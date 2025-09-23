@@ -1,0 +1,31 @@
+steps:
+  - name: gcr.io/buildpacks/builder
+    entrypoint: buildpacks
+    args:
+      - build
+      - "--path"
+      - "."
+      - "--builder"
+      - "gcr.io/buildpacks/builder"
+      - "--tag"
+      - "$_IMAGE"
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - $_SERVICE
+      - --image
+      - $_IMAGE
+      - --region
+      - $_DEPLOY_REGION
+      - --allow-unauthenticated
+
+images:
+  - "$_IMAGE"
+
+substitutions:
+  _DEPLOY_REGION: "us-south1"
+  _SERVICE: "aistatcharts"
+  _IMAGE: "us-south1-docker.pkg.dev/test-232919/cloud-run-source-deploy/aistatcharts:${SHORT_SHA}"
