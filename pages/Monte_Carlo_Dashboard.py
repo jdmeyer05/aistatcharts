@@ -24,17 +24,35 @@ with st.sidebar:
     use_seasonality = st.checkbox("Use Seasonality", value=True)
 
 # --- 2. DATA ENGINE ---
+# --- Updated fetch_data function ---
 @st.cache_data(ttl=3600)
 def fetch_data(symbol, period):
-    df = yf.download(symbol, period=period, progress=False)
-    if df.empty: return None
-    # Handle MultiIndex if present
-    if isinstance(df.columns, pd.MultiIndex):
-        df = df['Close']
-    else:
-        df = df[['Close']]
-    return df.dropna()
+    try:
+        # We explicitly set auto_adjust=True to ensure 'Close' is the adjusted price
+        df = yf.download(symbol, period=period, progress=False, auto_adjust=True)
+        
+        if df.empty:
+            return None
+            
+        # FIX: Handle MultiIndex columns (Ticker/Price levels)
+        if isinstance(df.columns, pd.MultiIndex):
+            # Flatten to just the Price levels (Open, High, Low, Close, etc.)
+            df.columns = df.columns.get_level_values(0)
+            
+        return df.dropna()
+    except Exception as e:
+        st.error(f"Download Error: {e}")
+        return None
 
+# --- Updated Execution Block ---
+px_data = fetch_data(ticker, hist_period)
+
+if px_data is not None and 'Close' in px_data.columns:
+    px = px_data['Close']
+    # ... rest of your code
+else:
+    st.error(f"Could not find 'Close' data for {ticker}. Check if the symbol is correct.")
+    
 def get_weekly_log_returns(px):
     # Calculate log returns and group by ISO week
     log_rets = np.log(px / px.shift(1)).dropna()
