@@ -4,7 +4,4 @@ numpy
 plotly
 massive
 matplotlib
-datetime
 yfinance
-re
-typing
