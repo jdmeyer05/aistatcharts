@@ -3,170 +3,143 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import yfinance as yf
-import datetime
 from datetime import date
+import datetime
 import re
-from typing import Optional, Tuple
 
-# ===============================
-# CONFIG & STYLING
-# ===============================
-st.set_page_config(page_title="Seasonality & Monte Carlo", layout="wide")
+# --- 1. CONFIG & UI SETUP ---
+st.set_page_config(page_title="Monte Carlo & Seasonality", layout="wide")
 
-# ===============================
-# CORE ANALYTICS ENGINE (Ticker Logic)
-# ===============================
-def _build_yahoo_candidates(ticker: str) -> list[str]:
-    t = ticker.strip().upper().replace("$", "")
-    cands = [t]
-    ROOTS = {"NG","CL","ES","NQ","GC","SI","HG","ZC","ZW","ZS","KC","SB","CC","RB","HO"}
-    m = re.fullmatch(r"([A-Z]{1,3})([FGHJKMNQUVXZ])(\d{2})", t)
-    if m:
-        root, mcode, yy = m.groups()
-        cands.append(f"{root}{mcode}{yy}=NG")
-        cands.append(f"{root}{mcode}{yy}.NYM")
-        cands.append(f"{root}=F")
-    else:
-        if t in ROOTS and not t.endswith("=F"):
-            cands.append(f"{t}=F")
-    seen, uniq = set(), []
-    for s in cands:
-        if s not in seen:
-            seen.add(s); uniq.append(s)
-    return uniq
-
-def _normalize_close(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    if df is None or df.empty: return None
-    if isinstance(df.columns, pd.MultiIndex):
-        lvl0 = df.columns.get_level_values(0)
-        if "Close" in set(lvl0):
-            s = df["Close"]; s = s.iloc[:, 0] if isinstance(s, pd.DataFrame) else s
-            return pd.DataFrame({"Close": s}).dropna()
-    if "Close" in df.columns: return df[["Close"]].dropna()
-    if "Adj Close" in df.columns: return df[["Adj Close"]].rename(columns={"Adj Close":"Close"}).dropna()
-    return None
-
-@st.cache_data(ttl=3600)
-def fetch_prices(ticker: str, period: str) -> pd.DataFrame:
-    candidates = _build_yahoo_candidates(ticker)
-    for sym in candidates:
-        for aa in (True, False):
-            try:
-                df = yf.download(sym, period=period, auto_adjust=aa, progress=False)
-                out = _normalize_close(df)
-                if out is not None and not out.empty:
-                    out.attrs["ticker_used"] = sym
-                    return out
-            except: continue
-    raise RuntimeError(f"Could not fetch data for {ticker}")
-
-# ===============================
-# RETURN CALCULATIONS
-# ===============================
-def daily_returns(close: pd.Series, method: str = "log") -> pd.Series:
-    return np.log(close / close.shift(1)).dropna() if method == "log" else close.pct_change().dropna()
-
-def weekly_returns(close: pd.Series, method: str = "log") -> pd.Series:
-    dlog = np.log(close / close.shift(1)).dropna()
-    df = pd.DataFrame({"dlog": dlog})
-    ic = dlog.index.isocalendar()
-    df["iso_year"], df["iso_week"] = ic["year"].astype(int), ic["week"].astype(int)
-    wk_log = df.groupby(["iso_year", "iso_week"])["dlog"].sum()
-    monday_dates = pd.to_datetime([date.fromisocalendar(int(y), int(w), 1) for (y, w) in wk_log.index])
-    wk_log.index = monday_dates
-    return wk_log if method == "log" else np.exp(wk_log) - 1.0
-
-def monthly_returns(close: pd.Series, method: str = "log") -> pd.Series:
-    dlog = np.log(close / close.shift(1)).dropna()
-    df = pd.DataFrame({"dlog": dlog, "year": dlog.index.year, "month": dlog.index.month})
-    mo_log = df.groupby(["year", "month"])["dlog"].sum()
-    dt_idx = pd.to_datetime([f"{y}-{m:02d}-01" for y, m in mo_log.index]) + pd.offsets.MonthEnd(0)
-    mo_log.index = dt_idx
-    return mo_log if method == "log" else np.exp(mo_log) - 1.0
-
-# ===============================
-# PLOTTING FUNCTIONS
-# ===============================
-def plot_seasonality_box(series: pd.Series, is_week: bool, years_back: int):
-    fig, ax = plt.subplots(figsize=(10, 4))
-    if is_week:
-        labels = series.index.isocalendar().week.astype(int)
-        title, xlabel, count = "Weekly Seasonality", "ISO Week", 53
-    else:
-        labels = series.index.month
-        title, xlabel, count = "Monthly Seasonality", "Month", 12
-    
-    df = pd.DataFrame({"ret": series, "grp": labels})
-    data = [df.loc[df["grp"] == i, "ret"].values for i in range(1, count + 1)]
-    
-    ax.boxplot(data, positions=np.arange(1, count + 1), showfliers=False)
-    ax.set_title(f"{title} (Last {years_back}y)")
-    ax.set_xlabel(xlabel)
-    ax.grid(True, axis="y", linestyle=":", alpha=0.6)
-    plt.tight_layout()
-    return fig
-
-# ===============================
-# STREAMLIT UI
-# ===============================
-st.title("📈 Advanced Seasonality & Monte Carlo")
-
-# --- Sidebar Controls ---
 with st.sidebar:
-    st.header("Data Settings")
-    ticker = st.text_input("Ticker Symbol", value="BTC-USD")
-    hist_period = st.selectbox("Historical Range", ["2y", "5y", "10y", "max"], index=1)
-    years_back = st.slider("Lookback Window (Years)", 2, 20, 8)
-    ret_method = st.radio("Return Method", ["log", "pct"])
+    st.header("📈 Data Settings")
+    ticker = st.text_input("Ticker", value="BTC-USD")
+    hist_period = st.selectbox("History", ["2y", "5y", "10y", "max"], index=1)
+    years_back = st.slider("Lookback (Years)", 2, 15, 8)
     
-    st.divider()
-    st.header("Monte Carlo Settings")
-    n_sims = st.number_input("Simulations", 1000, 50000, 10000, step=1000)
-    vol_mult = st.slider("Volatility Multiplier", 0.5, 2.0, 1.0, 0.1)
-    drift_bias = st.slider("Annual Drift Bias (%)", -20.0, 20.0, 0.0, 0.5)
+    st.header("🔮 Simulation Params")
+    n_sims = st.slider("Simulations", 1000, 20000, 5000)
+    drift_bias = st.slider("Annual Drift %", -50.0, 50.0, 0.0)
+    vol_mult = st.slider("Vol Multiplier", 0.5, 3.0, 1.0)
+    mc_method = st.selectbox("Method", ["bootstrap", "gaussian"])
+    use_seasonality = st.checkbox("Use Seasonality", value=True)
 
-# --- Execution ---
-try:
-    px_df = fetch_prices(ticker, hist_period)
-    px = px_df["Close"].tail(int(years_back * 252))
-    used_ticker = px_df.attrs.get("ticker_used")
+# --- 2. DATA ENGINE ---
+@st.cache_data(ttl=3600)
+def fetch_data(symbol, period):
+    df = yf.download(symbol, period=period, progress=False)
+    if df.empty: return None
+    # Handle MultiIndex if present
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df['Close']
+    else:
+        df = df[['Close']]
+    return df.dropna()
 
-    st.success(f"Loaded {used_ticker} ({len(px)} days)")
+def get_weekly_log_returns(px):
+    # Calculate log returns and group by ISO week
+    log_rets = np.log(px / px.shift(1)).dropna()
+    df = pd.DataFrame({"log_ret": log_rets.values}, index=log_rets.index)
+    ic = df.index.isocalendar()
+    df["year"], df["week"] = ic["year"].astype(int), ic["week"].astype(int)
+    # Group to get weekly sum of log returns
+    wk_log = df.groupby(["year", "week"])["log_ret"].sum()
+    # Create Monday dates for the index
+    idx = [pd.Timestamp(date.fromisocalendar(int(y), int(w), 1)) for (y, w) in wk_log.index]
+    return pd.Series(wk_log.values, index=idx).sort_index()
 
-    # --- Seasonality Row ---
+# --- 3. MONTE CARLO ENGINE ---
+def run_simulation(px, n_sims, drift_annual, vol_mult, method, use_seasonal):
+    wk_logrets = get_weekly_log_returns(px)
+    last_price = float(px.iloc[-1])
+    
+    # Calculate weeks remaining in the year
+    today = pd.Timestamp.now()
+    end_of_year = pd.Timestamp(year=today.year, month=12, day=31)
+    weeks_to_sim = ((end_of_year - today).days // 7) + 1
+    
+    if weeks_to_sim <= 0: weeks_to_sim = 12 # Fallback if year is ending
+
+    # Drift and Vol adjustments
+    drift_weekly = np.log(1 + drift_annual/100) / 52
+    
+    # Seasonal Profile (Mean log return per ISO week)
+    seasonal_profile = wk_logrets.groupby(wk_logrets.index.isocalendar().week).mean()
+    
+    # Generate Paths
+    results = np.zeros((n_sims, weeks_to_sim))
+    current_prices = np.full(n_sims, last_price)
+    
+    for t in range(weeks_to_sim):
+        target_date = today + pd.Timedelta(weeks=t)
+        wk_num = target_date.isocalendar().week
+        
+        # Base seasonal drift
+        s_drift = seasonal_profile.get(wk_num, 0) if use_seasonal else 0
+        
+        if method == "bootstrap":
+            shocks = np.random.choice(wk_logrets.values, size=n_sims)
+            # Center and scale shocks
+            shocks = (shocks - shocks.mean()) * vol_mult
+        else:
+            shocks = np.random.normal(0, wk_logrets.std() * vol_mult, size=n_sims)
+            
+        current_prices *= np.exp(s_drift + drift_weekly + shocks)
+        results[:, t] = current_prices
+        
+    return results, weeks_to_sim
+
+# --- 4. EXECUTION & RENDERING ---
+st.title(f"📊 {ticker} Analysis")
+
+px_data = fetch_data(ticker, hist_period)
+
+if px_data is not None:
+    px = px_data['Close']
+    
+    # Row 1: Seasonality Plots (Standard code from before)
     col1, col2 = st.columns(2)
-    
     with col1:
-        st.subheader("Weekly Distribution")
-        wk_ret = weekly_returns(px, method=ret_method)
-        st.pyplot(plot_seasonality_box(wk_ret, True, years_back))
+        st.subheader("Weekly Seasonals")
+        wk_rets = get_weekly_log_returns(px.tail(252 * years_back))
+        fig1, ax1 = plt.subplots()
+        df_box = pd.DataFrame({"ret": wk_rets.values, "wk": wk_rets.index.isocalendar().week})
+        df_box.boxplot(column='ret', by='wk', ax=ax1, grid=False)
+        st.pyplot(fig1)
 
-    with col2:
-        st.subheader("Monthly Distribution")
-        mo_ret = monthly_returns(px, method=ret_method)
-        st.pyplot(plot_seasonality_box(mo_ret, False, years_back))
-
-    # --- YTD Overlay ---
+    # Row 2: THE MONTE CARLO FAN CHART
     st.divider()
-    st.subheader("Yearly YTD Performance Overlay")
+    st.subheader("🔮 Price Projection (Monte Carlo)")
     
-    fig_ytd, ax_ytd = plt.subplots(figsize=(12, 5))
-    years = sorted(px.index.year.unique())
-    for y in years:
-        yr_data = px[px.index.year == y]
-        ytd = (yr_data / yr_data.iloc[0]) - 1.0
-        alpha = 1.0 if y == years[-1] else 0.3
-        linewidth = 2.5 if y == years[-1] else 1.0
-        ax_ytd.plot(range(len(ytd)), ytd.values, label=str(y), alpha=alpha, lw=linewidth)
+    paths, steps = run_simulation(px, n_sims, drift_bias, vol_mult, mc_method, use_seasonality)
     
-    ax_ytd.set_title("Returns Since Jan 1st")
-    ax_ytd.legend(ncol=3, loc='upper left', fontsize='small')
-    st.pyplot(fig_ytd)
+    # Calculate Percentiles for the Fan
+    p5 = np.percentile(paths, 5, axis=0)
+    p50 = np.percentile(paths, 50, axis=0)
+    p95 = np.percentile(paths, 95, axis=0)
+    
+    # Create the Plot
+    fig_mc, ax_mc = plt.subplots(figsize=(10, 5))
+    x_axis = np.arange(1, steps + 1)
+    
+    ax_mc.plot(x_axis, p50, color='cyan', label='Median Path', lw=2)
+    ax_mc.fill_between(x_axis, p5, p95, color='cyan', alpha=0.2, label='5th-95th Percentile')
+    
+    ax_mc.set_title(f"Simulated Price for {ticker} to Year-End")
+    ax_mc.set_ylabel("Price")
+    ax_mc.set_xlabel("Weeks from Today")
+    ax_mc.legend()
+    
+    # CRITICAL: This renders the chart on your webpage
+    st.pyplot(fig_mc)
+    
+    # Summary Table
+    st.write("### Stats")
+    summary = {
+        "Current Price": f"${px.iloc[-1]:,.2f}",
+        "Expected Year-End (Median)": f"${p50[-1]:,.2f}",
+        "Implied Return": f"{((p50[-1]/px.iloc[-1])-1)*100:.2f}%"
+    }
+    st.table(pd.DataFrame([summary]))
 
-except Exception as e:
-    st.error(f"Error: {e}")
-    st.info("Try a common symbol like 'BTC-USD' or 'AAPL'.")
-
-# --- Next Step ---
-# Would you like me to help you integrate the specific Monte Carlo simulation logic 
-# into this page to show the price 'fan' chart?
+else:
+    st.error("Could not load data. Check ticker.")
