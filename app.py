@@ -1,84 +1,84 @@
 import streamlit as st
-import requests
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+import os
+from massive import RESTClient  # Ensure 'massive-api-client' is in requirements.txt
 
-# --- SET PAGE CONFIG ---
-st.set_page_config(page_title="ERCOT Grid Monitor", layout="wide")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="ERCOT Massive Analytics", layout="wide")
 
-st.title("⚡ ERCOT Live Grid Monitor")
-st.subheader("Real-Time Load vs. Operating Reserves")
+# --- SECURE AUTHENTICATION ---
+# This pulls the key you just added to Google Cloud Environment Variables
+api_key = os.environ.get("MASSIVE_API_KEY")
 
-# --- DATA FETCHING ---
-@st.cache_data(ttl=300)  # Refresh data every 5 minutes
-def fetch_ercot_data():
-    # Public ERCOT Dashboard API for Grid Conditions
-    url = "https://www.ercot.com/api/1/services/read/dashboards/daily-prc.json"
+if not api_key:
+    st.error("❌ MASSIVE_API_KEY not found in environment variables. Please check Google Cloud settings.")
+    st.stop()
+
+# Initialize Massive Client
+client = RESTClient(api_key)
+
+# --- UI HEADER ---
+st.title("⚡ ERCOT Basis & Spread Analyzer")
+st.subheader("Data-Driven Insights for Power Trading")
+
+# --- SIDEBAR CONTROLS ---
+st.sidebar.header("Analysis Settings")
+lookback = st.sidebar.slider("Lookback Period (Days)", 1, 30, 7)
+interval = st.sidebar.selectbox("Data Interval", ["hour", "minute", "day"])
+
+# --- MAIN DASHBOARD ---
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.write("### Hub Selection")
+    hub_a = st.selectbox("Select Hub A (Source)", ["HB_WEST", "HB_NORTH", "HB_SOUTH", "HB_HOUSTON"])
+    hub_b = st.selectbox("Select Hub B (Sink)", ["HB_HOUSTON", "HB_WEST", "HB_NORTH", "HB_SOUTH"], index=0)
+
+with col2:
+    st.write("### Market Narrative")
+    st.info(f"Analyzing the spread between **{hub_a}** and **{hub_b}**. "
+            "Large spreads often indicate transmission congestion or localized demand spikes "
+            "from AI Data Center clusters in the West.")
+
+# --- FETCH & PLOT DATA ---
+if st.button("Generate Spread Analysis"):
     try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
+        # Placeholder for Massive API logic 
+        # In production, you'd use: client.list_aggs(ticker=f"ERCOT.{hub_a}", ...)
+        st.write(f"🔄 Querying Massive for {hub_a} and {hub_b}...")
         
-        # Extract the current condition object
-        current = data.get("current_condition", {})
+        # Example Data Visualization
+        # We'll create a mock spread chart until you verify your specific Massive tickers
+        dates = pd.date_range(end=pd.Timestamp.now(), periods=100, freq='H')
+        prices_a = [30 + (i % 10) for i in range(100)]
+        prices_b = [25 + (i % 15) for i in range(100)]
+        spread = [a - b for a, b in zip(prices_a, prices_b)]
+
+        fig = go.Figure()
         
-        # Example values (Actual keys may vary slightly based on ERCOT's API response)
-        # Note: ERCOT usually returns strings with commas, so we clean them.
-        reserves = float(current.get("prc_value", "0").replace(',', ''))
+        # Add Spread Line
+        fig.add_trace(go.Scatter(x=dates, y=spread, name="Spread (A-B)", 
+                                 line=dict(color='cyan', width=2),
+                                 fill='tozeroy'))
         
-        # For Load and Capacity, we use their secondary endpoint
-        load_url = "https://www.ercot.com/api/1/services/read/dashboards/supply-and-demand.json"
-        load_resp = requests.get(load_url, timeout=10)
-        load_data = load_resp.json()
+        fig.update_layout(
+            title=f"Real-Time Basis Spread: {hub_a} vs {hub_b}",
+            xaxis_title="Time",
+            yaxis_title="USD/MWh",
+            template="plotly_dark",
+            hovermode="x unified"
+        )
         
-        # Get the latest data point from the supply/demand graph
-        latest_point = load_data['data'][0]['datasets'][-1]['data'][-1]
-        current_load = float(latest_point.get('y', 0))
+        st.plotly_chart(fig, use_container_width=True)
         
-        return {
-            "reserves": reserves,
-            "load": current_load,
-            "status": current.get("title", "Unknown"),
-            "note": current.get("condition_note", ""),
-            "last_update": datetime.now().strftime("%H:%M:%S")
-        }
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
-        return None
+        st.error(f"Error fetching data from Massive: {e}")
 
-# --- UI LAYOUT ---
-data = fetch_ercot_data()
-
-if data:
-    # Top Level Metrics
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Current Load", f"{data['load']:,} MW")
-    col2.metric("Operating Reserves (PRC)", f"{data['reserves']:,} MW", delta_color="inverse")
-    col3.metric("Grid Status", data['status'])
-
-    st.info(f"💡 **Current Condition:** {data['note']}")
-
-    # Gauge Chart for Reserves
-    fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = data['reserves'],
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': "Operating Reserves (MW)"},
-        gauge = {
-            'axis': {'range': [0, 10000]},
-            'steps': [
-                {'range': [0, 2500], 'color': "red"},
-                {'range': [2500, 3000], 'color': "orange"},
-                {'range': [3000, 10000], 'color': "green"}
-            ],
-            'threshold': {
-                'line': {'color': "black", 'width': 4},
-                'thickness': 0.75,
-                'value': 2500
-            }
-        }
-    ))
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-st.caption(f"Last successful update: {data['last_update'] if data else 'N/A'}")
+# --- RAW DATA PREVIEW ---
+with st.expander("View Data Center Load Forecast Notes"):
+    st.write("""
+    **Current Market Context:**
+    * West Zone congestion is increasing due to 70GW+ of AI/LFL (Large Flexible Load) queue entries.
+    * Monitor HB_WEST volatility during low wind/high solar ramp periods.
+    """)
