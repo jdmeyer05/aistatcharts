@@ -4,6 +4,11 @@ import plotly.graph_objects as go
 import os
 from massive import RESTClient 
 
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def get_massive_data(ticker, lookback):
+    # Your client.list_aggs or data pull logic here
+    return data
+
 st.set_page_config(page_title="ERCOT Basis Analyzer", layout="wide")
 
 # Secure Authentication
