@@ -1,113 +1,81 @@
 import streamlit as st
 import extra_streamlit_components as stx
-import datetime
 from src.auth import init_supabase
 
-st.set_page_config(page_title="Quant Platform | Login", layout="centered")
+st.set_page_config(page_title="Quant Platform Login", layout="centered")
 
-st.markdown(
-    """<style>ul[data-testid="stSidebarNavItems"] li:nth-child(1) { display: none; }</style>""",
-    unsafe_allow_html=True
-)
-
+# Initialize Supabase and Cookie Manager
 supabase = init_supabase()
-
-# --- INITIALIZE COOKIE MANAGER ---
 cookie_manager = stx.CookieManager()
 
+# --- SESSION STATE INITIALIZATION ---
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
-if 'password_reset_mode' not in st.session_state:
-    st.session_state['password_reset_mode'] = False
+if 'user_email' not in st.session_state:
+    st.session_state['user_email'] = None
 
-# --- AUTO-LOGIN VIA COOKIE ---
-cached_email = cookie_manager.get(cookie="quant_user_session")
-if cached_email and not st.session_state['authenticated']:
+# --- FAST PASS: ALREADY LOGGED IN ---
+# If they wander back to the login page but already have a valid session, boot them to the dashboard.
+if st.session_state['authenticated'] or cookie_manager.get(cookie="quant_user_session"):
     st.session_state['authenticated'] = True
-    st.session_state['user_email'] = cached_email
     st.switch_page("pages/01_Summary.py")
 
-# --- URL REDIRECT CATCHER ---
-if "code" in st.query_params:
-    code = st.query_params.get("code")
-    try:
-        res = supabase.auth.exchange_code_for_session({"auth_code": code})
-        st.session_state['authenticated'] = True
-        st.session_state['user_email'] = res.user.email
-        st.session_state['password_reset_mode'] = True 
-        st.query_params.clear()
-        st.rerun()
-    except Exception as e:
-        st.error(f"Link expired or invalid: {e}")
-        st.query_params.clear()
+# --- UI RENDERING ---
+st.title("⚡ Quantitative Analysis Platform")
+st.markdown("Institutional-grade backtesting, options matrix, and macro charting.")
+st.divider()
 
-# --- ROUTER LOGIC ---
-if st.session_state.get('password_reset_mode'):
-    st.title("🔐 Set New Password")
-    with st.form("mandatory_reset_form"):
-        new_pw = st.text_input("New Password", type="password", key="new_pw_1", autocomplete="new-password")
-        confirm_pw = st.text_input("Confirm Password", type="password", key="new_pw_2", autocomplete="new-password")
-        if st.form_submit_button("Update Password & Enter App", type="primary"):
-            if new_pw == confirm_pw and len(new_pw) >= 6:
-                try:
-                    res = supabase.auth.update_user({"password": new_pw})
-                    
-                    # 🍪 FIX: Use datetime for the expires_at argument
-                    expiration_date = datetime.datetime.now() + datetime.timedelta(days=30)
-                    cookie_manager.set("quant_user_session", st.session_state['user_email'], expires_at=expiration_date)
-                    
-                    st.session_state['password_reset_mode'] = False
-                    st.switch_page("pages/01_Summary.py")
-                except Exception as e:
-                    st.error(f"Update failed: {e}")
-            else:
-                st.error("Passwords must match and be at least 6 characters.")
+tab1, tab2 = st.tabs(["🔒 Log In", "📝 Register"])
 
-elif st.session_state['authenticated']:
-    st.switch_page("pages/01_Summary.py")
+# --- LOG IN TAB ---
+with tab1:
+    with st.form("login_form"):
+        st.subheader("Access Your Account")
+        email = st.text_input("Email Address")
+        password = st.text_input("Password", type="password")
+        submit_login = st.form_submit_button("Log In", type="primary", use_container_width=True)
 
-else:
-    st.title("🏦 Institutional Quant Platform")
-    st.markdown("Advanced algorithmic backtesting, deep-learning tactical forecasts, and multi-leg option spread analysis.")
-    st.divider()
-    
-    tab_login, tab_signup, tab_forgot = st.tabs(["Log In", "Sign Up", "Forgot Password"])
-    
-    with tab_login:
-        with st.form("login_form"):
-            email = st.text_input("Email Address", key="login_email", autocomplete="username")
-            password = st.text_input("Password", type="password", key="login_pw", autocomplete="current-password")
-            if st.form_submit_button("Log In 🔓"):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                    
-                    # 🍪 FIX: Use datetime for the expires_at argument
-                    expiration_date = datetime.datetime.now() + datetime.timedelta(days=30)
-                    cookie_manager.set("quant_user_session", res.user.email, expires_at=expiration_date)
-                    
-                    st.session_state['authenticated'] = True
-                    st.session_state['user_email'] = res.user.email
-                    st.switch_page("pages/01_Summary.py")
-                except Exception as e:
-                    st.error(f"Login failed: {e}")
+        if submit_login:
+            try:
+                # 1. Authenticate with Supabase
+                response = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                
+                # 2. Set the secure browser cookie (expires in 30 days)
+                cookie_manager.set("quant_user_session", email, max_age=30*24*60*60)
+                
+                # 3. Update short-term memory
+                st.session_state['authenticated'] = True
+                st.session_state['user_email'] = email
+                
+                # 4. Route to the dashboard
+                st.success("Authentication successful! Rerouting...")
+                st.switch_page("pages/01_Summary.py")
+                
+            except Exception as e:
+                st.error(f"Login failed: Invalid email or password.")
 
-    with tab_signup:
-        with st.form("signup_form"):
-            new_email = st.text_input("Email Address", key="signup_email", autocomplete="username")
-            new_password = st.text_input("Password", type="password", key="signup_pw", autocomplete="new-password")
-            if st.form_submit_button("Create Account 📝"):
-                try:
-                    res = supabase.auth.sign_up({"email": new_email, "password": new_password})
-                    st.success("Account created! Check your email for the confirmation link.")
-                except Exception as e:
-                    st.error(f"Sign up failed: {e}")
+# --- REGISTER TAB ---
+with tab2:
+    with st.form("register_form"):
+        st.subheader("Create a New Account")
+        new_email = st.text_input("Email Address")
+        new_password = st.text_input("Password", type="password", help="Must be at least 6 characters.")
+        submit_register = st.form_submit_button("Register", type="primary", use_container_width=True)
 
-    with tab_forgot:
-        with st.form("forgot_form"):
-            reset_email = st.text_input("Email Address", key="forgot_email", autocomplete="email")
-            if st.form_submit_button("Send Reset Link 📧"):
-                try:
-                    supabase.auth.reset_password_for_email(reset_email)
-                    st.success("Check your email for the reset link!")
-                except Exception as e:
-                    st.error(f"Failed to send link: {e}")
+        if submit_register:
+            try:
+                # Create the user in Supabase
+                response = supabase.auth.sign_up({
+                    "email": new_email, 
+                    "password": new_password
+                })
+                
+                # 🚨 THE NEW SUCCESS MESSAGE: No email verification required!
+                st.success("✅ Account created successfully! You can now switch to the **Log In** tab to access the platform.")
+                
+            except Exception as e:
+                # Supabase returns specific error messages (like "Password should be at least 6 characters")
+                st.error(f"Registration failed: {e}")
+
+st.divider()
+st.caption("Protected by standard AES encryption and Supabase Auth routing.")
