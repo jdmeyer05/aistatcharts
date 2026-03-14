@@ -52,10 +52,9 @@ def run_sidebar_chatbot(context_data=""):
                 }
             ] + st.session_state.chat_messages
 
-            # FIXED: Using 'gpt-4o', which is highly stable and widely available.
-            # We keep 'max_completion_tokens' as it is the modern standard for this model series.
+            # Using 'gpt-4o-mini' which has the widest availability
             response = client.chat.completions.create(
-                model="gpt-4o", 
+                model="gpt-4o-mini", 
                 messages=messages,
                 max_completion_tokens=800
             )
