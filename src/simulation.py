@@ -1,9 +1,9 @@
+import streamlit as st
 import numpy as np
 import pandas as pd
 from datetime import date
 
 def weekly_log_returns(px_close: pd.Series) -> pd.Series:
-    """Calculates weekly log returns keyed to Monday dates of ISO weeks."""
     px_close = px_close.sort_index()
     dlog = np.log(px_close / px_close.shift(1)).dropna()
     df = pd.DataFrame({"dlog": dlog})
@@ -17,7 +17,6 @@ def weekly_log_returns(px_close: pd.Series) -> pd.Series:
     return wk_log.sort_index()
 
 def _seasonal_profile(logrets: pd.Series) -> pd.Series:
-    """Average log return by ISO week (1..53)."""
     weeks = logrets.index.isocalendar().week.astype(int)
     df = pd.DataFrame({"logret": logrets.values, "week": weeks.to_numpy()})
     wk_mu = df.groupby("week", sort=True)["logret"].mean()
@@ -25,32 +24,25 @@ def _seasonal_profile(logrets: pd.Series) -> pd.Series:
     return wk_mu.sort_index()
 
 def _future_seasonal_baseline(dates: pd.DatetimeIndex, seasonal_mu: pd.Series) -> np.ndarray:
-    """Maps the historical seasonal mean to future dates."""
     keys = dates.isocalendar().week.astype(int).to_numpy()
     mu_map = seasonal_mu.to_dict()
     return np.array([float(mu_map.get(int(k), 0.0)) for k in keys], dtype=float)
 
+@st.cache_data(show_spinner="Running Year-End Monte Carlo...")
 def simulate_to_year_end_weekly(px_close: pd.Series, n_sims: int, lookback_days: int, 
                                 method: str, drift_bias_annual_pct: float, vol_mult: float, 
                                 seed: int, use_seasonality: bool = True):
-    """
-    Weekly Monte Carlo from next ISO week to the last ISO week of the current year.
-    Returns: (paths_matrix, future_mondays_index)
-    """
     if px_close.empty:
         return np.empty((n_sims, 0)), pd.DatetimeIndex([])
 
-    # Clean data
     px_close = px_close[px_close > 0].dropna()
     last_ts = pd.Timestamp(px_close.index[-1])
     year = last_ts.year
 
-    # Find Next Monday
     days_to_next_mon = (7 - last_ts.weekday()) % 7
     if days_to_next_mon == 0: days_to_next_mon = 7
     next_monday = (last_ts + pd.Timedelta(days=days_to_next_mon)).normalize()
 
-    # Find Last ISO week Monday of the year
     last_iso_week_monday = pd.Timestamp(date.fromisocalendar(
         year, pd.Timestamp(f"{year}-12-28").isocalendar().week, 1
     ))
@@ -61,7 +53,6 @@ def simulate_to_year_end_weekly(px_close: pd.Series, n_sims: int, lookback_days:
     future_mondays = pd.date_range(next_monday, last_iso_week_monday, freq="W-MON")
     T = len(future_mondays)
 
-    # Historical metrics
     wk_logrets = weekly_log_returns(px_close)
     lookback_start = (wk_logrets.index.max() - pd.Timedelta(days=lookback_days))
     wk_tail = wk_logrets.loc[wk_logrets.index > lookback_start]
@@ -87,7 +78,6 @@ def simulate_to_year_end_weekly(px_close: pd.Series, n_sims: int, lookback_days:
         seasonal_future = np.zeros(T, dtype=float)
         bootstrap_source = wk_tail.to_numpy()
 
-    # Apply modifiers
     drift_bias_weekly = np.log(1.0 + drift_bias_annual_pct / 100.0) / 52.0
     mu_resid_adj = mu_hist + drift_bias_weekly
     sigma_adj = sigma_hist * vol_mult
@@ -98,7 +88,6 @@ def simulate_to_year_end_weekly(px_close: pd.Series, n_sims: int, lookback_days:
     paths = np.empty((n_sims, T), dtype=float)
     prices = np.full(n_sims, start_price, dtype=float)
 
-    # Generate Paths
     for t in range(T):
         if method == "bootstrap" and bootstrap_source.size > 0:
             eps = rng.choice(bootstrap_source, size=n_sims, replace=True)
@@ -112,3 +101,54 @@ def simulate_to_year_end_weekly(px_close: pd.Series, n_sims: int, lookback_days:
         paths[:, t] = prices
 
     return paths, future_mondays
+
+# --- NEW DAILY 30-DAY ENGINE ---
+
+@st.cache_data(show_spinner="Running 30-Day Daily Monte Carlo...")
+def simulate_days_daily(px_close: pd.Series, n_sims: int, lookback_days: int, 
+                        method: str, drift_bias_annual_pct: float, vol_mult: float, 
+                        seed: int, days_to_sim: int = 30):
+    """
+    Standard Daily Monte Carlo for short-term tactical projections.
+    """
+    if px_close.empty:
+        return np.empty((n_sims, 0)), pd.DatetimeIndex([])
+
+    px_close = px_close[px_close > 0].dropna()
+    dlog = np.log(px_close / px_close.shift(1)).dropna()
+    
+    lookback_start = (dlog.index.max() - pd.Timedelta(days=lookback_days))
+    tail = dlog.loc[dlog.index > lookback_start]
+    if tail.empty: tail = dlog.copy()
+
+    mu_hist = float(tail.mean())
+    sigma_hist = float(tail.std(ddof=1))
+    bootstrap_source = tail.to_numpy()
+
+    # Convert annual drift to daily (assuming ~252 trading days)
+    drift_bias_daily = np.log(1.0 + drift_bias_annual_pct / 100.0) / 252.0
+    mu_adj = mu_hist + drift_bias_daily
+    sigma_adj = sigma_hist * vol_mult
+
+    rng = np.random.default_rng(seed)
+    start_price = float(px_close.iloc[-1])
+
+    paths = np.empty((n_sims, days_to_sim), dtype=float)
+    prices = np.full(n_sims, start_price, dtype=float)
+
+    for t in range(days_to_sim):
+        if method == "bootstrap" and bootstrap_source.size > 0:
+            eps = rng.choice(bootstrap_source, size=n_sims, replace=True)
+            eps = (eps - eps.mean()) * vol_mult + eps.mean()
+            r_t = drift_bias_daily + eps
+        else:
+            eps = rng.normal(mu_adj, sigma_adj, size=n_sims)
+            r_t = eps
+        
+        prices = prices * np.exp(r_t)
+        paths[:, t] = prices
+
+    last_ts = pd.Timestamp(px_close.index[-1])
+    future_dates = pd.bdate_range(start=last_ts + pd.Timedelta(days=1), periods=days_to_sim)
+    
+    return paths, future_dates
