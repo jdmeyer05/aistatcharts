@@ -1,38 +1,62 @@
 import numpy as np
 import pandas as pd
 
-def get_returns(px, freq='W'):
-    """Calculates log returns grouped by week or month."""
-    log_rets = np.log(px / px.shift(1)).dropna()
-    df = pd.DataFrame({"log_ret": log_rets.values}, index=log_rets.index)
-    if freq == 'W':
-        ic = df.index.isocalendar()
-        df["group"], df["year"] = ic["week"].astype(int), ic["year"].astype(int)
-    else:
-        df["group"], df["year"] = df.index.month, df.index.year
+def run_monte_carlo_engine(px_close, n_sims, drift_pct, vol_mult, method, seasonal):
+    """
+    Runs the Monte Carlo simulation and returns the 5th, 50th, and 95th percentiles.
+    """
+    # 1. Calculate historical daily returns
+    daily_returns = px_close.pct_change().dropna()
     
-    return df.groupby(["year", "group"])["log_ret"].sum()
-
-def run_monte_carlo_engine(px, n_sims, drift_bias, vol_mult, method, use_seasonality):
-    """Vectorized calculation of year-end price paths."""
-    today = pd.Timestamp.now()
-    weeks_to_sim = max(1, ((pd.Timestamp(year=today.year, month=12, day=31) - today).days // 7) + 1)
+    # Calculate baseline statistics
+    mu = daily_returns.mean()
+    sigma = daily_returns.std()
     
-    wk_logrets = get_returns(px, 'W')
-    seasonal_profile = wk_logrets.groupby(level=1).mean()
+    # 2. Apply user-defined multipliers
+    # Convert annual drift percentage to daily decimal (Assuming 252 trading days)
+    daily_drift = (drift_pct / 100) / 252
+    adjusted_mu = mu + daily_drift
+    adjusted_sigma = sigma * vol_mult
     
-    target_weeks = [(today + pd.Timedelta(weeks=t)).isocalendar().week for t in range(weeks_to_sim)]
-    s_drifts = np.array([seasonal_profile.get(w, 0) if use_seasonality else 0 for w in target_weeks])
-    drift_weekly = np.log(1 + drift_bias/100) / 52
+    # We will simulate 1 year forward (252 trading days)
+    days_to_sim = 252
     
-    if method == "bootstrap":
-        shocks = np.random.choice(wk_logrets.values, size=(n_sims, weeks_to_sim))
-        shocks = (shocks - wk_logrets.mean()) * vol_mult
-    else:
-        shocks = np.random.normal(0, wk_logrets.std() * vol_mult, size=(n_sims, weeks_to_sim))
+    # Initialize the simulation matrix (rows = days, columns = simulations)
+    sim_returns = np.zeros((days_to_sim, n_sims))
+    
+    # 3. Generate Random Walks
+    if method == "gaussian":
+        # Standard normal distribution
+        random_shocks = np.random.normal(0, 1, (days_to_sim, n_sims))
+        sim_returns = adjusted_mu + (adjusted_sigma * random_shocks)
         
-    total_returns = s_drifts + drift_weekly + shocks
-    paths = float(px.iloc[-1]) * np.exp(np.cumsum(total_returns, axis=1))
+    elif method == "bootstrap":
+        # Randomly sample historical returns
+        historical_array = daily_returns.values
+        for i in range(n_sims):
+            # Pick random historical returns and apply multipliers
+            sampled = np.random.choice(historical_array, size=days_to_sim, replace=True)
+            # Center the sampled returns, then add the adjusted mean and multiply the variance
+            centered = sampled - np.mean(sampled)
+            sim_returns[:, i] = adjusted_mu + (centered * vol_mult)
+
+    # 4. Convert returns to price paths
+    # Start all simulations at the last known closing price
+    last_price = px_close.iloc[-1]
     
-    p5, p50, p95 = np.percentile(paths, [5, 50, 95], axis=0)
-    return p5, p50, p95, weeks_to_sim
+    # Calculate cumulative returns
+    price_paths = np.zeros_like(sim_returns)
+    price_paths[0] = last_price * (1 + sim_returns[0])
+    
+    for t in range(1, days_to_sim):
+        price_paths[t] = price_paths[t-1] * (1 + sim_returns[t])
+        
+    # 5. Extract Percentiles (Cross-sectional across all simulations for each day)
+    p5 = np.percentile(price_paths, 5, axis=1)
+    p50 = np.percentile(price_paths, 50, axis=1)
+    p95 = np.percentile(price_paths, 95, axis=1)
+    
+    # Generate the step index for the X-axis
+    steps = np.arange(1, days_to_sim + 1)
+    
+    return p5, p50, p95, steps
