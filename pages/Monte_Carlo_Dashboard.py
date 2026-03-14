@@ -3,107 +3,124 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
-from src.simulation import simulate_to_year_end_weekly
+from src.simulation import simulate_to_year_end_weekly, simulate_days_daily
 from src.chatbot import run_sidebar_chatbot
 
-st.title("📈 Seasonal Monte Carlo to Year-End")
+st.title("📈 Multi-Timeframe Monte Carlo Forecasts")
 
-# --- Sidebar Controls (Matching Colab UI) ---
+# --- Sidebar Controls (Batched via Form) ---
 with st.sidebar:
     st.header("Simulation Settings")
-    raw_ticker = st.text_input("Ticker", value="BTC-USD")
-    n_sims = st.slider("Simulations", 1000, 100000, 10000, step=1000)
-    lookback = st.slider("Lookback (Days)", 60, 2000, 365, step=5)
-    method = st.selectbox("MC Method", ["bootstrap", "gaussian"])
-    drift = st.slider("Drift Bias (Annual %)", -50.0, 50.0, 0.0, step=0.5)
-    vol_mult = st.slider("Vol Multiplier", 0.2, 3.0, 1.0, step=0.05)
-    seed = st.number_input("Random Seed", value=42)
-    seasonal = st.checkbox("Use ISO Week Seasonality", value=True)
+    
+    with st.form("monte_carlo_settings"):
+        raw_ticker = st.text_input("Ticker", value="BTC-USD")
+        n_sims = st.slider("Simulations", 1000, 100000, 10000, step=1000)
+        lookback = st.slider("Lookback (Days)", 60, 2000, 365, step=5)
+        method = st.selectbox("MC Method", ["bootstrap", "gaussian"])
+        drift = st.slider("Drift Bias (Annual %)", -50.0, 50.0, 0.0, step=0.5)
+        vol_mult = st.slider("Vol Multiplier", 0.2, 3.0, 1.0, step=0.05)
+        seed = st.number_input("Random Seed", value=42)
+        seasonal = st.checkbox("Use ISO Week Seasonality (Year-End Only)", value=True)
+        
+        submit_button = st.form_submit_button(label="🚀 Run Simulations")
 
 # --- Data & Execution ---
 ticker = format_massive_ticker(raw_ticker)
-# We fetch a larger base history (e.g. 5 years = 1825 days) to ensure we have deep seasonality data,
-# even if the simulation lookback is shorter.
+
+# Fetch 5 years of base data for deep seasonality analysis
 data = fetch_massive_data(ticker, 1825)
 
 if data is not None and not data.empty:
     px_close = data['Close'].astype(float).squeeze()
+    last_price = float(px_close.iloc[-1])
     
-    # Run the new weekly engine
-    paths, week_dates = simulate_to_year_end_weekly(
-        px_close=px_close,
-        n_sims=n_sims,
-        lookback_days=lookback,
-        method=method,
-        drift_bias_annual_pct=drift,
-        vol_mult=vol_mult,
-        seed=seed,
-        use_seasonality=seasonal
+    # ==========================================
+    # CHART 1: 30-DAY TACTICAL PROJECTION
+    # ==========================================
+    st.subheader("📅 30-Day Tactical Projection (Daily Steps)")
+    
+    paths_30d, dates_30d = simulate_days_daily(
+        px_close=px_close, n_sims=n_sims, lookback_days=lookback,
+        method=method, drift_bias_annual_pct=drift, vol_mult=vol_mult, seed=seed, days_to_sim=30
     )
 
-    if paths.size > 0:
-        # Calculate Percentiles
-        p5 = np.percentile(paths, 5, axis=0)
-        p50 = np.percentile(paths, 50, axis=0)
-        p95 = np.percentile(paths, 95, axis=0)
+    if paths_30d.size > 0:
+        p5_30 = np.percentile(paths_30d, 5, axis=0)
+        p50_30 = np.percentile(paths_30d, 50, axis=0)
+        p95_30 = np.percentile(paths_30d, 95, axis=0)
         
-        last_price = float(px_close.iloc[-1])
-        final_p50 = p50[-1]
-        exp_return = ((final_p50 / last_price) - 1.0) * 100
+        # Slice history to exactly 2 years back for this plot
+        start_2y = px_close.index[-1] - pd.DateOffset(years=2)
+        hist_2y = px_close.loc[px_close.index >= start_2y]
 
-        # --- Plotly Chart ---
-        fig = go.Figure()
-
-        # Historical Context (~6 months back for visual scaling)
-        hist = px_close.tail(180)
-        fig.add_trace(go.Scatter(
-            x=hist.index, y=hist.values,
-            name="History",
-            line=dict(color='#00d1ff', width=2)
+        fig_30 = go.Figure()
+        fig_30.add_trace(go.Scatter(x=hist_2y.index, y=hist_2y.values, name="2-Year History", line=dict(color='#00d1ff', width=2)))
+        fig_30.add_trace(go.Scatter(
+            x=dates_30d.tolist() + dates_30d.tolist()[::-1],
+            y=p95_30.tolist() + p5_30.tolist()[::-1],
+            fill='toself', fillcolor='rgba(255, 170, 0, 0.1)', line=dict(color='rgba(255,255,255,0)'), name='5% - 95% Range'
         ))
+        fig_30.add_trace(go.Scatter(x=dates_30d, y=p50_30, name="Median Path", line=dict(color='#ffaa00', width=3, dash='dot')))
 
-        # 90% Confidence Interval (Fan)
-        fig.add_trace(go.Scatter(
-            x=week_dates.tolist() + week_dates.tolist()[::-1],
-            y=p95.tolist() + p5.tolist()[::-1],
-            fill='toself',
-            fillcolor='rgba(255, 170, 0, 0.1)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='5% - 95% Range'
-        ))
-
-        # Median Forecast
-        fig.add_trace(go.Scatter(
-            x=week_dates, y=p50,
-            name="Median Projection",
-            line=dict(color='#ffaa00', width=3, dash='dot')
-        ))
-
-        fig.update_layout(
-            template="plotly_dark",
-            title=f"Weekly Seasonal Projection for {ticker} (Target: Year-End)",
-            xaxis_title="Date",
-            yaxis_title="Price ($)",
-            hovermode='x unified',
-            height=550,
+        fig_30.update_layout(
+            template="plotly_dark", height=450, hovermode='x unified', margin=dict(t=30, b=10),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # --- Metrics Table ---
-        st.subheader("📊 End of Year Summary")
+        st.plotly_chart(fig_30, use_container_width=True)
+        
+        # 30-Day Metrics
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Current Price", f"${last_price:,.2f}")
-        c2.metric("Median Target (P50)", f"${final_p50:,.2f}")
-        c3.metric("Expected Return", f"{exp_return:.2f}%")
-        c4.metric("Weeks Simulated", len(week_dates))
+        c2.metric("30-Day Target", f"${p50_30[-1]:,.2f}")
+        c3.metric("Exp. Return", f"{((p50_30[-1] / last_price) - 1.0) * 100:.2f}%")
+        c4.metric("Risk (P5 Bear Case)", f"${p5_30[-1]:,.2f}")
+    
+    st.markdown("<br><hr><br>", unsafe_allow_html=True)
 
-        st.caption(f"**Bear Case (P5):** ${p5[-1]:,.2f} | **Bull Case (P95):** ${p95[-1]:,.2f}")
+    # ==========================================
+    # CHART 2: YEAR-END STRATEGIC PROJECTION
+    # ==========================================
+    st.subheader("🎯 Year-End Strategic Projection (Weekly Seasonal)")
+    
+    paths_ye, dates_ye = simulate_to_year_end_weekly(
+        px_close=px_close, n_sims=n_sims, lookback_days=lookback,
+        method=method, drift_bias_annual_pct=drift, vol_mult=vol_mult, seed=seed, use_seasonality=seasonal
+    )
 
-        # AI Chatbot integration
-        ctx = f"Simulation for {ticker}. Expected return to year end: {exp_return:.2f}%. Target: ${final_p50:,.2f}."
+    if paths_ye.size > 0:
+        p5_ye = np.percentile(paths_ye, 5, axis=0)
+        p50_ye = np.percentile(paths_ye, 50, axis=0)
+        p95_ye = np.percentile(paths_ye, 95, axis=0)
+        
+        # Slice history to 6 months for clear scaling on the year-end chart
+        start_6m = px_close.index[-1] - pd.DateOffset(months=6)
+        hist_6m = px_close.loc[px_close.index >= start_6m]
+
+        fig_ye = go.Figure()
+        fig_ye.add_trace(go.Scatter(x=hist_6m.index, y=hist_6m.values, name="6-Month History", line=dict(color='#00d1ff', width=2)))
+        fig_ye.add_trace(go.Scatter(
+            x=dates_ye.tolist() + dates_ye.tolist()[::-1],
+            y=p95_ye.tolist() + p5_ye.tolist()[::-1],
+            fill='toself', fillcolor='rgba(255, 170, 0, 0.1)', line=dict(color='rgba(255,255,255,0)'), name='5% - 95% Range'
+        ))
+        fig_ye.add_trace(go.Scatter(x=dates_ye, y=p50_ye, name="Median Projection", line=dict(color='#ffaa00', width=3, dash='dot')))
+
+        fig_ye.update_layout(
+            template="plotly_dark", height=450, hovermode='x unified', margin=dict(t=30, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_ye, use_container_width=True)
+
+        # Year-End Metrics
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Year-End Target (P50)", f"${p50_ye[-1]:,.2f}")
+        c2.metric("Exp. Return", f"{((p50_ye[-1] / last_price) - 1.0) * 100:.2f}%")
+        c3.metric("Bull Case (P95)", f"${p95_ye[-1]:,.2f}")
+        c4.metric("Weeks Simulated", len(dates_ye))
+        
+        # AI Chatbot Context 
+        ctx = f"Simulation for {ticker}. 30-Day Target: ${p50_30[-1]:,.2f}. Year-End Target: ${p50_ye[-1]:,.2f}."
         run_sidebar_chatbot(ctx)
-
     else:
         st.info("The year is almost over; not enough weeks remaining to run a meaningful year-end projection.")
         
