@@ -8,3 +8,4 @@ openai
 massive
 scikit-learn
 requests
+extra-streamlit-components
