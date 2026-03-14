@@ -1,54 +1,69 @@
 import streamlit as st
-from openai import OpenAI
 import os
+from openai import OpenAI
 import logging
 
+# Initialize logger for this file
 logger = logging.getLogger(__name__)
 
 def run_sidebar_chatbot(context_data=""):
     """
-    Run a context-aware chatbot in the sidebar with isolated session state per page.
+    Initializes a sidebar chatbot that uses the specific page's context
+    to answer quantitative and fundamental analysis questions.
     """
-    try:
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        
-        with st.sidebar:
-            st.divider()
-            st.subheader("🤖 Analyst Chat")
+    st.sidebar.divider()
+    st.sidebar.subheader("🤖 Analyst Chat")
+    
+    # Check for API Key
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        st.sidebar.warning("OpenAI API key missing. Please add to secrets.")
+        return
+
+    client = OpenAI(api_key=api_key)
+    
+    # Initialize chat history in session state
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    # Display existing chat messages
+    for message in st.session_state.chat_messages:
+        with st.sidebar.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Chat input box
+    if prompt := st.sidebar.chat_input("Ask a question..."):
+        # Add user message to state and display
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        with st.sidebar.chat_message("user"):
+            st.markdown(prompt)
+
+        try:
+            # Build the message payload with the hidden system context
+            messages = [
+                {"role": "system", "content": f"You are a quantitative financial and energy market analyst. Provide concise, institutional-grade insights. Context for the current dashboard view: {context_data}"}
+            ] + st.session_state.chat_messages
+
+            # UPGRADE: Swapping to the new GPT-5.4 flagship model
+            response = client.chat.completions.create(
+                model="gpt-5.4", 
+                messages=messages,
+                max_tokens=500
+            )
             
-            # Use page-specific session state key to prevent message history bleed
-            chat_key = f"chatbot_messages_{st.session_state.get('page_id', 'default')}"
+            # Extract and display the response
+            bot_reply = response.choices[0].message.content
+            st.session_state.chat_messages.append({"role": "assistant", "content": bot_reply})
             
-            if chat_key not in st.session_state:
-                st.session_state[chat_key] = []
+            with st.sidebar.chat_message("assistant"):
+                st.markdown(bot_reply)
+                
+        except Exception as e:
+            logger.error(f"Chatbot API Error: {e}")
+            st.sidebar.error(f"API Error: {e}")
 
-            for m in st.session_state[chat_key]:
-                with st.chat_message(m["role"]): 
-                    st.markdown(m["content"])
-
-            if prompt := st.chat_input("Ask a question..."):
-                st.session_state[chat_key].append({"role": "user", "content": prompt})
-                with st.chat_message("user"): 
-                    st.markdown(prompt)
-
-                with st.chat_message("assistant"):
-                    try:
-                        # Use GPT-4 mini (cost/speed optimized)
-                        response = client.chat.completions.create(
-                            model="gpt-4-mini",
-                            messages=[
-                                {"role": "system", "content": f"You are a trading expert. Context: {context_data}"}
-                            ] + [{"role": m["role"], "content": m["content"]} for m in st.session_state[chat_key]]
-                        )
-                        txt = response.choices[0].message.content
-                        st.markdown(txt)
-                    except Exception as api_err:
-                        error_msg = f"API Error: {str(api_err)}"
-                        st.error(error_msg)
-                        logger.error(f"OpenAI API error: {str(api_err)}")
-                        txt = error_msg
-                        
-                st.session_state[chat_key].append({"role": "assistant", "content": txt})
-    except Exception as e:
-        logger.error(f"Chatbot initialization error: {str(e)}")
-        st.error(f"Chatbot error: {str(e)}")
+    # Add a clear button if chat gets too long
+    if len(st.session_state.chat_messages) > 0:
+        if st.sidebar.button("Clear Chat"):
+            st.session_state.chat_messages = []
+            st.rerun()
