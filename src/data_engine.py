@@ -57,7 +57,6 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
     api_key = os.environ.get("MASSIVE_API_KEY")
     if api_key:
         try:
-            # We use the standard Polygon/Massive historical aggregates endpoint
             base_url = "https://api.polygon.io/v2/aggs/ticker" 
             url = f"{base_url}/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
             
@@ -104,7 +103,7 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
 # --- OPTIONS DATA ENGINE ---
 
 @st.cache_data(ttl=3600, show_spinner="Fetching live options chain...")
-def fetch_options_chain(underlying_symbol: str, expiration_date: str = None) -> pd.DataFrame:
+def fetch_options_chain(underlying_symbol: str) -> pd.DataFrame:
     """
     Fetches the options chain snapshot for a given underlying ticker via REST.
     Flattens the nested JSON into a clean dataframe for charting.
@@ -119,9 +118,6 @@ def fetch_options_chain(underlying_symbol: str, expiration_date: str = None) -> 
         # We use the Snapshot API to get Pricing, IV, and Greeks in one call
         url = f"https://api.polygon.io/v3/snapshot/options/{formatted_sym}"
         params = {"limit": 250, "apiKey": api_key}
-        
-        if expiration_date:
-            params["expiration_date"] = expiration_date
             
         response = requests.get(url, params=params)
         response.raise_for_status()
