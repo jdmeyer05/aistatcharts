@@ -3,110 +3,65 @@ from src.auth import init_supabase
 
 st.set_page_config(page_title="Quant Platform | Login", layout="centered")
 
-# --- SIDEBAR UI OVERRIDE ---
+# Hide app.py from the sidebar completely. It is now just a hidden gateway.
 st.markdown(
-    """
-    <style>
-    ul[data-testid="stSidebarNavItems"] li:nth-child(1) span { display: none; }
-    ul[data-testid="stSidebarNavItems"] li:nth-child(1) a::after {
-        content: "🏠 Home Page"; font-weight: 400; margin-left: 5px;
-    }
-    </style>
-    """,
+    """<style>ul[data-testid="stSidebarNavItems"] li:nth-child(1) { display: none; }</style>""",
     unsafe_allow_html=True
 )
 
 supabase = init_supabase()
 
-# --- INITIALIZE SESSION STATES ---
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 if 'password_reset_mode' not in st.session_state:
     st.session_state['password_reset_mode'] = False
 
-# --- HANDLE URL REDIRECTS (Password Reset) ---
+# --- URL REDIRECT CATCHER ---
 if "code" in st.query_params:
     code = st.query_params.get("code")
     try:
-        # Exchange the code to log the user in temporarily
         res = supabase.auth.exchange_code_for_session({"auth_code": code})
         st.session_state['authenticated'] = True
         st.session_state['user_email'] = res.user.email
-        
-        # Trigger the dedicated Password Reset Screen
         st.session_state['password_reset_mode'] = True 
-        
         st.query_params.clear()
         st.rerun()
     except Exception as e:
         st.error(f"Link expired or invalid: {e}")
         st.query_params.clear()
 
-# ==========================================
-# UI ROUTING
-# ==========================================
+# --- ROUTER LOGIC ---
 
-# 1. DEDICATED PASSWORD RESET SCREEN
+# 1. Force Password Reset Screen (If clicking email link)
 if st.session_state.get('password_reset_mode'):
     st.title("🔐 Set New Password")
-    st.markdown("Please enter a new, secure password for your account.")
-    
     with st.form("mandatory_reset_form"):
-        # Explicitly tag as new-password
         new_pw = st.text_input("New Password", type="password", key="new_pw_1", autocomplete="new-password")
         confirm_pw = st.text_input("Confirm Password", type="password", key="new_pw_2", autocomplete="new-password")
         submit_new_pw = st.form_submit_button("Update Password & Enter App", type="primary")
         
         if submit_new_pw:
-            if new_pw != confirm_pw:
-                st.error("Passwords do not match. Please try again.")
-            elif len(new_pw) < 6:
-                st.error("Password must be at least 6 characters.")
-            else:
+            if new_pw == confirm_pw and len(new_pw) >= 6:
                 try:
                     supabase.auth.update_user({"password": new_pw})
-                    st.success("Password updated successfully!")
-                    st.session_state['password_reset_mode'] = False # Turn off reset mode
-                    st.rerun() # Drop them into the main dashboard
+                    st.session_state['password_reset_mode'] = False
+                    st.switch_page("pages/01_Summary.py") # TELEPORT TO DASHBOARD
                 except Exception as e:
-                    st.error(f"Failed to update password: {e}")
+                    st.error(f"Update failed: {e}")
+            else:
+                st.error("Passwords must match and be at least 6 characters.")
 
-# 2. NORMAL AUTHENTICATED DASHBOARD
+# 2. Automatically bypass login if already authenticated
 elif st.session_state['authenticated']:
-    st.title("🏦 Institutional Quant Platform")
-    st.success(f"Welcome back, {st.session_state.get('user_email', 'User')}!")
-    st.markdown("### System Status: **Online**")
-    st.markdown("""
-    Use the sidebar to navigate to your quantitative tools:
-    * **Monte Carlo Dashboard:** Multi-timeframe path simulations.
-    * **Algo Backtester:** Vectorized strategy testing.
-    * **Options Surface:** 2x2 grid analysis of IV and Liquidity.
-    * **Spread Analyzer:** Complex multi-leg PnL modeling.
-    * **ML Stock Predictor:** Stochastic recursive tactical forecasts.
-    """)
-    
-    st.divider()
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Log Out", type="primary", use_container_width=True):
-            supabase.auth.sign_out()
-            st.session_state['authenticated'] = False
-            st.session_state['user_email'] = None
-            st.rerun()
-            
-    with col2:
-        with st.expander("⚙️ Account Settings"):
-            st.info("Your account is active and secured.")
+    st.switch_page("pages/01_Summary.py") # TELEPORT TO DASHBOARD
 
-# 3. UNAUTHENTICATED LANDING PAGE
+# 3. Standard Login / Landing Screen
 else:
     st.title("🏦 Institutional Quant Platform")
-    st.markdown("Advanced algorithmic backtesting, deep-learning tactical forecasts, and multi-leg option spread analysis. Please sign in to access the engines.")
+    st.markdown("Advanced algorithmic backtesting, deep-learning tactical forecasts, and multi-leg option spread analysis.")
     
     if st.query_params.get("verified") == "true":
-        st.balloons()
-        st.success("🎉 **Email successfully verified!** Your account is now active. Please log in below.")
+        st.success("🎉 Email successfully verified! Please log in below.")
     
     st.divider()
     
@@ -114,44 +69,34 @@ else:
     
     with tab_login:
         with st.form("login_form"):
-            # Explicitly tell the browser this is an existing login
             email = st.text_input("Email Address", key="login_email", autocomplete="username")
             password = st.text_input("Password", type="password", key="login_pw", autocomplete="current-password")
-            submit_login = st.form_submit_button("Log In 🔓")
-            
-            if submit_login:
+            if st.form_submit_button("Log In 🔓"):
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     st.session_state['authenticated'] = True
                     st.session_state['user_email'] = res.user.email
-                    st.rerun()
+                    st.switch_page("pages/01_Summary.py") # TELEPORT TO DASHBOARD
                 except Exception as e:
                     st.error(f"Login failed: {e}")
 
     with tab_signup:
-        st.info("New accounts require email verification before logging in.")
         with st.form("signup_form"):
-            # Explicitly tell the browser to suggest a new password
             new_email = st.text_input("Email Address", key="signup_email", autocomplete="username")
-            new_password = st.text_input("Password", type="password", help="Must be at least 6 characters.", key="signup_pw", autocomplete="new-password")
-            submit_signup = st.form_submit_button("Create Account 📝")
-            
-            if submit_signup:
+            new_password = st.text_input("Password", type="password", key="signup_pw", autocomplete="new-password")
+            if st.form_submit_button("Create Account 📝"):
                 try:
                     res = supabase.auth.sign_up({"email": new_email, "password": new_password})
-                    st.success("Account created successfully! **Please check your email for the confirmation link** before trying to log in.")
+                    st.success("Account created! Check your email for the confirmation link.")
                 except Exception as e:
                     st.error(f"Sign up failed: {e}")
 
     with tab_forgot:
-        st.info("Enter your email to receive a secure password reset link.")
         with st.form("forgot_form"):
             reset_email = st.text_input("Email Address", key="forgot_email", autocomplete="email")
-            submit_reset = st.form_submit_button("Send Reset Link 📧")
-            
-            if submit_reset:
+            if st.form_submit_button("Send Reset Link 📧"):
                 try:
                     supabase.auth.reset_password_for_email(reset_email)
-                    st.success("Check your email for the reset link! It will open a secure page to set your new password.")
+                    st.success("Check your email for the reset link!")
                 except Exception as e:
                     st.error(f"Failed to send link: {e}")
