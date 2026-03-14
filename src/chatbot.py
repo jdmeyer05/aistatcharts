@@ -44,11 +44,11 @@ def run_sidebar_chatbot(context_data=""):
                 {"role": "system", "content": f"You are a quantitative financial and energy market analyst. Provide concise, institutional-grade insights. Context for the current dashboard view: {context_data}"}
             ] + st.session_state.chat_messages
 
-            # UPGRADE: Swapping to the new GPT-5.4 flagship model
+            # UPGRADE: Using the new model and the correct completion token parameter
             response = client.chat.completions.create(
                 model="gpt-5.4", 
                 messages=messages,
-                max_tokens=500
+                max_completion_tokens=500  # <--- THIS IS THE FIX
             )
             
             # Extract and display the response
