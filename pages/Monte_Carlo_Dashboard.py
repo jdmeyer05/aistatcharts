@@ -2,6 +2,9 @@ import streamlit as st
 # Must be the first Streamlit command to ensure enough width for side-by-side charts
 st.set_page_config(page_title="Multi-Timeframe Forecasts", layout="wide")
 
+from src.auth import check_auth
+check_auth()
+
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
