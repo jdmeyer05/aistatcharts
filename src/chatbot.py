@@ -54,7 +54,7 @@ def run_sidebar_chatbot(context_data=""):
 
             # Using 'gpt-4o-mini' which has the widest availability
             response = client.chat.completions.create(
-                model="gpt-4o-mini", 
+                model="gpt-5", 
                 messages=messages,
                 max_completion_tokens=800
             )
