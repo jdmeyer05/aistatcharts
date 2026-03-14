@@ -1,40 +1,31 @@
 import streamlit as st
-import pandas as pd
 import plotly.graph_objects as go
-import os
-from massive import RESTClient 
+from src.data_engine import fetch_massive_data, format_massive_ticker
 
-@st.cache_data(ttl=600)  # Cache for 10 minutes
-def get_massive_data(ticker, lookback):
-    # Your client.list_aggs or data pull logic here
-    return data
+st.set_page_config(page_title="ERCOT Market Analysis", layout="wide")
 
-st.set_page_config(page_title="ERCOT Basis Analyzer", layout="wide")
-
-# Secure Authentication
-api_key = os.environ.get("MASSIVE_API_KEY")
-
-if not api_key:
-    st.error("❌ Massive API Key not found. Please verify Google Cloud settings.")
-    st.stop()
-
-client = RESTClient(api_key)
-
-st.title("⚡ ERCOT Hub Spread & Basis")
-st.markdown("Analyzing congestion and price separation across ERCOT Hubs.")
-
-# Sidebar for this specific tool
+# Sidebar
 with st.sidebar:
-    st.header("Query Settings")
-    lookback = st.slider("Lookback (Days)", 1, 30, 7)
-    hub_a = st.selectbox("Hub A", ["HB_WEST", "HB_HOUSTON", "HB_NORTH", "HB_SOUTH"])
-    hub_b = st.selectbox("Hub B", ["HB_HOUSTON", "HB_WEST", "HB_NORTH", "HB_SOUTH"], index=1)
+    st.header("⚡ Node Selection")
+    hub = st.selectbox("Select Hub", ["HB_WEST", "HB_NORTH", "HB_SOUTH", "HB_HOUSTON", "HB_PAN"])
+    lookback = st.slider("Lookback Days", 30, 1095, 365)
 
-# Fetching Data Placeholder (Using your Massive key)
-if st.button("Calculate Live Spread"):
-    st.info(f"Connecting to Massive for {hub_a} and {hub_b}...")
-    
-    # Example chart logic
+# Execution
+st.title(f"ERCOT Power Market: {hub}")
+ticker = format_massive_ticker(hub)
+data = fetch_massive_data(ticker, lookback)
+
+if data is not None:
+    # 1. Main Price Chart
     fig = go.Figure()
-    # (Your existing Plotly logic here)
+    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], line=dict(color='#00d1ff', width=2)))
+    fig.update_layout(template="plotly_dark", title=f"Daily Settle Price History", yaxis_title="$/MWh")
     st.plotly_chart(fig, use_container_width=True)
+    
+    # 2. Key Stats
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Current Settle", f"${data['Close'].iloc[-1]:.2f}")
+    c2.metric("30-Day Avg", f"${data['Close'].tail(30).mean():.2f}")
+    c3.metric("Volatility (Annual)", f"{(data['Close'].pct_change().std() * np.sqrt(252) * 100):.1f}%")
+else:
+    st.error("No ERCOT data found for this node. Check API connection.")
