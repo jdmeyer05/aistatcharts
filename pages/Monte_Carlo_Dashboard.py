@@ -36,7 +36,11 @@ try:
         if 'Close' not in data.columns:
             st.error("❌ Error: Data does not contain 'Close' column. Check data source.")
         else:
-            px_close = data['Close']
+            # THE FIX: .squeeze() forces the (1093, 1) matrix into a flat 1D line
+            px_close = data['Close'].astype(float).squeeze()
+            
+            # Clean data (remove NaNs)
+            px_close = px_close.dropna()
             
             # Clean data (remove NaNs)
             px_close = px_close.dropna()
