@@ -3,6 +3,8 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm
 from datetime import datetime, date
+import matplotlib.pyplot as plt
+import seaborn as sns
 from src.auth import check_auth
 
 st.set_page_config(page_title="Options Insights", layout="wide")
@@ -21,7 +23,6 @@ def black_scholes_and_greeks(S, K, T, r, sigma, option_type='call'):
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
     
-    # Standard Normal PDF for Gamma/Vega
     N_prime_d1 = norm.pdf(d1) 
 
     if option_type == 'call':
@@ -41,7 +42,6 @@ def black_scholes_and_greeks(S, K, T, r, sigma, option_type='call'):
     return price, delta, gamma, theta, vega, rho
 
 # --- SIDEBAR CONFIGURATION ---
-# Notice how we replaced input() with st.number_input() and st.selectbox()!
 with st.sidebar:
     st.header("Option Parameters")
     
@@ -57,7 +57,7 @@ with st.sidebar:
     
     st.divider()
     st.caption("Visual Configuration")
-    purchase_price = st.number_input("Purchase Price (Premium Paid)", min_value=0.0, value=0.0, step=0.1, help="Used for PnL tracking and Break-even.")
+    purchase_price = st.number_input("Purchase Price (Premium Paid)", min_value=0.0, value=0.0, step=0.1, help="Used for PnL tracking and Contour Line.")
     price_range_pct = st.slider("Heatmap Price Range (+/- %)", 5, 50, 15, step=5)
 
 # --- CALCULATIONS ---
@@ -78,14 +78,16 @@ c6.metric("Rho (ρ)", f"${rho:.3f}")
 
 st.divider()
 
-# --- TOOL 1: THE DECAY HEATMAP ---
+# --- TOOL 1: THE DECAY HEATMAP (SEABORN) ---
 st.subheader(f"Time & Price Decay Matrix ({option_type.capitalize()})")
 
 if days_to_expiration > 0:
     lower_bound = S * (1 - (price_range_pct / 100))
     upper_bound = S * (1 + (price_range_pct / 100))
-    price_steps = np.linspace(lower_bound, upper_bound, 25)
+    # Using 20 steps to keep the cell annotations clean and readable
+    price_steps = np.linspace(lower_bound, upper_bound, 20) 
     
+    # Days array: From DTE down to 0
     days_array = np.arange(days_to_expiration, -1, -1)
     
     z_matrix = np.zeros((len(price_steps), len(days_array)))
@@ -96,26 +98,45 @@ if days_to_expiration > 0:
             price, _, _, _, _, _ = black_scholes_and_greeks(p, K, T_step, risk_free_rate, volatility, option_type)
             z_matrix[i, j] = price
 
-    fig_heat = go.Figure(data=go.Heatmap(
-        z=z_matrix,
-        x=days_array,
-        y=price_steps,
-        colorscale='RdYlGn' if option_type == 'call' else 'RdYlGn_r',
-        hovertemplate="Days to Exp: %{x}<br>Spot Price: $%{y:.2f}<br>Option Value: $%{z:.2f}<extra></extra>"
-    ))
+    # Adjust width dynamically so the squares don't get squished if DTE is high
+    plot_width = max(14, len(days_array) // 2)
+    fig, ax = plt.subplots(figsize=(plot_width, 8))
     
-    fig_heat.add_hline(y=S, line_dash="dash", line_color="white", annotation_text="Current Spot", annotation_position="bottom right")
+    cmap = sns.diverging_palette(10, 150, as_cmap=True)
+    
+    # Use purchase price as contour center if provided, otherwise use current theoretical value
+    center_val = purchase_price if purchase_price > 0 else current_price
 
-    fig_heat.update_layout(
-        template="plotly_dark",
-        xaxis_title="Days to Expiration",
-        yaxis_title="Underlying Spot Price ($)",
-        xaxis=dict(autorange="reversed"),
-        height=500
-    )
-    st.plotly_chart(fig_heat, use_container_width=True)
+    # Plot the Seaborn Heatmap
+    sns.heatmap(z_matrix, cmap=cmap, center=center_val, 
+                xticklabels=days_array, 
+                yticklabels=np.round(price_steps, 2), 
+                annot=True, fmt=".1f", cbar=False, ax=ax,
+                annot_kws={"size": 9})
+                
+    ax.set_title(f'{option_type.capitalize()} Option Price Heatmap', color='white', pad=20, size=14)
+    ax.set_xlabel('Days to Expiration', color='white', size=12)
+    ax.set_ylabel('Stock Price ($)', color='white', size=12)
+    
+    # Style ticks for dark mode
+    ax.tick_params(colors='white')
+    plt.setp(ax.get_xticklabels(), color="white")
+    plt.setp(ax.get_yticklabels(), color="white")
+
+    # Add the dashed contour line
+    X = np.arange(len(days_array)) + 0.5
+    Y = np.arange(len(price_steps)) + 0.5
+    contour = ax.contour(X, Y, z_matrix, levels=[center_val], colors='black', linewidths=2.5, linestyles='dashed')
+    ax.clabel(contour, inline=True, fontsize=12, colors='black')
+
+    # Force transparent background so it blends natively into Streamlit's dark theme
+    fig.patch.set_facecolor('#0E1117')
+    ax.set_facecolor('#0E1117')
+
+    st.pyplot(fig)
 else:
     st.warning("Option has expired. Matrix requires DTE > 0.")
+
 
 # --- TOOL 2: EXPIRATION PAYOFF ---
 st.subheader("Expiration PnL Profile")
@@ -127,15 +148,12 @@ else:
     payoff = np.maximum(K - payoff_prices, 0) - purchase_price
 
 fig_payoff = go.Figure()
-
 colors = ['#00FF00' if p >= 0 else '#FF0000' for p in payoff]
 
 fig_payoff.add_trace(go.Scatter(
     x=payoff_prices, y=payoff, 
-    mode='lines', 
-    line=dict(color='white', width=2),
-    fill='tozeroy',
-    name="PnL"
+    mode='lines', line=dict(color='white', width=2),
+    fill='tozeroy', name="PnL"
 ))
 
 fig_payoff.add_hline(y=0, line_dash="solid", line_color="gray")
@@ -145,7 +163,6 @@ fig_payoff.update_layout(
     template="plotly_dark",
     xaxis_title="Price at Expiration ($)",
     yaxis_title="Net Profit / Loss ($)",
-    height=400,
-    showlegend=False
+    height=400, showlegend=False
 )
 st.plotly_chart(fig_payoff, use_container_width=True)
