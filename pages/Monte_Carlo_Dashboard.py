@@ -41,7 +41,7 @@ try:
         elif len(data) < 10:
             st.warning(f"⚠️ Warning: Only {len(data)} data points available. Results may be unreliable (minimum 10 recommended).")
         else:
-            px_close = data['Close']
+            px_close = data['Close'].squeeze()  # Convert DataFrame to 1D Series
             
             # Run the Simulation from src/simulation.py
             try:
