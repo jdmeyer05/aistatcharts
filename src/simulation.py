@@ -34,83 +34,114 @@ def _future_seasonal_baseline(dates: pd.DatetimeIndex, seasonal_mu: pd.Series) -
     mu_map = seasonal_mu.to_dict()
     return np.array([float(mu_map.get(int(k), 0.0)) for k in keys], dtype=float)
 
-# --- ADVANCED ML TACTICAL ENGINE (30-Day) ---
+# --- STOCHASTIC RECURSIVE ML ENGINE (30-Day) ---
 
-@st.cache_data(show_spinner="Training Advanced Multi-Output ML Forecast...")
+@st.cache_data(show_spinner="Running Stochastic Recursive ML Forecast...")
 def predict_30d_random_forest(px_close: pd.Series, n_estimators: int = 200, lookback_days: int = 1000):
     """
-    Advanced Direct Multi-Step Random Forest.
-    Predicts stationary returns, utilizes momentum features (RSI/MACD), 
-    and generates uncertainty bands via tree-level simulation paths.
+    Predicts 1 day at a time (Recursive) and injects the AI's tree variance 
+    to create a realistic, "jagged" representative path instead of a stiff average.
     """
     if len(px_close) < 100:
         return np.empty((0, 0)), pd.DatetimeIndex([])
 
+    # --- 1. TRAIN THE MODEL ON 1-DAY AHEAD RETURNS ---
     df = pd.DataFrame(px_close).rename(columns={px_close.name: 'Close'})
-    
-    # 1. STATIONARITY: Predict Returns, not Prices
     df['Returns'] = df['Close'].pct_change()
     
-    # 2. ADVANCED FEATURE ENGINEERING
-    # Autoregressive Lags
-    for l in [1, 2, 3, 5, 10]:
-        df[f'lag_ret_{l}'] = df['Returns'].shift(l)
-        
-    # Volatility Cluster Detection
+    for l in [1, 2, 3, 5, 10]: df[f'lag_ret_{l}'] = df['Returns'].shift(l)
     df['Vol_20'] = df['Returns'].rolling(20).std()
     
-    # RSI (14-day Wilder's Smoothing)
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
     rs = gain / loss
     df['RSI_14'] = 100 - (100 / (1 + rs))
     
-    # MACD & Momentum
     ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema_12 - ema_26
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    # 3. DIRECT MULTI-STEP TARGETS
-    T = 30
-    for i in range(1, T + 1):
-        df[f'Target_Ret_{i}'] = df['Returns'].shift(-i)
-        
-    features = [c for c in df.columns if 'lag' in c or 'Vol' in c or 'RSI' in c or 'MACD' in c]
-    targets = [f'Target_Ret_{i}' for i in range(1, T + 1)]
+    # Target is exactly tomorrow's return
+    df['Target_Ret'] = df['Returns'].shift(-1)
     
-    # Grab the absolute latest features for inference BEFORE dropping NaNs
-    current_features = df[features].iloc[-1:].values
-    current_price = df['Close'].iloc[-1]
-        
-    # NOW drop NaNs to create a perfectly clean training dataset
+    features = [c for c in df.columns if 'lag' in c or 'Vol' in c or 'RSI' in c or 'MACD' in c]
+    
     train_df = df.dropna().tail(lookback_days)
     X_train = train_df[features]
-    y_train = train_df[targets]
+    y_train = train_df['Target_Ret']
     
-    # 4. TRAIN MULTI-OUTPUT MODEL
     model = RandomForestRegressor(n_estimators=n_estimators, max_depth=10, random_state=42, n_jobs=-1)
     model.fit(X_train, y_train)
     
-    # 5. GENERATE SIMULATION PATHS FROM TREE VARIANCE
-    tree_preds = [tree.predict(current_features)[0] for tree in model.estimators_]
-    tree_preds = np.array(tree_preds) 
+    # --- 2. RECURSIVE 1-STEP-AHEAD PROJECTION ---
+    T = 30
+    buffer = px_close.tail(150).tolist() # Hold enough history to calculate rolling features
     
-    tree_growth = 1.0 + tree_preds
-    tree_cum_returns = np.cumprod(tree_growth, axis=1)
-    tree_price_paths = current_price * tree_cum_returns 
+    mu_forecast = []
+    sigma_forecast = []
     
-    p50_path = np.percentile(tree_price_paths, 50, axis=0)
-    p5_path = np.percentile(tree_price_paths, 5, axis=0)
-    p95_path = np.percentile(tree_price_paths, 95, axis=0)
+    for step in range(T):
+        # Recalculate indicators dynamically based on the evolving buffer
+        temp_df = pd.DataFrame({'Close': buffer})
+        temp_df['Returns'] = temp_df['Close'].pct_change()
+        
+        for l in [1, 2, 3, 5, 10]: temp_df[f'lag_ret_{l}'] = temp_df['Returns'].shift(l)
+        temp_df['Vol_20'] = temp_df['Returns'].rolling(20).std()
+        
+        delta = temp_df['Close'].diff()
+        gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
+        loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
+        rs = gain / loss
+        temp_df['RSI_14'] = 100 - (100 / (1 + rs))
+        
+        ema_12 = temp_df['Close'].ewm(span=12, adjust=False).mean()
+        ema_26 = temp_df['Close'].ewm(span=26, adjust=False).mean()
+        macd = ema_12 - ema_26
+        macd_signal = macd.ewm(span=9, adjust=False).mean()
+        temp_df['MACD'] = macd
+        temp_df['MACD_Signal'] = macd_signal
+        temp_df['MACD_Hist'] = macd - macd_signal
+        
+        # Extract the absolute latest technical setup
+        X_current = temp_df[features].iloc[-1:].values
+        
+        # Predict drift and uncertainty
+        tree_preds = [tree.predict(X_current)[0] for tree in model.estimators_]
+        step_mu = np.mean(tree_preds)
+        step_sigma = np.std(tree_preds)
+        
+        mu_forecast.append(step_mu)
+        sigma_forecast.append(step_sigma)
+        
+        # Update buffer with the deterministic mean for the next step's calculation
+        buffer.append(buffer[-1] * (1 + step_mu))
+
+    # --- 3. MONTE CARLO INJECTION (Removes the "Stiffness") ---
+    n_sims = 1000
+    rng = np.random.default_rng(42) # Fixed seed to prevent jumping charts on re-renders
+    
+    # Generate 1,000 random walks using the AI's exact daily predicted drift and volatility
+    shocks = rng.normal(loc=np.array(mu_forecast), scale=np.array(sigma_forecast), size=(n_sims, T))
+    price_paths = px_close.iloc[-1] * np.cumprod(1.0 + shocks, axis=1)
+    
+    p5_path = np.percentile(price_paths, 5, axis=0)
+    p95_path = np.percentile(price_paths, 95, axis=0)
+    
+    # Identify the "Representative Path"
+    # Instead of plotting a perfectly smooth median line, we find the single actual 
+    # simulated jagged path that ends closest to the median value. 
+    median_end_value = np.percentile(price_paths[:, -1], 50)
+    closest_path_idx = np.argmin(np.abs(price_paths[:, -1] - median_end_value))
+    stochastic_mean_path = price_paths[closest_path_idx]
     
     last_ts = pd.Timestamp(px_close.index[-1])
     future_dates = pd.bdate_range(start=last_ts + pd.Timedelta(days=1), periods=T)
     
     return {
-        'mean': p50_path,
+        'mean': stochastic_mean_path, 
         'lower': p5_path,
         'upper': p95_path
     }, future_dates
