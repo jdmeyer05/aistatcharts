@@ -8,6 +8,9 @@ from src.chatbot import run_sidebar_chatbot
 
 st.set_page_config(page_title="Algo Backtester", layout="wide")
 
+from src.auth import check_auth
+check_auth()
+
 st.title("⚙️ Algorithmic Strategy Backtester")
 st.markdown("Test quantitative trading strategies with institutional-grade risk metrics, drawdown analysis, and trade logging.")
 
