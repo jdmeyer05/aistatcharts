@@ -11,3 +11,4 @@ requests
 extra-streamlit-components
 stripe
 matplotlib
+seaborn
