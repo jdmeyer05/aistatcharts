@@ -37,7 +37,6 @@ def calculate_option_pnl(strike, premium, type, side, price_at_expiry):
     return (payoff - premium) * mult * 100
 
 # --- State Management for Speed ---
-# Tracking the last ticker to prevent redundant API calls on page switch
 if 'last_ticker' not in st.session_state:
     st.session_state.last_ticker = None
 
@@ -59,22 +58,22 @@ if ticker != st.session_state.last_ticker:
 
 # --- Main Execution ---
 if submit_fetch or 'options_df' in st.session_state:
-    # 1. Fetch Underlying Price (Optimized via Session State)
+    # 1. Fetch Underlying Price
     if 'underlying_price' not in st.session_state or submit_fetch:
         underlying_df = fetch_massive_data(ticker, 5)
         if underlying_df is not None and not underlying_df.empty:
             st.session_state['underlying_price'] = underlying_df['Close'].iloc[-1]
         else:
-            st.error(f"Could not fetch underlying price for {ticker}. Please verify the stock ticker.")
+            st.error(f"Could not fetch underlying price for {ticker}.")
             st.stop()
     
-    # 2. Fetch Options Chain (Optimized via Session State)
+    # 2. Fetch Options Chain
     if 'options_df' not in st.session_state or submit_fetch:
         options_df = fetch_options_chain(ticker)
         if options_df is not None and not options_df.empty:
             st.session_state['options_df'] = options_df
         else:
-            st.error(f"No options data available for {ticker}. Ensure it is a stock with an active options chain.")
+            st.error(f"No options data available for {ticker}.")
             st.stop()
     
     current_price = st.session_state['underlying_price']
@@ -84,17 +83,46 @@ if submit_fetch or 'options_df' in st.session_state:
     col1, col2 = st.columns([1, 3])
 
     with col1:
-        st.subheader("Leg Selection")
-        # Filter for closest expiration or let user choose
-        expirations = sorted(options_df['expiration_date'].unique())
-        selected_exp = st.selectbox("Expiration Date", expirations)
+        st.subheader("Filter & Select")
         
-        filtered_chain = options_df[options_df['expiration_date'] == selected_exp].sort_values('strike_price')
+        # --- ENHANCEMENT: Multi-select for Expiration Dates ---
+        all_expirations = sorted(options_df['expiration_date'].unique())
+        
+        # Option to select all
+        select_all = st.checkbox("Select All Expirations", value=False)
+        
+        if select_all:
+            selected_exps = st.multiselect(
+                "Expiration Dates", 
+                all_expirations, 
+                default=all_expirations
+            )
+        else:
+            # Default to the nearest expiration if nothing selected
+            selected_exps = st.multiselect(
+                "Expiration Dates", 
+                all_expirations, 
+                default=[all_expirations[0]] if all_expirations else []
+            )
+
+        if not selected_exps:
+            st.warning("Please select at least one expiration date.")
+            st.stop()
+
+        # Primary Expiration for PnL Strategy modeling (usually one date)
+        primary_exp = st.selectbox(
+            "Primary Expiration for Strategy PnL", 
+            selected_exps,
+            index=0
+        )
+        
+        # Filter the chain for the strategy builder
+        strategy_chain = options_df[options_df['expiration_date'] == primary_exp].sort_values('strike_price')
         
         # Strategy Builder UI
         legs = []
         if strategy_type == "Bull Call Spread":
-            calls = filtered_chain[filtered_chain['contract_type'] == 'call']
+            calls = strategy_chain[strategy_chain['contract_type'] == 'call']
             if not calls.empty:
                 atm_call = calls.iloc[(calls['strike_price'] - current_price).abs().argsort()[:1]]
                 otm_call = calls[calls['strike_price'] > current_price].iloc[2:3] if len(calls[calls['strike_price'] > current_price]) > 2 else calls.tail(1)
@@ -103,8 +131,8 @@ if submit_fetch or 'options_df' in st.session_state:
                 legs.append({"type": "call", "side": "Short", "strike": otm_call['strike_price'].values[0], "premium": (otm_call['bid'].values[0] + otm_call['ask'].values[0])/2})
 
         elif strategy_type == "Iron Condor":
-            calls = filtered_chain[filtered_chain['contract_type'] == 'call']
-            puts = filtered_chain[filtered_chain['contract_type'] == 'put']
+            calls = strategy_chain[strategy_chain['contract_type'] == 'call']
+            puts = strategy_chain[strategy_chain['contract_type'] == 'put']
             
             if not calls.empty and not puts.empty:
                 legs.append({"type": "put", "side": "Long", "strike": puts[puts['strike_price'] < current_price * 0.95]['strike_price'].max() or puts['strike_price'].min(), "premium": 0.5})
@@ -113,7 +141,7 @@ if submit_fetch or 'options_df' in st.session_state:
                 legs.append({"type": "call", "side": "Long", "strike": calls[calls['strike_price'] > current_price * 1.05]['strike_price'].min() or calls['strike_price'].max(), "premium": 0.4})
 
         # Manual Adjustment
-        st.info("Adjust Legs Below:")
+        st.info(f"Adjusting strategy for {primary_exp}:")
         final_legs = []
         for i, leg in enumerate(legs):
             with st.expander(f"Leg {i+1}: {leg['side']} {leg['strike']} {leg['type'].upper()}"):
@@ -125,7 +153,7 @@ if submit_fetch or 'options_df' in st.session_state:
 
     with col2:
         # --- PnL Simulation ---
-        st.subheader("Strategy PnL Profile")
+        st.subheader(f"Strategy PnL Profile (Expiry: {primary_exp})")
         
         # Price Range for X-axis (±20% of current price)
         price_range = np.linspace(current_price * 0.8, current_price * 1.2, 100)
@@ -143,17 +171,13 @@ if submit_fetch or 'options_df' in st.session_state:
         
         # Metrics
         m1, m2, m3 = st.columns(3)
-        m1.metric("Current Price", f"${current_price:.2f}")
+        m1.metric("Spot Price", f"${current_price:.2f}")
         m2.metric("Net Cost/Credit", f"${net_premium * contract_qty:,.2f}", delta_color="inverse")
         m3.metric("Max Profit", f"${np.max(total_pnl):,.2f}")
 
         # Plotly PnL Chart
         fig = go.Figure()
-        
-        # Zero line
         fig.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5)
-        
-        # PnL Curve
         fig.add_trace(go.Scatter(
             x=price_range, y=total_pnl,
             mode='lines',
@@ -162,26 +186,20 @@ if submit_fetch or 'options_df' in st.session_state:
             fillcolor='rgba(0, 209, 255, 0.1)',
             name="PnL at Expiry"
         ))
-        
-        # Current Price Marker
         fig.add_vline(x=current_price, line_dash="dot", line_color="#ffaa00", annotation_text="Spot")
-
-        fig.update_layout(
-            template="plotly_dark",
-            xaxis_title="Price at Expiration",
-            yaxis_title="Profit / Loss ($)",
-            hovermode='x unified',
-            height=500
-        )
+        fig.update_layout(template="plotly_dark", xaxis_title="Price at Expiration", yaxis_title="Profit / Loss ($)", height=450)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Strategy Greeks
-        st.subheader("Portfolio Snapshot")
-        display_cols = ['strike_price', 'contract_type', 'bid', 'ask', 'implied_volatility', 'delta', 'theta']
-        st.dataframe(filtered_chain[display_cols].head(15), use_container_width=True)
+        # --- Data Table: Selected Expirations ---
+        st.subheader("Selected Options Chain Data")
+        # Filter main dataframe by the multiselect
+        display_df = options_df[options_df['expiration_date'].isin(selected_exps)].sort_values(['expiration_date', 'strike_price'])
+        
+        display_cols = ['expiration_date', 'strike_price', 'contract_type', 'bid', 'ask', 'implied_volatility', 'delta', 'theta']
+        st.dataframe(display_df[display_cols], use_container_width=True, height=400)
 
     # AI Context
-    ctx = f"Option spread analysis for {ticker}. Strategy: {strategy_type}. Spot: {current_price}. Total PnL max: ${np.max(total_pnl):,.2f}."
+    ctx = f"Option spread analysis for {ticker}. Strategy: {strategy_type}. Primary Expiry: {primary_exp}. Selected Expirations: {', '.join(selected_exps)}."
     run_sidebar_chatbot(ctx)
 
 else:
