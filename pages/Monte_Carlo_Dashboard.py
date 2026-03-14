@@ -5,7 +5,10 @@ import plotly.graph_objects as go
 import plotly.express as px_plot
 from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.simulation import get_returns, run_monte_carlo_engine # Assuming these are in simulation.py
+from src.chatbot import run_sidebar_chatbot
 
+# Run this at the start of every page script
+run_sidebar_chatbot()
 # --- CONFIG ---
 st.set_page_config(page_title="Monte Carlo & Seasonality", layout="wide")
 
