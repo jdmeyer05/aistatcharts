@@ -6,3 +6,4 @@ yfinance
 supabase
 openai
 massive
+scikit-learn
