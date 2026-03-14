@@ -1,4 +1,5 @@
 import streamlit as st
+import extra_streamlit_components as stx
 from src.auth import init_supabase, check_auth
 
 st.set_page_config(page_title="Platform Summary", layout="wide")
@@ -25,12 +26,11 @@ def safe_page_link(col, path, label, icon, description):
             st.error(f"Missing File: `{path}`")
             st.caption("Update the filename in `01_Summary.py` to match your actual file.")
 
-# NOTE: If any of these buttons show the red warning, just change the string 
-# inside the quotes below to match whatever you actually named the file in your /pages folder!
-safe_page_link(c1, "pages/02_Algo_Backtester.py", "Launch Engine", "⚡", "**Algo Backtester**\n\nVectorized historical strategy testing.")
-safe_page_link(c2, "pages/03_Historical_Analysis.py", "Launch Engine", "📈", "**Historical Analysis**\n\nDeep-dive market data visualization.")
-safe_page_link(c3, "pages/04_Spread_Analyzer.py", "Launch Engine", "🕸️", "**Spread Analyzer**\n\nMulti-leg options payoff mapping.")
-safe_page_link(c4, "pages/05_ML_Stock_Predictor.py", "Launch Engine", "🤖", "**ML Predictor**\n\nStochastic Random Forest forecasts.")
+# 🚨 NOTICE: The paths below MUST match your exact file names in the pages/ folder!
+safe_page_link(c1, "pages/Algo_Backtester.py", "Launch Engine", "⚡", "**Algo Backtester**\n\nVectorized historical strategy testing.")
+safe_page_link(c2, "pages/Historical_Analysis.py", "Launch Engine", "📈", "**Historical Analysis**\n\nDeep-dive market data visualization.")
+safe_page_link(c3, "pages/Option_Spread_Analyzer.py", "Launch Engine", "🕸️", "**Spread Analyzer**\n\nMulti-leg options payoff mapping.")
+safe_page_link(c4, "pages/ML_Stock_Predictor.py", "Launch Engine", "🤖", "**ML Predictor**\n\nStochastic Random Forest forecasts.")
 
 st.divider()
 
@@ -51,7 +51,16 @@ with col1:
 
 with col2:
     if st.button("Log Out of Platform", type="primary", use_container_width=True):
+        # Initialize cookie manager
+        cookie_manager = stx.CookieManager()
+        
+        # 1. Sign out of backend
         supabase.auth.sign_out()
+        
+        # 2. Destroy the browser cookie so they don't auto-login again
+        cookie_manager.delete("quant_user_session")
+        
+        # 3. Clear session state and redirect to login screen
         st.session_state['authenticated'] = False
         st.session_state['user_email'] = None
         st.switch_page("app.py")
