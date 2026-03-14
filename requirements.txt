@@ -9,3 +9,4 @@ massive
 scikit-learn
 requests
 extra-streamlit-components
+stripe
