@@ -1,25 +1,31 @@
 import streamlit as st
-import os
 from supabase import create_client, Client
-import logging
-
-logger = logging.getLogger(__name__)
 
 @st.cache_resource
 def init_supabase() -> Client:
-    """Initializes the Supabase client for Auth."""
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        st.error("🚨 Supabase credentials missing. Check environment variables.")
-        st.stop()
+    """Initialize and cache the Supabase client."""
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
 
 def check_auth():
     """
-    Blocks access to the page if the user is not logged in.
-    Drop this at the very top of every script in the pages/ folder.
+    Security firewall and UI override. 
+    Drop this at the top of every page in the /pages folder.
     """
-    if 'authenticated' not in st.session_state or not st.session_state['authenticated']:
-        st.warning("🔒 This page is protected. Please log in from the Home page.")
-        st.stop() # Immediately halts execution of the rest of the page
+    # 1. Inject the CSS override on every page the firewall protects
+    st.markdown(
+        """
+        <style>
+        ul[data-testid="stSidebarNavItems"] li:nth-child(1) span { display: none; }
+        ul[data-testid="stSidebarNavItems"] li:nth-child(1) a::after {
+            content: "🏠 Home Page"; font-weight: 400; margin-left: 5px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    # 2. Check if the user is actually logged in
+    if not st.session_state.get('authenticated', False):
+        st.switch_page("app.py")
