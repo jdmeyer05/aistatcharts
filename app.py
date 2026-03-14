@@ -1,9 +1,9 @@
 import streamlit as st
+import extra_streamlit_components as stx
 from src.auth import init_supabase
 
 st.set_page_config(page_title="Quant Platform | Login", layout="centered")
 
-# Hide app.py from the sidebar completely. It is now just a hidden gateway.
 st.markdown(
     """<style>ul[data-testid="stSidebarNavItems"] li:nth-child(1) { display: none; }</style>""",
     unsafe_allow_html=True
@@ -11,10 +11,21 @@ st.markdown(
 
 supabase = init_supabase()
 
+# --- INITIALIZE COOKIE MANAGER ---
+cookie_manager = stx.CookieManager()
+
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 if 'password_reset_mode' not in st.session_state:
     st.session_state['password_reset_mode'] = False
+
+# --- AUTO-LOGIN VIA COOKIE ---
+# Check if the user already has an active session cookie in their browser
+cached_email = cookie_manager.get(cookie="quant_user_session")
+if cached_email and not st.session_state['authenticated']:
+    st.session_state['authenticated'] = True
+    st.session_state['user_email'] = cached_email
+    st.switch_page("pages/01_Summary.py") # Teleport them instantly
 
 # --- URL REDIRECT CATCHER ---
 if "code" in st.query_params:
@@ -32,37 +43,32 @@ if "code" in st.query_params:
 
 # --- ROUTER LOGIC ---
 
-# 1. Force Password Reset Screen (If clicking email link)
 if st.session_state.get('password_reset_mode'):
     st.title("🔐 Set New Password")
     with st.form("mandatory_reset_form"):
         new_pw = st.text_input("New Password", type="password", key="new_pw_1", autocomplete="new-password")
         confirm_pw = st.text_input("Confirm Password", type="password", key="new_pw_2", autocomplete="new-password")
-        submit_new_pw = st.form_submit_button("Update Password & Enter App", type="primary")
-        
-        if submit_new_pw:
+        if st.form_submit_button("Update Password & Enter App", type="primary"):
             if new_pw == confirm_pw and len(new_pw) >= 6:
                 try:
-                    supabase.auth.update_user({"password": new_pw})
+                    res = supabase.auth.update_user({"password": new_pw})
+                    
+                    # Write the cookie upon password reset!
+                    cookie_manager.set("quant_user_session", st.session_state['user_email'], max_days=30)
+                    
                     st.session_state['password_reset_mode'] = False
-                    st.switch_page("pages/01_Summary.py") # TELEPORT TO DASHBOARD
+                    st.switch_page("pages/01_Summary.py")
                 except Exception as e:
                     st.error(f"Update failed: {e}")
             else:
                 st.error("Passwords must match and be at least 6 characters.")
 
-# 2. Automatically bypass login if already authenticated
 elif st.session_state['authenticated']:
-    st.switch_page("pages/01_Summary.py") # TELEPORT TO DASHBOARD
+    st.switch_page("pages/01_Summary.py")
 
-# 3. Standard Login / Landing Screen
 else:
     st.title("🏦 Institutional Quant Platform")
     st.markdown("Advanced algorithmic backtesting, deep-learning tactical forecasts, and multi-leg option spread analysis.")
-    
-    if st.query_params.get("verified") == "true":
-        st.success("🎉 Email successfully verified! Please log in below.")
-    
     st.divider()
     
     tab_login, tab_signup, tab_forgot = st.tabs(["Log In", "Sign Up", "Forgot Password"])
@@ -74,9 +80,13 @@ else:
             if st.form_submit_button("Log In 🔓"):
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    
+                    # 🍪 WRITE THE SECURE COOKIE ON LOGIN (Valid for 30 days)
+                    cookie_manager.set("quant_user_session", res.user.email, max_days=30)
+                    
                     st.session_state['authenticated'] = True
                     st.session_state['user_email'] = res.user.email
-                    st.switch_page("pages/01_Summary.py") # TELEPORT TO DASHBOARD
+                    st.switch_page("pages/01_Summary.py")
                 except Exception as e:
                     st.error(f"Login failed: {e}")
 
