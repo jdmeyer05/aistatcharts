@@ -120,15 +120,19 @@ def fetch_options_chain(underlying_symbol, expiration_date=None):
     # Tier 3: yfinance Fallback
     try:
         yahoo_ticker = translate_to_yahoo(formatted_symbol)
+        st.write(f"🔍 DEBUG: Attempting yfinance fetch for {yahoo_ticker}...") # ADD THIS
+        
         df_yf = yf.download(yahoo_ticker, start=start_date, end=end_date, progress=False)
+        
         if not df_yf.empty:
+            st.write("✅ DEBUG: yfinance succeeded!") # ADD THIS
             df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
             return df_yf[['Close']]
         else:
-            st.warning(f"⚠️ Yahoo Finance returned empty data for {yahoo_ticker}.")
+            st.write("❌ DEBUG: yfinance returned an empty dataframe.") # ADD THIS
             return None
     except Exception as e:
-        st.error(f"🚨 All sources failed. yfinance error: {e}")
+        st.write(f"🚨 DEBUG: yfinance threw a hard error: {e}") # ADD THIS
         return None
     
     return None
