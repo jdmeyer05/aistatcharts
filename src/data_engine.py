@@ -102,10 +102,10 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
 
 # --- OPTIONS DATA ENGINE ---
 
-@st.cache_data(ttl=3600, show_spinner="Fetching live options chain...")
+@st.cache_data(ttl=3600, show_spinner="Fetching live options chain (this may take a moment for SPY)...")
 def fetch_options_chain(underlying_symbol: str) -> pd.DataFrame:
     """
-    Fetches the options chain snapshot for a given underlying ticker via REST.
+    Fetches the options chain snapshot via REST with pagination.
     Flattens the nested JSON into a clean dataframe for charting.
     """
     api_key = os.environ.get("MASSIVE_API_KEY")
@@ -114,38 +114,47 @@ def fetch_options_chain(underlying_symbol: str) -> pd.DataFrame:
         
     try:
         formatted_sym = translate_to_yahoo(underlying_symbol).upper()
-        
-        # We use the Snapshot API to get Pricing, IV, and Greeks in one call
         url = f"https://api.polygon.io/v3/snapshot/options/{formatted_sym}"
         params = {"limit": 250, "apiKey": api_key}
             
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
+        contracts = []
         
-        if 'results' in data and len(data['results']) > 0:
-            st.session_state['current_data_source'] = "Massive API (Options Snapshot Feed)"
+        # Paginate to grab the full chain (capped at 5000 to prevent memory crashes)
+        while url and len(contracts) < 5000:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
             
-            # Flattening logic to prevent "Missing Columns" errors in the UI
-            contracts = []
-            for r in data['results']:
-                contract = {
-                    "ticker": r.get("details", {}).get("ticker"),
-                    "contract_type": r.get("details", {}).get("contract_type"),
-                    "strike_price": r.get("details", {}).get("strike_price"),
-                    "expiration_date": r.get("details", {}).get("expiration_date"),
-                    "implied_volatility": r.get("implied_volatility"),
-                    "open_interest": r.get("open_interest"),
-                    "volume": r.get("day", {}).get("volume", 0),
-                    "bid": r.get("last_quote", {}).get("bid", 0),
-                    "ask": r.get("last_quote", {}).get("ask", 0),
-                    "delta": r.get("greeks", {}).get("delta"),
-                    "gamma": r.get("greeks", {}).get("gamma"),
-                    "theta": r.get("greeks", {}).get("theta"),
-                    "vega": r.get("greeks", {}).get("vega"),
-                }
-                contracts.append(contract)
+            if 'results' in data and len(data['results']) > 0:
+                st.session_state['current_data_source'] = "Massive API (Options Snapshot Feed)"
                 
+                for r in data['results']:
+                    contract = {
+                        "ticker": r.get("details", {}).get("ticker"),
+                        "contract_type": r.get("details", {}).get("contract_type"),
+                        "strike_price": r.get("details", {}).get("strike_price"),
+                        "expiration_date": r.get("details", {}).get("expiration_date"),
+                        "implied_volatility": r.get("implied_volatility"),
+                        "open_interest": r.get("open_interest"),
+                        "volume": r.get("day", {}).get("volume", 0),
+                        "bid": r.get("last_quote", {}).get("bid", 0),
+                        "ask": r.get("last_quote", {}).get("ask", 0),
+                        "delta": r.get("greeks", {}).get("delta"),
+                        "gamma": r.get("greeks", {}).get("gamma"),
+                        "theta": r.get("greeks", {}).get("theta"),
+                        "vega": r.get("greeks", {}).get("vega"),
+                    }
+                    contracts.append(contract)
+            
+            # Check for the next page
+            next_url = data.get("next_url")
+            if next_url:
+                url = next_url
+                params = {"apiKey": api_key} # The next_url already has the cursor
+            else:
+                break
+                
+        if contracts:
             return pd.DataFrame(contracts)
         return None
             
