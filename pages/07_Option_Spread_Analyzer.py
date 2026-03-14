@@ -35,25 +35,43 @@ def calculate_option_pnl(strike, premium, type, side, price_at_expiry):
         payoff = np.maximum(strike - price_at_expiry, 0)
     return (payoff - premium) * mult * 100
 
-# --- Main Execution ---
+# --- State Management for Speed ---
+# Tracking the last ticker to prevent redundant API calls on page switch
+if 'last_ticker' not in st.session_state:
+    st.session_state.last_ticker = None
+
 ticker = format_massive_ticker(ticker_input)
 
+# Clear local cache if the user changes the ticker
+if ticker != st.session_state.last_ticker:
+    if 'options_df' in st.session_state:
+        del st.session_state['options_df']
+    if 'underlying_price' in st.session_state:
+        del st.session_state['underlying_price']
+    st.session_state.last_ticker = ticker
+
+# --- Main Execution ---
 if submit_fetch or 'options_df' in st.session_state:
-    # 1. Fetch Underlying Price
-    underlying_df = fetch_massive_data(ticker, 5)
-    if underlying_df is None or underlying_df.empty:
-        st.error("Could not fetch underlying price.")
-        st.stop()
+    # 1. Fetch Underlying Price (Optimized via Session State)
+    if 'underlying_price' not in st.session_state or submit_fetch:
+        underlying_df = fetch_massive_data(ticker, 5)
+        if underlying_df is not None and not underlying_df.empty:
+            st.session_state['underlying_price'] = underlying_df['Close'].iloc[-1]
+        else:
+            st.error("Could not fetch underlying price.")
+            st.stop()
     
-    current_price = underlying_df['Close'].iloc[-1]
+    # 2. Fetch Options Chain (Optimized via Session State)
+    if 'options_df' not in st.session_state or submit_fetch:
+        options_df = fetch_options_chain(ticker)
+        if options_df is not None and not options_df.empty:
+            st.session_state['options_df'] = options_df
+        else:
+            st.error("No options data available for this ticker.")
+            st.stop()
     
-    # 2. Fetch Options Chain
-    options_df = fetch_options_chain(ticker)
-    if options_df is None or options_df.empty:
-        st.error("No options data available for this ticker.")
-        st.stop()
-    
-    st.session_state['options_df'] = options_df
+    current_price = st.session_state['underlying_price']
+    options_df = st.session_state['options_df']
 
     # UI Layout
     col1, col2 = st.columns([1, 3])
@@ -69,23 +87,23 @@ if submit_fetch or 'options_df' in st.session_state:
         # Strategy Builder UI
         legs = []
         if strategy_type == "Bull Call Spread":
-            # Default setup: Buy ATM call, Sell OTM call
-            atm_call = filtered_chain[filtered_chain['contract_type'] == 'call'].iloc[(filtered_chain[filtered_chain['contract_type'] == 'call']['strike_price'] - current_price).abs().argsort()[:1]]
-            otm_call = filtered_chain[(filtered_chain['contract_type'] == 'call') & (filtered_chain['strike_price'] > current_price)].iloc[2:3]
-            
-            legs.append({"type": "call", "side": "Long", "strike": atm_call['strike_price'].values[0], "premium": (atm_call['bid'].values[0] + atm_call['ask'].values[0])/2})
-            legs.append({"type": "call", "side": "Short", "strike": otm_call['strike_price'].values[0], "premium": (otm_call['bid'].values[0] + otm_call['ask'].values[0])/2})
+            calls = filtered_chain[filtered_chain['contract_type'] == 'call']
+            if not calls.empty:
+                atm_call = calls.iloc[(calls['strike_price'] - current_price).abs().argsort()[:1]]
+                otm_call = calls[calls['strike_price'] > current_price].iloc[2:3] if len(calls[calls['strike_price'] > current_price]) > 2 else calls.tail(1)
+                
+                legs.append({"type": "call", "side": "Long", "strike": atm_call['strike_price'].values[0], "premium": (atm_call['bid'].values[0] + atm_call['ask'].values[0])/2})
+                legs.append({"type": "call", "side": "Short", "strike": otm_call['strike_price'].values[0], "premium": (otm_call['bid'].values[0] + otm_call['ask'].values[0])/2})
 
         elif strategy_type == "Iron Condor":
-            # Sell OTM Put, Buy further OTM Put | Sell OTM Call, Buy further OTM Call
             calls = filtered_chain[filtered_chain['contract_type'] == 'call']
             puts = filtered_chain[filtered_chain['contract_type'] == 'put']
             
-            # Simple heuristic for strikes
-            legs.append({"type": "put", "side": "Long", "strike": puts[puts['strike_price'] < current_price * 0.95]['strike_price'].max(), "premium": 0.5})
-            legs.append({"type": "put", "side": "Short", "strike": puts[puts['strike_price'] < current_price * 0.98]['strike_price'].max(), "premium": 1.2})
-            legs.append({"type": "call", "side": "Short", "strike": calls[calls['strike_price'] > current_price * 1.02]['strike_price'].min(), "premium": 1.1})
-            legs.append({"type": "call", "side": "Long", "strike": calls[calls['strike_price'] > current_price * 1.05]['strike_price'].min(), "premium": 0.4})
+            if not calls.empty and not puts.empty:
+                legs.append({"type": "put", "side": "Long", "strike": puts[puts['strike_price'] < current_price * 0.95]['strike_price'].max() or puts['strike_price'].min(), "premium": 0.5})
+                legs.append({"type": "put", "side": "Short", "strike": puts[puts['strike_price'] < current_price * 0.98]['strike_price'].max() or puts['strike_price'].min(), "premium": 1.2})
+                legs.append({"type": "call", "side": "Short", "strike": calls[calls['strike_price'] > current_price * 1.02]['strike_price'].min() or calls['strike_price'].max(), "premium": 1.1})
+                legs.append({"type": "call", "side": "Long", "strike": calls[calls['strike_price'] > current_price * 1.05]['strike_price'].min() or calls['strike_price'].max(), "premium": 0.4})
 
         # Manual Adjustment
         st.info("Adjust Legs Below:")
@@ -150,15 +168,13 @@ if submit_fetch or 'options_df' in st.session_state:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Strategy Greeks (Approximate Summation)
-        st.subheader("Portfolio Greeks (Estimate)")
-        g1, g2, g3, g4 = st.columns(4)
-        # Note: In a production app, we would sum the actual Greeks from the fetch_options_chain output
-        # Here we provide a summary view
-        st.dataframe(options_df[options_df['expiration_date'] == selected_exp][['strike_price', 'contract_type', 'delta', 'gamma', 'theta', 'vega']].head(10))
+        # Strategy Greeks
+        st.subheader("Portfolio Snapshot")
+        display_cols = ['strike_price', 'contract_type', 'bid', 'ask', 'implied_volatility', 'delta', 'theta']
+        st.dataframe(filtered_chain[display_cols].head(15), use_container_width=True)
 
     # AI Context
-    ctx = f"Analyzing {strategy_type} on {ticker}. Spot: {current_price}. Net Premium: {net_premium}. Leg 1 Strike: {final_legs[0]['strike']}."
+    ctx = f"Option spread analysis for {ticker}. Strategy: {strategy_type}. Spot: {current_price}. Total PnL max: ${np.max(total_pnl):,.2f}."
     run_sidebar_chatbot(ctx)
 
 else:
