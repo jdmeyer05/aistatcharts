@@ -10,14 +10,15 @@ st.set_page_config(page_title="Option Spread Analyzer", layout="wide")
 
 st.title("🦅 Option Spread & PnL Analyzer")
 st.markdown("""
-Model complex option strategies, visualize expiration PnL profiles, and analyze the 'Greeks' of your spread.
+Model complex option strategies, visualize expiration PnL profiles, and analyze the 'Greeks' of your spread. 
+*Note: This analyzer currently supports Stock and ETF tickers only.*
 """)
 
 # --- Sidebar: Strategy Selection ---
 with st.sidebar:
     st.header("Strategy Configuration")
     with st.form("strategy_settings"):
-        ticker_input = st.text_input("Underlying Ticker", value="SPY")
+        ticker_input = st.text_input("Underlying Ticker (Stocks/ETFs Only)", value="SPY")
         strategy_type = st.selectbox(
             "Strategy Type", 
             ["Bull Call Spread", "Bear Put Spread", "Iron Condor", "Straddle", "Strangle", "Custom"]
@@ -40,7 +41,13 @@ def calculate_option_pnl(strike, premium, type, side, price_at_expiry):
 if 'last_ticker' not in st.session_state:
     st.session_state.last_ticker = None
 
+# Format the ticker
 ticker = format_massive_ticker(ticker_input)
+
+# VALIDATION: Strictly allow only stock/equity tickers for options
+if ":" in ticker or "ERCOT" in ticker.upper():
+    st.error("🚨 Invalid Ticker Type: Options analysis is only supported for Equities (Stocks/ETFs). Please enter a symbol like AAPL, TSLA, or SPY.")
+    st.stop()
 
 # Clear local cache if the user changes the ticker
 if ticker != st.session_state.last_ticker:
@@ -58,7 +65,7 @@ if submit_fetch or 'options_df' in st.session_state:
         if underlying_df is not None and not underlying_df.empty:
             st.session_state['underlying_price'] = underlying_df['Close'].iloc[-1]
         else:
-            st.error("Could not fetch underlying price.")
+            st.error(f"Could not fetch underlying price for {ticker}. Please verify the stock ticker.")
             st.stop()
     
     # 2. Fetch Options Chain (Optimized via Session State)
@@ -67,7 +74,7 @@ if submit_fetch or 'options_df' in st.session_state:
         if options_df is not None and not options_df.empty:
             st.session_state['options_df'] = options_df
         else:
-            st.error("No options data available for this ticker.")
+            st.error(f"No options data available for {ticker}. Ensure it is a stock with an active options chain.")
             st.stop()
     
     current_price = st.session_state['underlying_price']
@@ -178,6 +185,6 @@ if submit_fetch or 'options_df' in st.session_state:
     run_sidebar_chatbot(ctx)
 
 else:
-    st.info("Enter a ticker and click 'Fetch Chain' to begin analysis.")
+    st.info("Enter a stock ticker (e.g., SPY, AAPL) and click 'Fetch Chain' to begin analysis.")
 
 render_data_source_footer()
