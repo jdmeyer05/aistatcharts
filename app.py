@@ -52,8 +52,9 @@ if st.session_state.get('password_reset_mode'):
     st.markdown("Please enter a new, secure password for your account.")
     
     with st.form("mandatory_reset_form"):
-        new_pw = st.text_input("New Password", type="password", key="new_pw_1")
-        confirm_pw = st.text_input("Confirm Password", type="password", key="new_pw_2")
+        # Explicitly tag as new-password
+        new_pw = st.text_input("New Password", type="password", key="new_pw_1", autocomplete="new-password")
+        confirm_pw = st.text_input("Confirm Password", type="password", key="new_pw_2", autocomplete="new-password")
         submit_new_pw = st.form_submit_button("Update Password & Enter App", type="primary")
         
         if submit_new_pw:
@@ -113,8 +114,9 @@ else:
     
     with tab_login:
         with st.form("login_form"):
-            email = st.text_input("Email Address", key="login_email")
-            password = st.text_input("Password", type="password", key="login_pw")
+            # Explicitly tell the browser this is an existing login
+            email = st.text_input("Email Address", key="login_email", autocomplete="username")
+            password = st.text_input("Password", type="password", key="login_pw", autocomplete="current-password")
             submit_login = st.form_submit_button("Log In 🔓")
             
             if submit_login:
@@ -129,8 +131,9 @@ else:
     with tab_signup:
         st.info("New accounts require email verification before logging in.")
         with st.form("signup_form"):
-            new_email = st.text_input("Email Address", key="signup_email")
-            new_password = st.text_input("Password", type="password", help="Must be at least 6 characters.", key="signup_pw")
+            # Explicitly tell the browser to suggest a new password
+            new_email = st.text_input("Email Address", key="signup_email", autocomplete="username")
+            new_password = st.text_input("Password", type="password", help="Must be at least 6 characters.", key="signup_pw", autocomplete="new-password")
             submit_signup = st.form_submit_button("Create Account 📝")
             
             if submit_signup:
@@ -143,7 +146,7 @@ else:
     with tab_forgot:
         st.info("Enter your email to receive a secure password reset link.")
         with st.form("forgot_form"):
-            reset_email = st.text_input("Email Address", key="forgot_email")
+            reset_email = st.text_input("Email Address", key="forgot_email", autocomplete="email")
             submit_reset = st.form_submit_button("Send Reset Link 📧")
             
             if submit_reset:
