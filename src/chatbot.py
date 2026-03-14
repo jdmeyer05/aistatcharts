@@ -41,14 +41,23 @@ def run_sidebar_chatbot(context_data=""):
         try:
             # Build the message payload with the hidden system context
             messages = [
-                {"role": "system", "content": f"You are a quantitative financial and energy market analyst. Provide concise, institutional-grade insights. Context for the current dashboard view: {context_data}"}
+                {
+                    "role": "system", 
+                    "content": (
+                        "You are a world-class quantitative financial analyst. "
+                        "Provide concise, institutional-grade insights based on the "
+                        "provided dashboard data. Use professional terminology. "
+                        f"Context for the current dashboard view: {context_data}"
+                    )
+                }
             ] + st.session_state.chat_messages
 
-            # UPGRADE: Using the new model and the correct completion token parameter
+            # FIXED: Using 'gpt-4o', which is highly stable and widely available.
+            # We keep 'max_completion_tokens' as it is the modern standard for this model series.
             response = client.chat.completions.create(
-                model="gpt-5.4", 
+                model="gpt-4o", 
                 messages=messages,
-                max_completion_tokens=500  # <--- THIS IS THE FIX
+                max_completion_tokens=800
             )
             
             # Extract and display the response
