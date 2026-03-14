@@ -9,6 +9,9 @@ from src.chatbot import run_sidebar_chatbot
 
 st.set_page_config(page_title="Historical & Seasonal Analysis", layout="wide")
 
+from src.auth import check_auth
+check_auth()
+
 st.title("🕰️ Historical & Seasonal Analysis")
 st.markdown("Analyze multi-year seasonality, Year-to-Date (YTD) trajectories, and monthly return distributions.")
 
