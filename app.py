@@ -1,5 +1,6 @@
 import streamlit as st
 import extra_streamlit_components as stx
+import datetime
 from src.auth import init_supabase
 
 st.set_page_config(page_title="Quant Platform | Login", layout="centered")
@@ -20,12 +21,11 @@ if 'password_reset_mode' not in st.session_state:
     st.session_state['password_reset_mode'] = False
 
 # --- AUTO-LOGIN VIA COOKIE ---
-# Check if the user already has an active session cookie in their browser
 cached_email = cookie_manager.get(cookie="quant_user_session")
 if cached_email and not st.session_state['authenticated']:
     st.session_state['authenticated'] = True
     st.session_state['user_email'] = cached_email
-    st.switch_page("pages/01_Summary.py") # Teleport them instantly
+    st.switch_page("pages/01_Summary.py")
 
 # --- URL REDIRECT CATCHER ---
 if "code" in st.query_params:
@@ -42,7 +42,6 @@ if "code" in st.query_params:
         st.query_params.clear()
 
 # --- ROUTER LOGIC ---
-
 if st.session_state.get('password_reset_mode'):
     st.title("🔐 Set New Password")
     with st.form("mandatory_reset_form"):
@@ -53,8 +52,9 @@ if st.session_state.get('password_reset_mode'):
                 try:
                     res = supabase.auth.update_user({"password": new_pw})
                     
-                    # Write the cookie upon password reset!
-                    cookie_manager.set("quant_user_session", st.session_state['user_email'], max_days=30)
+                    # 🍪 FIX: Use datetime for the expires_at argument
+                    expiration_date = datetime.datetime.now() + datetime.timedelta(days=30)
+                    cookie_manager.set("quant_user_session", st.session_state['user_email'], expires_at=expiration_date)
                     
                     st.session_state['password_reset_mode'] = False
                     st.switch_page("pages/01_Summary.py")
@@ -81,8 +81,9 @@ else:
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     
-                    # 🍪 WRITE THE SECURE COOKIE ON LOGIN (Valid for 30 days)
-                    cookie_manager.set("quant_user_session", res.user.email, max_days=30)
+                    # 🍪 FIX: Use datetime for the expires_at argument
+                    expiration_date = datetime.datetime.now() + datetime.timedelta(days=30)
+                    cookie_manager.set("quant_user_session", res.user.email, expires_at=expiration_date)
                     
                     st.session_state['authenticated'] = True
                     st.session_state['user_email'] = res.user.email
