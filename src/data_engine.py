@@ -17,7 +17,6 @@ def get_supabase_client() -> Client:
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY")
     if not url or not key:
-        logger.warning("Supabase credentials missing from environment.")
         return None
     try:
         return create_client(url, key)
@@ -40,6 +39,7 @@ def translate_to_yahoo(formatted_symbol: str) -> str:
 
 # --- MAIN DATA FETCHING ENGINE ---
 
+@st.cache_data(ttl=3600, show_spinner="Fetching market data...")
 def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
     """
     The UNLIMITED Data Engine:
@@ -53,13 +53,11 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
     
     logger.info(f"Fetching data for {formatted_symbol} ({days} days)")
 
-    # ---------------------------------------------------------
     # TIER 1: Massive REST API (Live Feed)
-    # ---------------------------------------------------------
     api_key = os.environ.get("MASSIVE_API_KEY")
     if api_key:
         try:
-            logger.info(f"🌐 Querying Massive API for {formatted_symbol}")
+            # We use the standard Polygon/Massive historical aggregates endpoint
             base_url = "https://api.polygon.io/v2/aggs/ticker" 
             url = f"{base_url}/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
             
@@ -68,29 +66,20 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
             data = response.json()
             
             if 'results' in data:
-                logger.info("✅ Massive API success.")
                 st.session_state['current_data_source'] = "Massive API (Live Feed)"
                 df = pd.DataFrame(data['results'])
                 df['Date'] = pd.to_datetime(df['t'], unit='ms')
                 df.set_index('Date', inplace=True)
                 return df[['c']].rename(columns={'c': 'Close'})
-            else:
-                logger.warning(f"No 'results' array found in Massive response for {formatted_symbol}")
         except Exception as e:
-            logger.error(f"❌ Massive REST API failed: {e}")
-    else:
-        logger.warning("MASSIVE_API_KEY not found. Skipping Tier 1.")
+            logger.error(f"Massive REST API failed: {e}")
 
-    # ---------------------------------------------------------
     # TIER 2: Supabase Cache (Backup)
-    # ---------------------------------------------------------
-    logger.info("Attempting Supabase fallback...")
     sb = get_supabase_client()
     if sb:
         try:
             res = sb.table("price_data").select("*").eq("ticker", formatted_symbol).gte("timestamp", start_date.isoformat()).execute()
             if res.data:
-                logger.info(f"✅ Backup success: Data loaded from Supabase for {formatted_symbol}")
                 st.session_state['current_data_source'] = "Supabase Database (Backup)"
                 df = pd.DataFrame(res.data)
                 df['Date'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
@@ -99,51 +88,37 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
         except Exception as e:
             logger.warning(f"Supabase backup failed: {e}")
 
-    # ---------------------------------------------------------
     # TIER 3: Yahoo Finance Fallback
-    # ---------------------------------------------------------
     try:
         yahoo_ticker = translate_to_yahoo(formatted_symbol)
-        logger.info(f"🦆 Attempting yfinance fallback for {yahoo_ticker}...")
-        
         df_yf = yf.download(yahoo_ticker, start=start_date, end=end_date, progress=False)
-        
         if not df_yf.empty:
-            logger.info("✅ yfinance success.")
             st.session_state['current_data_source'] = "Yahoo Finance (Fallback API)"
             df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
             return df_yf[['Close']]
-        else:
-            logger.warning(f"yfinance returned an empty dataframe for {yahoo_ticker}.")
     except Exception as e:
-        logger.exception(f"🚨 Critical failure: All sources failed for {formatted_symbol}. Error: {e}")
+        logger.exception(f"All sources failed for {formatted_symbol}")
     
     return None
 
 # --- OPTIONS DATA ENGINE ---
 
+@st.cache_data(ttl=3600, show_spinner="Fetching live options chain...")
 def fetch_options_chain(underlying_symbol: str, expiration_date: str = None) -> pd.DataFrame:
     """
     Fetches the options chain snapshot for a given underlying ticker via REST.
-    If expiration_date is provided (YYYY-MM-DD), it filters for that expiry.
+    Flattens the nested JSON into a clean dataframe for charting.
     """
-    logger.info(f"Fetching options chain for {underlying_symbol}")
-    
     api_key = os.environ.get("MASSIVE_API_KEY")
     if not api_key:
-        st.error("MASSIVE_API_KEY is missing from environment variables.")
         return None
         
     try:
         formatted_sym = translate_to_yahoo(underlying_symbol).upper()
         
-        # Standard Polygon/Massive Options Reference Endpoint
-        url = "https://api.polygon.io/v3/reference/options/contracts"
-        params = {
-            "underlying_ticker": formatted_sym,
-            "limit": 1000,
-            "apiKey": api_key
-        }
+        # We use the Snapshot API to get Pricing, IV, and Greeks in one call
+        url = f"https://api.polygon.io/v3/snapshot/options/{formatted_sym}"
+        params = {"limit": 250, "apiKey": api_key}
         
         if expiration_date:
             params["expiration_date"] = expiration_date
@@ -153,20 +128,39 @@ def fetch_options_chain(underlying_symbol: str, expiration_date: str = None) -> 
         data = response.json()
         
         if 'results' in data and len(data['results']) > 0:
-            logger.info(f"✅ Successfully retrieved {len(data['results'])} contracts.")
-            df = pd.DataFrame(data['results'])
-            return df
-        else:
-            logger.warning("No options contracts found for this ticker.")
-            return None
+            st.session_state['current_data_source'] = "Massive API (Options Snapshot Feed)"
+            
+            # Flattening logic to prevent "Missing Columns" errors in the UI
+            contracts = []
+            for r in data['results']:
+                contract = {
+                    "ticker": r.get("details", {}).get("ticker"),
+                    "contract_type": r.get("details", {}).get("contract_type"),
+                    "strike_price": r.get("details", {}).get("strike_price"),
+                    "expiration_date": r.get("details", {}).get("expiration_date"),
+                    "implied_volatility": r.get("implied_volatility"),
+                    "open_interest": r.get("open_interest"),
+                    "volume": r.get("day", {}).get("volume", 0),
+                    "bid": r.get("last_quote", {}).get("bid", 0),
+                    "ask": r.get("last_quote", {}).get("ask", 0),
+                    "delta": r.get("greeks", {}).get("delta"),
+                    "gamma": r.get("greeks", {}).get("gamma"),
+                    "theta": r.get("greeks", {}).get("theta"),
+                    "vega": r.get("greeks", {}).get("vega"),
+                }
+                contracts.append(contract)
+                
+            return pd.DataFrame(contracts)
+        return None
             
     except Exception as e:
-        logger.exception(f"❌ Options chain REST fetch failed: {e}")
+        logger.exception(f"Options chain fetch failed: {e}")
         return None
 
 # --- GLOBAL UI COMPONENTS ---
 
 def render_data_source_footer():
+    """Neatly displays the active data source badge at the bottom of the page."""
     st.markdown("---")
     source = st.session_state.get('current_data_source', 'Awaiting Data...')
     st.caption(f"📡 **Active Data Source:** `{source}` (Cached for performance)")
