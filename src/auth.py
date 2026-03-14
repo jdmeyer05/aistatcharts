@@ -1,11 +1,19 @@
+import os
 import streamlit as st
 from supabase import create_client, Client
 
 @st.cache_resource
 def init_supabase() -> Client:
     """Initialize and cache the Supabase client."""
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    # 1. Try to get keys from Cloud Run Environment Variables first
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    
+    # 2. If running locally and env vars are missing, fallback to st.secrets
+    if not url or not key:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        
     return create_client(url, key)
 
 def check_auth():
@@ -13,7 +21,6 @@ def check_auth():
     Security firewall and UI override. 
     Drop this at the top of every page in the /pages folder.
     """
-    # 1. Inject the CSS override on every page the firewall protects
     st.markdown(
         """
         <style>
@@ -26,6 +33,5 @@ def check_auth():
         unsafe_allow_html=True
     )
     
-    # 2. Check if the user is actually logged in
     if not st.session_state.get('authenticated', False):
         st.switch_page("app.py")
