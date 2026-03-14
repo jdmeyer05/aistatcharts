@@ -4,13 +4,12 @@ import plotly.graph_objects as go
 from src.data_engine import fetch_options_chain, fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
 
-# Must be wide to support the 2x2 grid gracefully
 st.set_page_config(page_title="Advanced Options Analysis", layout="wide")
 
 st.title("📊 Advanced Options Surface Analysis")
 st.markdown("Analyze Implied Volatility skew, Open Interest walls, Volume distribution, and Greek exposures across specific expirations.")
 
-# --- SIDEBAR CONFIGURATION ---
+# --- SIDEBAR CONFIGURATION (Top) ---
 with st.sidebar:
     st.header("Chain Settings")
     with st.form("options_settings"):
@@ -24,7 +23,6 @@ if ":" in ticker or "ERCOT" in ticker.upper():
     st.stop()
 
 # --- FETCH DATA ---
-# Notice we only pass the ticker now. The filtering happens after we get the data.
 if submit or 'opt_surface_df' not in st.session_state or st.session_state.get('opt_surface_ticker') != ticker:
     with st.spinner(f"Pulling live snapshot for {ticker}..."):
         df = fetch_options_chain(ticker)
@@ -38,28 +36,30 @@ if submit or 'opt_surface_df' not in st.session_state or st.session_state.get('o
         st.session_state.opt_surface_ticker = ticker
         st.session_state.opt_underlying_px = px_df['Close'].iloc[-1] if px_df is not None else None
 
-# --- RENDER DASHBOARD ---
+# --- SIDEBAR CONFIGURATION (Bottom - Dependent on Data) ---
+selected_exp = None
 if 'opt_surface_df' in st.session_state:
     df = st.session_state.opt_surface_df
-    current_px = st.session_state.opt_underlying_px
-    
-    # Filter Controls (Dynamically generated from the fetched chain)
     expirations = sorted(df['expiration_date'].dropna().unique())
-    if not expirations:
-        st.warning("No valid expiration dates found in the chain.")
-        st.stop()
-        
-    selected_exp = st.selectbox("🎯 Select Expiration Date to Analyze", expirations, index=0)
+    
+    with st.sidebar:
+        st.divider()
+        if expirations:
+            selected_exp = st.selectbox("🎯 Select Expiration Date", expirations, index=0)
+        else:
+            st.warning("No valid expirations found.")
+
+# --- RENDER DASHBOARD ---
+if 'opt_surface_df' in st.session_state and selected_exp:
+    df = st.session_state.opt_surface_df
+    current_px = st.session_state.opt_underlying_px
     
     # Filter dataframe by selected expiration and sort by strike
     exp_df = df[df['expiration_date'] == selected_exp].sort_values('strike_price')
     calls = exp_df[exp_df['contract_type'] == 'call']
     puts = exp_df[exp_df['contract_type'] == 'put']
     
-    st.divider()
-    
     # --- 2x2 CHART GRID ---
-    # Row 1
     r1c1, r1c2 = st.columns(2)
     
     with r1c1:
@@ -82,7 +82,6 @@ if 'opt_surface_df' in st.session_state:
         fig_oi.update_layout(template="plotly_dark", height=350, margin=dict(t=20, b=0, l=0, r=0), barmode='group', yaxis_title="Open Interest")
         st.plotly_chart(fig_oi, use_container_width=True)
 
-    # Row 2
     r2c1, r2c2 = st.columns(2)
     
     with r2c1:
