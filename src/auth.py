@@ -1,5 +1,4 @@
 import os
-import time
 import streamlit as st
 import stripe
 import extra_streamlit_components as stx
@@ -18,39 +17,42 @@ def init_supabase() -> Client:
     return create_client(url, key)
 
 def check_auth():
-    """Security firewall with a reliable 1-second cookie recovery window."""
+    """Security firewall that correctly yields to the browser to fetch cookies."""
     # 1. Fast Pass: Already authenticated in this active tab
     if st.session_state.get('authenticated', False):
         return
 
+    # Initialize the React component on the frontend
     cookie_manager = stx.CookieManager()
     
-    # Track how many times we've asked the browser for the cookie
-    if 'cookie_check_count' not in st.session_state:
-        st.session_state['cookie_check_count'] = 0
-
-    # Grab ALL cookies at once (more reliable on a hard refresh)
-    cookies = cookie_manager.get_all()
-    cached_email = cookies.get("quant_user_session")
+    # Try to grab the cookie
+    cached_email = cookie_manager.get(cookie="quant_user_session")
 
     if cached_email:
-        # Success! The browser finally handed over the cookie.
+        # Success! The browser delivered the cookie.
         st.session_state['authenticated'] = True
         st.session_state['user_email'] = cached_email
-        st.session_state['cookie_check_count'] = 0 # Reset the counter
+        st.session_state['cookie_check_count'] = 0 
         st.rerun() # Refresh silently to load the engine
         
-    elif st.session_state['cookie_check_count'] < 2:
-        # The browser hasn't sent it yet. Pause and try again.
-        st.session_state['cookie_check_count'] += 1
-        st.markdown("<br><br><h3 style='text-align: center; color: #00d1ff;'>🔄 Reconnecting secure session...</h3>", unsafe_allow_html=True)
-        time.sleep(0.5) # Force Python to wait for 0.5 seconds
-        st.rerun() # Run the check one more time
-        
     else:
-        # We waited a full second, checked twice, and the cookie genuinely isn't there.
-        st.session_state['cookie_check_count'] = 0
-        st.switch_page("app.py")
+        # Initialize a counter to track our attempts
+        if 'cookie_check_count' not in st.session_state:
+            st.session_state['cookie_check_count'] = 0
+
+        if st.session_state['cookie_check_count'] == 0:
+            # First pass: We MUST yield control to the browser!
+            st.session_state['cookie_check_count'] += 1
+            st.markdown("<br><br><h3 style='text-align: center; color: #00d1ff;'>🔄 Reconnecting secure session...</h3>", unsafe_allow_html=True)
+            
+            # CRITICAL FIX: st.stop() halts Python so the frontend can render the component.
+            # Once the component renders and finds the cookie, it will auto-rerun the script!
+            st.stop() 
+            
+        else:
+            # Second pass: If we reach here, the component rendered, auto-reran, and genuinely found no cookie.
+            st.session_state['cookie_check_count'] = 0
+            st.switch_page("app.py")
 
 
 def verify_subscription(email: str, user_id: str):
