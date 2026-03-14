@@ -19,6 +19,7 @@ if st.session_state['authenticated']:
     * **Algo Backtester:** Vectorized strategy testing.
     * **Options Surface:** 2x2 grid analysis of IV and Liquidity.
     * **Spread Analyzer:** Complex multi-leg PnL modeling.
+    * **ML Stock Predictor:** Stochastic recursive tactical forecasts.
     """)
     
     st.divider()
@@ -48,6 +49,11 @@ if st.session_state['authenticated']:
 else:
     st.title("🏦 Institutional Quant Platform")
     st.markdown("Advanced algorithmic backtesting, deep-learning tactical forecasts, and multi-leg option spread analysis. Please sign in to access the engines.")
+    
+    # Catch the verification redirect from Supabase
+    if st.query_params.get("verified") == "true":
+        st.balloons()
+        st.success("🎉 **Email successfully verified!** Your account is now active. Please log in below.")
     
     st.divider()
     
