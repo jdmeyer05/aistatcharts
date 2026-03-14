@@ -5,11 +5,11 @@ from supabase import create_client, Client
 @st.cache_resource
 def init_supabase() -> Client:
     """Initialize and cache the Supabase client."""
-    # 1. Try to get keys from Cloud Run Environment Variables first
+    # Look for Cloud Run environment variables first!
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY")
     
-    # 2. If running locally and env vars are missing, fallback to st.secrets
+    # Fallback for your local laptop environment
     if not url or not key:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
