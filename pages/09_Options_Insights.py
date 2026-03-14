@@ -1,75 +1,151 @@
+import streamlit as st
 import numpy as np
+import plotly.graph_objects as go
 from scipy.stats import norm
-from datetime import datetime
-import matplotlib.pyplot as plt
-import seaborn as sns
+from datetime import datetime, date
+from src.auth import check_auth
 
-def black_scholes_option_price(S, K, T, r, sigma, option_type='call'):
-    if T == 0:
-        if option_type == 'call':
-            return max(S - K, 0)
-        elif option_type == 'put':
-            return max(K - S, 0)
+st.set_page_config(page_title="Options Insights", layout="wide")
+check_auth() # The firewall
+
+st.title("🔮 Options Pricing & Greeks Insights")
+st.markdown("Black-Scholes theoretical pricing matrix, Greek exposures, and payoff profiling.")
+
+# --- MATH ENGINE ---
+def black_scholes_and_greeks(S, K, T, r, sigma, option_type='call'):
+    """Calculates BS Price and the 5 major Greeks."""
+    if T <= 0: # Handle expiration
+        price = max(S - K, 0) if option_type == 'call' else max(K - S, 0)
+        return price, 0.0, 0.0, 0.0, 0.0, 0.0
+
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
+    
+    # Standard Normal PDF for Gamma/Vega
+    N_prime_d1 = norm.pdf(d1) 
+
     if option_type == 'call':
         price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
-    elif option_type == 'put':
+        delta = norm.cdf(d1)
+        theta = (- (S * sigma * N_prime_d1) / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * norm.cdf(d2)) / 365
+        rho = (K * T * np.exp(-r * T) * norm.cdf(d2)) / 100
+    else:
         price = K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
-    return price
+        delta = norm.cdf(d1) - 1
+        theta = (- (S * sigma * N_prime_d1) / (2 * np.sqrt(T)) + r * K * np.exp(-r * T) * norm.cdf(-d2)) / 365
+        rho = (-K * T * np.exp(-r * T) * norm.cdf(-d2)) / 100
 
-# User Inputs
-current_stock_price = float(input("Enter the current stock price: "))
-strike_price = float(input("Enter the strike price: "))
-expiration_date_input = input("Enter the expiration date (YYYY-MM-DD): ")
-volatility = float(input("Enter the volatility (as a decimal, e.g., 0.1792 for 17.92%): "))
-risk_free_rate = float(input("Enter the risk-free rate (as a decimal, e.g., 0.043 for 4.3%): "))
-option_type_input = input("Enter 'call' or 'put' for the option type: ").lower()
-option_type = 'put' if option_type_input == 'put' else 'call'
-current_option_price = float(input("Enter the current option price: "))
+    gamma = N_prime_d1 / (S * sigma * np.sqrt(T))
+    vega = (S * np.sqrt(T) * N_prime_d1) / 100
 
-# Parse the expiration date
-expiration_date = datetime.strptime(expiration_date_input, '%Y-%m-%d')
+    return price, delta, gamma, theta, vega, rho
 
-# Calculate the number of days to expiration from today
-current_date = datetime.now()
-days_to_expiration = (expiration_date - current_date).days
+# --- SIDEBAR CONFIGURATION ---
+# Notice how we replaced input() with st.number_input() and st.selectbox()!
+with st.sidebar:
+    st.header("Option Parameters")
+    
+    option_type = st.selectbox("Option Type", ["Call", "Put"]).lower()
+    
+    S = st.number_input("Current Spot Price ($)", min_value=0.01, value=100.00, step=1.0)
+    K = st.number_input("Strike Price ($)", min_value=0.01, value=100.00, step=1.0)
+    
+    expiration_date = st.date_input("Expiration Date", value=date.today().replace(month=date.today().month % 12 + 1))
+    
+    volatility = st.number_input("Implied Volatility (%)", min_value=0.1, value=20.0, step=1.0) / 100
+    risk_free_rate = st.number_input("Risk-Free Rate (%)", value=4.5, step=0.1) / 100
+    
+    st.divider()
+    st.caption("Visual Configuration")
+    purchase_price = st.number_input("Purchase Price (Premium Paid)", min_value=0.0, value=0.0, step=0.1, help="Used for PnL tracking and Break-even.")
+    price_range_pct = st.slider("Heatmap Price Range (+/- %)", 5, 50, 15, step=5)
 
-# Adjust price range based on option type
-if option_type == 'call':
-    price_changes = np.arange(current_stock_price-7, current_stock_price + 7, 1)
+# --- CALCULATIONS ---
+days_to_expiration = max((expiration_date - date.today()).days, 0)
+T_years = days_to_expiration / 365.0
+
+current_price, delta, gamma, theta, vega, rho = black_scholes_and_greeks(S, K, T_years, risk_free_rate, volatility, option_type)
+
+# --- TOP DASHBOARD: GREEKS ---
+st.subheader("Theoretical Pricing & The Greeks")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Theoretical Value", f"${current_price:.2f}")
+c2.metric("Delta (Δ)", f"{delta:.3f}")
+c3.metric("Gamma (Γ)", f"{gamma:.4f}")
+c4.metric("Theta (Θ)", f"${theta:.3f}", help="Daily decay")
+c5.metric("Vega (v)", f"${vega:.3f}", help="Per 1% IV change")
+c6.metric("Rho (ρ)", f"${rho:.3f}")
+
+st.divider()
+
+# --- TOOL 1: THE DECAY HEATMAP ---
+st.subheader(f"Time & Price Decay Matrix ({option_type.capitalize()})")
+
+if days_to_expiration > 0:
+    lower_bound = S * (1 - (price_range_pct / 100))
+    upper_bound = S * (1 + (price_range_pct / 100))
+    price_steps = np.linspace(lower_bound, upper_bound, 25)
+    
+    days_array = np.arange(days_to_expiration, -1, -1)
+    
+    z_matrix = np.zeros((len(price_steps), len(days_array)))
+    
+    for i, p in enumerate(price_steps):
+        for j, d in enumerate(days_array):
+            T_step = d / 365.0
+            price, _, _, _, _, _ = black_scholes_and_greeks(p, K, T_step, risk_free_rate, volatility, option_type)
+            z_matrix[i, j] = price
+
+    fig_heat = go.Figure(data=go.Heatmap(
+        z=z_matrix,
+        x=days_array,
+        y=price_steps,
+        colorscale='RdYlGn' if option_type == 'call' else 'RdYlGn_r',
+        hovertemplate="Days to Exp: %{x}<br>Spot Price: $%{y:.2f}<br>Option Value: $%{z:.2f}<extra></extra>"
+    ))
+    
+    fig_heat.add_hline(y=S, line_dash="dash", line_color="white", annotation_text="Current Spot", annotation_position="bottom right")
+
+    fig_heat.update_layout(
+        template="plotly_dark",
+        xaxis_title="Days to Expiration",
+        yaxis_title="Underlying Spot Price ($)",
+        xaxis=dict(autorange="reversed"),
+        height=500
+    )
+    st.plotly_chart(fig_heat, use_container_width=True)
 else:
-    price_changes = np.arange(current_stock_price - 20, current_stock_price + 1, 1)
+    st.warning("Option has expired. Matrix requires DTE > 0.")
 
-# Generate range of days to expiration
-days = np.arange(0, days_to_expiration + 1, 1)  # Including today (day 0)
+# --- TOOL 2: EXPIRATION PAYOFF ---
+st.subheader("Expiration PnL Profile")
 
-# Initialize the matrix to hold option prices
-matrix = np.zeros((len(price_changes), len(days)))
+payoff_prices = np.linspace(S * 0.5, S * 1.5, 100)
+if option_type == 'call':
+    payoff = np.maximum(payoff_prices - K, 0) - purchase_price
+else:
+    payoff = np.maximum(K - payoff_prices, 0) - purchase_price
 
-# Calculate option prices for the matrix
-for i, price in enumerate(price_changes):
-    for j, day in enumerate(days):
-        T_new = day / 365
-        matrix[i, j] = round(black_scholes_option_price(price, strike_price, T_new, risk_free_rate, volatility, option_type=option_type), 1)
+fig_payoff = go.Figure()
 
-# Create a custom colormap
-cmap = sns.diverging_palette(10, 150, as_cmap=True)
+colors = ['#00FF00' if p >= 0 else '#FF0000' for p in payoff]
 
-# Dynamically adjust the plot size
-plot_width = max(30, days_to_expiration // 10)
-plot_height = 8 * 1.2  # Increase height by 20%
+fig_payoff.add_trace(go.Scatter(
+    x=payoff_prices, y=payoff, 
+    mode='lines', 
+    line=dict(color='white', width=2),
+    fill='tozeroy',
+    name="PnL"
+))
 
-# Plot the heatmap
-plt.figure(figsize=(plot_width, plot_height))
-ax = sns.heatmap(matrix, cmap=cmap, center=current_option_price, xticklabels=days[::-1], yticklabels=np.round(price_changes), annot=True, fmt=".1f", cbar=False)
-plt.title(f'{option_type.capitalize()} Option Price Heatmap')
-plt.xlabel('Days to Expiration')
-plt.ylabel('Stock Price')
-plt.gca().invert_xaxis()  # Reverse x-axis order
+fig_payoff.add_hline(y=0, line_dash="solid", line_color="gray")
+fig_payoff.add_vline(x=S, line_dash="dash", line_color="#00d1ff", annotation_text="Current Spot")
 
-# Add a contour line for the current option price
-contour = ax.contour(matrix, levels=[current_option_price], colors='black', linewidths=2, linestyles='dashed', origin='lower')
-ax.clabel(contour, inline=True, fontsize=10)
-
-plt.show()
+fig_payoff.update_layout(
+    template="plotly_dark",
+    xaxis_title="Price at Expiration ($)",
+    yaxis_title="Net Profit / Loss ($)",
+    height=400,
+    showlegend=False
+)
+st.plotly_chart(fig_payoff, use_container_width=True)
