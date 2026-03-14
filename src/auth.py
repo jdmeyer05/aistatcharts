@@ -22,14 +22,14 @@ def check_auth():
     if st.session_state.get('authenticated', False):
         return
 
-    # 2. INSTANT RECOVERY (Native Streamlit feature, bypasses race conditions)
+    # 2. INSTANT RECOVERY (Native Streamlit feature, completely bypasses the bug)
     if hasattr(st, "context") and hasattr(st.context, "cookies"):
         if "quant_user_session" in st.context.cookies:
             st.session_state['authenticated'] = True
             st.session_state['user_email'] = st.context.cookies["quant_user_session"]
             st.rerun()
 
-    # 3. Fallback check for older Streamlit versions using the component
+    # 3. Fallback check using the component
     cookie_manager = stx.CookieManager()
     cached_email = cookie_manager.get(cookie="quant_user_session")
     
@@ -40,19 +40,16 @@ def check_auth():
             del st.session_state['auth_yielded']
         st.rerun()
 
-    # 4. The Auto-Yield Protocol
-    # If we reach here, the browser hasn't sent the cookie yet.
+    # 4. The Auto-Yield Protocol (Replaces the broken manual button!)
     # We yield control to the browser EXACTLY ONCE to let it load.
     if 'auth_yielded' not in st.session_state:
         st.session_state['auth_yielded'] = True
         st.markdown("<br><br><h3 style='text-align: center; color: #00d1ff;'>🔄 Synchronizing secure connection...</h3>", unsafe_allow_html=True)
         # st.stop() halts Python so the frontend can render and grab the cookie.
-        # Once the component finds the cookie, it will automatically trigger a rerun for us!
         st.stop() 
 
     # 5. The True Kick
-    # If the code reaches this line, it means we yielded to the browser, the component ran, 
-    # triggered a rerun, and the cookie was STILL missing. They are genuinely logged out.
+    # If the cookie genuinely isn't there, boot to login.
     st.session_state['auth_yielded'] = False
     st.switch_page("app.py")
 
