@@ -122,16 +122,16 @@ def run_strategy(df, strat_name, p1=None, p2=None):
     return df['Position']
 
 def get_optimization_grid(strat_name):
-    """Defines the parameter search space based on the strategy type."""
+    """Defines the parameter search space AND the parameter display names."""
     if "Crossover" in strat_name or "Cross" in strat_name or "MACD" in strat_name:
-        return range(5, 50, 5), range(15, 100, 5) # Fast, Slow
+        return range(5, 50, 5), range(15, 100, 5), "Fast Period", "Slow Period"
     elif "RSI" in strat_name:
-        return range(5, 30, 2), range(15, 45, 5) # Period, Oversold Threshold
+        return range(5, 30, 2), range(15, 45, 5), "RSI Period", "Oversold Boundary"
     elif "Bollinger" in strat_name or "Z-Score" in strat_name:
-        return range(10, 60, 5), [1.5, 2.0, 2.5, 3.0] # Period, StdDev Threshold
+        return range(10, 60, 5), [1.5, 2.0, 2.5, 3.0], "Lookback Period", "StdDev Multiplier"
     elif "Donchian" in strat_name or "Simple Momentum" in strat_name:
-        return range(10, 100, 5), [None] # Period only
-    return [None], [None]
+        return range(10, 100, 5), [None], "Lookback Period", None
+    return [None], [None], "Param 1", "Param 2"
 
 # --- EXECUTION ---
 if run_test or run_opt or 'bt_data' not in st.session_state or st.session_state.get('bt_ticker') != ticker:
@@ -149,7 +149,7 @@ if run_test or run_opt or 'bt_data' not in st.session_state or st.session_state.
     # 🎯 OPTIMIZATION LOGIC
     if run_opt:
         with st.spinner(f"Running Grid Search Optimization for {strategy}..."):
-            grid_p1, grid_p2 = get_optimization_grid(strategy)
+            grid_p1, grid_p2, name_p1, name_p2 = get_optimization_grid(strategy)
             best_ret = -np.inf
             
             progress_bar = st.progress(0)
@@ -177,7 +177,13 @@ if run_test or run_opt or 'bt_data' not in st.session_state or st.session_state.
                         p1_final, p2_final = p1, p2
             
             progress_bar.empty()
-            opt_msg = f"**Optimal Parameters Found:** Param 1 = `{p1_final}`, Param 2 = `{p2_final}`"
+            
+            # Format the output with the specific parameter names
+            if p2_final is not None and name_p2 is not None:
+                opt_msg = f"**Optimal Parameters Found:** {name_p1} = `{p1_final}` | {name_p2} = `{p2_final}`"
+            else:
+                opt_msg = f"**Optimal Parameters Found:** {name_p1} = `{p1_final}`"
+                
             st.session_state.opt_msg = opt_msg
             
     else:
