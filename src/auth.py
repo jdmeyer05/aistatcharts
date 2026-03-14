@@ -17,40 +17,44 @@ def init_supabase() -> Client:
     return create_client(url, key)
 
 def check_auth():
-    """Bulletproof security firewall with Instant Recovery."""
+    """Bulletproof security firewall with Automated Yield Recovery."""
     # 1. Fast Pass: Already authenticated in this active tab
     if st.session_state.get('authenticated', False):
         return
 
-    # 2. INSTANT RECOVERY (Bypasses React Frontend Race Conditions)
-    # This reads the cookie directly from the server headers the millisecond you refresh.
+    # 2. INSTANT RECOVERY (Native Streamlit feature, bypasses race conditions)
     if hasattr(st, "context") and hasattr(st.context, "cookies"):
         if "quant_user_session" in st.context.cookies:
             st.session_state['authenticated'] = True
             st.session_state['user_email'] = st.context.cookies["quant_user_session"]
             st.rerun()
 
-    # 3. Fallback check for older Streamlit versions
+    # 3. Fallback check for older Streamlit versions using the component
     cookie_manager = stx.CookieManager()
     cached_email = cookie_manager.get(cookie="quant_user_session")
     
     if cached_email:
         st.session_state['authenticated'] = True
         st.session_state['user_email'] = cached_email
+        if 'auth_yielded' in st.session_state:
+            del st.session_state['auth_yielded']
         st.rerun()
 
-    # 4. The Anti-Loop Protocol
-    # If the cookie genuinely isn't found, we DO NOT automatically switch pages.
-    # We display a manual recovery button so you are never violently booted.
-    st.warning("Secure session disconnected due to page refresh.")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🔄 Restore Session", type="primary", use_container_width=True):
-            st.rerun() # By the time you click this, the browser has definitely loaded the cookie.
-    with col2:
-        if st.button("Log In Again", use_container_width=True):
-            st.switch_page("app.py")
-    st.stop()
+    # 4. The Auto-Yield Protocol
+    # If we reach here, the browser hasn't sent the cookie yet.
+    # We yield control to the browser EXACTLY ONCE to let it load.
+    if 'auth_yielded' not in st.session_state:
+        st.session_state['auth_yielded'] = True
+        st.markdown("<br><br><h3 style='text-align: center; color: #00d1ff;'>🔄 Synchronizing secure connection...</h3>", unsafe_allow_html=True)
+        # st.stop() halts Python so the frontend can render and grab the cookie.
+        # Once the component finds the cookie, it will automatically trigger a rerun for us!
+        st.stop() 
+
+    # 5. The True Kick
+    # If the code reaches this line, it means we yielded to the browser, the component ran, 
+    # triggered a rerun, and the cookie was STILL missing. They are genuinely logged out.
+    st.session_state['auth_yielded'] = False
+    st.switch_page("app.py")
 
 
 def verify_subscription(email: str, user_id: str):
