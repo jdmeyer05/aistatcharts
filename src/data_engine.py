@@ -1,10 +1,14 @@
 import pandas as pd
 import yfinance as yf
 import os
+import logging
 from supabase import create_client, Client
 from massive import RESTClient
 from datetime import date, timedelta
 import streamlit as st
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 # Initialize Clients
 def get_clients():
@@ -13,7 +17,23 @@ def get_clients():
         RESTClient(os.environ.get("MASSIVE_API_KEY"))
     )
 
+def format_massive_ticker(raw_ticker):
+    """
+    Format ticker symbol for API compatibility.
+    Handles crypto (BTC-USD), forex, and energy symbols (ERCOT.LMP).
+    """
+    ticker = raw_ticker.strip().upper()
+    # Keep crypto pairs as-is (e.g., BTC-USD)
+    # Remove X: prefix for forex (e.g., X:EURUSD -> EURUSD)
+    if ticker.startswith("X:"):
+        ticker = ticker[2:]
+    return ticker
+
 def fetch_massive_data(symbol, days):
+    """
+    Fetch price data with three-tier fallback strategy.
+    Returns: DataFrame with 'Close' column or None if all sources fail.
+    """
     supabase, massive_client = get_clients()
     end_date = date.today()
     start_date = end_date - timedelta(days=days)
@@ -21,13 +41,15 @@ def fetch_massive_data(symbol, days):
     # 1. Supabase Check
     try:
         res = supabase.table("price_data").select("*").eq("ticker", symbol).gte("timestamp", start_date.isoformat()).execute()
-        if res.data:
+        if res.data and len(res.data) > 0:
             df = pd.DataFrame(res.data)
             df['Date'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
             df.set_index('Date', inplace=True)
-            if df.index[-1].date() >= (end_date - timedelta(days=1)):
+            # Check if data is recent enough
+            if len(df) > 0 and df.index[-1].date() >= (end_date - timedelta(days=1)):
                 return df[['close_price']].rename(columns={'close_price': 'Close'})
-    except: pass
+    except Exception as e:
+        logger.warning(f"Supabase fetch failed for {symbol}: {str(e)}")
 
     # 2. Massive API with Loop
     all_aggs = []
@@ -35,17 +57,22 @@ def fetch_massive_data(symbol, days):
     try:
         for _ in range(5):
             aggs = massive_client.list_aggs(ticker=symbol, multiplier=1, timespan="day", from_=start_date.strftime("%Y-%m-%d"), to=current_to, limit=5000)
-            if not aggs: break
+            if not aggs: 
+                break
             batch = list(aggs)
             all_aggs.extend(batch)
+            if len(batch) == 0:
+                break
             earliest_dt = pd.to_datetime(min(a.timestamp for a in batch), unit='ms').date()
-            if earliest_dt <= start_date or len(batch) < 100: break
+            if earliest_dt <= start_date or len(batch) < 100: 
+                break
             current_to = (earliest_dt - timedelta(days=1)).strftime("%Y-%m-%d")
 
-        if all_aggs:
+        if all_aggs and len(all_aggs) > 0:
             df = pd.DataFrame(all_aggs)
             df['Date'] = pd.to_datetime(df['timestamp'], unit='ms').dt.tz_localize(None)
-            df.set_index('Date', inplace=True).sort_index(inplace=True)
+            df.set_index('Date', inplace=True)
+            df.sort_index(inplace=True)
             df.rename(columns={'close': 'Close'}, inplace=True)
             
             # Upsert to Supabase
@@ -53,12 +80,16 @@ def fetch_massive_data(symbol, days):
             supabase.table("price_data").upsert(rows).execute()
             return df[['Close']]
     except Exception as e:
+        logger.warning(f"Massive API error for {symbol}: {str(e)}")
         st.warning(f"Massive API Rate Limit/Error. Falling back to yfinance.")
 
     # 3. yfinance Fallback
     try:
         df_yf = yf.download(symbol.replace("X:", "").replace("ERCOT.", ""), start=start_date, end=end_date, progress=False)
-        if not df_yf.empty:
+        if not df_yf.empty and len(df_yf) > 0:
             df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
             return df_yf[['Close']]
-    except: return None
+    except Exception as e:
+        logger.error(f"yfinance fallback failed for {symbol}: {str(e)}")
+    
+    return None
