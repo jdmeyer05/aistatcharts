@@ -2,6 +2,11 @@ import streamlit as st
 import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker
 
+from src.chatbot import run_sidebar_chatbot
+
+# Run this at the start of every page script
+run_sidebar_chatbot()
+
 st.set_page_config(page_title="ERCOT Market Analysis", layout="wide")
 
 # Sidebar
