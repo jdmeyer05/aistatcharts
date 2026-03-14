@@ -10,7 +10,7 @@ st.title("🛡️ Portfolio Risk & VaR Engine")
 
 with st.sidebar:
     st.header("Risk Parameters")
-    raw_tickers = st.text_input("Portfolio Tickers (comma separated)", "ERCOT.HB_WEST, X:BTC-USD, QQQ")
+    raw_tickers = st.text_input("Portfolio Tickers (comma separated)", "TLT,USO,QQQ")
     portfolio_value = st.number_input("Total Portfolio Value ($)", value=100000, step=10000)
     lookback = st.slider("Historical Lookback (Days)", 90, 1000, 365)
     confidence_level = st.selectbox("Confidence Level", [0.95, 0.99])
