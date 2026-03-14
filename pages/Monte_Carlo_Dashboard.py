@@ -1,6 +1,8 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # <-- THIS IS THE MAGIC FIX FOR CLOUD RUN
 import matplotlib.pyplot as plt
 import os
 from massive import RESTClient 
