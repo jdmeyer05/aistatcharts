@@ -22,11 +22,27 @@ if st.session_state['authenticated']:
     """)
     
     st.divider()
-    if st.button("Log Out", type="primary"):
-        supabase.auth.sign_out()
-        st.session_state['authenticated'] = False
-        st.session_state['user_email'] = None
-        st.rerun()
+    
+    # Account Management Row
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Log Out", type="primary", use_container_width=True):
+            supabase.auth.sign_out()
+            st.session_state['authenticated'] = False
+            st.session_state['user_email'] = None
+            st.rerun()
+            
+    with col2:
+        with st.expander("⚙️ Account Settings (Update Password)"):
+            with st.form("update_password_form"):
+                new_pw = st.text_input("Enter New Password", type="password")
+                if st.form_submit_button("Save New Password"):
+                    try:
+                        supabase.auth.update_user({"password": new_pw})
+                        st.success("Password updated successfully!")
+                    except Exception as e:
+                        st.error(f"Failed to update password: {e}")
 
 # --- UNAUTHENTICATED STATE (LANDING PAGE) ---
 else:
@@ -35,7 +51,8 @@ else:
     
     st.divider()
     
-    tab_login, tab_signup = st.tabs(["Log In", "Sign Up"])
+    # We now have 3 tabs instead of 2
+    tab_login, tab_signup, tab_forgot = st.tabs(["Log In", "Sign Up", "Forgot Password"])
     
     with tab_login:
         with st.form("login_form"):
@@ -65,3 +82,16 @@ else:
                     st.success("Account created successfully! **Please check your email for the confirmation link** before trying to log in.")
                 except Exception as e:
                     st.error("Sign up failed. Ensure your password is strong enough and the email isn't already registered.")
+
+    with tab_forgot:
+        st.info("Enter your email to receive a secure password reset link.")
+        with st.form("forgot_form"):
+            reset_email = st.text_input("Email Address")
+            submit_reset = st.form_submit_button("Send Reset Link 📧")
+            
+            if submit_reset:
+                try:
+                    supabase.auth.reset_password_for_email(reset_email)
+                    st.success("Check your email for the reset link! Once you click it and log in, use Account Settings to set a new password.")
+                except Exception as e:
+                    st.error(f"Failed to send link: {e}")
