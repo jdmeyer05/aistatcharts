@@ -3,5 +3,4 @@ pandas
 numpy
 plotly
 massive
-matplotlib
 yfinance
