@@ -6,6 +6,9 @@ import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.chatbot import run_sidebar_chatbot
 
+from src.auth import check_auth
+check_auth() 
+
 st.title("🛡️ Portfolio Risk & VaR Engine")
 
 with st.sidebar:
