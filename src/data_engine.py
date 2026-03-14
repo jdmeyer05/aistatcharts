@@ -42,10 +42,10 @@ def translate_to_yahoo(formatted_symbol: str) -> str:
 
 def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
     """
-    The 3-Tier Data Engine:
-    1. Check Supabase cache to save API credits.
-    2. Fetch via Massive REST API.
-    3. Fallback to yfinance if Massive fails or keys are missing.
+    The UNLIMITED Data Engine:
+    1. Fetch live via Massive REST API (Primary).
+    2. Fallback to Supabase if Massive is down.
+    3. Fallback to yfinance if all else fails.
     """
     end_date = date.today()
     start_date = end_date - timedelta(days=days)
@@ -54,30 +54,13 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
     logger.info(f"Fetching data for {formatted_symbol} ({days} days)")
 
     # ---------------------------------------------------------
-    # TIER 1: Supabase Cache
-    # ---------------------------------------------------------
-    sb = get_supabase_client()
-    if sb:
-        try:
-            res = sb.table("price_data").select("*").eq("ticker", formatted_symbol).gte("timestamp", start_date.isoformat()).execute()
-            if res.data:
-                logger.info(f"✅ Cache hit in Supabase for {formatted_symbol}")
-                df = pd.DataFrame(res.data)
-                df['Date'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
-                df.set_index('Date', inplace=True)
-                return df[['close_price']].rename(columns={'close_price': 'Close'})
-        except Exception as e:
-            logger.warning(f"Supabase fetch failed or table empty: {e}")
-
-    # ---------------------------------------------------------
-    # TIER 2: Massive REST API
+    # TIER 1: Massive REST API (Live Feed)
     # ---------------------------------------------------------
     api_key = os.environ.get("MASSIVE_API_KEY")
     if api_key:
         try:
             logger.info(f"🌐 Querying Massive API for {formatted_symbol}")
-            # Standard Polygon/Massive historical aggregates endpoint
-            base_url = "https://api.polygon.io/v2/aggs/ticker" # Adjust to api.massive.io if required by your specific plan
+            base_url = "https://api.polygon.io/v2/aggs/ticker" 
             url = f"{base_url}/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
             
             response = requests.get(url, params={"apiKey": api_key})
@@ -86,8 +69,8 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
             
             if 'results' in data:
                 logger.info("✅ Massive API success.")
+                st.session_state['current_data_source'] = "Massive API (Live Feed)"
                 df = pd.DataFrame(data['results'])
-                # 't' is timestamp in milliseconds, 'c' is closing price
                 df['Date'] = pd.to_datetime(df['t'], unit='ms')
                 df.set_index('Date', inplace=True)
                 return df[['c']].rename(columns={'c': 'Close'})
@@ -96,7 +79,25 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
         except Exception as e:
             logger.error(f"❌ Massive REST API failed: {e}")
     else:
-        logger.warning("MASSIVE_API_KEY not found. Skipping Tier 2.")
+        logger.warning("MASSIVE_API_KEY not found. Skipping Tier 1.")
+
+    # ---------------------------------------------------------
+    # TIER 2: Supabase Cache (Backup)
+    # ---------------------------------------------------------
+    logger.info("Attempting Supabase fallback...")
+    sb = get_supabase_client()
+    if sb:
+        try:
+            res = sb.table("price_data").select("*").eq("ticker", formatted_symbol).gte("timestamp", start_date.isoformat()).execute()
+            if res.data:
+                logger.info(f"✅ Backup success: Data loaded from Supabase for {formatted_symbol}")
+                st.session_state['current_data_source'] = "Supabase Database (Backup)"
+                df = pd.DataFrame(res.data)
+                df['Date'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
+                df.set_index('Date', inplace=True)
+                return df[['close_price']].rename(columns={'close_price': 'Close'})
+        except Exception as e:
+            logger.warning(f"Supabase backup failed: {e}")
 
     # ---------------------------------------------------------
     # TIER 3: Yahoo Finance Fallback
@@ -109,6 +110,7 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
         
         if not df_yf.empty:
             logger.info("✅ yfinance success.")
+            st.session_state['current_data_source'] = "Yahoo Finance (Fallback API)"
             df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
             return df_yf[['Close']]
         else:
