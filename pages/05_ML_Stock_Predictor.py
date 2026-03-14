@@ -7,6 +7,9 @@ from sklearn.metrics import accuracy_score
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
 
+from src.auth import check_auth
+check_auth()
+
 st.title("🧠 AI Trend Predictor (Random Forest)")
 st.markdown("Trains a Machine Learning classifier on the fly to predict tomorrow's price direction based on engineered technical features.")
 
