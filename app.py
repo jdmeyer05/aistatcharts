@@ -9,18 +9,16 @@ if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
 # --- HANDLE URL REDIRECTS (Password Reset / Verification) ---
-# Catch the secret code Supabase puts in the URL when clicking an email link
 if "code" in st.query_params:
     code = st.query_params.get("code")
     try:
-        # Exchange the code to instantly log the user in
         res = supabase.auth.exchange_code_for_session({"auth_code": code})
         st.session_state['authenticated'] = True
         st.session_state['user_email'] = res.user.email
-        st.query_params.clear()  # Clean the URL up so it doesn't re-trigger
-        st.rerun()               # Force reload into the dashboard
+        st.query_params.clear()
+        st.rerun()
     except Exception as e:
-        st.error(f"This link has expired or is invalid. Please request a new one.")
+        st.error(f"Link expired or invalid: {e}")
         st.query_params.clear()
 
 # --- AUTHENTICATED STATE ---
@@ -40,7 +38,6 @@ if st.session_state['authenticated']:
     
     st.divider()
     
-    # Account Management Row
     col1, col2 = st.columns(2)
     
     with col1:
@@ -53,7 +50,8 @@ if st.session_state['authenticated']:
     with col2:
         with st.expander("⚙️ Account Settings (Update Password)"):
             with st.form("update_password_form"):
-                new_pw = st.text_input("Enter New Password", type="password")
+                # Added unique key
+                new_pw = st.text_input("Enter New Password", type="password", key="update_pw_input")
                 if st.form_submit_button("Save New Password"):
                     try:
                         supabase.auth.update_user({"password": new_pw})
@@ -66,7 +64,6 @@ else:
     st.title("🏦 Institutional Quant Platform")
     st.markdown("Advanced algorithmic backtesting, deep-learning tactical forecasts, and multi-leg option spread analysis. Please sign in to access the engines.")
     
-    # Catch the manual verification redirect
     if st.query_params.get("verified") == "true":
         st.balloons()
         st.success("🎉 **Email successfully verified!** Your account is now active. Please log in below.")
@@ -77,8 +74,9 @@ else:
     
     with tab_login:
         with st.form("login_form"):
-            email = st.text_input("Email Address")
-            password = st.text_input("Password", type="password")
+            # Added unique keys to separate from Sign Up
+            email = st.text_input("Email Address", key="login_email")
+            password = st.text_input("Password", type="password", key="login_pw")
             submit_login = st.form_submit_button("Log In 🔓")
             
             if submit_login:
@@ -88,13 +86,15 @@ else:
                     st.session_state['user_email'] = res.user.email
                     st.rerun()
                 except Exception as e:
-                    st.error("Login failed: Invalid credentials or email not confirmed.")
+                    # Showing the exact error message from Supabase now
+                    st.error(f"Login failed: {e}")
 
     with tab_signup:
         st.info("New accounts require email verification before logging in.")
         with st.form("signup_form"):
-            new_email = st.text_input("Email Address")
-            new_password = st.text_input("Password", type="password", help="Must be at least 6 characters.")
+            # Added unique keys to separate from Log In
+            new_email = st.text_input("Email Address", key="signup_email")
+            new_password = st.text_input("Password", type="password", help="Must be at least 6 characters.", key="signup_pw")
             submit_signup = st.form_submit_button("Create Account 📝")
             
             if submit_signup:
@@ -102,12 +102,13 @@ else:
                     res = supabase.auth.sign_up({"email": new_email, "password": new_password})
                     st.success("Account created successfully! **Please check your email for the confirmation link** before trying to log in.")
                 except Exception as e:
-                    st.error("Sign up failed. Ensure your password is strong enough and the email isn't already registered.")
+                    st.error(f"Sign up failed: {e}")
 
     with tab_forgot:
         st.info("Enter your email to receive a secure password reset link.")
         with st.form("forgot_form"):
-            reset_email = st.text_input("Email Address")
+            # Added unique key
+            reset_email = st.text_input("Email Address", key="forgot_email")
             submit_reset = st.form_submit_button("Send Reset Link 📧")
             
             if submit_reset:
