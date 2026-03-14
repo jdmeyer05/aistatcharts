@@ -35,7 +35,7 @@ def fetch_massive_data(symbol, days):
         end_date = date.today()
         start_date = end_date - timedelta(days=days)
         
-        # Pulling aggregates from Massive
+        # list_aggs returns a generator of 'Agg' objects
         aggs = client.list_aggs(
             ticker=symbol,
             multiplier=1,
@@ -45,22 +45,26 @@ def fetch_massive_data(symbol, days):
             limit=5000
         )
         
-        # Convert generator/list to DataFrame
+        # Convert the list of objects into a DataFrame
         df = pd.DataFrame(aggs)
 
-        # DEFENSIVE CHECK: If df is empty, stop here
         if df.empty:
-            st.error(f"No data returned for {symbol}. Check your ticker format.")
+            st.error(f"No data returned for {symbol}.")
             return None
             
-        # Massive Columns: 't' = timestamp, 'c' = close
-        if 't' in df.columns and 'c' in df.columns:
-            df['Date'] = pd.to_datetime(df['t'], unit='ms')
+        # FIX: Massive Objects use full names: 'timestamp' and 'close'
+        if 'timestamp' in df.columns and 'close' in df.columns:
+            # Convert Unix ms to datetime
+            df['Date'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('Date', inplace=True)
-            df.rename(columns={'c': 'Close'}, inplace=True)
+            
+            # Rename 'close' to 'Close' to match the rest of your math logic
+            df.rename(columns={'close': 'Close'}, inplace=True)
+            
+            # Return only the Close column
             return df[['Close']].dropna()
         else:
-            st.error(f"Unexpected data format from Massive. Columns found: {df.columns.tolist()}")
+            st.error(f"Mapping error. Found columns: {df.columns.tolist()}")
             return None
 
     except Exception as e:
