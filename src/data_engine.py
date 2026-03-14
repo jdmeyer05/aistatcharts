@@ -163,3 +163,10 @@ def fetch_options_chain(underlying_symbol: str, expiration_date: str = None) -> 
     except Exception as e:
         logger.exception(f"❌ Options chain REST fetch failed: {e}")
         return None
+
+# --- GLOBAL UI COMPONENTS ---
+
+def render_data_source_footer():
+    st.markdown("---")
+    source = st.session_state.get('current_data_source', 'Awaiting Data...')
+    st.caption(f"📡 **Active Data Source:** `{source}` (Cached for performance)")
