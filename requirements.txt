@@ -1,8 +1,8 @@
-streamlit==1.38.0
+streamlit
 pandas
 numpy
 plotly
-massive
 yfinance
 supabase
 openai
+massive-sdk
