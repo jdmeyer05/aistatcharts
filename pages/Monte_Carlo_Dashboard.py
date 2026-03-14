@@ -1,9 +1,8 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # <-- THIS IS THE MAGIC FIX FOR CLOUD RUN
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import plotly.express as px_plot
 import os
 from massive import RESTClient 
 from datetime import date, timedelta
@@ -21,20 +20,12 @@ client = RESTClient(api_key)
 # SMART TICKER PARSER
 def format_massive_ticker(user_input: str) -> str:
     t = user_input.strip().upper()
-    
-    # If the user already included a prefix (like X: or ERCOT.), trust them
     if ":" in t or t.startswith("ERCOT."):
         return t
-        
-    # Crypto detection (e.g., BTC-USD -> X:BTC-USD)
     if "-USD" in t:
         return f"X:{t}"
-        
-    # ERCOT Hub/Zone detection (e.g., HB_WEST -> ERCOT.HB_WEST)
     if t.startswith("HB_") or t.startswith("LZ_"):
         return f"ERCOT.{t}"
-        
-    # Default assumption: Standard US Equity (e.g., AAPL)
     return t
 
 with st.sidebar:
@@ -49,7 +40,6 @@ with st.sidebar:
     mc_method = st.selectbox("Method", ["bootstrap", "gaussian"])
     use_seasonality = st.checkbox("Use Seasonality", value=True)
 
-# Apply the smart parser
 formatted_ticker = format_massive_ticker(raw_ticker)
 
 # --- 2. DATA & MATH ENGINES ---
@@ -104,36 +94,51 @@ if px_data is not None and not px_data.empty:
     with col1:
         st.write("**Weekly Log Returns**")
         wk_rets = get_returns(px, 'W')
-        # REDUCED SIZE: from default to (6, 3)
-        fig_wk, ax_wk = plt.subplots(figsize=(6, 3))
         df_wk = pd.DataFrame({"ret": wk_rets.values, "wk": wk_rets.index.isocalendar().week})
-        df_wk.boxplot(column='ret', by='wk', ax=ax_wk, grid=False, showfliers=False)
-        plt.suptitle(""); ax_wk.set_title("")
-        st.pyplot(fig_wk)
+        fig_wk = px_plot.box(df_wk, x='wk', y='ret', color_discrete_sequence=['#00d1ff'])
+        fig_wk.update_layout(xaxis_title="ISO Week", yaxis_title="Log Return", margin=dict(l=0, r=0, t=20, b=0))
+        st.plotly_chart(fig_wk, use_container_width=True)
 
     with col2:
         st.write("**Monthly Log Returns**")
         mo_rets = get_returns(px, 'M')
-        # REDUCED SIZE: from default to (6, 3)
-        fig_mo, ax_mo = plt.subplots(figsize=(6, 3))
         df_mo = pd.DataFrame({"ret": mo_rets.values, "mo": mo_rets.index.month})
-        df_mo.boxplot(column='ret', by='mo', ax=ax_mo, grid=False, showfliers=False)
-        plt.suptitle(""); ax_mo.set_title("")
-        st.pyplot(fig_mo)
+        fig_mo = px_plot.box(df_mo, x='mo', y='ret', color_discrete_sequence=['#00d1ff'])
+        fig_mo.update_layout(xaxis_title="Month", yaxis_title="Log Return", margin=dict(l=0, r=0, t=20, b=0))
+        st.plotly_chart(fig_mo, use_container_width=True)
 
     st.divider()
     st.subheader("2. Yearly YTD Performance Overlay")
-    # REDUCED SIZE: from (12, 5) to (10, 4)
-    fig_ytd, ax_ytd = plt.subplots(figsize=(10, 4))
+    
+    fig_ytd = go.Figure()
     years = sorted(px.index.year.unique())
     for y in years:
         yr_data = px[px.index.year == y]
         ytd = (yr_data / yr_data.iloc[0]) - 1.0
-        alpha, lw = (1.0, 2.5) if y == years[-1] else (0.3, 1.0)
-        ax_ytd.plot(range(len(ytd)), ytd.values, label=str(y), alpha=alpha, lw=lw)
-    ax_ytd.set_title("Relative Return Since Jan 1")
-    ax_ytd.legend(ncol=4, fontsize='small')
-    st.pyplot(fig_ytd)
+        
+        is_current = (y == years[-1])
+        alpha = 1.0 if is_current else 0.3
+        lw = 3 if is_current else 1
+        color = '#00d1ff' if is_current else 'gray'
+        
+        fig_ytd.add_trace(go.Scatter(
+            x=list(range(len(ytd))),
+            y=ytd.values,
+            mode='lines',
+            line=dict(color=color, width=lw),
+            opacity=alpha,
+            name=str(y),
+            hoverinfo='skip' if not is_current else 'all',
+            hovertemplate='Day %{x}: %{y:.2%}<extra></extra>' if is_current else None
+        ))
+    
+    fig_ytd.update_layout(
+        xaxis_title="Trading Days Since Jan 1", 
+        yaxis_title="Relative Return", 
+        hovermode="x unified",
+        margin=dict(l=0, r=0, t=20, b=0)
+    )
+    st.plotly_chart(fig_ytd, use_container_width=True)
 
     st.divider()
     st.subheader("3. Monte Carlo Year-End Projection")
@@ -157,14 +162,37 @@ if px_data is not None and not px_data.empty:
         current_prices *= np.exp(s_drift + drift_weekly + shocks)
         paths[:, t] = current_prices
 
-    # REDUCED SIZE: from (12, 6) to (10, 4)
-    fig_mc, ax_mc = plt.subplots(figsize=(10, 4))
     p5, p50, p95 = np.percentile(paths, [5, 50, 95], axis=0)
-    ax_mc.plot(range(1, weeks_to_sim + 1), p50, color='cyan', label='Median', lw=2)
-    ax_mc.fill_between(range(1, weeks_to_sim + 1), p5, p95, color='cyan', alpha=0.15, label='90% CI')
-    ax_mc.set_title(f"Simulation for {raw_ticker}")
-    ax_mc.legend()
-    st.pyplot(fig_mc)
+    x_axis = list(range(1, weeks_to_sim + 1))
+
+    fig_mc = go.Figure()
+
+    fig_mc.add_trace(go.Scatter(
+        x=x_axis + x_axis[::-1], 
+        y=list(p95) + list(p5)[::-1], 
+        fill='toself',
+        fillcolor='rgba(0, 209, 255, 0.15)',
+        line=dict(color='rgba(255,255,255,0)'),
+        hoverinfo="skip",
+        name='90% Confidence Interval'
+    ))
+
+    fig_mc.add_trace(go.Scatter(
+        x=x_axis,
+        y=p50,
+        mode='lines',
+        line=dict(color='#00d1ff', width=3),
+        name='Median Forecast',
+        hovertemplate='Week %{x}<br>Price: $%{y:,.2f}<extra></extra>'
+    ))
+
+    fig_mc.update_layout(
+        xaxis_title="Weeks from Today",
+        yaxis_title="Price (USD)",
+        hovermode="x unified",
+        margin=dict(l=0, r=0, t=20, b=0)
+    )
+    st.plotly_chart(fig_mc, use_container_width=True)
 
     st.metric("Expected Year-End Price", f"${p50[-1]:,.2f}", f"{((p50[-1]/px.iloc[-1])-1)*100:.2f}%")
 
