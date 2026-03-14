@@ -24,6 +24,7 @@ if ":" in ticker or "ERCOT" in ticker.upper():
     st.stop()
 
 # --- FETCH DATA ---
+# Notice we only pass the ticker now. The filtering happens after we get the data.
 if submit or 'opt_surface_df' not in st.session_state or st.session_state.get('opt_surface_ticker') != ticker:
     with st.spinner(f"Pulling live snapshot for {ticker}..."):
         df = fetch_options_chain(ticker)
@@ -42,7 +43,7 @@ if 'opt_surface_df' in st.session_state:
     df = st.session_state.opt_surface_df
     current_px = st.session_state.opt_underlying_px
     
-    # Filter Controls
+    # Filter Controls (Dynamically generated from the fetched chain)
     expirations = sorted(df['expiration_date'].dropna().unique())
     if not expirations:
         st.warning("No valid expiration dates found in the chain.")
