@@ -1,4 +1,5 @@
 import os
+import time
 import streamlit as st
 import stripe
 import extra_streamlit_components as stx
@@ -17,33 +18,39 @@ def init_supabase() -> Client:
     return create_client(url, key)
 
 def check_auth():
-    """Security firewall with persistent cookie recovery across page refreshes."""
-    # 1. Fast Pass: If already authenticated in this session, let them through instantly
+    """Security firewall with a reliable 1-second cookie recovery window."""
+    # 1. Fast Pass: Already authenticated in this active tab
     if st.session_state.get('authenticated', False):
         return
 
-    # 2. Mount the cookie manager to check the browser's persistent storage
-    cookie_manager = stx.CookieManager(key="firewall")
-    cached_email = cookie_manager.get(cookie="quant_user_session")
+    cookie_manager = stx.CookieManager()
+    
+    # Track how many times we've asked the browser for the cookie
+    if 'cookie_check_count' not in st.session_state:
+        st.session_state['cookie_check_count'] = 0
 
-    # 3. If the cookie is found, restore the session state immediately
+    # Grab ALL cookies at once (more reliable on a hard refresh)
+    cookies = cookie_manager.get_all()
+    cached_email = cookies.get("quant_user_session")
+
     if cached_email:
+        # Success! The browser finally handed over the cookie.
         st.session_state['authenticated'] = True
         st.session_state['user_email'] = cached_email
-        st.rerun() # Refresh the page silently to clear the loading state
-
-    # 4. The Streamlit Race Condition Fix:
-    # Third-party components take a split second to retrieve data from the browser.
-    # If we check the cookie immediately on a fresh reload, it will always be None.
-    # We must pause the script execution for one cycle to allow the cookie to arrive.
-    if not st.session_state.get("cookie_loading_delay", False):
-        st.session_state["cookie_loading_delay"] = True
+        st.session_state['cookie_check_count'] = 0 # Reset the counter
+        st.rerun() # Refresh silently to load the engine
+        
+    elif st.session_state['cookie_check_count'] < 2:
+        # The browser hasn't sent it yet. Pause and try again.
+        st.session_state['cookie_check_count'] += 1
         st.markdown("<br><br><h3 style='text-align: center; color: #00d1ff;'>🔄 Reconnecting secure session...</h3>", unsafe_allow_html=True)
-        st.stop() # Halts the boot to wait for the cookie to trigger a rerun!
-
-    # 5. If we reach this line, the delay finished and there is genuinely no cookie.
-    st.session_state["cookie_loading_delay"] = False
-    st.switch_page("app.py")
+        time.sleep(0.5) # Force Python to wait for 0.5 seconds
+        st.rerun() # Run the check one more time
+        
+    else:
+        # We waited a full second, checked twice, and the cookie genuinely isn't there.
+        st.session_state['cookie_check_count'] = 0
+        st.switch_page("app.py")
 
 
 def verify_subscription(email: str, user_id: str):
