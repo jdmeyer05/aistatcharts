@@ -9,6 +9,9 @@ from src.chatbot import run_sidebar_chatbot
 # Enable wide mode for the 2x2 grid
 st.set_page_config(page_title="Advanced Technical Screener", layout="wide")
 
+from src.auth import check_auth
+check_auth()
+
 st.title("📡 Advanced Technical Screener")
 st.markdown("Multi-dimensional technical analysis: Trend (EMAs), Momentum (MACD/RSI), and Volatility (Bollinger Bands).")
 
