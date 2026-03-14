@@ -8,10 +8,26 @@ supabase = init_supabase()
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
+# --- HANDLE URL REDIRECTS (Password Reset / Verification) ---
+# Catch the secret code Supabase puts in the URL when clicking an email link
+if "code" in st.query_params:
+    code = st.query_params.get("code")
+    try:
+        # Exchange the code to instantly log the user in
+        res = supabase.auth.exchange_code_for_session({"auth_code": code})
+        st.session_state['authenticated'] = True
+        st.session_state['user_email'] = res.user.email
+        st.query_params.clear()  # Clean the URL up so it doesn't re-trigger
+        st.rerun()               # Force reload into the dashboard
+    except Exception as e:
+        st.error(f"This link has expired or is invalid. Please request a new one.")
+        st.query_params.clear()
+
 # --- AUTHENTICATED STATE ---
 if st.session_state['authenticated']:
     st.title("🏦 Institutional Quant Platform")
     st.success(f"Welcome back, {st.session_state.get('user_email', 'User')}!")
+    st.info("💡 **If you just reset your password, please enter a new one in the Account Settings menu below.**")
     st.markdown("### System Status: **Online**")
     st.markdown("""
     Use the sidebar to navigate to your quantitative tools:
@@ -50,14 +66,13 @@ else:
     st.title("🏦 Institutional Quant Platform")
     st.markdown("Advanced algorithmic backtesting, deep-learning tactical forecasts, and multi-leg option spread analysis. Please sign in to access the engines.")
     
-    # Catch the verification redirect from Supabase
+    # Catch the manual verification redirect
     if st.query_params.get("verified") == "true":
         st.balloons()
         st.success("🎉 **Email successfully verified!** Your account is now active. Please log in below.")
     
     st.divider()
     
-    # We now have 3 tabs instead of 2
     tab_login, tab_signup, tab_forgot = st.tabs(["Log In", "Sign Up", "Forgot Password"])
     
     with tab_login:
