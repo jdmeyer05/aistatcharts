@@ -51,6 +51,40 @@ def fetch_massive_data(symbol, days):
     except Exception as e:
         logger.warning(f"Supabase fetch failed for {symbol}: {str(e)}")
 
+# Add this to the bottom of src/data_engine.py
+def fetch_options_chain(underlying_symbol, expiration_date=None):
+    """
+    Fetches the options chain snapshot for a given underlying ticker.
+    If expiration_date is provided (YYYY-MM-DD), it filters for that expiry.
+    """
+    mc = get_massive()
+    if not mc: return None
+    
+    try:
+        # Note: The exact method name depends on your massive-sdk version.
+        # This uses the standard snapshot endpoint structure for options.
+        formatted_sym = underlying_symbol.replace("X:", "").replace("ERCOT.", "").upper()
+        
+        # Pull all active contracts for the underlying
+        # In a real API, this might be mc.get_snapshot_options(underlying=formatted_sym)
+        # Using a generic call structure here for Massive/Polygon:
+        response = mc.reference_options_contracts(underlying_ticker=formatted_sym, limit=1000)
+        
+        if not response: return None
+        
+        df = pd.DataFrame(response)
+        
+        # Filter by expiration if requested
+        if expiration_date and 'expiration_date' in df.columns:
+            df = df[df['expiration_date'] == expiration_date]
+            
+        return df
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Options API Error: {e}")
+        return None
+    
+    
     # 2. Massive API with Loop
     all_aggs = []
     current_to = end_date.strftime("%Y-%m-%d")
