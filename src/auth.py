@@ -17,42 +17,40 @@ def init_supabase() -> Client:
     return create_client(url, key)
 
 def check_auth():
-    """Security firewall that correctly yields to the browser to fetch cookies."""
+    """Bulletproof security firewall with Instant Recovery."""
     # 1. Fast Pass: Already authenticated in this active tab
     if st.session_state.get('authenticated', False):
         return
 
-    # Initialize the React component on the frontend
-    cookie_manager = stx.CookieManager()
-    
-    # Try to grab the cookie
-    cached_email = cookie_manager.get(cookie="quant_user_session")
+    # 2. INSTANT RECOVERY (Bypasses React Frontend Race Conditions)
+    # This reads the cookie directly from the server headers the millisecond you refresh.
+    if hasattr(st, "context") and hasattr(st.context, "cookies"):
+        if "quant_user_session" in st.context.cookies:
+            st.session_state['authenticated'] = True
+            st.session_state['user_email'] = st.context.cookies["quant_user_session"]
+            st.rerun()
 
+    # 3. Fallback check for older Streamlit versions
+    cookie_manager = stx.CookieManager()
+    cached_email = cookie_manager.get(cookie="quant_user_session")
+    
     if cached_email:
-        # Success! The browser delivered the cookie.
         st.session_state['authenticated'] = True
         st.session_state['user_email'] = cached_email
-        st.session_state['cookie_check_count'] = 0 
-        st.rerun() # Refresh silently to load the engine
-        
-    else:
-        # Initialize a counter to track our attempts
-        if 'cookie_check_count' not in st.session_state:
-            st.session_state['cookie_check_count'] = 0
+        st.rerun()
 
-        if st.session_state['cookie_check_count'] == 0:
-            # First pass: We MUST yield control to the browser!
-            st.session_state['cookie_check_count'] += 1
-            st.markdown("<br><br><h3 style='text-align: center; color: #00d1ff;'>🔄 Reconnecting secure session...</h3>", unsafe_allow_html=True)
-            
-            # CRITICAL FIX: st.stop() halts Python so the frontend can render the component.
-            # Once the component renders and finds the cookie, it will auto-rerun the script!
-            st.stop() 
-            
-        else:
-            # Second pass: If we reach here, the component rendered, auto-reran, and genuinely found no cookie.
-            st.session_state['cookie_check_count'] = 0
+    # 4. The Anti-Loop Protocol
+    # If the cookie genuinely isn't found, we DO NOT automatically switch pages.
+    # We display a manual recovery button so you are never violently booted.
+    st.warning("Secure session disconnected due to page refresh.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Restore Session", type="primary", use_container_width=True):
+            st.rerun() # By the time you click this, the browser has definitely loaded the cookie.
+    with col2:
+        if st.button("Log In Again", use_container_width=True):
             st.switch_page("app.py")
+    st.stop()
 
 
 def verify_subscription(email: str, user_id: str):
