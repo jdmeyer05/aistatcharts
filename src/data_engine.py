@@ -1,31 +1,27 @@
 import os
 import logging
 import pandas as pd
+import numpy as np
+from scipy.stats import norm
 import requests
 import yfinance as yf
 from datetime import date, timedelta
 from supabase import create_client, Client
 import streamlit as st
 
-# Initialize the logger for this specific file
 logger = logging.getLogger(__name__)
 
 # --- HELPER FUNCTIONS ---
-
 def get_supabase_client() -> Client:
-    """Safely initializes the Supabase client."""
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        return None
-    try:
-        return create_client(url, key)
+    if not url or not key: return None
+    try: return create_client(url, key)
     except Exception as e:
         logger.error(f"Failed to initialize Supabase: {e}")
         return None
 
 def format_massive_ticker(user_input: str) -> str:
-    """Formats the user input for the Massive/Polygon API."""
     if not user_input: return ""
     t = user_input.strip().upper()
     if ":" in t or t.startswith("ERCOT."): return t
@@ -34,138 +30,94 @@ def format_massive_ticker(user_input: str) -> str:
     return t
 
 def translate_to_yahoo(formatted_symbol: str) -> str:
-    """Translates a Massive/Polygon ticker back to a Yahoo Finance ticker."""
     return formatted_symbol.replace("X:", "").replace("ERCOT.", "")
 
-# --- MAIN DATA FETCHING ENGINE ---
-
+# --- PRICE DATA ENGINE ---
 @st.cache_data(ttl=3600, show_spinner="Fetching market data...")
 def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
-    """
-    The UNLIMITED Data Engine:
-    1. Fetch live via Massive REST API (Primary).
-    2. Fallback to Supabase if Massive is down.
-    3. Fallback to yfinance if all else fails.
-    """
     end_date = date.today()
     start_date = end_date - timedelta(days=days)
     formatted_symbol = format_massive_ticker(symbol)
     
-    logger.info(f"Fetching data for {formatted_symbol} ({days} days)")
-
-    # TIER 1: Massive REST API (Live Feed)
+    # Tier 1: Massive
     api_key = os.environ.get("MASSIVE_API_KEY")
     if api_key:
         try:
-            base_url = "https://api.polygon.io/v2/aggs/ticker" 
-            url = f"{base_url}/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
-            
-            response = requests.get(url, params={"apiKey": api_key})
-            response.raise_for_status()
-            data = response.json()
-            
+            url = f"https://api.polygon.io/v2/aggs/ticker/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
+            res = requests.get(url, params={"apiKey": api_key})
+            res.raise_for_status()
+            data = res.json()
             if 'results' in data:
                 st.session_state['current_data_source'] = "Massive API (Live Feed)"
                 df = pd.DataFrame(data['results'])
                 df['Date'] = pd.to_datetime(df['t'], unit='ms')
                 df.set_index('Date', inplace=True)
                 return df[['c']].rename(columns={'c': 'Close'})
-        except Exception as e:
-            logger.error(f"Massive REST API failed: {e}")
+        except: pass
 
-    # TIER 2: Supabase Cache (Backup)
-    sb = get_supabase_client()
-    if sb:
-        try:
-            res = sb.table("price_data").select("*").eq("ticker", formatted_symbol).gte("timestamp", start_date.isoformat()).execute()
-            if res.data:
-                st.session_state['current_data_source'] = "Supabase Database (Backup)"
-                df = pd.DataFrame(res.data)
-                df['Date'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
-                df.set_index('Date', inplace=True)
-                return df[['close_price']].rename(columns={'close_price': 'Close'})
-        except Exception as e:
-            logger.warning(f"Supabase backup failed: {e}")
-
-    # TIER 3: Yahoo Finance Fallback
+    # Tier 2: Yahoo Fallback
     try:
-        yahoo_ticker = translate_to_yahoo(formatted_symbol)
-        df_yf = yf.download(yahoo_ticker, start=start_date, end=end_date, progress=False)
+        df_yf = yf.download(translate_to_yahoo(formatted_symbol), start=start_date, end=end_date, progress=False)
         if not df_yf.empty:
             st.session_state['current_data_source'] = "Yahoo Finance (Fallback API)"
             df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
             return df_yf[['Close']]
-    except Exception as e:
-        logger.exception(f"All sources failed for {formatted_symbol}")
-    
+    except: pass
     return None
 
-# --- OPTIONS DATA ENGINE ---
-
-@st.cache_data(ttl=3600, show_spinner="Fetching live options chain (this may take a moment for SPY)...")
-def fetch_options_chain(underlying_symbol: str) -> pd.DataFrame:
-    """
-    Fetches the options chain snapshot via REST with pagination.
-    Flattens the nested JSON into a clean dataframe for charting.
-    """
-    api_key = os.environ.get("MASSIVE_API_KEY")
-    if not api_key:
-        return None
-        
+# --- UNLIMITED OPTIONS ENGINE ---
+@st.cache_data(ttl=3600)
+def get_expiration_dates(symbol: str):
+    """Fetches all available expiration dates instantly."""
     try:
-        formatted_sym = translate_to_yahoo(underlying_symbol).upper()
-        url = f"https://api.polygon.io/v3/snapshot/options/{formatted_sym}"
-        params = {"limit": 250, "apiKey": api_key}
-            
-        contracts = []
-        
-        # Paginate to grab the full chain (capped at 5000 to prevent memory crashes)
-        while url and len(contracts) < 5000:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            if 'results' in data and len(data['results']) > 0:
-                st.session_state['current_data_source'] = "Massive API (Options Snapshot Feed)"
-                
-                for r in data['results']:
-                    contract = {
-                        "ticker": r.get("details", {}).get("ticker"),
-                        "contract_type": r.get("details", {}).get("contract_type"),
-                        "strike_price": r.get("details", {}).get("strike_price"),
-                        "expiration_date": r.get("details", {}).get("expiration_date"),
-                        "implied_volatility": r.get("implied_volatility"),
-                        "open_interest": r.get("open_interest"),
-                        "volume": r.get("day", {}).get("volume", 0),
-                        "bid": r.get("last_quote", {}).get("bid", 0),
-                        "ask": r.get("last_quote", {}).get("ask", 0),
-                        "delta": r.get("greeks", {}).get("delta"),
-                        "gamma": r.get("greeks", {}).get("gamma"),
-                        "theta": r.get("greeks", {}).get("theta"),
-                        "vega": r.get("greeks", {}).get("vega"),
-                    }
-                    contracts.append(contract)
-            
-            # Check for the next page
-            next_url = data.get("next_url")
-            if next_url:
-                url = next_url
-                params = {"apiKey": api_key} # The next_url already has the cursor
-            else:
-                break
-                
-        if contracts:
-            return pd.DataFrame(contracts)
-        return None
-            
+        tk = yf.Ticker(translate_to_yahoo(symbol))
+        return list(tk.options)
     except Exception as e:
-        logger.exception(f"Options chain fetch failed: {e}")
-        return None
+        logger.error(f"Failed to fetch expirations: {e}")
+        return []
 
-# --- GLOBAL UI COMPONENTS ---
+@st.cache_data(ttl=3600, show_spinner="Calculating Black-Scholes Greeks...")
+def fetch_options_chain(symbol: str, expiration: str = None) -> pd.DataFrame:
+    """Fetches chain and calculates Delta dynamically to bypass API limits."""
+    try:
+        tk = yf.Ticker(translate_to_yahoo(symbol))
+        exps = tk.options
+        if not exps: return None
+        
+        target_exp = expiration if expiration else exps[0]
+        chain = tk.option_chain(target_exp)
+        
+        calls, puts = chain.calls, chain.puts
+        calls['contract_type'] = 'call'
+        puts['contract_type'] = 'put'
+        
+        df = pd.concat([calls, puts], ignore_index=True)
+        df = df.rename(columns={
+            'strike': 'strike_price', 'impliedVolatility': 'implied_volatility',
+            'openInterest': 'open_interest', 'volume': 'volume'
+        })
+        df['expiration_date'] = target_exp
+        
+        # Black-Scholes Delta Approximation
+        hist = tk.history(period="5d")
+        spot = hist['Close'].iloc[-1] if not hist.empty else df['strike_price'].median()
+        t = (pd.to_datetime(target_exp) - pd.Timestamp.now()).days / 365.0
+        if t <= 0: t = 0.001
+        
+        iv = np.where((df['implied_volatility'].isna()) | (df['implied_volatility'] <= 0), 0.001, df['implied_volatility'])
+        d1 = (np.log(spot / df['strike_price']) + (0.04 + (iv**2)/2) * t) / (iv * np.sqrt(t))
+        
+        df['delta'] = np.where(df['contract_type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
+        df['theta'] = 0.0 # Placeholder to prevent UI crash
+        df['gamma'] = 0.0 # Placeholder to prevent UI crash
+        
+        st.session_state['current_data_source'] = "Unlimited Options Engine (YFinance + SciPy)"
+        return df
+    except Exception as e:
+        logger.error(f"Options fetch failed: {e}")
+        return None
 
 def render_data_source_footer():
-    """Neatly displays the active data source badge at the bottom of the page."""
     st.markdown("---")
     source = st.session_state.get('current_data_source', 'Awaiting Data...')
-    st.caption(f"📡 **Active Data Source:** `{source}` (Cached for performance)")
+    st.caption(f"📡 **Active Data Source:** `{source}`")
