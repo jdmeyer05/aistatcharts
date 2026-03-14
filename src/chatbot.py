@@ -1,31 +1,54 @@
 import streamlit as st
-import openai # Or your preferred LLM
+from openai import OpenAI
+import os
 
-def run_sidebar_chatbot():
+# Initialize OpenAI Client
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+def run_sidebar_chatbot(context_data=None):
+    """
+    context_data: A string or dict containing current page info 
+    (e.g., 'Ticker: BTC-USD, Year-End Projection: $85,000')
+    """
     with st.sidebar:
         st.divider()
         st.subheader("🤖 AI Market Assistant")
         
-        # Initialize chat history in session state
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
-        # Display chat messages from history on app rerun
+        # Display history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # Accept user input
-        if prompt := st.chat_input("Ask about ERCOT or MC sims..."):
-            # Add user message to chat history
+        if prompt := st.chat_input("Ask about this data..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
 
-            # Generate Assistant Response
+            # --- API CALL WITH CONTEXT ---
             with st.chat_message("assistant"):
-                # Placeholder for LLM Logic (e.g., OpenAI API call)
-                response = f"You asked about: {prompt}. I'm processing that data now..."
-                st.markdown(response)
+                # We inject the current page data into the system message
+                system_msg = {
+                    "role": "system", 
+                    "content": f"You are a power trading and financial analyst. Current market context: {context_data}"
+                }
+                
+                # Build the message chain
+                api_messages = [system_msg] + [
+                    {"role": m["role"], "content": m["content"]} 
+                    for m in st.session_state.messages
+                ]
+
+                # Using GPT-5 mini (2026 standard for fast, smart reasoning)
+                response = client.chat.completions.create(
+                    model="gpt-5-mini",
+                    messages=api_messages,
+                    stream=False
+                )
+                
+                full_response = response.choices[0].message.content
+                st.markdown(full_response)
             
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
