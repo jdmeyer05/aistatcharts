@@ -3,6 +3,26 @@ from src.auth import init_supabase
 
 st.set_page_config(page_title="Quant Platform | Login", layout="centered")
 
+# --- SIDEBAR UI OVERRIDE ---
+# This renames the first sidebar item without changing the file name
+st.markdown(
+    """
+    <style>
+    /* Hide the default text 'App' */
+    ul[data-testid="stSidebarNavItems"] li:nth-child(1) span {
+        display: none;
+    }
+    /* Inject 'Home Page' */
+    ul[data-testid="stSidebarNavItems"] li:nth-child(1) a::after {
+        content: "🏠 Home Page";
+        font-weight: 400;
+        margin-left: 5px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 supabase = init_supabase()
 
 if 'authenticated' not in st.session_state:
@@ -50,7 +70,6 @@ if st.session_state['authenticated']:
     with col2:
         with st.expander("⚙️ Account Settings (Update Password)"):
             with st.form("update_password_form"):
-                # Added unique key
                 new_pw = st.text_input("Enter New Password", type="password", key="update_pw_input")
                 if st.form_submit_button("Save New Password"):
                     try:
@@ -86,7 +105,6 @@ else:
                     st.session_state['user_email'] = res.user.email
                     st.rerun()
                 except Exception as e:
-                    # Showing the exact error message from Supabase now
                     st.error(f"Login failed: {e}")
 
     with tab_signup:
