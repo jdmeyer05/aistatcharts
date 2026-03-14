@@ -11,10 +11,6 @@ import numpy as np
 # Setup logging
 logger = logging.getLogger(__name__)
 
-# Set unique page ID for session state isolation
-if 'page_id' not in st.session_state:
-    st.session_state.page_id = 'monte_carlo'
-
 # NO set_page_config here (it is already in app.py)
 
 st.title("📈 Monte Carlo Simulation")
@@ -39,85 +35,67 @@ try:
         # Validate data structure
         if 'Close' not in data.columns:
             st.error("❌ Error: Data does not contain 'Close' column. Check data source.")
-            logger.error(f"Invalid data structure for {ticker}: missing 'Close' column")
-        elif len(data) < 10:
-            st.warning(f"⚠️ Warning: Only {len(data)} data points available. Results may be unreliable (minimum 10 recommended).")
         else:
-            # Extract Close as a Series and handle both DataFrame and Series returns
-            close_data = data['Close']
-            if isinstance(close_data, pd.DataFrame):
-                px_close = close_data.squeeze()
-            else:
-                px_close = close_data
+            px_close = data['Close']
             
-            # Ensure px_close is a proper pandas Series with no NaN values
-            if px_close.isnull().any():
-                st.warning(f"⚠️ Warning: Data contains {px_close.isnull().sum()} NaN values. Removing them.")
-                px_close = px_close.dropna()
+            # Clean data (remove NaNs)
+            px_close = px_close.dropna()
             
-            # Double check we still have enough data after cleaning
             if len(px_close) < 10:
-                st.error(f"❌ Error: Not enough valid data points after cleaning ({len(px_close)} available).")
-                logger.error(f"Insufficient data for {ticker} after NaN removal")
+                st.error(f"❌ Error: Not enough valid data points ({len(px_close)}).")
             else:
-                # Run the Simulation from src/simulation.py
-                try:
-                    st.info(f"📊 Running Monte Carlo simulation with {len(px_close)} data points...")
-                    
-                    p5, p50, p95, steps = run_monte_carlo_engine(
-                        px_close, n_sims, drift, vol_mult, method, seasonal
-                    )
-                    
-                    # Chart: Historical & Projection with confidence intervals
-                    fig = go.Figure()
-                    
-                    # Create date index for historical data
-                    historical_dates = pd.date_range(end=pd.Timestamp.now(), periods=len(px_close), freq='D')
-                    
-                    # Add historical data
-                    fig.add_trace(go.Scatter(
-                        x=historical_dates,
-                        y=px_close.values,  # Use .values to ensure numpy array
-                        name="Historical Data",
-                        line=dict(color='#1f77b4', width=2),
-                        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Price:</b> $%{y:,.2f}<extra></extra>'
-                    ))
-                    
-                    # Create future dates for projections
-                    future_dates = pd.date_range(start=pd.Timestamp.now(), periods=len(p50), freq='D')
-                    
-                    # Add projection lines (percentiles)
-                    fig.add_trace(go.Scatter(
-                        x=future_dates,
-                        y=p95,
-                        name="95th Percentile (Upside)",
-                        line=dict(color='#00aa00', dash='dash', width=1),
-                        opacity=0.7,
-                        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>95th Percentile:</b> $%{y:,.2f}<extra></extra>'
-                    ))
-                    
-                    fig.add_trace(go.Scatter(
-                        x=future_dates,
-                        y=p50, 
-                        name="Median Forecast", 
-                        line=dict(color='#ffaa00', width=3),
-                        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>Median:</b> $%{y:,.2f}<extra></extra>'
-                    ))
-                    
-                    fig.add_trace(go.Scatter(
-                        x=future_dates,
-                        y=p5,
-                        name="5th Percentile (Downside)",
-                        line=dict(color='#ff0000', dash='dash', width=1),
-                        opacity=0.7,
-                        fill='tonexty',
-                        hovertemplate='<b>Date:</b> %{x|%Y-%m-%d}<br><b>5th Percentile:</b> $%{y:,.2f}<extra></extra>'
-                    ))
-                    
-                    fig.update_layout(
-                        template="plotly_dark", 
-                        title=f"📊 {ticker} - Monte Carlo Forecast ({lookback}-day lookback, {n_sims} simulations)",
-                        xaxis_title="Date",
-                        yaxis_title="Price ($)",
-                        hovermode='x unified',
-                        height=600
+                # Run the Simulation
+                p5, p50, p95, steps = run_monte_carlo_engine(
+                    px_close, n_sims, drift, vol_mult, method, seasonal
+                )
+                
+                # --- Main Plotting Logic ---
+                fig = go.Figure()
+                
+                # Historical Data
+                fig.add_trace(go.Scatter(
+                    x=px_close.index, y=px_close.values,
+                    name="Historical",
+                    line=dict(color='#00d1ff', width=2)
+                ))
+                
+                # Projection Dates
+                last_date = px_close.index[-1]
+                future_dates = pd.date_range(start=last_date, periods=len(p50), freq='D')
+                
+                # Confidence Interval (Shaded Area)
+                fig.add_trace(go.Scatter(
+                    x=future_dates.tolist() + future_dates.tolist()[::-1],
+                    y=p95.tolist() + p5.tolist()[::-1],
+                    fill='toself',
+                    fillcolor='rgba(255, 170, 0, 0.1)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    name='90% Confidence Interval'
+                ))
+
+                # Median Forecast
+                fig.add_trace(go.Scatter(
+                    x=future_dates, y=p50,
+                    name="Median Forecast",
+                    line=dict(color='#ffaa00', width=3)
+                ))
+
+                fig.update_layout(
+                    template="plotly_dark",
+                    title=f"Projection for {ticker}",
+                    xaxis_title="Date",
+                    yaxis_title="Price ($)",
+                    hovermode='x unified',
+                    height=600
+                ) # Parenthesis closed here correctly
+                
+                st.plotly_chart(fig, use_container_width=True)
+
+                # --- Chatbot Integration ---
+                mc_context = f"Ticker: {ticker}. Projected Median: ${p50[-1]:,.2f}. Annual Drift: {drift}%."
+                run_sidebar_chatbot(context_data=mc_context)
+    else:
+        st.warning("No data found. Check ticker or API limit.")
+
+except Exception as e:
+    st.error(f"An error occurred: {e}")
