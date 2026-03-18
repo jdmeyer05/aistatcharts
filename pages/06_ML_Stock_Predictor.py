@@ -7,7 +7,7 @@ from src.simulation import predict_30d_random_forest
 from src.chatbot import run_sidebar_chatbot
 from src.auth import check_auth
 
-st.set_page_config(page_title="ML Stock Predictor", layout="wide")
+st.set_page_config(page_title="ML Stock Predictor", layout="wide", initial_sidebar_state="collapsed")
 check_auth() # The firewall
 
 st.title("🤖 ML Tactical Forecast (30-Day)")
@@ -24,12 +24,12 @@ with st.sidebar:
         n_trees = st.slider("Random Forest Estimators", 50, 500, 200, step=50)
         lookback = st.slider("Training Lookback (Days)", 500, 2520, 1000, step=250)
         
-        submit = st.form_submit_button("🚀 Run Neural Forecast")
+        submit = st.form_submit_button("🚀 Run ML Forecast")
 
 ticker = format_massive_ticker(raw_ticker)
 
 # --- EXECUTION ---
-if submit or 'ml_forecast' not in st.session_state or st.session_state.get('ml_ticker') != ticker:
+if submit or 'ml_forecast' not in st.session_state or st.session_state.get('ml_ticker') != ticker or st.session_state.get('ml_params') != (n_trees, lookback):
     with st.spinner(f"Training ML Engine on {ticker} and running stochastic projections..."):
         # Fetch data
         df = fetch_massive_data(ticker, lookback + 150) # Buffer for rolling indicators
@@ -50,6 +50,7 @@ if submit or 'ml_forecast' not in st.session_state or st.session_state.get('ml_t
         st.session_state.ml_forecast = forecast_data
         st.session_state.ml_dates = future_dates
         st.session_state.ml_ticker = ticker
+        st.session_state.ml_params = (n_trees, lookback)
 
 # --- RENDER DASHBOARD ---
 if 'ml_forecast' in st.session_state:
@@ -68,10 +69,11 @@ if 'ml_forecast' in st.session_state:
     downside = (lower_bound / current_price) - 1
     
     # --- METRICS ROW ---
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Current Spot", f"${current_price:,.2f}")
-    c2.metric("Target (30-Day)", f"${predicted_mean_price:,.2f}", f"{predicted_return * 100:.2f}%")
-    c3.metric("90% Confidence Interval", f"${lower_bound:,.2f} - ${upper_bound:,.2f}")
+    c2.metric("Target (30-Day)", f"${predicted_mean_price:,.2f}", f"{predicted_return * 100:+.2f}%")
+    c3.metric("90% CI Lower", f"${lower_bound:,.2f}", f"{downside * 100:+.2f}%")
+    c4.metric("90% CI Upper", f"${upper_bound:,.2f}", f"{upside * 100:+.2f}%")
     
     # --- PLOTLY CHART ---
     # Slice the last 60 days of history so the chart isn't zoomed out too far

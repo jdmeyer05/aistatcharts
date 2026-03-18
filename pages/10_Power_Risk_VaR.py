@@ -7,7 +7,9 @@ from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.chatbot import run_sidebar_chatbot
 
 from src.auth import check_auth
-check_auth() 
+
+st.set_page_config(page_title="Power Risk VaR", layout="wide", initial_sidebar_state="collapsed")
+check_auth()
 
 st.title("🛡️ Portfolio Risk & VaR Engine")
 
@@ -24,11 +26,17 @@ ticker_list = [t.strip() for t in raw_tickers.split(",")]
 # --- Fetch & Align Data ---
 st.info("Aggregating portfolio data...")
 all_data = {}
+failed_tickers = []
 for t in ticker_list:
     formatted_t = format_massive_ticker(t)
     df = fetch_massive_data(formatted_t, lookback)
     if df is not None:
         all_data[t] = df['Close']
+    else:
+        failed_tickers.append(t)
+
+if failed_tickers:
+    st.warning(f"Could not load data for: {', '.join(failed_tickers)}")
 
 if all_data:
     portfolio_df = pd.DataFrame(all_data).dropna()
@@ -40,11 +48,16 @@ if all_data:
     weights = np.full(len(ticker_list), 1.0 / len(ticker_list))
     portfolio_returns = daily_returns.dot(weights)
     
-    # --- VaR MATHEMATICS ---
+    # --- VaR & CVaR MATHEMATICS ---
     # We look at the historical worst days. If confidence is 95%, we find the 5th percentile return.
     percentile = (1 - confidence_level) * 100
     var_percent = np.percentile(portfolio_returns, percentile)
     var_dollar = portfolio_value * var_percent
+
+    # Conditional VaR (Expected Shortfall) — average loss beyond VaR
+    tail_returns = portfolio_returns[portfolio_returns <= var_percent]
+    cvar_percent = tail_returns.mean() if len(tail_returns) > 0 else var_percent
+    cvar_dollar = portfolio_value * cvar_percent
     
     # --- CHART: RETURNS DISTRIBUTION ---
     st.subheader("Daily Returns Distribution")
@@ -70,11 +83,13 @@ if all_data:
     
     # --- METRICS ---
     st.divider()
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     c1.metric(f"1-Day {int(confidence_level*100)}% VaR (%)", f"{var_percent*100:.2f}%")
     c2.metric(f"1-Day {int(confidence_level*100)}% VaR ($)", f"${abs(var_dollar):,.2f}", delta="Max Expected Loss", delta_color="inverse")
-    
-    st.caption(f"Based on historical data, there is a {int(confidence_level*100)}% probability that the portfolio will not lose more than **${abs(var_dollar):,.2f}** in a single trading day.")
+    c3.metric(f"1-Day {int(confidence_level*100)}% CVaR ($)", f"${abs(cvar_dollar):,.2f}", delta="Avg Loss Beyond VaR", delta_color="inverse")
+
+    st.caption(f"**VaR:** There is a {int(confidence_level*100)}% probability that the portfolio will not lose more than **${abs(var_dollar):,.2f}** in a single trading day. "
+               f"**CVaR:** If losses exceed VaR, the average expected loss is **${abs(cvar_dollar):,.2f}**.")
 
     # Chatbot Context
     ctx = f"The 1-Day {int(confidence_level*100)}% VaR for a ${portfolio_value} portfolio containing {raw_tickers} is ${abs(var_dollar):.2f}."

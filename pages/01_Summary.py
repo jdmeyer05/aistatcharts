@@ -1,10 +1,9 @@
 import streamlit as st
-import extra_streamlit_components as stx
 import yfinance as yf
 import plotly.graph_objects as go
 from src.auth import init_supabase, check_auth
 
-st.set_page_config(page_title="Platform Summary", layout="wide")
+st.set_page_config(page_title="Platform Summary", layout="wide", initial_sidebar_state="collapsed")
 check_auth() # The firewall
 
 supabase = init_supabase()
@@ -60,7 +59,7 @@ for ticker, name, color, col in markets:
         if price is not None:
             # Color the text green or red based on daily performance
             delta_color = "green" if change >= 0 else "red"
-            st.markdown(f"<h3 style='margin-top:-15px;'>${price:,.2f} <span style='font-size:16px; color:{delta_color};'>({change:+.2f}%)</span></h3>", unsafe_allow_html=True)
+            st.markdown(f"<h4 style='margin-top:-15px; margin-bottom:0; white-space:nowrap;'>${price:,.2f}</h4><span style='font-size:14px; color:{delta_color};'>({change:+.2f}%)</span>", unsafe_allow_html=True)
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
         else:
             st.error("Market data unavailable.")
@@ -123,9 +122,7 @@ with col1:
 
 with col2:
     if st.button("Log Out of Platform", type="primary", use_container_width=True):
-        cookie_manager = stx.CookieManager()
         supabase.auth.sign_out()
-        cookie_manager.delete("quant_user_session")
         st.session_state['authenticated'] = False
         st.session_state['user_email'] = None
         st.switch_page("app.py")

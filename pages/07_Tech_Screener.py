@@ -7,7 +7,7 @@ from src.data_engine import fetch_massive_data, format_massive_ticker, render_da
 from src.chatbot import run_sidebar_chatbot
 
 # Enable wide mode for the 2x2 grid
-st.set_page_config(page_title="Advanced Technical Screener", layout="wide")
+st.set_page_config(page_title="Advanced Technical Screener", layout="wide", initial_sidebar_state="collapsed")
 
 from src.auth import check_auth
 check_auth()

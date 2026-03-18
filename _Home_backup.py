@@ -6,6 +6,10 @@ st.set_page_config(page_title="Quant Platform | Login", layout="centered")
 
 supabase = init_supabase()
 
+if supabase is None:
+    st.error("Supabase credentials not configured. Set SUPABASE_URL and SUPABASE_KEY as environment variables or in .streamlit/secrets.toml.")
+    st.stop()
+
 # Initialize session state for auth
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False

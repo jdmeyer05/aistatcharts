@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.auth import check_auth
 
-st.set_page_config(page_title="Monte Carlo Simulation", layout="wide")
+st.set_page_config(page_title="Monte Carlo Simulation", layout="wide", initial_sidebar_state="collapsed")
 check_auth() # The firewall
 
 st.title("🎲 Monte Carlo Stochastic Simulator")
@@ -51,7 +51,8 @@ if run_sim or 'mc_data' not in st.session_state or st.session_state.get('mc_tick
             drift = mu - (0.5 * sigma**2)
             
             # Generate the random shock matrix (sim_days x sim_count)
-            Z = np.random.normal(0, 1, (sim_days, sim_count))
+            rng = np.random.default_rng(42)
+            Z = rng.normal(0, 1, (sim_days, sim_count))
             
             # Combine drift and shocks into daily return multipliers
             daily_returns_sim = np.exp(drift + sigma * Z)

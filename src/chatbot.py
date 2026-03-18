@@ -22,9 +22,11 @@ def run_sidebar_chatbot(context_data=""):
 
     client = OpenAI(api_key=api_key)
     
-    # Initialize chat history in session state
+    # Initialize chat history in session state (capped at 50 messages to prevent memory bloat)
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
+    elif len(st.session_state.chat_messages) > 50:
+        st.session_state.chat_messages = st.session_state.chat_messages[-50:]
 
     # Display existing chat messages
     for message in st.session_state.chat_messages:
@@ -54,7 +56,7 @@ def run_sidebar_chatbot(context_data=""):
 
             # Using 'gpt-4o-mini' which has the widest availability
             response = client.chat.completions.create(
-                model="gpt-5", 
+                model="gpt-4o-mini",
                 messages=messages,
                 max_completion_tokens=800
             )
