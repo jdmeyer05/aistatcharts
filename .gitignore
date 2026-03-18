@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 .env
+src/grok_regime_history.json
