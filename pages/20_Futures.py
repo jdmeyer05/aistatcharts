@@ -5,12 +5,11 @@ import plotly.graph_objects as go
 import plotly.express as px
 import yfinance as yf
 import logging
-from src.auth import check_auth
+from src.layout import setup_page
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Futures Dashboard", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+setup_page("20_Futures")
 
 st.title("📈 Futures Dashboard")
 st.markdown("Real-time futures snapshot, term structure, cross-asset correlations, and volatility monitoring.")

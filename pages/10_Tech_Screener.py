@@ -6,11 +6,8 @@ from plotly.subplots import make_subplots
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
 
-# Enable wide mode for the 2x2 grid
-st.set_page_config(page_title="Advanced Technical Screener", layout="wide", initial_sidebar_state="collapsed")
-
-from src.auth import check_auth
-check_auth()
+from src.layout import setup_page
+setup_page("10_Tech_Screener")
 
 st.title("📡 Advanced Technical Screener")
 st.markdown("Multi-dimensional technical analysis: Trend (EMAs), Momentum (MACD/RSI), and Volatility (Bollinger Bands).")

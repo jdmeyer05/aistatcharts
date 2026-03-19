@@ -3,10 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker
-from src.auth import check_auth
-
-st.set_page_config(page_title="Algo Backtester", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+from src.layout import setup_page
+setup_page("11_Algo_Backtester")
 
 st.title("⚡ Vectorized Algo Backtester & Optimizer")
 st.markdown("Test trading strategies, optimize parameters, and analyze performance with institutional-grade analytics.")

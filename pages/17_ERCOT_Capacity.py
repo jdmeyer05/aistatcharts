@@ -6,12 +6,11 @@ import requests
 import io
 import logging
 from datetime import date
-from src.auth import check_auth
+from src.layout import setup_page
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="ERCOT Capacity Pipeline", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+setup_page("17_ERCOT_Capacity")
 
 st.title("🏗️ ERCOT Capacity Pipeline")
 st.markdown("Planned generation additions by fuel type from ERCOT's Interconnection Resource queue.")

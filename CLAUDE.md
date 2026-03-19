@@ -9,7 +9,7 @@ python -m streamlit run app.py
 
 Opens at **http://localhost:8501**. Auth is bypassed locally when `LOCAL_DEV = "true"` (see `src/auth.py`).
 
-**Python 3.14 note:** `supabase` has a transitive dep (`pyiceberg`) that fails to build without MSVC. Workaround: install `storage3==2.19.0 --no-deps` then install remaining deps normally. All other packages install fine.
+**Python 3.14 note:** `supabase` has a transitive dep (`pyiceberg`) that fails to build without MSVC. Workaround: install `storage3==2.19.0 --no-deps` then install remaining deps normally.
 
 **Production (Docker):**
 ```bash
@@ -20,141 +20,140 @@ docker build -t aistatcharts . && docker run -p 8080:8080 aistatcharts
 
 ## What This App Does
 
-Institutional-grade **quantitative trading & analysis platform** built with Streamlit. Features: advanced charting, options analytics, ML forecasts, backtesting, macro/energy monitoring, AI-powered scenario analysis with live data feeds, and an AI chatbot sidebar.
+Institutional-grade **quantitative trading & analysis platform** built with Streamlit. Features: AI-powered macro scenario analysis (4 models), individual stock scorecards, RL trading strategy optimizer, options analytics, backtesting, energy/macro monitoring, and subscription-gated access.
 
 ---
 
 ## Project Structure
 
 ```
-app.py                        → Entry point: Supabase login, routes to Summary
+app.py                        → Entry point: Supabase login + user agreement acceptance
 Dockerfile                    → Python 3.11-slim, Cloud Run on port 8080
 requirements.txt              → All pip dependencies
+USER_AGREEMENT.md             → Legal terms of use (referenced at registration)
+MARKETING_PLAN.md             → Go-to-market strategy
+TWEET_TEMPLATES.txt           → Ready-to-post tweet templates
 .streamlit/config.toml        → Dark theme (cyan primary)
 .streamlit/secrets.toml       → API keys (see below)
-src/grok_regime_history.json  → Hourly Grok analysis history (auto-generated)
+src/grok_regime_history.json  → Hourly Grok analysis history (auto-generated, gitignored)
 ```
 
 ### src/ — Core Modules
 
 | File | Purpose |
 |------|---------|
-| `auth.py` | Supabase client init, session recovery, local dev bypass |
+| `auth.py` | Supabase auth, session recovery, **subscription tier system** (free/pro/premium/institutional), page gating, AI quota enforcement, Stripe integration |
+| `layout.py` | `setup_page()` universal page setup, sidebar branding with SVG logo + tier badge, data freshness status bar, background task notifications, error boundaries |
+| `styles.py` | Centralized color system (10 semantic colors), global CSS injection (cards, backgrounds, borders, 5-layer background system, metric styling) |
+| `ticker_tape.py` | Scrolling market ticker (10 assets, time-synced animation for cross-page continuity) |
 | `chatbot.py` | OpenAI sidebar chatbot (system prompt: quant analyst), 50-msg cap |
 | `data_engine.py` | Market data fetcher: Massive API → yfinance fallback, ticker normalization, options chains |
-| `eia_helpers.py` | EIA API v2 wrapper for energy timeseries, WoW change calc |
-| `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths with tree variance injection |
-| `grok_regime_history.json` | Persistent store for hourly Grok regime analyses (timestamps, probabilities, sentiment, asset estimates) |
+| `eia_helpers.py` | EIA API v2 wrapper for energy timeseries |
+| `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
 
-### pages/ — App Pages
+### pages/ — 20 App Pages
 
 | # | File | What It Does |
 |---|------|-------------|
-| 01 | `Summary.py` | Dashboard: sparklines for QQQ, BTC, Oil, NatGas with 3-month trends |
-| 02 | `Scenario_Analysis.py` | **Flagship page** — see detailed breakdown below |
-| 03 | `Historical_Analysis.py` | Multi-year price history, seasonal decomposition, volatility, drawdown |
-| 04 | `Options_Analysis.py` | IV skew, open interest walls, Greek exposures (equities only) |
-| 05 | `Options_Flow.py` | Unusual activity scanner, put/call ratios, GEX (Polygon API) |
-| 06 | `Options_Lab.py` | Vol surface across all expirations, earnings analyzer, multi-leg strategy modeler |
-| 07 | `ML_Stock_Predictor.py` | 30-day Random Forest forecast with probabilistic projections (uses `simulation.py`) |
-| 08 | `Tech_Screener.py` | EMA, RSI, MACD, Bollinger Bands in 2x2 grid layout |
-| 09 | `Algo_Backtester.py` | 13 strategies (SMA, MACD, RSI, ATR, etc.), vectorized backtest, Sharpe/drawdown stats |
-| 10 | `Monte_Carlo.py` | GBM simulation: configurable paths/days, percentile bands, terminal distribution |
-| 11 | `Power_Risk_VaR.py` | Multi-asset portfolio VaR/CVaR at 95%/99%, correlation heatmaps |
-| 12 | `Oil_Fundamentals.py` | EIA crude: inventories, production, Cushing, refinery util, 5-year seasonal avg |
-| 13 | `NatGas_Fundamentals.py` | EIA storage by region, Henry Hub spot, consumption, 5-year avg |
-| 14 | `ERCOT_Power.py` | Real-time TX grid: fuel mix, supply vs demand, load forecast (15-min refresh) |
-| 15 | `ERCOT_Capacity.py` | Planned generation additions by fuel type from ERCOT interconnection queue |
-| 16 | `Economic_Calendar.py` | FRED releases (CPI, NFP, GDP, FOMC), yield curve (1M–30Y) |
-| 17 | `Iran_Conflict.py` | GDELT media intensity, oil price correlation, defense/energy sector impact |
-| 18 | `Futures.py` | Multi-asset snapshot (indices, energy, metals, rates, ag, FX), term structure, correlations |
+| 01 | `Summary.py` | Dashboard: 12 candlestick charts (indices, commodities, rates), Grok macro pulse, AI alerts, portfolio snapshot, account management |
+| 02 | `Scenario_Analysis.py` | **Flagship** — 7-tab macro scenario engine (see deep dive below) |
+| 03 | `Stock_Analysis.py` | 4-model AI stock scorecard (Grok + GPT-4o + Gemini 3 Pro + Claude), blended consensus, radar chart, price targets |
+| 04 | `RL_Trading.py` | Dueling DQN ensemble with prioritized replay, 31 features, 10-tab analysis including walk-forward, bootstrap significance, Monte Carlo robustness, Grok AI assessment |
+| 05 | `Historical_Analysis.py` | Multi-year price history, seasonal decomposition, volatility, drawdown |
+| 06 | `Options_Analysis.py` | IV skew, open interest walls, Greek exposures |
+| 07 | `Options_Flow.py` | Unusual activity scanner, put/call ratios, GEX |
+| 08 | `Options_Lab.py` | Vol surface, earnings analyzer, multi-leg strategy modeler |
+| 09 | `ML_Stock_Predictor.py` | 30-day Random Forest forecast |
+| 10 | `Tech_Screener.py` | EMA, RSI, MACD, Bollinger Bands |
+| 11 | `Algo_Backtester.py` | 13 strategies, vectorized backtest |
+| 12 | `Monte_Carlo.py` | GBM stochastic simulation |
+| 13 | `Power_Risk_VaR.py` | Portfolio VaR/CVaR |
+| 14 | `Oil_Fundamentals.py` | EIA crude data |
+| 15 | `NatGas_Fundamentals.py` | EIA storage & supply |
+| 16 | `ERCOT_Power.py` | Real-time TX grid |
+| 17 | `ERCOT_Capacity.py` | Generation pipeline |
+| 18 | `Economic_Calendar.py` | FRED releases, yield curve |
+| 19 | `Iran_Conflict.py` | Geopolitical risk monitor |
+| 20 | `Futures.py` | Multi-asset futures snapshot |
+
+---
+
+## Subscription Tier System
+
+Defined in `src/auth.py`. Enforced by `setup_page()` in `src/layout.py`.
+
+| Tier | Pages | AI Models | Daily Analyses | RL Trading | Price |
+|------|-------|-----------|---------------|------------|-------|
+| **Free** | 17 (no 02, 03, 04) | None | 0 | No | $0 |
+| **Pro** | All 20 | GPT-4o only | 5/day | No | $29/mo |
+| **Premium** | All 20 | All 4 | 50/day | Yes | $79/mo |
+| **Institutional** | All 20 | All 4 | Unlimited | Yes | $249/mo |
+
+Admin emails (`jdmeyer05@gmail.com`, `local-dev@preview`) always get Institutional.
 
 ---
 
 ## Scenario Analysis Engine (Page 02) — Deep Dive
 
-This is the most complex page. It has 7 tabs and integrates 7 live data sources through a Grok AI analysis pipeline.
+### 7 Tabs
+1. **Macro Portfolio Scenarios** — AI regime analysis + portfolio impact
+2. **Fed & Macro Drivers** — Live FRED sparklines, FOMC dot plot, Polymarket, StockTwits
+3. **Historical Stress Tests** — 8 historical crises replayed
+4. **Custom What-If** — Slider-based asset shocks
+5. **Bull / Base / Bear** — GBM projections
+6. **Event-Driven** — Catalyst modeler
+7. **Model Diagnostics** — Factor betas, residuals, correlations
 
-### Tab Order
-1. **Macro Portfolio Scenarios** — AI-powered regime analysis + portfolio impact
-2. **Fed & Macro Drivers** — Live FRED indicators, FOMC dot plot, Polymarket, StockTwits
-3. **Historical Stress Tests** — Replay 8 historical crises against your portfolio
-4. **Custom What-If** — Slider-based asset shocks with macro presets
-5. **Bull / Base / Bear** — GBM forward projections with adjustable assumptions
-6. **Event-Driven** — Catalyst modeler (FOMC, earnings, CPI, geopolitical) with probability weighting
-7. **Model Diagnostics** — Factor betas, R², residuals, correlations, stress tests
+### 7-Layer Grok Analysis Pipeline (hourly auto-poll)
 
-### 7-Layer Grok Analysis Pipeline
-Grok 3 (xAI) is called hourly and ingests all 7 layers in a single prompt:
-
-| # | Layer | Source | Update Freq | How |
-|---|-------|--------|-------------|-----|
-| 1 | Hard economic data | FRED API | Live (1hr cache) | 21 series: CPI, Core PCE, unemployment, NFP, Fed Funds, 2s10s, 10Y, 2Y, retail sales, sentiment, industrial production, GDP, housing starts, dollar, initial claims, Sahm Rule, NFCI, VIX, HY spreads, 5Y breakeven, 10Y breakeven |
-| 2 | FOMC dot plots + SEP | Last 3 meetings | Hardcoded (4x/yr) | March 2026, December 2025, September 2025. Individual projections + medians + hawkish/dovish shift analysis |
-| 3 | Beige Books | Last 3 releases | Hardcoded (8x/yr) | March 2026, January 2026, November 2025. District-level anecdotal economic conditions |
-| 4 | Leading indicators | FRED (GDPNow) + Grok search | Live + search | GDPNow from FRED. ISM PMI, CME FedWatch, LEI via Grok's real-time search |
-| 5 | Retail sentiment | StockTwits API | Live (30min cache) | Bull/bear ratios for SPY, QQQ, TLT, USO, GLD, DIA, IWM, VIX. Uses `curl_cffi` to bypass Cloudflare |
-| 6 | Prediction markets | Polymarket Gamma API | Live (30min cache) | Recession probability, Fed rate cuts, inflation level, Iran outcomes. No auth needed |
-| 7 | X/Twitter sentiment | Grok real-time search | Per hourly call | Grok searches X for Fed commentary, recession fears, inflation expectations, geopolitical developments |
-
-### Hourly Auto-Poll System
-- Results saved to `src/grok_regime_history.json` with timestamps
-- On page load: checks last result age. If >1hr, calls Grok with full 7-layer prompt
-- If <1hr, loads cached result instantly (no API call)
-- History enables: probability-over-time chart (line + stacked area), sentiment log, change tracking
-- Grok receives its own prior analyses (last 24 entries) to track shifts and avoid manufacturing changes
-- "Force Refresh" button visible only to admin (jdmeyer05@gmail.com)
+| # | Layer | Source | Update |
+|---|-------|--------|--------|
+| 1 | Hard data | FRED (21 series) | Live (1hr cache) |
+| 2 | FOMC | Last 3 dot plots + SEP | Hardcoded (4x/yr) |
+| 3 | Beige Books | Last 3 releases | Hardcoded (8x/yr) |
+| 4 | Leading indicators | GDPNow (FRED) + Grok search | Live + search |
+| 5 | Retail sentiment | StockTwits (curl_cffi) | Live (30min) |
+| 6 | Prediction markets | Polymarket | Live (30min) |
+| 7 | X/Twitter | Grok real-time search | Per hourly call |
 
 ### Two-Layer Portfolio Impact Model
-Returns are estimated for each user ticker under each macro regime:
+- **Layer 1:** Exponentially-weighted 7-factor OLS (VIX, 10Y, HY spreads, breakeven, dollar, oil, VIX×HY interaction) + block bootstrap + Student-t CIs
+- **Layer 2:** Grok AI per-ticker estimates
+- **Blending:** R²-adaptive + stability-adjusted weights
+- **Monte Carlo:** 10K draws with regime-weighted Student-t for full distribution
+- **Horizon selector:** 3m / 6m / 12m
 
-**Layer 1 — Data-Driven Factor Model:**
-- 7 factors: VIX, 10Y yield, HY credit spreads, 5Y breakeven inflation, dollar index, crude oil, VIX×HY interaction
-- Exponentially-weighted OLS (halflife=60 trading days)
-- Block bootstrap from regime-like periods (high-VIX vs low-VIX historical blocks)
-- Stressed residual std for downside regimes (recession, crisis, stagflation)
-- Student-t (df=5) confidence intervals for fat tails
-- Rolling beta stability check (first-half vs second-half correlation)
+---
 
-**Layer 2 — Grok AI Estimates:**
-- User's actual ticker list sent to Grok
-- Grok estimates per-ticker returns based on sector exposure and historical analogs
-- Returns per-regime `asset_estimates` dict
+## Stock Analysis (Page 03) — 4-Model Consensus
 
-**Blending:**
-- R²-adaptive + stability-adjusted weights
-- High R² + stable betas → up to 80% data weight
-- Low R² + unstable betas → up to 70% AI weight
-- Fallback chain: blended → data-only → AI-only → hardcoded defaults
+Calls Grok 3, GPT-4o, Gemini 3 Pro, and Claude Sonnet in parallel with identical prompts containing fundamentals, technicals, StockTwits sentiment, and macro context. Blends scores, price targets, and recommendations. Shows individual model views side-by-side.
 
-**Portfolio Features:**
-- Horizon selector: 3m / 6m / 12m (scales factor moves, CIs, and AI estimates)
-- 10,000 Monte Carlo simulations with regime-weighted Student-t draws
-- 95% VaR, CVaR (Expected Shortfall), probability of loss
-- Sector concentration detection
-- Stressed vs normal correlation matrices
+---
 
-### 6 Macro Regimes (probability-calibrated to March 2026)
-Current base probabilities reflect: Iran/Hormuz oil shock, Fed hold at 3.50-3.75%, Feb NFP -92K, tariffs at 10.5% effective rate.
+## RL Trading (Page 04) — Dueling DQN Ensemble
 
-| Regime | Base Prob | Key Driver |
-|--------|-----------|-----------|
-| Stagflation | 30% | Oil >$100 + tariffs keep inflation sticky while growth stalls |
-| Recession | 25% | Negative NFP + oil drag + tariff squeeze |
-| Soft Landing | 15% | Requires rapid de-escalation + oil normalization |
-| Financial Crisis | 10% | Prolonged Hormuz closure → sovereign/credit contagion |
-| Re-Acceleration | 10% | Quick war end + SCOTUS strikes tariffs |
-| Goldilocks | 10% | Everything breaks right simultaneously |
+- **Architecture:** Dueling DQN (value + advantage streams) with Prioritized Experience Replay
+- **Features:** 31 inputs (technicals, Fourier cycles, intermarket, relative strength, insider data, earnings proximity, short interest) × 5 stacked timesteps = 155 state dims
+- **Risk management:** Stop-loss, max daily loss, commission + spread + slippage + borrow cost
+- **Validation:** Walk-forward, bootstrap significance (5K resamples), Monte Carlo robustness (200 sims)
+- **Benchmarks:** Buy & hold, SMA crossover, mean reversion, momentum
+- **Grok assessment:** Independent qualitative analysis with A-F grading
+- **Background training:** Can train in background thread, notification on all pages when done
+- **10 tabs:** How It Works, Performance, OOS, Walk-Forward, Statistical Tests, Robustness, AI Assessment, Diagnostics, Trade Analysis, Strategy Insights
 
-### Model Diagnostics Tab
-- Factor beta heatmap (7 factors × N tickers)
-- R² and beta stability bar charts
-- Residual distribution histograms with kurtosis/skew
-- Actual vs predicted scatter plots
-- Stressed vs normal volatility comparison
-- Factor correlation matrix (multicollinearity check)
-- Normal vs stressed asset correlation heatmaps
-- Sector concentration flags
+---
+
+## Visual Design System
+
+Defined in `src/styles.py`:
+- **5-layer background:** Gradient mesh + grid lines + noise texture + topographic contours + vignette
+- **Card styling:** Semi-transparent backgrounds with backdrop blur
+- **Borders:** All charts, tables, expanders, alert boxes have consistent card_border
+- **Metrics:** Card-styled with border and background
+- **Sidebar:** SVG logo, tier badge, scrollable, "app" nav link hidden
+- **Ticker tape:** 10 assets, time-synced CSS animation across page navigation
+- **Status bar:** Data freshness dots (green/yellow/red) + market open/closed status
 
 ---
 
@@ -165,40 +164,41 @@ All in `.streamlit/secrets.toml`:
 | Key | Service | Used By |
 |-----|---------|---------|
 | `SUPABASE_URL` + `SUPABASE_KEY` | Auth & database | `auth.py` |
-| `OPENAI_API_KEY` | Sidebar chatbot | `chatbot.py` |
-| `GROK_API_KEY` | Scenario analysis (xAI) | `02_Scenario_Analysis.py` |
+| `OPENAI_API_KEY` | GPT-4o + chatbot | Stock Analysis, chatbot |
+| `GROK_API_KEY` | Grok 3 (xAI) | Scenario Analysis, Stock Analysis, RL Assessment |
+| `GEMINI_API_KEY` | Gemini 3 Pro | Stock Analysis |
+| `ANTHROPIC_API_KEY` | Claude Sonnet | Stock Analysis |
 | `MASSIVE_API_KEY` | Price data (Polygon) | `data_engine.py` |
-| `FRED_API_KEY` | Economic indicators | `02_Scenario_Analysis.py`, `15_Economic_Calendar.py` |
-| `EIA_API_KEY` | Energy data | `eia_helpers.py` |
-| `FINNHUB_API_KEY` | Earnings calendar | `15_Economic_Calendar.py` |
+| `FRED_API_KEY` | Economic indicators | Scenario Analysis, Econ Calendar |
+| `EIA_API_KEY` | Energy data | Oil/NatGas pages |
+| `FINNHUB_API_KEY` | Earnings calendar | Econ Calendar |
 | `FMP_API_KEY` | Financial data | Various |
 | `LOCAL_DEV` | Skip auth locally | `auth.py` |
 
-No auth needed for: Polymarket (public API), StockTwits (public API via curl_cffi), yfinance.
+No auth needed: Polymarket (public), StockTwits (curl_cffi), yfinance.
 
 ---
 
 ## Key Patterns
 
-- **Auth:** Supabase with session persistence; returns `None` locally to bypass
-- **Caching:** `@st.cache_data(ttl=...)` — 15min to 1hr TTLs
-- **Data fallback:** Massive API → yfinance for price data
-- **Admin gates:** Force refresh button gated to `jdmeyer05@gmail.com` and `local-dev@preview`
-- **StockTwits:** Requires `curl_cffi` (not `requests`) to bypass Cloudflare. Already installed via yfinance.
-- **Grok history:** JSON file at `src/grok_regime_history.json`. Contains timestamped entries with regime probabilities, sentiment summaries, change summaries, and asset estimates.
+- **Auth + Tiers:** Supabase auth → `get_user_tier()` → `check_page_access()` → `render_upgrade_prompt()` or allow
+- **Page setup:** Every page calls `setup_page("XX_Name")` which handles: config, auth, CSS, sidebar, ticker tape, status bar, tier gating
+- **Caching:** `@st.cache_data(ttl=...)` — 5min for prices, 30min for sentiment/Polymarket, 1hr for FRED
+- **Data fallback:** Massive API → yfinance
+- **StockTwits:** Requires `curl_cffi` to bypass Cloudflare
+- **Admin gates:** Force refresh, institutional tier for `jdmeyer05@gmail.com`
+- **Grok history:** JSON at `src/grok_regime_history.json` (gitignored)
+- **Background tasks:** RL training via `threading.Thread`, notifications via `st.session_state` checked in `render_background_notifications()`
 
 ---
 
-## Hardcoded Data That Needs Manual Updates
+## Hardcoded Data Needing Manual Updates
 
-These change infrequently but are NOT auto-updating:
-
-| Data | Location in `02_Scenario_Analysis.py` | Update When |
-|------|---------------------------------------|-------------|
-| FOMC dot plots (3 meetings) | `build_fred_summary()` | After each FOMC with projections (4x/yr) |
-| FOMC SEP economic projections | `build_fred_summary()` | Same as above |
-| Beige Book summaries (3 releases) | `build_fred_summary()` | After each Beige Book (8x/yr) |
-| Historical stress test drawdowns | `HISTORICAL_SCENARIOS` dict | Rarely — only if correcting data |
-| Macro regime descriptions/rationale | `MACRO_REGIMES` dict | When macro conditions shift materially |
-| Regime factor moves | `REGIME_FACTOR_MOVES` dict | When recalibrating regime assumptions |
-| Sector ticker mapping | `SECTOR_MAP` dict | When adding new tickers |
+| Data | Location | Update When |
+|------|----------|-------------|
+| FOMC dot plots (3 meetings) | `02_Scenario_Analysis.py: build_fred_summary()` | After FOMC with projections (4x/yr) |
+| Beige Book summaries (3) | Same | After each Beige Book (8x/yr) |
+| Historical stress test drawdowns | `02: HISTORICAL_SCENARIOS` | Rarely |
+| Macro regime definitions | `02: MACRO_REGIMES` | When conditions shift materially |
+| Regime factor moves | `02: REGIME_FACTOR_MOVES` | When recalibrating |
+| Sector ticker mapping | `02: SECTOR_MAP` | When adding tickers |

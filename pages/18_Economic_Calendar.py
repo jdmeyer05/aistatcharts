@@ -6,12 +6,11 @@ import requests
 import os
 import logging
 from datetime import date, timedelta, datetime
-from src.auth import check_auth
+from src.layout import setup_page
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Economic Calendar", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+setup_page("18_Economic_Calendar")
 
 st.title("📅 Economic Calendar")
 st.markdown("Upcoming macro releases, earnings, Treasury auctions, yield curve, and inflation data.")

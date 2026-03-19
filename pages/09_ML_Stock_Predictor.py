@@ -5,10 +5,8 @@ import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.simulation import predict_30d_random_forest
 from src.chatbot import run_sidebar_chatbot
-from src.auth import check_auth
-
-st.set_page_config(page_title="ML Stock Predictor", layout="wide", initial_sidebar_state="collapsed")
-check_auth() # The firewall
+from src.layout import setup_page
+setup_page("09_ML_Stock_Predictor")
 
 st.title("🤖 ML Tactical Forecast (30-Day)")
 st.markdown("Stochastic Recursive Random Forest: Projects 1 day ahead dynamically to generate a realistic, volatility-adjusted price path.")

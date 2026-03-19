@@ -5,10 +5,8 @@ import plotly.graph_objects as go
 import yfinance as yf
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
-from src.auth import check_auth
-
-st.set_page_config(page_title="Historical & Seasonal Analysis", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+from src.layout import setup_page
+setup_page("05_Historical_Analysis")
 
 st.title("🕰️ Historical & Seasonal Analysis")
 st.markdown("Price action, seasonality, volatility, drawdowns, and statistical profiling.")

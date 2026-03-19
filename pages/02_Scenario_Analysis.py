@@ -8,6 +8,7 @@ import requests
 import os
 import logging
 import json
+from datetime import datetime, timedelta
 from openai import OpenAI
 from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.chatbot import run_sidebar_chatbot
@@ -15,20 +16,11 @@ from src.auth import check_auth
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Scenario Analysis", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+from src.layout import setup_page
+setup_page("02_Scenario_Analysis")
 
 st.title("🔬 Scenario Analysis Engine")
 st.markdown("Stress test portfolios against historical shocks, custom what-if scenarios, bull/bear projections, and event-driven catalysts.")
-
-# Wrap text in dataframe cells
-st.markdown("""<style>
-    [data-testid="stDataFrame"] td div[data-testid="stMarkdownContainer"] p,
-    [data-testid="stDataFrame"] td {
-        white-space: normal !important;
-        word-wrap: break-word !important;
-    }
-</style>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # SIDEBAR
@@ -266,8 +258,8 @@ Rules:
 
 Respond with ONLY valid JSON in this exact format:
 {"regimes": [{"name": "regime name", "probability": N, "rationale": "..."}],
- "sentiment_summary": "2-3 sentence overview of the dominant macro narrative on X right now, including reaction to latest FOMC",
- "change_summary": "1-2 sentences on what changed since the prior assessment and whether probabilities shifted",
+ "sentiment_summary": "2-3 sentences on what is NEW on X right now. Do NOT repeat the same general narrative from prior assessments. Focus on: new posts in the last hour, any shift in tone, new data releases, breaking news, or notable new commentary. If nothing material has changed, say 'No material change in the last hour — narrative remains [X].' Be specific about what is different.",
+ "change_summary": "Compare your probabilities to the PRIOR ANALYSES provided. State the exact pp changes. If probabilities barely moved (<2pp), say 'No material shift — probabilities stable.' Do NOT manufacture changes.",
  "asset_estimates": {"regime_name": {"TICKER1": return_pct, "TICKER2": return_pct}}}
 
 IMPORTANT: If a portfolio ticker list is provided, you MUST include "asset_estimates" in your response.
@@ -1985,10 +1977,20 @@ if 'scenario_data' in st.session_state:
                         ts_display = ts
                     st.caption(f"{status} | Last updated: **{ts_display}** | Auto-refreshes hourly")
 
-                    # X/Twitter sentiment summary
+                    # X/Twitter sentiment summary with freshness indicator
                     sentiment = grok_result.get("sentiment_summary", "")
                     if sentiment:
-                        st.info(f"**X/Twitter Sentiment Pulse:** {sentiment}")
+                        try:
+                            age_min = (datetime.now() - datetime.fromisoformat(ts)).total_seconds() / 60
+                            if age_min < 10:
+                                fresh_label = "just now"
+                            elif age_min < 60:
+                                fresh_label = f"{age_min:.0f}m ago"
+                            else:
+                                fresh_label = f"{age_min/60:.1f}h ago"
+                        except Exception:
+                            fresh_label = ""
+                        st.info(f"**X/Twitter Sentiment Pulse** ({fresh_label}): {sentiment}")
 
                     # Change summary from prior assessment
                     change_summary = grok_result.get("change_summary", "")
@@ -2382,23 +2384,24 @@ if 'scenario_data' in st.session_state:
                        "This is a weighted average — in reality you land in ONE regime, not a blend of all.")
 
             fig_waterfall = go.Figure()
-            ev_contributions = [(r["regime"], r["pnl"] * r["prob"]) for r in regime_results]
+            ev_contributions = [(r["regime"], r["pnl"] * r["prob"] / port_val * 100) for r in regime_results]
+            ev_pnl_pct = ev_pnl / port_val * 100
             ev_contributions.sort(key=lambda x: x[1], reverse=True)
 
             fig_waterfall.add_trace(go.Waterfall(
-                x=[e[0] for e in ev_contributions] + ["Expected Value"],
-                y=[e[1] for e in ev_contributions] + [ev_pnl],
+                x=[e[0] for e in ev_contributions] + ["Expected Return"],
+                y=[e[1] for e in ev_contributions] + [ev_pnl_pct],
                 measure=["relative"] * len(ev_contributions) + ["total"],
                 connector_line_color="#555555",
                 increasing_marker_color="#00cc66",
                 decreasing_marker_color="#ff4444",
                 totals_marker_color="#00d1ff",
-                text=[f"${v:+,.0f}" for _, v in ev_contributions] + [f"${ev_pnl:+,.0f}"],
+                text=[f"{v:+.1f}%" for _, v in ev_contributions] + [f"{ev_pnl_pct:+.1f}%"],
                 textposition="outside"
             ))
             fig_waterfall.update_layout(
                 template="plotly_dark", height=400, margin=dict(t=30, b=0, l=0, r=0),
-                yaxis_title="P&L Contribution ($)"
+                yaxis_title="EV Contribution (%)"
             )
             st.plotly_chart(fig_waterfall, use_container_width=True)
 

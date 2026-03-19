@@ -6,10 +6,8 @@ import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.chatbot import run_sidebar_chatbot
 
-from src.auth import check_auth
-
-st.set_page_config(page_title="Power Risk VaR", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+from src.layout import setup_page
+setup_page("13_Power_Risk_VaR")
 
 st.title("🛡️ Portfolio Risk & VaR Engine")
 

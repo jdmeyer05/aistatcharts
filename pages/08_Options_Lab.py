@@ -7,13 +7,12 @@ import os
 import logging
 from scipy.stats import norm
 from datetime import date, timedelta
-from src.auth import check_auth
 from src.data_engine import format_massive_ticker, fetch_massive_data
+from src.layout import setup_page
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Options Lab", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+setup_page("08_Options_Lab")
 
 st.title("🔬 Options Lab")
 st.markdown("Volatility surface, earnings move analyzer, and multi-leg strategy modeler with time decay.")

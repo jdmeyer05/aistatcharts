@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from src.auth import check_auth
 from src.eia_helpers import fetch_eia_data
-
-st.set_page_config(page_title="Oil Fundamentals", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+from src.layout import setup_page
+setup_page("14_Oil_Fundamentals")
 
 st.title("🛢️ US Oil Fundamentals")
 st.markdown("Live macroeconomic supply data directly from the Energy Information Administration (EIA).")

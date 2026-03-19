@@ -7,13 +7,12 @@ import os
 import logging
 import time
 from datetime import date, timedelta
-from src.auth import check_auth
 from src.data_engine import fetch_massive_data
+from src.layout import setup_page
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Iran Conflict Monitor", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+setup_page("19_Iran_Conflict")
 
 st.title("🛡️ Iran Conflict Monitor")
 st.markdown("Geopolitical risk tracking via GDELT media intensity, oil price correlation, and defense/energy market impact.")

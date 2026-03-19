@@ -3,10 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from src.data_engine import get_expiration_dates, fetch_options_chain, fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
-from src.auth import check_auth
-
-st.set_page_config(page_title="Advanced Options Analysis", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+from src.layout import setup_page
+setup_page("06_Options_Analysis")
 
 st.title("📊 Advanced Options Surface Analysis")
 st.markdown("Analyze Implied Volatility skew, Open Interest walls, Volume distribution, and Greek exposures across specific expirations.")

@@ -4,12 +4,11 @@ import numpy as np
 import plotly.graph_objects as go
 import requests
 import logging
-from src.auth import check_auth
+from src.layout import setup_page
 
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="ERCOT Power Dashboard", layout="wide", initial_sidebar_state="collapsed")
-check_auth()
+setup_page("16_ERCOT_Power")
 
 st.title("⚡ ERCOT Power Dashboard")
 st.markdown("Live grid conditions, generation mix, load forecasts, and reserve data from the Electric Reliability Council of Texas.")
