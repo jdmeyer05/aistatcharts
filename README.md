@@ -24,7 +24,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Subscription Tiers
 
-| | Free | Pro ($29/mo) | Premium ($79/mo) | Platinum ($249/mo) |
+| | Free | Pro ($12/mo) | Premium ($29/mo) | Platinum ($79/mo) |
 |---|---|---|---|---|
 | **Pages** | 17 | All 20 | All 20 | All 20 |
 | **AI Analyses/day** | 0 | 5 | 50 | Unlimited |
@@ -122,8 +122,8 @@ Create 3 subscription products in Stripe Dashboard with these `lookup_key` value
 
 | Product | Price | Lookup Key |
 |---------|-------|-----------|
-| Pro | $29/mo | `pro` or `pro_monthly` |
-| Premium | $79/mo | `premium` or `premium_monthly` |
-| Platinum | $249/mo | `platinum` or `platinum_monthly` |
+| Pro | $12/mo | `pro` or `pro_monthly` |
+| Premium | $29/mo | `premium` or `premium_monthly` |
+| Platinum | $79/mo | `platinum` or `platinum_monthly` |
 
 Yearly variants: `pro_yearly`, `premium_yearly`, `platinum_yearly`

@@ -17,7 +17,7 @@
 
 **Differentiator:** No other platform blends Grok + GPT-4o + Gemini + Claude with live FRED data, Polymarket odds, StockTwits sentiment, and FOMC dot plots into a single scenario analysis engine. Bloomberg doesn't have AI consensus. ChatGPT doesn't have live FRED + factor models.
 
-**Price anchor:** Always compare to Bloomberg Terminal ($24,000/yr) and Capital IQ ($20,000/yr). "$79/month vs $2,000/month — same caliber analysis."
+**Price anchor:** Always compare to Bloomberg Terminal ($24,000/yr) and Capital IQ ($20,000/yr). "$29/month vs $2,000/month — same caliber analysis."
 
 ---
 
@@ -157,7 +157,7 @@ Each video naturally showcases the platform. CTA: "Try it free at [link]"
 
 **Timing:** Prepare a polished landing page, launch on a Tuesday or Wednesday
 
-**Tagline:** "Bloomberg Terminal meets ChatGPT — institutional quant analysis for $29/mo"
+**Tagline:** "Bloomberg Terminal meets ChatGPT — AI-powered quant analysis starting at $12/mo"
 
 **Key features to highlight:**
 1. 4 AI models (Grok + GPT + Gemini + Claude) consensus stock analysis

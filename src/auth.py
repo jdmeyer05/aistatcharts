@@ -259,8 +259,8 @@ def render_upgrade_prompt(feature_name: str = "this feature"):
         f'<p style="color:#aaa;margin:0 0 12px 0;">'
         f'{feature_name} is not available on the <strong>{TIERS[tier]["name"]}</strong> plan.</p>'
         f'<p style="color:#888;font-size:0.85rem;">'
-        f'Upgrade to <strong>Pro</strong> ($29/mo), <strong>Premium</strong> ($79/mo), '
-        f'or <strong>Platinum</strong> ($249/mo) for full access to AI-powered analysis.</p>'
+        f'Upgrade to <strong>Pro</strong> ($12/mo), <strong>Premium</strong> ($29/mo), '
+        f'or <strong>Platinum</strong> ($79/mo) for full access to AI-powered analysis.</p>'
         f'</div>',
         unsafe_allow_html=True,
     )

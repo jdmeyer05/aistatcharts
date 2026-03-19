@@ -89,9 +89,9 @@ Defined in `src/auth.py`. Enforced by `setup_page()` in `src/layout.py`. Stripe 
 | Tier | Pages | AI Models | Daily Analyses | RL Trading | Analyst Chat | Price |
 |------|-------|-----------|---------------|------------|-------------|-------|
 | **Free** | 17 (no 02, 03, 04) | None | 0 | No | Gemini Flash (5/day) | $0 |
-| **Pro** | All 20 | GPT-5 | 5/day | No | Gemini Flash (unlimited) | $29/mo |
-| **Premium** | All 20 | All 4 | 50/day | Yes | GPT-5 (unlimited) | $79/mo |
-| **Platinum** | All 20 | All 4 | Unlimited | Yes | GPT-5 (unlimited) | $249/mo |
+| **Pro** | All 20 | GPT-5 | 5/day | No | Gemini Flash (unlimited) | $12/mo |
+| **Premium** | All 20 | All 4 | 50/day | Yes | GPT-5 (unlimited) | $29/mo |
+| **Platinum** | All 20 | All 4 | Unlimited | Yes | GPT-5 (unlimited) | $79/mo |
 
 Admin emails (`jdmeyer05@gmail.com`, `local-dev@preview`) always get Platinum.
 
