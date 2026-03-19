@@ -250,11 +250,13 @@ Rules:
 - Note where market sentiment DIVERGES from the Fed's own projections — this is the most valuable signal
 - Be direct and institutional in tone
 - Each rationale should be 2-4 sentences blending data + FOMC projections + sentiment
-- You will also be given your own PRIOR ANALYSES (hourly history). Use this to:
-  - Track how your probability estimates have shifted over time
-  - Note what changed since the last assessment and WHY
-  - Call out any meaningful trend (e.g., "stagflation probability has risen 5pp over the last 6 hours")
-  - If nothing material changed, say so — don't manufacture shifts
+- You will be given BASE PROBABILITIES and your MOST RECENT prior analysis. Use this to:
+  - START from the base probabilities as your anchor — these reflect careful calibration
+  - Only deviate from base probabilities when you can cite SPECIFIC NEW DATA that justifies the shift
+  - Compare to your most recent prior analysis and note what changed and WHY
+  - If no material new data has emerged since the last run, your probabilities should be VERY CLOSE to the base rates (within 3-5pp)
+  - Do NOT continue a trend just because prior runs showed movement — each run is independent
+  - A probability drifting steadily in one direction across runs is a RED FLAG for anchoring bias
 
 Respond with ONLY valid JSON in this exact format:
 {"regimes": [{"name": "regime name", "probability": N, "rationale": "..."}],
@@ -275,7 +277,7 @@ Use your knowledge of each asset. Be specific, not generic."""
     if history_ctx:
         history_block = f"""
 
-YOUR PRIOR ANALYSES (hourly history — use this to track shifts):
+BASE PROBABILITIES + MOST RECENT PRIOR ANALYSIS (anchor to base rates, only deviate with new data):
 {history_ctx}
 """
 
@@ -288,8 +290,8 @@ MACRO REGIMES to evaluate:
 {history_block}
 Now search X/Twitter for the latest macro, Fed, recession, inflation, and geopolitical sentiment.
 Pay special attention to market reaction to today's FOMC decision and dot plot.
-Compare your assessment to your prior analyses above and note what changed.
-Combine all layers (FRED data + FOMC projections + X sentiment + prior trend) to assign probabilities.
+Compare your assessment to the base probabilities and your most recent prior analysis. Note what changed.
+Start from the BASE PROBABILITIES and only adjust if specific new data justifies it. Do not drift.
 {f'PORTFOLIO TICKERS to estimate returns for: {", ".join(ticker_list)}. For each regime, estimate 12-month return for each ticker.' if ticker_list else ''}
 JSON only."""
 
@@ -383,14 +385,22 @@ def get_latest_grok_result() -> tuple:
 
 
 def build_history_context() -> str:
-    """Build a summary of the last 24 hours of Grok analyses for the prompt."""
+    """Build context from the most recent Grok analysis only (prevents drift).
+
+    Only the last entry is provided so Grok can note what changed since last time,
+    without anchoring on a long trend of its own prior outputs.
+    The base probabilities are included as the anchor point.
+    """
     history = load_grok_history()
     if not history:
         return ""
 
-    # Get last 24 entries (or fewer)
-    recent = history[-24:]
-    lines = []
+    # Include base probabilities as the anchor
+    base_probs = ", ".join(f"{name}: {data['probability']}%" for name, data in MACRO_REGIMES.items())
+    lines = [f"BASE PROBABILITIES (starting anchor): {base_probs}"]
+
+    # Only show the most recent 1-2 entries to prevent feedback-loop drift
+    recent = history[-2:]
     for entry in recent:
         ts = entry.get("timestamp", "")
         try:

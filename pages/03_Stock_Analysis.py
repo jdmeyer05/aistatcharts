@@ -378,9 +378,9 @@ MODEL_CONFIGS = {
         "color": "#ff4444",
     },
     "openai": {
-        "name": "GPT-4o",
+        "name": "GPT-5",
         "base_url": None,  # default OpenAI
-        "model": "gpt-4o",
+        "model": "gpt-5",
         "key_name": "OPENAI_API_KEY",
         "extra_instructions": "Use your training data and knowledge to assess the latest market conditions, analyst consensus, and any recent news for this ticker.",
         "color": "#00cc66",
@@ -433,16 +433,24 @@ Produce your complete analysis for {ticker}. JSON only."""
             if config["base_url"]:
                 client_kwargs["base_url"] = config["base_url"]
             client = OpenAI(**client_kwargs)
-            response = client.chat.completions.create(
-                model=config["model"],
-                messages=[
+            # GPT-5 uses max_completion_tokens and doesn't support temperature
+            is_gpt5 = "gpt-5" in config["model"]
+            model_kwargs = {
+                "model": config["model"],
+                "messages": [
                     {"role": "system", "content": STOCK_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                response_format={"type": "json_object"},
-                max_tokens=3000,
-                temperature=0.3,
-            )
+                "max_completion_tokens" if is_gpt5 else "max_tokens": 3000,
+                **({"temperature": 0.3} if not is_gpt5 else {}),
+            }
+            try:
+                response = client.chat.completions.create(
+                    **model_kwargs,
+                    response_format={"type": "json_object"},
+                )
+            except Exception:
+                response = client.chat.completions.create(**model_kwargs)
             raw = response.choices[0].message.content
 
         # Strip markdown code blocks (some models wrap JSON in ```json ... ```)

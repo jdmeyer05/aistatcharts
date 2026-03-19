@@ -40,8 +40,8 @@ TIERS = {
         "ai_models": ["grok", "openai", "gemini", "claude"],
         "rl_enabled": True,
     },
-    "institutional": {
-        "name": "Institutional",
+    "platinum": {
+        "name": "Platinum",
         "pages": "__all__",
         "daily_ai_analyses": -1,  # unlimited
         "ai_models": ["grok", "openai", "gemini", "claude"],
@@ -49,7 +49,7 @@ TIERS = {
     },
 }
 
-# Admin emails always get institutional access
+# Admin emails always get platinum access
 ADMIN_EMAILS = {"jdmeyer05@gmail.com", "local-dev@preview"}
 
 
@@ -114,10 +114,25 @@ def check_auth():
     st.switch_page("app.py")
 
 
-def verify_subscription(email: str, user_id: str):
+# Stripe price lookup_key → tier mapping
+# Set these lookup_keys when creating prices in Stripe Dashboard
+STRIPE_TIER_MAP = {
+    "pro": "pro",
+    "pro_monthly": "pro",
+    "pro_yearly": "pro",
+    "premium": "premium",
+    "premium_monthly": "premium",
+    "premium_yearly": "premium",
+    "platinum": "platinum",
+    "platinum_monthly": "platinum",
+    "platinum_yearly": "platinum",
+}
+
+
+def verify_subscription(email: str, user_id: str) -> str:
     """
-    JIT Clearing Engine: Cross-references user email with Stripe API
-    and updates the Supabase ledger automatically.
+    Cross-references user email with Stripe API to determine subscription tier.
+    Updates Supabase ledger. Returns the tier name (free/pro/premium/platinum).
     """
     stripe_key = os.environ.get("STRIPE_SECRET_KEY")
     if not stripe_key:
@@ -136,18 +151,34 @@ def verify_subscription(email: str, user_id: str):
         customer_id = customers.data[0].id
         subscriptions = stripe.Subscription.list(customer=customer_id, status="active")
 
-        if subscriptions.data:
-            plan_type = subscriptions.data[0].get("items", {}).get("data", [{}])[0].get("price", {}).get("lookup_key", "basic")
-            supabase = init_supabase()
-            supabase.table("subscriptions").upsert({
-                "user_id": user_id,
-                "email": email,
-                "stripe_customer_id": customer_id,
-                "status": "active",
-                "plan_type": plan_type or "basic"
-            }).execute()
+        if not subscriptions.data:
+            return "free"
 
-            return "active"
+        # Get the lookup_key from the active subscription's price
+        sub = subscriptions.data[0]
+        items = sub.get("items", {}).get("data", [])
+        lookup_key = ""
+        price_id = ""
+        if items:
+            price = items[0].get("price", {})
+            lookup_key = price.get("lookup_key", "")
+            price_id = price.get("id", "")
+
+        # Map lookup_key to tier
+        tier = STRIPE_TIER_MAP.get(lookup_key, "pro")  # default to pro if unknown active sub
+
+        # Sync to Supabase
+        supabase = init_supabase()
+        supabase.table("subscriptions").upsert({
+            "user_id": user_id,
+            "email": email,
+            "stripe_customer_id": customer_id,
+            "stripe_price_id": price_id,
+            "status": "active",
+            "plan_type": tier,
+        }).execute()
+
+        return tier
 
     except Exception as e:
         logger.error(f"Stripe API Error: {e}")
@@ -161,7 +192,7 @@ def get_user_tier() -> str:
 
     # Admin override
     if email in ADMIN_EMAILS:
-        return "institutional"
+        return "platinum"
 
     # Check cached tier in session state
     if "user_tier" in st.session_state:
@@ -169,12 +200,8 @@ def get_user_tier() -> str:
 
     # Check Stripe
     tier = verify_subscription(email, email)
-    if tier == "active":
-        st.session_state["user_tier"] = "premium"
-        return "premium"
-
-    st.session_state["user_tier"] = "free"
-    return "free"
+    st.session_state["user_tier"] = tier
+    return tier
 
 
 def get_tier_config(tier: str = None) -> dict:
@@ -232,8 +259,8 @@ def render_upgrade_prompt(feature_name: str = "this feature"):
         f'<p style="color:#aaa;margin:0 0 12px 0;">'
         f'{feature_name} is not available on the <strong>{TIERS[tier]["name"]}</strong> plan.</p>'
         f'<p style="color:#888;font-size:0.85rem;">'
-        f'Upgrade to <strong>Pro</strong> ($29/mo) or <strong>Premium</strong> ($79/mo) '
-        f'for full access to AI-powered analysis.</p>'
+        f'Upgrade to <strong>Pro</strong> ($29/mo), <strong>Premium</strong> ($79/mo), '
+        f'or <strong>Platinum</strong> ($249/mo) for full access to AI-powered analysis.</p>'
         f'</div>',
         unsafe_allow_html=True,
     )

@@ -27,27 +27,52 @@ st.caption(f"Welcome back, **{user_email}**")
 # ═══════════════════════════════════════════════
 # DATA FETCHING
 # ═══════════════════════════════════════════════
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_market_data(ticker: str, period: str = "1mo") -> dict:
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_market_data(ticker: str) -> dict:
     try:
         tk = yf.Ticker(ticker)
-        hist = tk.history(period=period)
-        if hist.empty or len(hist) < 2:
-            return None
-        close = hist["Close"]
-        last = close.iloc[-1]
-        prev = close.iloc[-2]
-        day_chg = (last / prev - 1) * 100
 
-        week_chg = (last / close.iloc[-6] - 1) * 100 if len(close) > 6 else 0
-        month_chg = (last / close.iloc[0] - 1) * 100
+        # Daily data for previous close and period returns
+        daily = tk.history(period="1mo")
+        if daily.empty or len(daily) < 2:
+            return None
+
+        # Previous close = second-to-last daily bar (last bar is today)
+        prev_close = float(daily["Close"].iloc[-2])
+        last = float(daily["Close"].iloc[-1])
+
+        # Try intraday for chart (5m intervals, try multiple)
+        intra = pd.DataFrame()
+        for interval in ["5m", "15m", "2m"]:
+            try:
+                intra = tk.history(period="1d", interval=interval)
+                if not intra.empty and len(intra) >= 3:
+                    break
+            except Exception:
+                continue
+
+        # Use intraday for chart if we got it, otherwise use last 5 daily bars
+        if not intra.empty and len(intra) >= 3:
+            chart_close = intra["Close"]
+            chart_dates = intra.index
+            last = float(chart_close.iloc[-1])
+        else:
+            chart_close = daily["Close"].tail(5)
+            chart_dates = daily.index[-5:]
+
+        # Day change always vs previous daily close
+        day_chg = (last / prev_close - 1) * 100 if prev_close > 0 else 0
+
+        # Period returns from daily data
+        d_close = daily["Close"]
+        week_chg = (last / float(d_close.iloc[-min(6, len(d_close))]) - 1) * 100 if len(d_close) > 1 else 0
+        month_chg = (last / float(d_close.iloc[0]) - 1) * 100
 
         return {
             "price": last, "day_chg": day_chg, "week_chg": week_chg,
             "month_chg": month_chg,
-            "open": hist["Open"], "high": hist["High"],
-            "low": hist["Low"], "close": close,
-            "volume": hist["Volume"], "dates": hist.index,
+            "prev_close": prev_close,
+            "close": chart_close, "dates": chart_dates,
         }
     except Exception:
         return None
@@ -105,20 +130,30 @@ with error_boundary("Market Dashboard"):
                         unsafe_allow_html=True,
                     )
 
-                    # Mini candlestick chart
-                    fig = go.Figure(go.Candlestick(
-                        x=data["dates"],
-                        open=data["open"], high=data["high"],
-                        low=data["low"], close=data["close"],
-                        increasing_line_color=COLORS["success"],
-                        decreasing_line_color=COLORS["danger"],
-                        increasing_fillcolor=COLORS["success"],
-                        decreasing_fillcolor=COLORS["danger"],
+                    # Intraday area chart — green if up vs prev close, red if down
+                    above = data["day_chg"] >= 0
+                    line_color = "#00ff96" if above else "#ff4444"
+                    fill_color = "rgba(0,255,150,0.15)" if above else "rgba(255,68,68,0.15)"
+
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=data["dates"], y=data["close"],
+                        mode="lines",
+                        line=dict(color=line_color, width=1.5),
+                        fill="tozeroy", fillcolor=fill_color,
+                        hovertemplate="%{y:.2f}<extra></extra>",
+                        showlegend=False,
                     ))
+
+                    y_min = float(data["close"].min())
+                    y_max = float(data["close"].max())
+                    y_pad = (y_max - y_min) * 0.1 if y_max > y_min else 1
+
                     fig.update_layout(
-                        template="plotly_dark", height=90, margin=dict(l=0, r=0, t=0, b=0),
-                        xaxis=dict(visible=False, rangeslider=dict(visible=False)),
-                        yaxis=dict(visible=False),
+                        template="plotly_dark", height=100,
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        xaxis=dict(visible=False),
+                        yaxis=dict(visible=False, range=[y_min - y_pad, y_max + y_pad]),
                         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                         showlegend=False,
                     )
@@ -243,7 +278,7 @@ with error_boundary("Alerts"):
         pass
 
     # Check VIX level
-    vix_data = fetch_market_data("^VIX", "5d")
+    vix_data = fetch_market_data("^VIX")
     if vix_data and vix_data["price"] > 25:
         alerts.append(f"**VIX at {vix_data['price']:.1f}** — elevated fear/volatility")
     if vix_data and vix_data["day_chg"] > 10:
@@ -285,7 +320,7 @@ with error_boundary("Portfolio Snapshot"):
 with error_boundary("Account"):
     st.markdown("##### Account")
 
-    tier_colors = {"free": "#888", "pro": "#00d1ff", "premium": "#ffaa00", "institutional": "#00ff96"}
+    tier_colors = {"free": "#888", "pro": "#00d1ff", "premium": "#ffaa00", "platinum": "#00ff96"}
     t_color = tier_colors.get(tier, "#888")
 
     ac1, ac2, ac3, ac4 = st.columns(4)
