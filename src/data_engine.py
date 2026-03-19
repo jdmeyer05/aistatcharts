@@ -135,12 +135,28 @@ def fetch_options_chain(symbol: str, expiration: str = None) -> pd.DataFrame:
                     d = r.get('details', {})
                     g = r.get('greeks', {})
                     day = r.get('day', {})
+                    quote = r.get('last_quote', {})
+
+                    # Bid/ask: try live quote first, fall back to day close ±1%
+                    bid = quote.get('bid') or 0
+                    ask = quote.get('ask') or 0
+                    day_close = day.get('close', 0) or 0
+                    day_vwap = day.get('vwap', 0) or 0
+
+                    if bid == 0 and day_close > 0:
+                        bid = day_close * 0.99
+                    if ask == 0 and day_close > 0:
+                        ask = day_close * 1.01
+
+                    last_price = day_close or day_vwap or 0
+
                     rows.append({
                         'strike_price': d.get('strike_price'),
                         'contract_type': d.get('contract_type'),
                         'expiration_date': d.get('expiration_date'),
-                        'bid': r.get('last_quote', {}).get('bid', 0),
-                        'ask': r.get('last_quote', {}).get('ask', 0),
+                        'bid': bid,
+                        'ask': ask,
+                        'last_price': last_price,
                         'volume': day.get('volume', 0),
                         'open_interest': r.get('open_interest', 0),
                         'implied_volatility': r.get('implied_volatility', 0),
@@ -150,7 +166,7 @@ def fetch_options_chain(symbol: str, expiration: str = None) -> pd.DataFrame:
                         'vega': g.get('vega', 0),
                     })
                 df = pd.DataFrame(rows)
-                st.session_state['current_data_source'] = "Massive API (Live Feed)"
+                st.session_state['current_data_source'] = "Massive API (Polygon)"
                 return df
         except Exception as e:
             logger.warning(f"Massive options chain fetch failed for {symbol}: {e}")
@@ -171,9 +187,17 @@ def fetch_options_chain(symbol: str, expiration: str = None) -> pd.DataFrame:
         df = pd.concat([calls, puts], ignore_index=True)
         df = df.rename(columns={
             'strike': 'strike_price', 'impliedVolatility': 'implied_volatility',
-            'openInterest': 'open_interest', 'volume': 'volume'
+            'openInterest': 'open_interest', 'volume': 'volume',
+            'lastPrice': 'last_price',
         })
         df['expiration_date'] = target_exp
+
+        # After hours, bid/ask are 0 — use lastPrice as fallback
+        if 'last_price' in df.columns:
+            df['bid'] = np.where((df['bid'] == 0) & (df['last_price'] > 0),
+                                 df['last_price'] * 0.98, df['bid'])
+            df['ask'] = np.where((df['ask'] == 0) & (df['last_price'] > 0),
+                                 df['last_price'] * 1.02, df['ask'])
 
         RISK_FREE_RATE = 0.045
         hist = tk.history(period="5d")
@@ -183,10 +207,16 @@ def fetch_options_chain(symbol: str, expiration: str = None) -> pd.DataFrame:
 
         iv = np.where((df['implied_volatility'].isna()) | (df['implied_volatility'] <= 0), 0.001, df['implied_volatility'])
         d1 = (np.log(spot / df['strike_price']) + (RISK_FREE_RATE + (iv**2)/2) * t) / (iv * np.sqrt(t))
+        d2 = d1 - iv * np.sqrt(t)
 
         df['delta'] = np.where(df['contract_type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
         df['gamma'] = norm.pdf(d1) / (spot * iv * np.sqrt(t))
-        df['theta'] = (-(spot * iv * norm.pdf(d1)) / (2 * np.sqrt(t)) - RISK_FREE_RATE * df['strike_price'] * np.exp(-RISK_FREE_RATE * t) * norm.cdf(d1 - iv * np.sqrt(t))) / 365
+        # Theta differs for calls vs puts
+        common_theta = -(spot * iv * norm.pdf(d1)) / (2 * np.sqrt(t))
+        call_theta = (common_theta - RISK_FREE_RATE * df['strike_price'] * np.exp(-RISK_FREE_RATE * t) * norm.cdf(d2)) / 365
+        put_theta = (common_theta + RISK_FREE_RATE * df['strike_price'] * np.exp(-RISK_FREE_RATE * t) * norm.cdf(-d2)) / 365
+        df['theta'] = np.where(df['contract_type'] == 'call', call_theta, put_theta)
+        df['vega'] = spot * np.sqrt(t) * norm.pdf(d1) / 100  # per 1% IV change
 
         st.session_state['current_data_source'] = "Yahoo Finance + SciPy (Fallback)"
         return df

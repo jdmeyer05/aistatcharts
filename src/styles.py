@@ -131,16 +131,40 @@ def inject_global_css():
     .stDataFrame {{
         border: 1px solid {COLORS['card_border']} !important;
         border-radius: 6px !important;
-        overflow: hidden;
+        overflow: hidden !important;
         padding: 6px !important;
     }}
+    /* Prevent chart annotations/text from overflowing */
+    [data-testid="stPlotlyChart"] .plotly .main-svg {{
+        overflow: hidden !important;
+    }}
+    [data-testid="stPlotlyChart"] .plotly {{
+        overflow: hidden !important;
+    }}
 
-    /* Tabs container */
+    /* Tabs — full border treatment */
+    .stTabs {{
+        border: 1px solid {COLORS['card_border']} !important;
+        border-radius: 8px !important;
+        overflow: hidden;
+    }}
+    .stTabs [data-baseweb="tab-list"] {{
+        background: rgba(14, 17, 23, 0.7) !important;
+        border-bottom: 1px solid {COLORS['card_border']} !important;
+        border-radius: 8px 8px 0 0 !important;
+        padding: 4px 4px 0 4px !important;
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        border-radius: 6px 6px 0 0 !important;
+        padding: 8px 16px !important;
+        color: {COLORS['text_muted']} !important;
+    }}
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+        color: {COLORS['accent']} !important;
+        border-bottom: 2px solid {COLORS['accent']} !important;
+    }}
     .stTabs [data-baseweb="tab-panel"] {{
-        border: 1px solid {COLORS['card_border']};
-        border-top: none;
-        border-radius: 0 0 6px 6px;
-        padding: 12px 8px;
+        padding: 14px 12px !important;
     }}
 
     /* Info, warning, success, error boxes */
@@ -293,12 +317,7 @@ def inject_global_css():
         backdrop-filter: blur(4px);
     }}
 
-    /* Tabs need subtle treatment */
-    .stTabs [data-baseweb="tab-list"] {{
-        background: rgba(14, 17, 23, 0.7);
-        border-radius: 6px;
-        padding: 2px;
-    }}
+    /* (tab styles defined above) */
 
     /* Ticker tape needs solid bg */
     .ticker-tape-container {{
@@ -346,28 +365,31 @@ def inject_global_css():
         background: rgba(0, 209, 255, 0.1) !important;
     }}
     .stPopover > button {{
-        font-size: 0.85rem !important;
-        padding: 4px 12px !important;
+        font-size: clamp(0.65rem, 1.1vw, 0.9rem) !important;
+        padding: clamp(2px, 0.4vw, 6px) clamp(6px, 1vw, 14px) !important;
         border: 1px solid {COLORS['card_border']} !important;
         border-radius: 6px !important;
         background: {COLORS['card_bg']} !important;
         color: {COLORS['text_primary']} !important;
+        white-space: nowrap !important;
     }}
     .stPopover > button:hover {{
         border-color: {COLORS['accent']} !important;
     }}
-    /* Nav row buttons — match popover style */
+    /* Nav row buttons (Summary) — match popover style */
     .stMainBlockContainer .stButton > button[kind="secondary"] {{
-        font-size: 0.85rem !important;
-        padding: 4px 12px !important;
+        font-size: clamp(0.65rem, 1.1vw, 0.9rem) !important;
+        padding: clamp(2px, 0.4vw, 6px) clamp(6px, 1vw, 14px) !important;
         border: 1px solid {COLORS['card_border']} !important;
         border-radius: 6px !important;
         background: {COLORS['card_bg']} !important;
         color: {COLORS['text_primary']} !important;
+        white-space: nowrap !important;
     }}
     .stMainBlockContainer .stButton > button[kind="secondary"]:hover {{
         border-color: {COLORS['accent']} !important;
     }}
+    /* (duplicate nav button styles removed — clamp-based styles above handle all sizes) */
 
     /* ── Sidebar input borders ── */
     /* Text inputs, number inputs, selectboxes, date pickers, multiselects */

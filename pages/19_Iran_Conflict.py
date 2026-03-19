@@ -185,6 +185,8 @@ DISRUPTION_BREAKDOWN = [
 ]
 CURRENT_NET_DISRUPTION = round(sum(d["mbpd"] for d in DISRUPTION_BREAKDOWN), 2)  # -10.75
 
+# Base models (always used): Grok, Gemini, Claude
+# Platinum-only: GPT-5 (added at runtime if tier = platinum)
 MODEL_CONFIGS = {
     "grok": {
         "name": "Grok 3",
@@ -211,28 +213,12 @@ MODEL_CONFIGS = {
             "Every claim in your rationale MUST reference a specific data point, tweet, or headline."
         ),
         "color": "#ff4444",
-        # Weights by domain — Grok gets extra weight on recency/sentiment
         "weight_escalation": 1.3,
         "weight_oil": 0.8,
         "weight_ceasefire": 0.9,
-    },
-    "openai": {
-        "name": "GPT-5",
-        "base_url": None,
-        "model": "gpt-5",
-        "key_name": "OPENAI_API_KEY",
-        "extra_instructions": (
-            "YOUR ROLE: Military & strategic analysis specialist.\n"
-            "Focus on: (1) Military balance of forces and operational tempo. "
-            "(2) Historical parallels — compare to 1980 Iran-Iraq War, 1990 Gulf War, 2019 Soleimani escalation. "
-            "(3) Escalation ladder — what would move this conflict to the next level vs. de-escalation.\n"
-            "YOU MUST: Cite specific data points from the LIVE DATA provided (GDELT scores, oil prices, event counts). "
-            "Every escalation score must reference a comparable historical event at that level."
-        ),
-        "color": "#00cc66",
-        "weight_escalation": 1.2,
-        "weight_oil": 0.9,
-        "weight_ceasefire": 1.0,
+        "max_tokens": 4096,
+        "data_sections": ["timeline", "infrastructure", "oil", "gdelt_tone", "disruption", "prior"],
+        "tier_required": None,  # all tiers
     },
     "gemini": {
         "name": "Gemini 3 Pro",
@@ -240,17 +226,28 @@ MODEL_CONFIGS = {
         "model": "gemini-3-pro-preview",
         "key_name": "GEMINI_API_KEY",
         "extra_instructions": (
-            "YOUR ROLE: Energy markets & economic impact specialist.\n"
-            "Focus on: (1) Exact supply disruption by facility (mbpd offline at each chokepoint). "
-            "(2) Oil price mechanics — spare capacity, SPR drawdown math, shipping rerouting costs. "
-            "(3) Second-order economic effects — inflation pass-through, refinery margins, LNG substitution.\n"
-            "YOU MUST: Ground your oil price forecast in the LIVE OIL PRICE DATA provided. "
-            "Cite the current price level and % change. Your disruption estimate must add up facility-by-facility."
+            "YOUR ROLE: Military strategy & energy markets specialist.\n"
+            "You cover TWO domains — provide analysis on BOTH:\n\n"
+            "MILITARY & STRATEGIC:\n"
+            "  (1) Military balance of forces and operational tempo.\n"
+            "  (2) Historical parallels — compare to 1980 Iran-Iraq War, 1990 Gulf War, 2019 Soleimani escalation.\n"
+            "  (3) Escalation ladder — what would move this conflict to the next level vs. de-escalation.\n"
+            "  Every escalation score must reference a comparable historical event at that level.\n\n"
+            "ENERGY & ECONOMIC:\n"
+            "  (1) Exact supply disruption by facility (mbpd offline at each chokepoint).\n"
+            "  (2) Oil price mechanics — spare capacity, SPR drawdown math, shipping rerouting costs.\n"
+            "  (3) Second-order economic effects — inflation pass-through, refinery margins, LNG substitution.\n"
+            "  Your disruption estimate must add up facility-by-facility.\n\n"
+            "YOU MUST: Ground your analysis in the LIVE DATA provided. Cite GDELT scores, oil prices, "
+            "event counts, and specific facility statuses."
         ),
         "color": "#4285f4",
-        "weight_escalation": 0.8,
+        "weight_escalation": 1.1,
         "weight_oil": 1.4,
         "weight_ceasefire": 0.8,
+        "max_tokens": 4096,
+        "data_sections": ["timeline", "infrastructure", "gdelt_intensity", "gdelt_bulk", "oil", "disruption", "prior"],
+        "tier_required": None,
     },
     "claude": {
         "name": "Claude Sonnet",
@@ -270,7 +267,33 @@ MODEL_CONFIGS = {
         "weight_escalation": 1.0,
         "weight_oil": 0.9,
         "weight_ceasefire": 1.4,
+        "max_tokens": 4096,
+        "data_sections": ["timeline", "infrastructure", "oil", "gdelt_tone", "acled", "disruption", "prior"],
+        "tier_required": None,
     },
+}
+
+# Platinum-only model — added to MODEL_CONFIGS at runtime for platinum users
+GPT5_CONFIG = {
+    "name": "GPT-5",
+    "base_url": None,
+    "model": "gpt-5",
+    "key_name": "OPENAI_API_KEY",
+    "extra_instructions": (
+        "YOUR ROLE: Deep strategic analysis & synthesis specialist.\n"
+        "Focus on: (1) Synthesize intelligence from all dimensions — military, economic, diplomatic. "
+        "(2) Identify non-obvious second and third-order effects. "
+        "(3) Historical parallels with precise calibration. "
+        "(4) Challenge assumptions in the other models' likely conclusions.\n"
+        "YOU MUST: Provide the most rigorous, nuanced analysis. Cite specific data points."
+    ),
+    "color": "#00cc66",
+    "weight_escalation": 1.2,
+    "weight_oil": 1.0,
+    "weight_ceasefire": 1.1,
+    "max_tokens": 16000,
+    "data_sections": ["timeline", "infrastructure", "gdelt_intensity", "gdelt_bulk", "acled", "oil", "disruption", "prior"],
+    "tier_required": "platinum",
 }
 
 CONFLICT_SYSTEM_PROMPT = """You are an elite geopolitical intelligence analyst specializing in Middle East conflicts and energy security.
@@ -369,12 +392,20 @@ For example, "Prolonged Stalemate" at 60% and "Ceasefire within 30d" at 25% can 
 because a stalemate could eventually lead to a ceasefire. Assess each scenario independently."""
 
 
-def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone) -> str:
-    """Build a live data block to inject into the AI prompt so models ground on real numbers."""
+def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
+                            sections: list[str] | None = None) -> str:
+    """Build a live data block to inject into the AI prompt.
+
+    Args:
+        sections: optional filter — only include these data sections.
+            Valid: gdelt_intensity, gdelt_tone, oil, acled, disruption
+            If None, include all.
+    """
+    include_all = sections is None
     lines = [f"=== LIVE DATA FEED (as of {datetime.now().strftime('%B %d, %Y %I:%M %p')}) ==="]
 
     # GDELT media intensity
-    if gdelt_data:
+    if (include_all or "gdelt_intensity" in sections) and gdelt_data:
         lines.append("\n--- GDELT Media Intensity (higher = more coverage) ---")
         for label, df_g in gdelt_data.items():
             if df_g is not None and not df_g.empty:
@@ -388,14 +419,14 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone) -> str:
         lines.append("  (DATA FRESHNESS: GDELT data is daily granularity, cached up to 2 hours)")
 
     # GDELT tone/sentiment
-    if df_tone is not None and not df_tone.empty:
+    if (include_all or "gdelt_tone" in sections) and df_tone is not None and not df_tone.empty:
         latest_tone = df_tone["value"].iloc[-1]
         avg_tone = df_tone["value"].mean()
         lines.append(f"\n--- GDELT Media Tone (negative = hostile) ---")
         lines.append(f"  Current tone: {latest_tone:.2f}, 6-month avg: {avg_tone:.2f}")
 
     # Oil price
-    if df_oil is not None and not df_oil.empty:
+    if (include_all or "oil" in sections) and df_oil is not None and not df_oil.empty:
         latest_price = df_oil["value"].iloc[-1]
         prev_price = df_oil["value"].iloc[-2] if len(df_oil) > 1 else latest_price
         chg_1d = ((latest_price / prev_price) - 1) * 100 if prev_price > 0 else 0
@@ -411,7 +442,7 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone) -> str:
         lines.append(f"  180d range: ${low_180d:.2f} — ${high_180d:.2f}")
 
     # ACLED conflict events
-    if df_acled is not None and not df_acled.empty:
+    if (include_all or "acled" in sections) and df_acled is not None and not df_acled.empty:
         lines.append(f"\n--- ACLED Armed Conflict Events (Middle East) ---")
         total = len(df_acled)
         total_fatal = int(df_acled["fatalities"].sum()) if "fatalities" in df_acled.columns else 0
@@ -432,15 +463,16 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone) -> str:
                 lines.append(f"  Event types (7d): {', '.join(f'{t}={c}' for t, c in by_type.items())}")
         lines.append(f"  Total since Jan 2026: {total} events, {total_fatal} fatalities")
         lines.append("  (DATA FRESHNESS: ACLED data may lag 1-7 days from real events)")
-    else:
-        lines.append("\n--- ACLED Data: NOT AVAILABLE (no API access or CSV uploaded) ---")
+    elif include_all or "acled" in sections:
+        lines.append("\n--- ACLED Data: NOT AVAILABLE ---")
 
-    # Verified disruption breakdown (single source of truth)
-    lines.append(f"\n--- VERIFIED SUPPLY DISRUPTION (facility-by-facility, as of {DISRUPTION_TIMELINE[-1]['date']}) ---")
-    for d in DISRUPTION_BREAKDOWN:
-        lines.append(f"  {d['facility']}: {d['mbpd']:+.1f} mbpd")
-    lines.append(f"  NET DISRUPTION: {CURRENT_NET_DISRUPTION:+.2f} mbpd")
-    lines.append("  YOUR current_disruption_mbpd MUST match ~10.75 unless you cite a specific change.")
+    # Verified disruption breakdown
+    if include_all or "disruption" in sections:
+        lines.append(f"\n--- VERIFIED SUPPLY DISRUPTION (facility-by-facility, as of {DISRUPTION_TIMELINE[-1]['date']}) ---")
+        for d in DISRUPTION_BREAKDOWN:
+            lines.append(f"  {d['facility']}: {d['mbpd']:+.1f} mbpd")
+        lines.append(f"  NET DISRUPTION: {CURRENT_NET_DISRUPTION:+.2f} mbpd")
+        lines.append("  YOUR current_disruption_mbpd MUST match ~12.45 unless you cite a specific change.")
 
     return "\n".join(lines)
 
@@ -518,6 +550,8 @@ def get_latest_conflict_result() -> tuple:
 def run_single_conflict_model(model_key: str, api_key: str, context_prompt: str) -> dict:
     """Call a single AI model for conflict analysis."""
     config = MODEL_CONFIGS[model_key]
+    model_max_tokens = config.get("max_tokens", 3000)
+
     user_prompt = f"""{context_prompt}
 
 {config['extra_instructions']}
@@ -529,7 +563,7 @@ Produce your complete analysis. JSON only."""
             client = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
                 model=config["model"],
-                max_tokens=4096,
+                max_tokens=model_max_tokens,
                 temperature=0.3,
                 system=CONFLICT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -541,7 +575,6 @@ Produce your complete analysis. JSON only."""
                 client_kwargs["base_url"] = config["base_url"]
             client = OpenAI(**client_kwargs)
 
-            # GPT-5 uses max_completion_tokens and doesn't support temperature
             is_gpt5 = "gpt-5" in config["model"]
             call_kwargs = dict(
                 model=config["model"],
@@ -549,7 +582,7 @@ Produce your complete analysis. JSON only."""
                     {"role": "system", "content": CONFLICT_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                **{"max_completion_tokens" if is_gpt5 else "max_tokens": 4096},
+                **{"max_completion_tokens" if is_gpt5 else "max_tokens": model_max_tokens},
                 **({"temperature": 0.3} if not is_gpt5 else {}),
             )
 
@@ -563,9 +596,19 @@ Produce your complete analysis. JSON only."""
                 response = client.chat.completions.create(**call_kwargs)
 
             raw = response.choices[0].message.content
+            # Check for truncation
+            finish = response.choices[0].finish_reason
+            if finish == "length":
+                logger.warning(f"{config['name']} response truncated (finish_reason=length)")
+
+        if not raw or not raw.strip():
+            return {"success": False, "error": "Empty response (model may need higher max_completion_tokens)", "model_name": config["name"]}
 
         cleaned = re.sub(r"^```json?\s*", "", raw.strip())
         cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        if not cleaned:
+            return {"success": False, "error": "Response contained no JSON content", "model_name": config["name"]}
 
         # Attempt to repair truncated JSON (e.g., missing closing braces)
         try:
@@ -661,7 +704,7 @@ def blend_conflict_results(results: dict) -> dict:
     # Collect market implications — prefer specialist per domain
     market_keys = ["energy", "equities", "safe_havens", "currencies"]
     # Gemini is energy specialist, Claude for safe havens, GPT-4o for equities
-    market_priority = {"energy": "gemini", "equities": "openai", "safe_havens": "claude", "currencies": "claude"}
+    market_priority = {"energy": "gemini", "equities": "gemini", "safe_havens": "claude", "currencies": "claude"}
     market_blended = {}
     for mk in market_keys:
         preferred = market_priority.get(mk)
@@ -1018,8 +1061,26 @@ with st.spinner("Loading geopolitical data from GDELT..."):
 
     gdelt_data, df_tone = fetch_all_gdelt_data(gdelt_queries)
 
-    # GDELT bulk events — direct download, no API rate limits
-    df_gdelt_bulk = fetch_gdelt_bulk_events(days=21)
+    # GDELT bulk events — use cached parquet if available, fetch in background if stale
+    # This avoids blocking page load with 21 file downloads
+    import threading
+    df_gdelt_bulk = pd.DataFrame()
+    _gdelt_parquet = os.path.join(os.path.dirname(__file__), "..", "data", "gdelt_events", "iran_conflict_events.parquet")
+    if os.path.exists(_gdelt_parquet):
+        try:
+            df_gdelt_bulk = pd.read_parquet(_gdelt_parquet)
+        except Exception:
+            pass
+
+    # Trigger background refresh if cache is stale or missing
+    if df_gdelt_bulk.empty or "gdelt_bg_started" not in st.session_state:
+        st.session_state["gdelt_bg_started"] = True
+        def _bg_gdelt():
+            try:
+                fetch_gdelt_bulk_events(days=21)
+            except Exception:
+                pass
+        threading.Thread(target=_bg_gdelt, daemon=True).start()
 
     # ACLED conflict events — try API first, fall back to local CSV
     acled_email = _get_key("ACLED_EMAIL")
@@ -1101,46 +1162,66 @@ tab_ai, tab_timeline, tab_acled, tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ---- TAB: AI War Analysis (4-model blend) ----
 with tab_ai:
     st.subheader("AI-Powered Conflict Intelligence")
-    st.caption("Blended analysis from Grok 3, GPT-4o, Gemini 3 Pro, and Claude Sonnet — updated hourly.")
+
+    # Determine which models to use based on user tier
+    from src.auth import get_user_tier
+    user_tier = get_user_tier()
+    active_configs = dict(MODEL_CONFIGS)
+    if user_tier == "platinum":
+        gpt5_key = _get_key(GPT5_CONFIG["key_name"])
+        if gpt5_key:
+            active_configs["openai"] = GPT5_CONFIG
+
+    model_names = ", ".join(mc["name"] for mc in active_configs.values())
+    platinum_note = " (Platinum tier: +GPT-5)" if user_tier == "platinum" else ""
+    st.caption(f"Blended analysis from {model_names}{platinum_note} — updated hourly.")
 
     # Check for cached result
     latest_conflict, is_conflict_stale = get_latest_conflict_result()
 
-    # Build context for the AI models — grounded in live data
-    conflict_context = f"""Analyze the current state of the US-Israel war on Iran as of {datetime.now().strftime('%B %d, %Y %I:%M %p')}.
+    # Build base context (shared across all models — timeline + infrastructure)
+    base_context = f"""Analyze the current state of the US-Israel war on Iran as of {datetime.now().strftime('%B %d, %Y %I:%M %p')}.
 
 Recent timeline of key events:
 """
     for evt in CONFLICT_TIMELINE_EVENTS[-6:]:
-        conflict_context += f"- {evt['date']}: {evt['event']} (Impact: {evt['impact']})\n"
-
-    conflict_context += f"""
-Key infrastructure status:
-"""
+        base_context += f"- {evt['date']}: {evt['event']} (Impact: {evt['impact']})\n"
+    base_context += "\nKey infrastructure status:\n"
     for name, info in INFRASTRUCTURE_TARGETS.items():
-        conflict_context += f"- {name}: {info['capacity']} — {info['status']}\n"
+        base_context += f"- {name}: {info['capacity']} — {info['status']}\n"
 
-    # Inject live data so models ground on real numbers
-    conflict_context += "\n" + build_live_data_context(gdelt_data, df_oil, df_acled, df_tone)
-
-    # Inject bulk GDELT event data (direct downloads, not rate-limited API)
-    if not df_gdelt_bulk.empty:
-        conflict_context += "\n" + build_gdelt_ai_context(df_gdelt_bulk)
-
-    # Inject prior analysis for comparison (anti-drift)
+    # Pre-build data sections (cached strings)
     prior_ctx = build_prior_analysis_context()
-    if prior_ctx:
-        conflict_context += "\n" + prior_ctx
+    gdelt_bulk_ctx = build_gdelt_ai_context(df_gdelt_bulk) if not df_gdelt_bulk.empty else ""
+
+    def _build_model_context(model_key: str) -> str:
+        """Build a slimmed-down context for a specific model based on its data_sections."""
+        sections = active_configs.get(model_key, MODEL_CONFIGS.get(model_key, {})).get("data_sections")
+        ctx = base_context
+
+        # Only include data sections this model needs
+        if sections is None or "timeline" in sections or "infrastructure" in sections:
+            pass  # already in base_context
+
+        ctx += "\n" + build_live_data_context(gdelt_data, df_oil, df_acled, df_tone, sections=sections)
+
+        if (sections is None or "gdelt_bulk" in sections) and gdelt_bulk_ctx:
+            ctx += "\n" + gdelt_bulk_ctx
+
+        if (sections is None or "prior" in sections) and prior_ctx:
+            ctx += "\n" + prior_ctx
+
+        return ctx
 
     # Gather available API keys
     available_models = {}
-    for mk, mc in MODEL_CONFIGS.items():
+    for mk, mc in active_configs.items():
         key = _get_key(mc["key_name"])
         if key:
             available_models[mk] = key
 
     if not available_models:
-        st.warning("No AI API keys configured. Add GROK_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or ANTHROPIC_API_KEY to secrets.")
+        st.warning("No AI API keys configured. Add GROK_API_KEY, GEMINI_API_KEY, or ANTHROPIC_API_KEY to secrets.")
     else:
         col_run, col_status = st.columns([1, 3])
         with col_run:
@@ -1163,14 +1244,15 @@ Key infrastructure status:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                     futures = {}
                     for mk, api_key in available_models.items():
-                        futures[executor.submit(run_single_conflict_model, mk, api_key, conflict_context)] = mk
+                        model_ctx = _build_model_context(mk)
+                        futures[executor.submit(run_single_conflict_model, mk, api_key, model_ctx)] = mk
 
                     for future in concurrent.futures.as_completed(futures):
                         mk = futures[future]
                         try:
                             model_results[mk] = future.result()
                         except Exception as e:
-                            model_results[mk] = {"success": False, "error": str(e), "model_name": MODEL_CONFIGS[mk]["name"]}
+                            model_results[mk] = {"success": False, "error": str(e), "model_name": active_configs.get(mk, MODEL_CONFIGS.get(mk, {})).get("name", mk)}
 
                 # Report per-model status
                 succeeded = [mk for mk, r in model_results.items() if r.get("success")]
@@ -1179,11 +1261,11 @@ Key infrastructure status:
                 conflict_result = blend_conflict_results(model_results)
                 if conflict_result.get("success"):
                     save_conflict_result(conflict_result)
-                    st.success(f"Analysis complete — {len(succeeded)}/{len(model_results)} models responded: {', '.join(MODEL_CONFIGS[mk]['name'] for mk in succeeded)}")
+                    st.success(f"Analysis complete — {len(succeeded)}/{len(model_results)} models responded: {', '.join(active_configs.get(mk, {}).get('name', mk) for mk in succeeded)}")
 
                 if failed:
                     for mk, err in failed.items():
-                        st.warning(f"{MODEL_CONFIGS[mk]['name']} failed: {err[:150]}")
+                        st.warning(f"{active_configs.get(mk, {}).get('name', mk)} failed: {err[:150]}")
         elif latest_conflict and latest_conflict.get("blended"):
             conflict_result = latest_conflict["blended"]
             conflict_result["success"] = True
@@ -1270,9 +1352,8 @@ Key infrastructure status:
                     if ma.get("citations"):
                         cites = "".join(f"<li>{c}</li>" for c in ma["citations"][:3])
                         citations_html = f'<div style="color:#888; font-size:11px; margin-top:4px;"><b>Citations:</b><ul style="margin:2px 0 0 16px; padding:0;">{cites}</ul></div>'
-                    role_map = {"Grok 3": "Breaking News", "GPT-5": "Military/Strategic",
-                                "GPT-4o": "Military/Strategic",
-                                "Gemini 3 Pro": "Energy/Economic", "Claude Sonnet": "Diplomatic"}
+                    role_map = {"Grok 3": "Breaking News", "GPT-5": "Strategic Synthesis",
+                                "Gemini 3 Pro": "Military/Energy", "Claude Sonnet": "Diplomatic"}
                     role = role_map.get(ma["model"], "")
                     with col:
                         st.markdown(f"""<div style="padding:10px; border:1px solid {ma['color']}; border-radius:8px;">

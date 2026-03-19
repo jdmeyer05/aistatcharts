@@ -89,9 +89,9 @@ Defined in `src/auth.py`. Enforced by `setup_page()` in `src/layout.py`. Stripe 
 | Tier | Pages | AI Models | Daily Analyses | RL Trading | Analyst Chat | Price |
 |------|-------|-----------|---------------|------------|-------------|-------|
 | **Free** | 17 (no 02, 03, 04) | None | 0 | No | Gemini Flash (5/day) | $0 |
-| **Pro** | All 20 | GPT-5 | 5/day | No | Gemini Flash (unlimited) | $12/mo |
-| **Premium** | All 20 | All 4 | 50/day | Yes | GPT-5 (unlimited) | $29/mo |
-| **Platinum** | All 20 | All 4 | Unlimited | Yes | GPT-5 (unlimited) | $79/mo |
+| **Pro** | All 20 | 3 (Grok, Gemini, Claude) | 5/day | No | Gemini Flash (unlimited) | $12/mo |
+| **Premium** | All 20 | 3 (Grok, Gemini, Claude) | 50/day | Yes | GPT-5 (unlimited) | $29/mo |
+| **Platinum** | All 20 | 4 (+GPT-5) | Unlimited | Yes | GPT-5 (unlimited) | $79/mo |
 
 Admin emails (`jdmeyer05@gmail.com`, `local-dev@preview`) always get Platinum.
 
@@ -115,16 +115,18 @@ Tier-based sidebar chat with model and rate limit per tier. Configured in `CHAT_
 7. **Market Impact** — Defense & energy sector performance
 8. **Sentiment Analysis** — GDELT media tone
 
-### 4-Model AI Analysis Pipeline
+### AI Analysis Pipeline (3 models standard, +GPT-5 for Platinum)
 
-Each model has a specialized analytical lens:
+Each model has a specialized analytical lens. Per-model prompts are slimmed to only include relevant data sections.
 
-| Model | Role | Domain Weights |
-|-------|------|---------------|
-| **Grok 3** | Breaking news & social sentiment (live X/Twitter search) | Escalation: 1.3x |
-| **GPT-5** | Military/strategic analysis with historical parallels | Escalation: 1.2x |
-| **Gemini 3 Pro** | Energy markets & economic impact (facility-level math) | Oil: 1.4x |
-| **Claude Sonnet** | Diplomatic & probabilistic reasoning | Ceasefire: 1.4x |
+| Model | Role | Domain Weights | Cost |
+|-------|------|---------------|------|
+| **Grok 3** | Breaking news & infrastructure monitoring (live X/Twitter) | Escalation: 1.3x | ~$0.03 |
+| **Gemini 3 Pro** | Military/strategic + energy/economic (dual role) | Escalation: 1.1x, Oil: 1.4x | ~$0.01 |
+| **Claude Sonnet** | Diplomatic & probabilistic reasoning | Ceasefire: 1.4x | ~$0.03 |
+| **GPT-5** *(Platinum only)* | Deep strategic synthesis, challenges assumptions | Escalation: 1.2x | ~$0.13 |
+
+Standard query cost: ~$0.07. Platinum query cost: ~$0.20. GPT-5 added at runtime via `GPT5_CONFIG` + `active_configs` dict.
 
 ### Reliability Features
 - **Calibration anchors** — escalation scores mapped to historical events (10=Cuban Missile Crisis → 1=post-conflict)

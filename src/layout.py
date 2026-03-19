@@ -81,7 +81,7 @@ def render_header(current_page: str):
     # ── Row 1: Brand bar (pure HTML — fully responsive) ──
     st.markdown(f"""<div class="site-header">
         <div class="site-header-brand">
-            <span style="font-size:20px; font-weight:800; color:{COLORS['accent']}; letter-spacing:1.5px;">AI STATCHARTS</span>
+            <span style="font-size:clamp(13px, 1.8vw, 22px); font-weight:800; color:{COLORS['accent']}; letter-spacing:1.5px;">AI STATCHARTS</span>
         </div>
         <div class="site-header-badges">
             <span class="header-badge" style="color:{mkt_color}; border-color:{mkt_color};">{mkt_status}</span>
@@ -173,6 +173,7 @@ def render_header(current_page: str):
     # Append threat indicators
     items.append(f'<span style="color:#ffaa00;">FED 3.50-3.75%</span>')
     items.append(f'<span style="color:{esc_color};">IRAN DAY {days_of_conflict} ({esc_score}/10)</span>')
+    items.append(f'<span style="color:#555;">updated {now.strftime("%I:%M %p")}</span>')
 
     separator = '&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;'
     single_tape = separator.join(items)

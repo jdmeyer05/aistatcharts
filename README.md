@@ -28,7 +28,7 @@ Opens at **http://localhost:8501** (or next available port).
 |---|---|---|---|---|
 | **Pages** | 17 | All 20 | All 20 | All 20 |
 | **AI Analyses/day** | 0 | 5 | 50 | Unlimited |
-| **AI Models** | None | GPT-5 | All 4 | All 4 |
+| **AI Models** | None | 3 (Grok, Gemini, Claude) | 3 (Grok, Gemini, Claude) | 4 (+GPT-5) |
 | **RL Trading** | No | No | Yes | Yes |
 | **Analyst Chat** | Gemini Flash (5/day) | Gemini Flash (unlimited) | GPT-5 (unlimited) | GPT-5 (unlimited) |
 
@@ -44,14 +44,14 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## AI Models
 
-All 4 models called in parallel with specialized roles:
+3 models called in parallel (4 for Platinum tier):
 
 | Model | Role | Key Capability |
 |-------|------|----------------|
-| **Grok 3** | Breaking news & sentiment | Live X/Twitter search |
-| **GPT-5** | Military/strategic analysis | Historical parallels |
-| **Gemini 3 Pro** | Energy/economic impact | Facility-level disruption math |
-| **Claude Sonnet** | Diplomatic/probabilistic | Calibrated uncertainty ranges |
+| **Grok 3** | Breaking news & sentiment | Live X/Twitter search, infrastructure monitoring |
+| **Gemini 3 Pro** | Military/strategic + energy/economic | Dual-role: escalation analysis + facility-level disruption math |
+| **Claude Sonnet** | Diplomatic/probabilistic | Calibrated uncertainty, ceasefire probability, scenario trees |
+| **GPT-5** *(Platinum only)* | Deep strategic synthesis | Challenges assumptions, second/third-order effects |
 
 ## Data Sources
 

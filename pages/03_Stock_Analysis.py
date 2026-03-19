@@ -441,7 +441,7 @@ Produce your complete analysis for {ticker}. JSON only."""
                     {"role": "system", "content": STOCK_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                "max_completion_tokens" if is_gpt5 else "max_tokens": 3000,
+                "max_completion_tokens" if is_gpt5 else "max_tokens": 16000 if is_gpt5 else 3000,
                 **({"temperature": 0.3} if not is_gpt5 else {}),
             }
             try:

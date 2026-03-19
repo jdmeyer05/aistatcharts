@@ -83,7 +83,8 @@ api_key = _get_massive_key()
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("Configuration")
-    raw_ticker = st.text_input("Ticker", value="SPY")
+    default_ticker = st.session_state.get("shared_options_ticker", "SPY")
+    raw_ticker = st.text_input("Ticker", value=default_ticker)
     ticker = format_massive_ticker(raw_ticker)
     submit = st.button("Load Data", type="primary", use_container_width=True)
 
@@ -103,6 +104,8 @@ if submit:
             st.session_state["lab_spot"] = spot
             st.session_state["lab_ticker"] = ticker
             st.session_state["lab_px"] = px_df
+            st.session_state["shared_options_ticker"] = ticker
+            st.session_state["shared_options_spot"] = spot
         else:
             st.error("No options data returned.")
             st.stop()
