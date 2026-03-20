@@ -6,7 +6,7 @@ from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.layout import setup_page
 setup_page("11_Algo_Backtester")
 
-st.title("⚡ Vectorized Algo Backtester & Optimizer")
+st.title("🏗️ Algo Backtester & Optimizer")
 st.markdown("Test trading strategies, optimize parameters, and analyze performance with institutional-grade analytics.")
 
 # --- STRATEGY ENGINE ---

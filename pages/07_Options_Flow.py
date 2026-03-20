@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 setup_page("07_Options_Flow")
 
-st.title("🌊 Options Flow Intelligence")
+st.title("💧 Options Flow Intelligence")
 st.markdown("Unusual activity scanner, put/call analysis, and gamma exposure profiling.")
 
 

@@ -16,6 +16,13 @@ COLORS = {
 
 APP_VERSION = "2.1.0"
 
+# Default Plotly config — disables scroll zoom so mobile users can scroll the page
+PLOTLY_CONFIG = {
+    "scrollZoom": False,
+    "displayModeBar": False,
+    "doubleClick": "reset",
+}
+
 
 def inject_global_css():
     """Inject global CSS classes used across all pages. Call once per page."""
@@ -140,6 +147,14 @@ def inject_global_css():
     }}
     [data-testid="stPlotlyChart"] .plotly {{
         overflow: hidden !important;
+    }}
+    /* Disable Plotly drag-to-zoom on touch devices so page scroll works */
+    @media (pointer: coarse) {{
+        [data-testid="stPlotlyChart"] .plotly .drag,
+        [data-testid="stPlotlyChart"] .plotly .scrollbox,
+        [data-testid="stPlotlyChart"] .plotly .nsewdrag {{
+            pointer-events: none !important;
+        }}
     }}
 
     /* Tabs — full border treatment */
@@ -566,4 +581,20 @@ def inject_global_css():
             white-space: nowrap !important;
         }}
     }}
-</style>""", unsafe_allow_html=True)
+</style>
+""", unsafe_allow_html=True)
+
+    # Disable Plotly scrollZoom globally via JS (prevents mobile scroll hijack)
+    st.markdown("""<script>
+(function() {
+    var obs = new MutationObserver(function() {
+        var plots = document.querySelectorAll('.js-plotly-plot');
+        plots.forEach(function(p) {
+            if (p._fullLayout && p._fullLayout.scrollZoom !== false) {
+                Plotly.relayout(p, {scrollZoom: false});
+            }
+        });
+    });
+    obs.observe(document.body, {childList: true, subtree: true});
+})();
+</script>""", unsafe_allow_html=True)

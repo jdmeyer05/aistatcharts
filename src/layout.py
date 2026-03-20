@@ -7,32 +7,32 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 from src.styles import COLORS, APP_VERSION, inject_global_css
 from src.ticker_tape import _get_ticker_tape_data
-from src.auth import check_auth, check_page_access, render_upgrade_prompt, get_user_tier, get_tier_config
+from src.auth import check_auth, check_page_access, render_upgrade_prompt, get_user_tier, get_tier_config, get_usage_summary, render_token_purchase
 
 logger = logging.getLogger(__name__)
 
 # Page registry: filename key → (title, icon)
 PAGE_CONFIG = {
-    "01_Summary":            ("Summary | AI Statcharts", "📈"),
-    "02_Scenario_Analysis":  ("Scenario Analysis | AI Statcharts", "🔬"),
-    "03_Stock_Analysis":     ("Stock Analysis | AI Statcharts", "🔍"),
-    "04_RL_Trading":         ("RL Trading | AI Statcharts", "🧠"),
-    "05_Historical_Analysis":("Historical Analysis | AI Statcharts", "📊"),
-    "06_Options_Analysis":   ("Options Analysis | AI Statcharts", "📉"),
-    "07_Options_Flow":       ("Options Flow | AI Statcharts", "🌊"),
-    "08_Options_Lab":        ("Options Lab | AI Statcharts", "🧪"),
-    "09_ML_Stock_Predictor": ("ML Predictor | AI Statcharts", "🤖"),
-    "10_Tech_Screener":      ("Tech Screener | AI Statcharts", "📡"),
-    "11_Algo_Backtester":    ("Algo Backtester | AI Statcharts", "⚙️"),
-    "12_Monte_Carlo":        ("Monte Carlo | AI Statcharts", "🎲"),
+    "01_Summary":            ("Summary | AI Statcharts", "🎯"),
+    "02_Scenario_Analysis":  ("Scenario Analysis | AI Statcharts", "🔮"),
+    "03_Stock_Analysis":     ("Stock Analysis | AI Statcharts", "🧠"),
+    "04_RL_Trading":         ("RL Trading | AI Statcharts", "🦾"),
+    "05_Historical_Analysis":("Historical Analysis | AI Statcharts", "🕰️"),
+    "06_Options_Analysis":   ("Options Analysis | AI Statcharts", "💎"),
+    "07_Options_Flow":       ("Options Flow | AI Statcharts", "💧"),
+    "08_Options_Lab":        ("Options Lab | AI Statcharts", "🧫"),
+    "09_ML_Stock_Predictor": ("ML Predictor | AI Statcharts", "🎲"),
+    "10_Tech_Screener":      ("Tech Screener | AI Statcharts", "🛰️"),
+    "11_Algo_Backtester":    ("Algo Backtester | AI Statcharts", "🏗️"),
+    "12_Monte_Carlo":        ("Monte Carlo | AI Statcharts", "🎯"),
     "13_Power_Risk_VaR":     ("Portfolio VaR | AI Statcharts", "🛡️"),
-    "14_Oil_Fundamentals":   ("Oil Fundamentals | AI Statcharts", "🛢️"),
-    "15_NatGas_Fundamentals":("NatGas Fundamentals | AI Statcharts", "🔥"),
+    "14_Oil_Fundamentals":   ("Oil Fundamentals | AI Statcharts", "🔥"),
+    "15_NatGas_Fundamentals":("NatGas Fundamentals | AI Statcharts", "♨️"),
     "16_ERCOT_Power":        ("ERCOT Power | AI Statcharts", "⚡"),
     "17_ERCOT_Capacity":     ("ERCOT Capacity | AI Statcharts", "🏗️"),
-    "18_Economic_Calendar":  ("Economic Calendar | AI Statcharts", "📅"),
-    "19_Iran_Conflict":      ("Iran Conflict | AI Statcharts", "🌍"),
-    "20_Futures":            ("Futures | AI Statcharts", "📋"),
+    "18_Economic_Calendar":  ("Economic Calendar | AI Statcharts", "🏛️"),
+    "19_Iran_Conflict":      ("Iran Conflict | AI Statcharts", "🎖️"),
+    "20_Futures":            ("Futures | AI Statcharts", "📈"),
 }
 
 
@@ -57,6 +57,25 @@ def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collap
         page_title = PAGE_CONFIG.get(page_key, (page_key, ""))[0].split(" | ")[0]
         render_upgrade_prompt(page_title)
         st.stop()
+
+
+def _build_usage_badge() -> str:
+    """Build an HTML badge showing AI usage / tokens remaining."""
+    summary = get_usage_summary()
+    if summary["tier"] == "free" and summary["tokens"] == 0:
+        return ""
+
+    remaining = summary["total_remaining"]
+    color = "#00ff96" if remaining > 10 else "#ffaa00" if remaining > 0 else "#ff4444"
+
+    parts = []
+    if summary["daily_limit"] > 0:
+        parts.append(f"{summary['daily_remaining']}/{summary['daily_limit']}")
+    if summary["tokens"] > 0:
+        parts.append(f"+{summary['tokens']}tk")
+
+    label = " ".join(parts) if parts else str(remaining)
+    return f'<span class="header-badge" style="color:{color}; border-color:{color};">{label}</span>'
 
 
 def render_header(current_page: str):
@@ -86,6 +105,7 @@ def render_header(current_page: str):
         <div class="site-header-badges">
             <span class="header-badge" style="color:{mkt_color}; border-color:{mkt_color};">{mkt_status}</span>
             <span class="header-badge" style="color:{tier_color}; border-color:{tier_color};">{tier_cfg['name']}</span>
+            {_build_usage_badge()}
             <span style="font-size:10px; color:{COLORS['text_muted']};">{now.strftime('%I:%M %p')}</span>
         </div>
     </div>""", unsafe_allow_html=True)

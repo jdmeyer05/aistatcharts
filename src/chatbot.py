@@ -25,12 +25,12 @@ CHAT_TIERS = {
         "label": "Gemini Flash",
     },
     "premium": {
-        "model": "gpt-5",
-        "key_name": "OPENAI_API_KEY",
-        "base_url": None,
+        "model": "gemini-2.5-flash",
+        "key_name": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "max_tokens": 800,
         "daily_limit": -1,
-        "label": "GPT-5",
+        "label": "Gemini Flash",
     },
     "platinum": {
         "model": "gpt-5",

@@ -1045,7 +1045,7 @@ Respond with JSON:
 # ═══════════════════════════════════════════════
 # PAGE UI
 # ═══════════════════════════════════════════════
-st.title("🧠 RL Trading Strategy Optimizer")
+st.title("🦾 RL Trading Strategy Optimizer")
 st.markdown("Deep Q-Network ensemble discovers optimal trading strategies with walk-forward validation.")
 
 with st.sidebar:

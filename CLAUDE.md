@@ -90,13 +90,22 @@ Defined in `src/auth.py`. Enforced by `setup_page()` in `src/layout.py`. Stripe 
 |------|-------|-----------|---------------|------------|-------------|-------|
 | **Free** | 17 (no 02, 03, 04) | None | 0 | No | Gemini Flash (5/day) | $0 |
 | **Pro** | All 20 | 3 (Grok, Gemini, Claude) | 5/day | No | Gemini Flash (unlimited) | $12/mo |
-| **Premium** | All 20 | 3 (Grok, Gemini, Claude) | 50/day | Yes | GPT-5 (unlimited) | $29/mo |
-| **Platinum** | All 20 | 4 (+GPT-5) | Unlimited | Yes | GPT-5 (unlimited) | $79/mo |
+| **Premium** | All 20 | 3 (Grok, Gemini, Claude) | 20/day | Yes | Gemini Flash (unlimited) | $29/mo |
+| **Platinum** | All 20 | 4 (+GPT-5) | 50/day | Yes | GPT-5 (unlimited) | $79/mo |
 
 Admin emails (`jdmeyer05@gmail.com`, `local-dev@preview`) always get Platinum.
 
+### Token System (`src/auth.py`)
+When users exceed their daily included AI analyses, they can purchase token packs:
+- Starter: 50 tokens / $5 ($0.10/token)
+- Power: 200 tokens / $15 ($0.075/token)
+- Elite: 500 tokens / $30 ($0.06/token)
+
+1 token = 1 AI analysis. Tokens never expire. Free users can buy tokens to access AI without a subscription.
+`check_ai_quota()` checks daily allowance first, then token balance. `increment_ai_usage()` deducts from daily first, falls back to tokens. Token balance shown in header badge and Summary account section.
+
 ### Analyst Chat (`src/chatbot.py`)
-Tier-based sidebar chat with model and rate limit per tier. Configured in `CHAT_TIERS` dict. GPT-5 requires `max_completion_tokens` (not `max_tokens`) and no custom `temperature`.
+Tier-based sidebar chat. Free/Pro/Premium use Gemini Flash. Platinum uses GPT-5. Configured in `CHAT_TIERS` dict.
 
 ### Stripe Integration
 `verify_subscription()` reads `lookup_key` from active Stripe subscription price → maps via `STRIPE_TIER_MAP` → stores tier in Supabase. Supports monthly/yearly variants (`pro_monthly`, `premium_yearly`, etc.).

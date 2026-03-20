@@ -28,25 +28,34 @@ TIERS = {
     },
     "pro": {
         "name": "Pro",
-        "pages": "__all__",  # all pages
+        "pages": "__all__",
         "daily_ai_analyses": 5,
-        "ai_models": ["openai"],  # GPT-4o only
+        "ai_models": ["grok", "gemini", "claude"],
         "rl_enabled": False,
     },
     "premium": {
         "name": "Premium",
         "pages": "__all__",
-        "daily_ai_analyses": 50,
-        "ai_models": ["grok", "openai", "gemini", "claude"],
+        "daily_ai_analyses": 20,
+        "ai_models": ["grok", "gemini", "claude"],
         "rl_enabled": True,
     },
     "platinum": {
         "name": "Platinum",
         "pages": "__all__",
-        "daily_ai_analyses": -1,  # unlimited
+        "daily_ai_analyses": 50,
         "ai_models": ["grok", "openai", "gemini", "claude"],
         "rl_enabled": True,
     },
+}
+
+# ─────────────────────────────────────────────
+# TOKEN SYSTEM
+# ─────────────────────────────────────────────
+TOKEN_PACKS = {
+    "starter": {"name": "Starter", "tokens": 50, "price": 5.00, "per_token": 0.10},
+    "power": {"name": "Power", "tokens": 200, "price": 15.00, "per_token": 0.075},
+    "elite": {"name": "Elite", "tokens": 500, "price": 30.00, "per_token": 0.06},
 }
 
 # Admin emails always get platinum access
@@ -220,27 +229,91 @@ def check_page_access(page_key: str) -> bool:
     return page_key in config["pages"]
 
 
+def get_daily_usage() -> int:
+    """Get today's AI analysis usage count."""
+    from datetime import date
+    return st.session_state.get(f"ai_usage_{date.today().isoformat()}", 0)
+
+
+def get_daily_limit() -> int:
+    """Get the daily AI analysis limit for the current tier."""
+    config = TIERS.get(get_user_tier(), TIERS["free"])
+    return config["daily_ai_analyses"]
+
+
+def get_token_balance() -> int:
+    """Get the user's purchased token balance."""
+    return st.session_state.get("token_balance", 0)
+
+
 def check_ai_quota() -> bool:
-    """Check if user has AI analysis quota remaining today."""
+    """Check if user has AI analysis quota remaining (daily allowance OR tokens)."""
     tier = get_user_tier()
     config = TIERS.get(tier, TIERS["free"])
     limit = config["daily_ai_analyses"]
-    if limit == -1:
-        return True
+
     if limit == 0:
-        return False
+        # Free tier — can still use purchased tokens
+        return get_token_balance() > 0
+
+    # Check daily included allowance first
     from datetime import date
     today = date.today().isoformat()
     used = st.session_state.get(f"ai_usage_{today}", 0)
-    return used < limit
+    if used < limit:
+        return True
+
+    # Daily limit reached — check token balance
+    return get_token_balance() > 0
 
 
 def increment_ai_usage():
-    """Increment the daily AI analysis counter."""
+    """Use one AI analysis — deducts from daily allowance first, then tokens."""
     from datetime import date
     today = date.today().isoformat()
     key = f"ai_usage_{today}"
-    st.session_state[key] = st.session_state.get(key, 0) + 1
+    used = st.session_state.get(key, 0)
+
+    tier = get_user_tier()
+    limit = TIERS.get(tier, TIERS["free"])["daily_ai_analyses"]
+
+    if used < limit:
+        # Still within daily included allowance
+        st.session_state[key] = used + 1
+    else:
+        # Deduct from token balance
+        balance = get_token_balance()
+        if balance > 0:
+            st.session_state["token_balance"] = balance - 1
+
+
+def add_tokens(amount: int):
+    """Add purchased tokens to the user's balance."""
+    current = get_token_balance()
+    st.session_state["token_balance"] = current + amount
+
+
+def get_usage_summary() -> dict:
+    """Get a summary of today's usage and remaining capacity."""
+    from datetime import date
+    today = date.today().isoformat()
+    used = st.session_state.get(f"ai_usage_{today}", 0)
+    limit = get_daily_limit()
+    tokens = get_token_balance()
+    tier = get_user_tier()
+
+    daily_remaining = max(0, limit - used) if limit > 0 else 0
+    total_remaining = daily_remaining + tokens
+
+    return {
+        "tier": tier,
+        "daily_used": used,
+        "daily_limit": limit,
+        "daily_remaining": daily_remaining,
+        "tokens": tokens,
+        "total_remaining": total_remaining,
+        "source": "included" if daily_remaining > 0 else ("tokens" if tokens > 0 else "none"),
+    }
 
 
 def get_allowed_models() -> list:
@@ -252,6 +325,8 @@ def get_allowed_models() -> list:
 def render_upgrade_prompt(feature_name: str = "this feature"):
     """Render a styled upgrade prompt when a user hits a tier gate."""
     tier = get_user_tier()
+    tokens = get_token_balance()
+
     st.markdown(
         f'<div style="background:rgba(0,209,255,0.08);border:1px solid #00d1ff;'
         f'border-radius:8px;padding:20px;text-align:center;margin:20px 0;">'
@@ -260,7 +335,72 @@ def render_upgrade_prompt(feature_name: str = "this feature"):
         f'{feature_name} is not available on the <strong>{TIERS[tier]["name"]}</strong> plan.</p>'
         f'<p style="color:#888;font-size:0.85rem;">'
         f'Upgrade to <strong>Pro</strong> ($12/mo), <strong>Premium</strong> ($29/mo), '
-        f'or <strong>Platinum</strong> ($79/mo) for full access to AI-powered analysis.</p>'
+        f'or <strong>Platinum</strong> ($79/mo) for full access.</p>'
         f'</div>',
         unsafe_allow_html=True,
     )
+
+
+def render_quota_exceeded():
+    """Show when a user has used all daily analyses and has no tokens."""
+    summary = get_usage_summary()
+    st.markdown(
+        f'<div style="background:rgba(255,170,0,0.08);border:1px solid #ffaa00;'
+        f'border-radius:8px;padding:16px;text-align:center;margin:12px 0;">'
+        f'<div style="color:#ffaa00;font-weight:bold;font-size:16px;">Daily Limit Reached</div>'
+        f'<p style="color:#aaa;margin:6px 0;">You\'ve used {summary["daily_used"]}/{summary["daily_limit"]} '
+        f'included analyses today and have {summary["tokens"]} tokens remaining.</p>'
+        f'<p style="color:#888;font-size:0.85rem;">Buy tokens below to continue, or wait until tomorrow for your allowance to reset.</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    render_token_purchase()
+
+
+def render_token_purchase():
+    """Render the token purchase UI."""
+    st.markdown("#### Buy Analysis Tokens")
+    st.caption("Tokens let you run AI analyses beyond your daily included allowance. They never expire.")
+
+    balance = get_token_balance()
+    st.markdown(f'<div style="text-align:center; padding:8px; border:1px solid #00d1ff; border-radius:6px; margin-bottom:12px;">'
+                f'<span style="color:#888;">Current Balance:</span> '
+                f'<span style="font-size:20px; font-weight:bold; color:#00d1ff;">{balance} tokens</span></div>',
+                unsafe_allow_html=True)
+
+    pack_cols = st.columns(len(TOKEN_PACKS))
+    for col, (pack_id, pack) in zip(pack_cols, TOKEN_PACKS.items()):
+        with col:
+            st.markdown(f"""<div style="text-align:center; padding:12px; border:1px solid #30363d; border-radius:8px;">
+                <div style="font-size:16px; font-weight:bold; color:#e0e0e0;">{pack['name']}</div>
+                <div style="font-size:28px; font-weight:bold; color:#00d1ff; margin:8px 0;">{pack['tokens']}</div>
+                <div style="color:#888; font-size:12px;">tokens</div>
+                <div style="font-size:18px; font-weight:bold; color:#00ff96; margin:8px 0;">${pack['price']:.0f}</div>
+                <div style="color:#888; font-size:11px;">${pack['per_token']:.3f}/token</div>
+            </div>""", unsafe_allow_html=True)
+            if st.button(f"Buy {pack['name']}", key=f"buy_{pack_id}", use_container_width=True):
+                # In production, this would create a Stripe Checkout Session
+                # For now, add tokens directly (dev mode)
+                add_tokens(pack['tokens'])
+                st.success(f"Added {pack['tokens']} tokens! Balance: {get_token_balance()}")
+                st.rerun()
+
+
+def render_quota_status():
+    """Render a compact usage/quota indicator."""
+    summary = get_usage_summary()
+    tier = summary["tier"]
+    if tier == "free" and summary["tokens"] == 0:
+        return  # Don't show for free users with no tokens
+
+    daily_str = f"{summary['daily_used']}/{summary['daily_limit']}" if summary['daily_limit'] > 0 else "—"
+    token_str = f"{summary['tokens']} tokens" if summary['tokens'] > 0 else ""
+
+    parts = [f"Today: {daily_str}"]
+    if token_str:
+        parts.append(token_str)
+
+    color = "#00ff96" if summary['total_remaining'] > 5 else "#ffaa00" if summary['total_remaining'] > 0 else "#ff4444"
+
+    st.markdown(f'<div style="font-size:11px; color:{color}; text-align:right;">'
+                f'{" | ".join(parts)}</div>', unsafe_allow_html=True)

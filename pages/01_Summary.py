@@ -20,7 +20,7 @@ user_email = st.session_state.get("user_email", "User")
 tier = get_user_tier()
 tier_config = get_tier_config(tier)
 
-st.title("📊 Dashboard")
+st.title("🎯 Summary")
 st.caption(f"Welcome back, **{user_email}**")
 
 
@@ -41,15 +41,28 @@ def fetch_market_data(ticker: str) -> dict:
         prev_close = float(daily["Close"].iloc[-2])
         last = float(daily["Close"].iloc[-1])
 
-        # Try intraday for chart (5m intervals, try multiple)
+        # Try intraday for chart
+        is_crypto = ticker in ("BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD")
         intra = pd.DataFrame()
-        for interval in ["5m", "15m", "2m"]:
+
+        if is_crypto:
+            # Crypto trades 24/7 — use 1h bars over 2 days for smooth continuous chart
             try:
-                intra = tk.history(period="1d", interval=interval)
-                if not intra.empty and len(intra) >= 3:
-                    break
+                intra = tk.history(period="2d", interval="1h")
+                if not intra.empty:
+                    # Keep last 24 hours
+                    cutoff = pd.Timestamp.now(tz=intra.index.tz) - pd.Timedelta(hours=24)
+                    intra = intra[intra.index >= cutoff]
             except Exception:
-                continue
+                pass
+        else:
+            for interval in ["5m", "15m", "30m"]:
+                try:
+                    intra = tk.history(period="1d", interval=interval)
+                    if not intra.empty and len(intra) >= 3:
+                        break
+                except Exception:
+                    continue
 
         # Use intraday for chart if we got it, otherwise use last 5 daily bars
         if not intra.empty and len(intra) >= 3:
@@ -323,7 +336,12 @@ with error_boundary("Account"):
     tier_colors = {"free": "#888", "pro": "#00d1ff", "premium": "#ffaa00", "platinum": "#00ff96"}
     t_color = tier_colors.get(tier, "#888")
 
-    ac1, ac2, ac3, ac4 = st.columns(4)
+    from src.auth import get_usage_summary, get_token_balance, render_token_purchase
+
+    summary = get_usage_summary()
+    tokens = get_token_balance()
+
+    ac1, ac2, ac3, ac4, ac5 = st.columns(5)
     ac1.markdown(
         f'<div style="text-align:center;padding:8px;border:1px solid {t_color};border-radius:6px;">'
         f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">Plan</div>'
@@ -331,34 +349,40 @@ with error_boundary("Account"):
         unsafe_allow_html=True,
     )
 
-    # AI usage today
-    today_key = f"ai_usage_{date.today().isoformat()}"
-    used = st.session_state.get(today_key, 0)
-    limit = tier_config["daily_ai_analyses"]
-    limit_str = "∞" if limit == -1 else str(limit)
+    daily_str = f"{summary['daily_used']}/{summary['daily_limit']}" if summary['daily_limit'] > 0 else "0/0"
     ac2.markdown(
         f'<div style="text-align:center;padding:8px;border:1px solid {COLORS["card_border"]};border-radius:6px;">'
-        f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">AI Analyses Today</div>'
-        f'<div style="font-size:1.1rem;font-weight:700;">{used} / {limit_str}</div></div>',
+        f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">AI Today</div>'
+        f'<div style="font-size:1.1rem;font-weight:700;">{daily_str}</div></div>',
         unsafe_allow_html=True,
     )
 
-    # Models available
-    models = tier_config["ai_models"]
-    models_str = ", ".join(models) if models else "None"
+    token_color = "#00ff96" if tokens > 10 else "#ffaa00" if tokens > 0 else "#888"
     ac3.markdown(
+        f'<div style="text-align:center;padding:8px;border:1px solid {token_color};border-radius:6px;">'
+        f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">Tokens</div>'
+        f'<div style="font-size:1.1rem;font-weight:700;color:{token_color};">{tokens}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    models = tier_config["ai_models"]
+    ac4.markdown(
         f'<div style="text-align:center;padding:8px;border:1px solid {COLORS["card_border"]};border-radius:6px;">'
         f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">AI Models</div>'
-        f'<div style="font-size:0.8rem;font-weight:600;">{models_str if len(models_str) < 25 else f"{len(models)} models"}</div></div>',
+        f'<div style="font-size:0.8rem;font-weight:600;">{len(models)} models</div></div>',
         unsafe_allow_html=True,
     )
 
-    ac4.markdown(
+    ac5.markdown(
         f'<div style="text-align:center;padding:8px;border:1px solid {COLORS["card_border"]};border-radius:6px;">'
         f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">RL Trading</div>'
         f'<div style="font-size:1.1rem;font-weight:700;">{"✓" if tier_config["rl_enabled"] else "✗"}</div></div>',
         unsafe_allow_html=True,
     )
+
+    # Token purchase section
+    with st.expander("Buy Analysis Tokens"):
+        render_token_purchase()
 
     # Account actions
     act1, act2 = st.columns(2)

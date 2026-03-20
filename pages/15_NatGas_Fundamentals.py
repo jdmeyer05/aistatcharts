@@ -6,7 +6,7 @@ from src.eia_helpers import fetch_eia_data
 from src.layout import setup_page
 setup_page("15_NatGas_Fundamentals")
 
-st.title("🔥 Natural Gas Fundamentals")
+st.title("♨️ Natural Gas Fundamentals")
 st.markdown("Live weekly Working Gas in Underground Storage data from the Energy Information Administration (EIA).")
 
 # --- FETCH ALL DATA ---

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 setup_page("19_Iran_Conflict")
 
-st.title("🛡️ Iran Conflict Monitor")
+st.title("🎖️ Iran Conflict Monitor")
 st.markdown("Geopolitical risk tracking via GDELT media intensity, oil price correlation, and defense/energy market impact.")
 
 
@@ -402,11 +402,11 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
             If None, include all.
     """
     include_all = sections is None
-    lines = [f"=== LIVE DATA FEED (as of {datetime.now().strftime('%B %d, %Y %I:%M %p')}) ==="]
+    lines = [f"Current data as of {datetime.now().strftime('%B %d, %Y %I:%M %p')}:"]
 
     # GDELT media intensity
     if (include_all or "gdelt_intensity" in sections) and gdelt_data:
-        lines.append("\n--- GDELT Media Intensity (higher = more coverage) ---")
+        lines.append("\nGDELT Media Intensity:")
         for label, df_g in gdelt_data.items():
             if df_g is not None and not df_g.empty:
                 latest = df_g["value"].iloc[-1]
@@ -422,7 +422,7 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
     if (include_all or "gdelt_tone" in sections) and df_tone is not None and not df_tone.empty:
         latest_tone = df_tone["value"].iloc[-1]
         avg_tone = df_tone["value"].mean()
-        lines.append(f"\n--- GDELT Media Tone (negative = hostile) ---")
+        lines.append(f"\nGDELT Media Tone:")
         lines.append(f"  Current tone: {latest_tone:.2f}, 6-month avg: {avg_tone:.2f}")
 
     # Oil price
@@ -436,14 +436,14 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
         chg_30d = ((latest_price / price_30d_ago) - 1) * 100 if price_30d_ago > 0 else 0
         high_180d = df_oil["value"].max()
         low_180d = df_oil["value"].min()
-        lines.append(f"\n--- WTI Crude Oil (EIA) ---")
+        lines.append(f"\nWTI Crude Oil:")
         lines.append(f"  Current: ${latest_price:.2f}/bbl, 1d: {chg_1d:+.1f}%, "
                      f"7d: {chg_7d:+.1f}%, 30d: {chg_30d:+.1f}%")
         lines.append(f"  180d range: ${low_180d:.2f} — ${high_180d:.2f}")
 
     # ACLED conflict events
     if (include_all or "acled" in sections) and df_acled is not None and not df_acled.empty:
-        lines.append(f"\n--- ACLED Armed Conflict Events (Middle East) ---")
+        lines.append(f"\nACLED Conflict Events:")
         total = len(df_acled)
         total_fatal = int(df_acled["fatalities"].sum()) if "fatalities" in df_acled.columns else 0
         # Last 7 days
@@ -464,11 +464,11 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
         lines.append(f"  Total since Jan 2026: {total} events, {total_fatal} fatalities")
         lines.append("  (DATA FRESHNESS: ACLED data may lag 1-7 days from real events)")
     elif include_all or "acled" in sections:
-        lines.append("\n--- ACLED Data: NOT AVAILABLE ---")
+        lines.append("")
 
     # Verified disruption breakdown
     if include_all or "disruption" in sections:
-        lines.append(f"\n--- VERIFIED SUPPLY DISRUPTION (facility-by-facility, as of {DISRUPTION_TIMELINE[-1]['date']}) ---")
+        lines.append(f"\nSupply Disruption ({DISRUPTION_TIMELINE[-1]['date']}):")
         for d in DISRUPTION_BREAKDOWN:
             lines.append(f"  {d['facility']}: {d['mbpd']:+.1f} mbpd")
         lines.append(f"  NET DISRUPTION: {CURRENT_NET_DISRUPTION:+.2f} mbpd")
@@ -547,9 +547,9 @@ def get_latest_conflict_result() -> tuple:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def run_single_conflict_model(model_key: str, api_key: str, context_prompt: str) -> dict:
+def run_single_conflict_model(model_key: str, api_key: str, context_prompt: str, model_config: dict = None) -> dict:
     """Call a single AI model for conflict analysis."""
-    config = MODEL_CONFIGS[model_key]
+    config = model_config or MODEL_CONFIGS.get(model_key) or GPT5_CONFIG
     model_max_tokens = config.get("max_tokens", 3000)
 
     user_prompt = f"""{context_prompt}
@@ -633,8 +633,9 @@ Produce your complete analysis. JSON only."""
         return {"success": False, "error": str(e), "model_name": config["name"]}
 
 
-def _domain_weighted_avg(results: dict, field_path: list[str], weight_key: str, default: float = 0) -> float:
+def _domain_weighted_avg(results: dict, field_path: list[str], weight_key: str, default: float = 0, configs: dict = None) -> float:
     """Compute a domain-weighted average for a nested field across model results."""
+    _cfgs = configs or MODEL_CONFIGS
     total_weight = 0
     weighted_sum = 0
     for k, v in results.items():
@@ -643,14 +644,16 @@ def _domain_weighted_avg(results: dict, field_path: list[str], weight_key: str, 
             val = val.get(key, {}) if isinstance(val, dict) else default
         if not isinstance(val, (int, float)):
             val = default
-        w = MODEL_CONFIGS.get(k, {}).get(weight_key, 1.0)
+        w = _cfgs.get(k, {}).get(weight_key, 1.0)
         weighted_sum += val * w
         total_weight += w
     return round(weighted_sum / total_weight, 1) if total_weight else default
 
 
-def blend_conflict_results(results: dict) -> dict:
+def blend_conflict_results(results: dict, configs: dict = None) -> dict:
     """Blend multiple model outputs into a unified conflict assessment with domain-weighted scoring."""
+    if configs is None:
+        configs = MODEL_CONFIGS
     successful = {k: v for k, v in results.items() if v.get("success")}
     if not successful:
         return {"success": False, "error": "All models failed"}
@@ -658,25 +661,25 @@ def blend_conflict_results(results: dict) -> dict:
     n = len(successful)
     models_used = [v.get("model_name", k) for k, v in successful.items()]
 
-    # Domain-weighted escalation (Grok & GPT-4o weighted higher on escalation)
+    # Domain-weighted escalation
     avg_escalation = _domain_weighted_avg(
-        successful, ["escalation_risk", "score"], "weight_escalation", 5)
+        successful, ["escalation_risk", "score"], "weight_escalation", 5, configs)
 
-    # Domain-weighted oil disruption (Gemini weighted higher)
+    # Domain-weighted oil disruption
     avg_disruption = _domain_weighted_avg(
-        successful, ["oil_impact", "current_disruption_mbpd"], "weight_oil", 0)
+        successful, ["oil_impact", "current_disruption_mbpd"], "weight_oil", 0, configs)
 
-    # Domain-weighted oil price forecasts (Gemini weighted higher)
+    # Domain-weighted oil price forecasts
     price_low = _domain_weighted_avg(
-        successful, ["oil_impact", "price_forecast_30d", "low"], "weight_oil", 0)
+        successful, ["oil_impact", "price_forecast_30d", "low"], "weight_oil", 0, configs)
     price_base = _domain_weighted_avg(
-        successful, ["oil_impact", "price_forecast_30d", "base"], "weight_oil", 0)
+        successful, ["oil_impact", "price_forecast_30d", "base"], "weight_oil", 0, configs)
     price_high = _domain_weighted_avg(
-        successful, ["oil_impact", "price_forecast_30d", "high"], "weight_oil", 0)
+        successful, ["oil_impact", "price_forecast_30d", "high"], "weight_oil", 0, configs)
 
-    # Domain-weighted ceasefire probability (Claude weighted higher)
+    # Domain-weighted ceasefire probability
     avg_ceasefire = round(_domain_weighted_avg(
-        successful, ["diplomatic_outlook", "ceasefire_probability_30d"], "weight_ceasefire", 0))
+        successful, ["diplomatic_outlook", "ceasefire_probability_30d"], "weight_ceasefire", 0, configs))
 
     # Collect all unique developments
     all_devs = []
@@ -763,7 +766,7 @@ def blend_conflict_results(results: dict) -> dict:
             "score": score,
             "rationale": esc.get("rationale", ""),
             "citations": esc.get("citations", []),
-            "color": MODEL_CONFIGS.get(k, {}).get("color", "#ffffff"),
+            "color": configs.get(k, {}).get("color", "#ffffff"),
         })
 
     # Disagreement detection
@@ -1245,7 +1248,8 @@ Recent timeline of key events:
                     futures = {}
                     for mk, api_key in available_models.items():
                         model_ctx = _build_model_context(mk)
-                        futures[executor.submit(run_single_conflict_model, mk, api_key, model_ctx)] = mk
+                        mc = active_configs.get(mk)
+                        futures[executor.submit(run_single_conflict_model, mk, api_key, model_ctx, mc)] = mk
 
                     for future in concurrent.futures.as_completed(futures):
                         mk = futures[future]
@@ -1258,7 +1262,7 @@ Recent timeline of key events:
                 succeeded = [mk for mk, r in model_results.items() if r.get("success")]
                 failed = {mk: r.get("error", "Unknown") for mk, r in model_results.items() if not r.get("success")}
 
-                conflict_result = blend_conflict_results(model_results)
+                conflict_result = blend_conflict_results(model_results, active_configs)
                 if conflict_result.get("success"):
                     save_conflict_result(conflict_result)
                     st.success(f"Analysis complete — {len(succeeded)}/{len(model_results)} models responded: {', '.join(active_configs.get(mk, {}).get('name', mk) for mk in succeeded)}")
@@ -1341,45 +1345,28 @@ Recent timeline of key events:
 
             st.divider()
 
-            # Per-model escalation assessments
+            # Per-model escalation assessments — stacked for full readability
             st.markdown("#### Model Assessments")
-            st.caption("Each model has a specialized role — Grok: breaking news, GPT-4o: military/strategic, Gemini: energy/economic, Claude: diplomatic/probabilistic")
+            role_map = {"Grok 3": "Breaking News", "GPT-5": "Strategic Synthesis",
+                        "Gemini 3 Pro": "Military/Energy", "Claude Sonnet": "Diplomatic"}
             model_assess = esc.get("model_assessments", [])
-            if model_assess:
-                assess_cols = st.columns(len(model_assess))
-                for col, ma in zip(assess_cols, model_assess):
-                    citations_html = ""
-                    if ma.get("citations"):
-                        cites = "".join(f"<li>{c}</li>" for c in ma["citations"][:3])
-                        citations_html = f'<div style="color:#888; font-size:11px; margin-top:4px;"><b>Citations:</b><ul style="margin:2px 0 0 16px; padding:0;">{cites}</ul></div>'
-                    role_map = {"Grok 3": "Breaking News", "GPT-5": "Strategic Synthesis",
-                                "Gemini 3 Pro": "Military/Energy", "Claude Sonnet": "Diplomatic"}
-                    role = role_map.get(ma["model"], "")
-                    with col:
-                        st.markdown(f"""<div style="padding:10px; border:1px solid {ma['color']}; border-radius:8px;">
-                            <div style="color:{ma['color']}; font-weight:bold; font-size:14px;">{ma['model']}</div>
-                            <div style="color:#888; font-size:11px;">{role}</div>
-                            <div style="font-size:24px; font-weight:bold; color:white;">{ma['score']}/10 — {ma['level']}</div>
-                            <div style="color:#ccc; font-size:12px; margin-top:6px;">{ma['rationale'][:250]}</div>
-                            {citations_html}
-                        </div>""", unsafe_allow_html=True)
-
-            # Model disagreements
-            disagreements = conflict_result.get("disagreements", [])
-            if disagreements:
-                st.divider()
-                st.markdown("#### Model Disagreements")
-                st.caption("Significant divergence between models — this is where the most valuable signal is.")
-                for d in disagreements:
-                    spread = d.get("spread", 0)
-                    field = d.get("field", "")
-                    high = d.get("high", {})
-                    low = d.get("low", {})
-                    st.markdown(f"""<div style="padding:10px 14px; border:1px solid #ffaa00; border-radius:8px; margin-bottom:8px; background:rgba(255,170,0,0.05);">
-                        <div style="color:#ffaa00; font-weight:bold;">⚠ {field} — spread of {spread}{'pp' if '%' not in str(spread) and '$' not in str(spread) else ''}</div>
-                        <div style="color:#ff6b35; font-size:13px; margin-top:4px;">▲ {high.get('model', '')}: {high.get('score', '')} — {high.get('rationale', '')[:150]}</div>
-                        <div style="color:#00d1ff; font-size:13px; margin-top:2px;">▼ {low.get('model', '')}: {low.get('score', '')} — {low.get('rationale', '')[:150]}</div>
-                    </div>""", unsafe_allow_html=True)
+            for ma in model_assess:
+                role = role_map.get(ma["model"], "")
+                citations_html = ""
+                if ma.get("citations"):
+                    cites = " · ".join(ma["citations"][:4])
+                    citations_html = f'<div style="color:#888; font-size:11px; margin-top:4px;">Citations: {cites}</div>'
+                st.markdown(f"""<div style="padding:12px 14px; border-left:3px solid {ma['color']}; margin-bottom:8px; background:rgba(255,255,255,0.02); border-radius:0 6px 6px 0;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="color:{ma['color']}; font-weight:bold; font-size:14px;">{ma['model']}</span>
+                            <span style="color:#888; font-size:11px; margin-left:8px;">{role}</span>
+                        </div>
+                        <span style="font-size:20px; font-weight:bold; color:white;">{ma['score']}/10 — {ma['level']}</span>
+                    </div>
+                    <div style="color:#ccc; font-size:13px; margin-top:8px; line-height:1.5;">{ma['rationale']}</div>
+                    {citations_html}
+                </div>""", unsafe_allow_html=True)
 
             st.divider()
 

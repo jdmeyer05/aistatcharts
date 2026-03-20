@@ -578,7 +578,7 @@ def blend_model_results(results: dict) -> dict:
 # ─────────────────────────────────────────────
 # PAGE
 # ─────────────────────────────────────────────
-st.title("🔍 Stock Analysis & Recommendation")
+st.title("🧠 Stock Analysis & Recommendation")
 st.markdown("AI-powered institutional-grade equity research. Multi-dimensional scoring with quantitative backing.")
 
 # Sidebar

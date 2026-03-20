@@ -6,7 +6,7 @@ from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.layout import setup_page
 setup_page("12_Monte_Carlo")
 
-st.title("🎲 Monte Carlo Stochastic Simulator")
+st.title("🎯 Monte Carlo Simulator")
 st.markdown("Forecast terminal price distributions using Geometric Brownian Motion (GBM).")
 
 # --- SIDEBAR CONFIGURATION ---

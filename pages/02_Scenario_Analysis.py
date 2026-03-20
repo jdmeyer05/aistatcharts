@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 from src.layout import setup_page
 setup_page("02_Scenario_Analysis")
 
-st.title("🔬 Scenario Analysis Engine")
+st.title("🔮 Scenario Analysis Engine")
 st.markdown("Stress test portfolios against historical shocks, custom what-if scenarios, bull/bear projections, and event-driven catalysts.")
 
 # ─────────────────────────────────────────────

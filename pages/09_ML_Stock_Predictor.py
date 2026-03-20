@@ -8,7 +8,7 @@ from src.chatbot import run_sidebar_chatbot
 from src.layout import setup_page
 setup_page("09_ML_Stock_Predictor")
 
-st.title("🤖 ML Tactical Forecast (30-Day)")
+st.title("🎲 ML Tactical Forecast (30-Day)")
 st.markdown("Stochastic Recursive Random Forest: Projects 1 day ahead dynamically to generate a realistic, volatility-adjusted price path.")
 
 # --- SIDEBAR CONFIGURATION ---

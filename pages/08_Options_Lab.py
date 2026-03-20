@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 setup_page("08_Options_Lab")
 
-st.title("🔬 Options Lab")
+st.title("🧫 Options Lab")
 st.markdown("Volatility surface, earnings move analyzer, and multi-leg strategy modeler with time decay.")
 
 

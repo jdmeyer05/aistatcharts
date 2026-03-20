@@ -14,23 +14,26 @@ Opens at **http://localhost:8501** (or next available port).
 ## Platform Overview
 
 - **20 pages** of quantitative analysis tools
-- **4 AI models** running in parallel: Grok 3, GPT-5, Gemini 3 Pro, Claude Sonnet
-- **Top nav header** — brand bar with dropdown navigation, market status, tier badge
+- **3 AI models** (4 for Platinum): Grok 3, Gemini 3 Pro, Claude Sonnet (+GPT-5)
+- **Top nav header** — brand bar with dropdown navigation, market status, tier/usage badge
 - **Scrolling market strip** — S&P 500, WTI Crude, VIX, Gold, DXY, BTC, Fed rate, Iran war escalation score
-- **Tier-based analyst chat** — Gemini Flash (Free/Pro) or GPT-5 (Premium/Platinum)
-- **Subscription tiers** — Free, Pro ($29), Premium ($79), Platinum ($249)
+- **Tier-based analyst chat** — Gemini Flash (Free/Pro/Premium) or GPT-5 (Platinum)
+- **Token system** — buy analysis tokens ($5/50, $15/200, $30/500) when daily limit is reached
+- **Subscription tiers** — Free, Pro ($12), Premium ($29), Platinum ($79)
 - **Supabase auth** — login, registration, user agreement, tier management
 - **Stripe integration** — subscription billing with lookup_key tier mapping
+- **Mobile-friendly** — touch scroll protection, responsive breakpoints
 
 ## Subscription Tiers
 
 | | Free | Pro ($12/mo) | Premium ($29/mo) | Platinum ($79/mo) |
 |---|---|---|---|---|
 | **Pages** | 17 | All 20 | All 20 | All 20 |
-| **AI Analyses/day** | 0 | 5 | 50 | Unlimited |
+| **AI Analyses/day** | 0 | 5 | 20 | 50 |
 | **AI Models** | None | 3 (Grok, Gemini, Claude) | 3 (Grok, Gemini, Claude) | 4 (+GPT-5) |
 | **RL Trading** | No | No | Yes | Yes |
-| **Analyst Chat** | Gemini Flash (5/day) | Gemini Flash (unlimited) | GPT-5 (unlimited) | GPT-5 (unlimited) |
+| **Analyst Chat** | Gemini Flash (5/day) | Gemini Flash (unlimited) | Gemini Flash (unlimited) | GPT-5 (unlimited) |
+| **Bonus Tokens** | Buy tokens for AI analyses beyond daily limit — never expire |
 
 ## Key Pages
 

@@ -9,7 +9,7 @@ from src.chatbot import run_sidebar_chatbot
 from src.layout import setup_page
 setup_page("10_Tech_Screener")
 
-st.title("📡 Advanced Technical Screener")
+st.title("🛰️ Advanced Technical Screener")
 st.markdown("Multi-dimensional technical analysis: Trend (EMAs), Momentum (MACD/RSI), and Volatility (Bollinger Bands).")
 
 # --- SIDEBAR CONFIGURATION ---
