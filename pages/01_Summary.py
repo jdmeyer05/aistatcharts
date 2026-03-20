@@ -384,6 +384,16 @@ with error_boundary("Account"):
     with st.expander("Buy Analysis Tokens"):
         render_token_purchase()
 
+    # Subscription plans
+    from src.auth import render_pricing_cards, STRIPE_LINKS
+    with st.expander("Upgrade Plan"):
+        render_pricing_cards(current_tier=tier)
+
+    # Manage subscription
+    portal_link = STRIPE_LINKS.get("portal", "#")
+    if tier != "free":
+        st.link_button("Manage Subscription", portal_link, use_container_width=True)
+
     # Account actions
     act1, act2 = st.columns(2)
     with act1:

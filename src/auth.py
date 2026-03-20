@@ -58,6 +58,23 @@ TOKEN_PACKS = {
     "elite": {"name": "Elite", "tokens": 500, "price": 30.00, "per_token": 0.06},
 }
 
+# ─────────────────────────────────────────────
+# STRIPE PAYMENT LINKS
+# Replace these with real Stripe Payment Link URLs from your dashboard
+# ─────────────────────────────────────────────
+STRIPE_LINKS = {
+    # Subscription plans
+    "pro": "https://buy.stripe.com/REPLACE_WITH_PRO_LINK",
+    "premium": "https://buy.stripe.com/REPLACE_WITH_PREMIUM_LINK",
+    "platinum": "https://buy.stripe.com/REPLACE_WITH_PLATINUM_LINK",
+    # Token packs
+    "tokens_starter": "https://buy.stripe.com/REPLACE_WITH_STARTER_TOKENS",
+    "tokens_power": "https://buy.stripe.com/REPLACE_WITH_POWER_TOKENS",
+    "tokens_elite": "https://buy.stripe.com/REPLACE_WITH_ELITE_TOKENS",
+    # Customer portal (manage subscription)
+    "portal": "https://billing.stripe.com/REPLACE_WITH_PORTAL_LINK",
+}
+
 # Admin emails always get platinum access
 ADMIN_EMAILS = {"jdmeyer05@gmail.com", "local-dev@preview"}
 
@@ -325,20 +342,50 @@ def get_allowed_models() -> list:
 def render_upgrade_prompt(feature_name: str = "this feature"):
     """Render a styled upgrade prompt when a user hits a tier gate."""
     tier = get_user_tier()
-    tokens = get_token_balance()
 
     st.markdown(
         f'<div style="background:rgba(0,209,255,0.08);border:1px solid #00d1ff;'
         f'border-radius:8px;padding:20px;text-align:center;margin:20px 0;">'
         f'<h3 style="color:#00d1ff;margin:0 0 8px 0;">Upgrade Required</h3>'
-        f'<p style="color:#aaa;margin:0 0 12px 0;">'
+        f'<p style="color:#aaa;margin:0 0 16px 0;">'
         f'{feature_name} is not available on the <strong>{TIERS[tier]["name"]}</strong> plan.</p>'
-        f'<p style="color:#888;font-size:0.85rem;">'
-        f'Upgrade to <strong>Pro</strong> ($12/mo), <strong>Premium</strong> ($29/mo), '
-        f'or <strong>Platinum</strong> ($79/mo) for full access.</p>'
         f'</div>',
         unsafe_allow_html=True,
     )
+    render_pricing_cards(current_tier=tier)
+
+
+def render_pricing_cards(current_tier: str = "free"):
+    """Render subscription plan cards with Stripe checkout links."""
+    plans = [
+        {"key": "pro", "name": "Pro", "price": "$12", "period": "/mo",
+         "features": ["All 20 pages", "5 AI analyses/day", "3 AI models", "Unlimited chat (Gemini)"],
+         "color": "#00d1ff"},
+        {"key": "premium", "name": "Premium", "price": "$29", "period": "/mo",
+         "features": ["All 20 pages", "20 AI analyses/day", "3 AI models", "RL Trading", "Unlimited chat"],
+         "color": "#ffaa00"},
+        {"key": "platinum", "name": "Platinum", "price": "$79", "period": "/mo",
+         "features": ["All 20 pages", "50 AI analyses/day", "4 AI models (+GPT-5)", "RL Trading", "GPT-5 chat"],
+         "color": "#00ff96"},
+    ]
+
+    cols = st.columns(len(plans))
+    for col, plan in zip(cols, plans):
+        is_current = plan["key"] == current_tier
+        border = plan["color"] if not is_current else "#30363d"
+        with col:
+            features_html = "".join(f'<div style="color:#ccc; font-size:12px; padding:2px 0;">&#10003; {f}</div>' for f in plan["features"])
+            badge = '<div style="color:#888; font-size:10px; margin-top:4px;">CURRENT PLAN</div>' if is_current else ""
+            st.markdown(
+                f'<div style="text-align:center; padding:16px; border:1px solid {border}; border-radius:8px;">'
+                f'<div style="font-size:18px; font-weight:bold; color:{plan["color"]};">{plan["name"]}</div>'
+                f'<div style="font-size:28px; font-weight:bold; color:white; margin:8px 0;">{plan["price"]}<span style="font-size:14px; color:#888;">{plan["period"]}</span></div>'
+                f'{features_html}{badge}</div>',
+                unsafe_allow_html=True,
+            )
+            if not is_current:
+                link = STRIPE_LINKS.get(plan["key"], "#")
+                st.link_button(f"Subscribe to {plan['name']}", link, use_container_width=True)
 
 
 def render_quota_exceeded():
@@ -358,32 +405,41 @@ def render_quota_exceeded():
 
 
 def render_token_purchase():
-    """Render the token purchase UI."""
+    """Render the token purchase UI with Stripe links."""
     st.markdown("#### Buy Analysis Tokens")
     st.caption("Tokens let you run AI analyses beyond your daily included allowance. They never expire.")
 
     balance = get_token_balance()
-    st.markdown(f'<div style="text-align:center; padding:8px; border:1px solid #00d1ff; border-radius:6px; margin-bottom:12px;">'
-                f'<span style="color:#888;">Current Balance:</span> '
-                f'<span style="font-size:20px; font-weight:bold; color:#00d1ff;">{balance} tokens</span></div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="text-align:center; padding:8px; border:1px solid #00d1ff; border-radius:6px; margin-bottom:12px;">'
+        f'<span style="color:#888;">Current Balance:</span> '
+        f'<span style="font-size:20px; font-weight:bold; color:#00d1ff;">{balance} tokens</span></div>',
+        unsafe_allow_html=True,
+    )
 
     pack_cols = st.columns(len(TOKEN_PACKS))
+    stripe_keys = {"starter": "tokens_starter", "power": "tokens_power", "elite": "tokens_elite"}
     for col, (pack_id, pack) in zip(pack_cols, TOKEN_PACKS.items()):
         with col:
-            st.markdown(f"""<div style="text-align:center; padding:12px; border:1px solid #30363d; border-radius:8px;">
-                <div style="font-size:16px; font-weight:bold; color:#e0e0e0;">{pack['name']}</div>
-                <div style="font-size:28px; font-weight:bold; color:#00d1ff; margin:8px 0;">{pack['tokens']}</div>
-                <div style="color:#888; font-size:12px;">tokens</div>
-                <div style="font-size:18px; font-weight:bold; color:#00ff96; margin:8px 0;">${pack['price']:.0f}</div>
-                <div style="color:#888; font-size:11px;">${pack['per_token']:.3f}/token</div>
-            </div>""", unsafe_allow_html=True)
-            if st.button(f"Buy {pack['name']}", key=f"buy_{pack_id}", use_container_width=True):
-                # In production, this would create a Stripe Checkout Session
-                # For now, add tokens directly (dev mode)
-                add_tokens(pack['tokens'])
-                st.success(f"Added {pack['tokens']} tokens! Balance: {get_token_balance()}")
-                st.rerun()
+            st.markdown(
+                f'<div style="text-align:center; padding:12px; border:1px solid #30363d; border-radius:8px;">'
+                f'<div style="font-size:16px; font-weight:bold; color:#e0e0e0;">{pack["name"]}</div>'
+                f'<div style="font-size:28px; font-weight:bold; color:#00d1ff; margin:8px 0;">{pack["tokens"]}</div>'
+                f'<div style="color:#888; font-size:12px;">tokens</div>'
+                f'<div style="font-size:18px; font-weight:bold; color:#00ff96; margin:8px 0;">${pack["price"]:.0f}</div>'
+                f'<div style="color:#888; font-size:11px;">${pack["per_token"]:.3f}/token</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            link = STRIPE_LINKS.get(stripe_keys.get(pack_id, ""), "#")
+            if _is_local_dev():
+                # Dev mode — add tokens directly for testing
+                if st.button(f"Buy {pack['name']} (dev)", key=f"buy_{pack_id}", use_container_width=True):
+                    add_tokens(pack['tokens'])
+                    st.success(f"Added {pack['tokens']} tokens!")
+                    st.rerun()
+            else:
+                st.link_button(f"Buy {pack['name']}", link, use_container_width=True)
 
 
 def render_quota_status():
