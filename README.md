@@ -18,7 +18,7 @@ Opens at **http://localhost:8501** (or next available port).
 - **Top nav header** — brand bar with dropdown navigation, market status, tier/usage badge
 - **Scrolling market strip** — S&P 500, WTI Crude, VIX, Gold, DXY, BTC, Fed rate, Iran war escalation score
 - **Tier-based analyst chat** — Gemini Flash (Free/Pro/Premium) or GPT-5 (Platinum)
-- **Token system** — buy analysis tokens ($5/50, $15/200, $30/500) when daily limit is reached
+- **Token system** — buy analysis tokens ($8/50, $25/200, $50/500) when daily limit is reached
 - **Subscription tiers** — Free, Pro ($12), Premium ($29), Platinum ($79)
 - **Supabase auth** — login, registration, user agreement, tier management
 - **Stripe integration** — subscription billing with lookup_key tier mapping
@@ -91,6 +91,7 @@ src/
   chatbot.py              Tier-based analyst chat (Gemini Flash or GPT-5)
   gdelt_events.py         GDELT bulk event download & processing
   data_engine.py          Market data (Massive API -> yfinance fallback)
+  options_models.py       BS-Merton Jump Diffusion pricing for missing data
   eia_helpers.py           EIA API wrapper
   simulation.py           Stochastic price simulation
 pages/
@@ -121,12 +122,15 @@ LOCAL_DEV = "true"              Skip auth locally
 
 ## Stripe Setup
 
-Create 3 subscription products in Stripe Dashboard with these `lookup_key` values on their prices:
+All payment links are configured in `src/auth.py` → `STRIPE_LINKS`. Tier detection reads price metadata `tier` field, then lookup_key, then product name as fallback.
 
-| Product | Price | Lookup Key |
-|---------|-------|-----------|
-| Pro | $12/mo | `pro` or `pro_monthly` |
-| Premium | $29/mo | `premium` or `premium_monthly` |
-| Platinum | $79/mo | `platinum` or `platinum_monthly` |
+| Product | Price | Type | Metadata |
+|---------|-------|------|----------|
+| Pro | $12/mo | Recurring | `tier: pro` |
+| Premium | $29/mo | Recurring | `tier: premium` |
+| Platinum | $79/mo | Recurring | `tier: platinum` |
+| Starter Tokens (50) | $8 | One-time | — |
+| Power Tokens (200) | $25 | One-time | — |
+| Elite Tokens (500) | $50 | One-time | — |
 
-Yearly variants: `pro_yearly`, `premium_yearly`, `platinum_yearly`
+Customer portal enabled for subscription management. `STRIPE_SECRET_KEY` required in secrets.

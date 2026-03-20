@@ -97,9 +97,9 @@ Admin emails (`jdmeyer05@gmail.com`, `local-dev@preview`) always get Platinum.
 
 ### Token System (`src/auth.py`)
 When users exceed their daily included AI analyses, they can purchase token packs:
-- Starter: 50 tokens / $5 ($0.10/token)
-- Power: 200 tokens / $15 ($0.075/token)
-- Elite: 500 tokens / $30 ($0.06/token)
+- Starter: 50 tokens / $8 ($0.16/token, 56% margin)
+- Power: 200 tokens / $25 ($0.125/token, 44% margin)
+- Elite: 500 tokens / $50 ($0.10/token, 30% margin)
 
 1 token = 1 AI analysis. Tokens never expire. Free users can buy tokens to access AI without a subscription.
 `check_ai_quota()` checks daily allowance first, then token balance. `increment_ai_usage()` deducts from daily first, falls back to tokens. Token balance shown in header badge and Summary account section.
