@@ -102,13 +102,33 @@ When users exceed their daily included AI analyses, they can purchase token pack
 - Elite: 500 tokens / $50 ($0.10/token, 30% margin)
 
 1 token = 1 AI analysis. Tokens never expire. Free users can buy tokens to access AI without a subscription.
-`check_ai_quota()` checks daily allowance first, then token balance. `increment_ai_usage()` deducts from daily first, falls back to tokens. Token balance shown in header badge and Summary account section.
+- `check_ai_quota()` checks daily allowance first, then token balance
+- `increment_ai_usage()` deducts from daily first, falls back to tokens
+- Token balance persisted in Supabase `user_tokens` table (survives sessions)
+- Token balance shown in header badge and Summary account section
 
 ### Analyst Chat (`src/chatbot.py`)
 Tier-based sidebar chat. Free/Pro/Premium use Gemini Flash. Platinum uses GPT-5. Configured in `CHAT_TIERS` dict.
 
 ### Stripe Integration
-`verify_subscription()` reads `lookup_key` from active Stripe subscription price → maps via `STRIPE_TIER_MAP` → stores tier in Supabase. Supports monthly/yearly variants (`pro_monthly`, `premium_yearly`, etc.).
+- `verify_subscription()` checks price metadata `tier` → lookup_key → product name
+- `get_user_tier()` checks: admin list → session cache → Supabase (webhook) → Stripe API → free
+- Payment links configured in `STRIPE_LINKS` dict (all plans + token packs + portal)
+- `check_payment_failures()` shows red banner when payment fails
+
+### Webhook Server (`webhook_server.py`)
+Flask server (port 5000) handling Stripe webhook events:
+- `checkout.session.completed` → activates subscription tier or adds tokens
+- `customer.subscription.updated` → tier upgrade/downgrade
+- `customer.subscription.deleted` → reverts to free
+- `invoice.payment_failed` → flags in Supabase, shows banner to user
+
+Run: `python webhook_server.py` (separate from Streamlit)
+
+### Supabase Tables
+- `subscriptions` — email, plan_type, status, stripe_customer_id, stripe_price_id, updated_at
+- `user_tokens` — email, balance, updated_at
+- `payment_failures` — email, invoice_id, failed_at, resolved
 
 ---
 

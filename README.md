@@ -83,8 +83,9 @@ Opens at **http://localhost:8501** (or next available port).
 
 ```
 app.py                    Entry point (login + user agreement)
+webhook_server.py         Stripe webhook handler (Flask, port 5000)
 src/
-  auth.py                 Supabase auth, tier system (Free/Pro/Premium/Platinum), Stripe mapping, page gating
+  auth.py                 Supabase auth, tier system, token system, Stripe mapping, page gating
   layout.py               setup_page(), header bar, nav dropdowns, market ticker strip
   styles.py               Global CSS, 5-layer background, responsive breakpoints, color system
   ticker_tape.py          Market data feed (^GSPC, CL=F, GC=F, ^VIX, etc.)
@@ -92,7 +93,7 @@ src/
   gdelt_events.py         GDELT bulk event download & processing
   data_engine.py          Market data (Massive API -> yfinance fallback)
   options_models.py       BS-Merton Jump Diffusion pricing for missing data
-  eia_helpers.py           EIA API wrapper
+  eia_helpers.py          EIA API wrapper
   simulation.py           Stochastic price simulation
 pages/
   01-20                   All application pages
@@ -100,13 +101,24 @@ data/
   gdelt_events/           Cached GDELT daily event files (gitignored)
 ```
 
+## Running
+
+```bash
+# Streamlit app
+python -m streamlit run app.py
+
+# Webhook server (separate terminal)
+python webhook_server.py
+```
+
 ## Environment Setup
 
-All API keys in `.streamlit/secrets.toml` (gitignored):
+All keys in `.streamlit/secrets.toml` (gitignored):
 
 ```
 SUPABASE_URL, SUPABASE_KEY     Auth & database
-STRIPE_SECRET_KEY               Stripe billing
+STRIPE_SECRET_KEY               Stripe billing (sk_live_ or sk_test_)
+STRIPE_WEBHOOK_SECRET           Webhook signature verification
 OPENAI_API_KEY                  GPT-5
 GROK_API_KEY                    Grok 3 (xAI)
 GEMINI_API_KEY                  Gemini 2.5 Flash + 3 Pro
@@ -122,7 +134,7 @@ LOCAL_DEV = "true"              Skip auth locally
 
 ## Stripe Setup
 
-All payment links are configured in `src/auth.py` → `STRIPE_LINKS`. Tier detection reads price metadata `tier` field, then lookup_key, then product name as fallback.
+Payment links in `src/auth.py` → `STRIPE_LINKS`. Tier detection: price metadata `tier` → lookup_key → product name.
 
 | Product | Price | Type | Metadata |
 |---------|-------|------|----------|
@@ -133,4 +145,9 @@ All payment links are configured in `src/auth.py` → `STRIPE_LINKS`. Tier detec
 | Power Tokens (200) | $25 | One-time | — |
 | Elite Tokens (500) | $50 | One-time | — |
 
-Customer portal enabled for subscription management. `STRIPE_SECRET_KEY` required in secrets.
+**Webhook setup:** dashboard.stripe.com/webhooks → add endpoint `/stripe/webhook` → select events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed` → copy signing secret to `STRIPE_WEBHOOK_SECRET`.
+
+**Supabase tables required:**
+- `subscriptions` — email, plan_type, status, stripe_customer_id, stripe_price_id, updated_at
+- `user_tokens` — email, balance, updated_at
+- `payment_failures` — email, invoice_id, failed_at, resolved
