@@ -23,6 +23,24 @@ tier_config = get_tier_config(tier)
 st.title("🎯 Summary")
 st.caption(f"Welcome back, **{user_email}**")
 
+# ── Post-checkout confirmation ──
+query_params = st.query_params
+if query_params.get("checkout") == "success":
+    plan = query_params.get("plan", "")
+    if plan:
+        st.success(f"Welcome to **{plan.title()}**! Your subscription is now active. Refresh the page to unlock your new features.")
+    else:
+        st.success("Payment successful! Your account has been updated.")
+    # Clear the query params
+    st.query_params.clear()
+elif query_params.get("checkout") == "tokens":
+    st.success("Tokens purchased! Your balance has been updated.")
+    st.query_params.clear()
+
+# ── Payment failure check ──
+from src.auth import check_payment_failures
+check_payment_failures()
+
 
 # ═══════════════════════════════════════════════
 # DATA FETCHING

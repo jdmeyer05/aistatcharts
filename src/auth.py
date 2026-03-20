@@ -231,7 +231,8 @@ def verify_subscription(email: str, user_id: str) -> str:
 
 
 def get_user_tier() -> str:
-    """Get the current user's subscription tier. Checks admin list, then Stripe, then defaults to free."""
+    """Get the current user's subscription tier.
+    Priority: admin list → session cache → Supabase (set by webhook) → Stripe API → free."""
     email = st.session_state.get("user_email", "")
 
     # Admin override
@@ -242,7 +243,20 @@ def get_user_tier() -> str:
     if "user_tier" in st.session_state:
         return st.session_state["user_tier"]
 
-    # Check Stripe
+    # Check Supabase first (updated by webhook in real-time)
+    supabase = init_supabase()
+    if supabase and email:
+        try:
+            result = supabase.table("subscriptions").select("plan_type").eq("email", email).eq("status", "active").execute()
+            if result.data:
+                tier = result.data[0]["plan_type"]
+                if tier in TIERS:
+                    st.session_state["user_tier"] = tier
+                    return tier
+        except Exception:
+            pass
+
+    # Fallback: check Stripe API directly
     tier = verify_subscription(email, email)
     st.session_state["user_tier"] = tier
     return tier
@@ -277,7 +291,22 @@ def get_daily_limit() -> int:
 
 
 def get_token_balance() -> int:
-    """Get the user's purchased token balance."""
+    """Get the user's purchased token balance. Loads from Supabase on first call."""
+    if "token_balance" not in st.session_state:
+        # Try loading from Supabase
+        email = st.session_state.get("user_email", "")
+        supabase = init_supabase()
+        if supabase and email:
+            try:
+                result = supabase.table("user_tokens").select("balance").eq("email", email).execute()
+                if result.data:
+                    st.session_state["token_balance"] = result.data[0]["balance"]
+                else:
+                    st.session_state["token_balance"] = 0
+            except Exception:
+                st.session_state["token_balance"] = 0
+        else:
+            st.session_state["token_balance"] = 0
     return st.session_state.get("token_balance", 0)
 
 
@@ -313,19 +342,42 @@ def increment_ai_usage():
     limit = TIERS.get(tier, TIERS["free"])["daily_ai_analyses"]
 
     if used < limit:
-        # Still within daily included allowance
         st.session_state[key] = used + 1
     else:
-        # Deduct from token balance
+        # Deduct from token balance and persist
         balance = get_token_balance()
         if balance > 0:
-            st.session_state["token_balance"] = balance - 1
+            new_balance = balance - 1
+            st.session_state["token_balance"] = new_balance
+            email = st.session_state.get("user_email", "")
+            supabase = init_supabase()
+            if supabase and email:
+                try:
+                    supabase.table("user_tokens").upsert({
+                        "email": email,
+                        "balance": new_balance,
+                    }, on_conflict="email").execute()
+                except Exception:
+                    pass
 
 
 def add_tokens(amount: int):
-    """Add purchased tokens to the user's balance."""
+    """Add purchased tokens to the user's balance. Persists to Supabase."""
     current = get_token_balance()
-    st.session_state["token_balance"] = current + amount
+    new_balance = current + amount
+    st.session_state["token_balance"] = new_balance
+
+    # Persist to Supabase
+    email = st.session_state.get("user_email", "")
+    supabase = init_supabase()
+    if supabase and email:
+        try:
+            supabase.table("user_tokens").upsert({
+                "email": email,
+                "balance": new_balance,
+            }, on_conflict="email").execute()
+        except Exception as e:
+            logger.warning(f"Failed to persist token balance: {e}")
 
 
 def get_usage_summary() -> dict:
@@ -458,6 +510,30 @@ def render_token_purchase():
                     st.rerun()
             else:
                 st.link_button(f"Buy {pack['name']}", link, use_container_width=True)
+
+
+def check_payment_failures() -> bool:
+    """Check if the user has unresolved payment failures. Returns True if there's a problem."""
+    email = st.session_state.get("user_email", "")
+    supabase = init_supabase()
+    if not supabase or not email:
+        return False
+    try:
+        result = supabase.table("payment_failures").select("*").eq("email", email).eq("resolved", False).execute()
+        if result.data:
+            st.markdown(
+                '<div style="background:rgba(255,68,68,0.1);border:1px solid #ff4444;'
+                'border-radius:8px;padding:12px;text-align:center;margin:8px 0;">'
+                '<span style="color:#ff4444;font-weight:bold;">Payment Failed</span> — '
+                'Your last payment could not be processed. Please update your payment method to avoid losing access. '
+                f'<a href="{STRIPE_LINKS.get("portal", "#")}" target="_blank" style="color:#00d1ff;">Update Payment</a>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def render_quota_status():
