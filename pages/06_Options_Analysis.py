@@ -28,6 +28,10 @@ with st.sidebar:
     submit = st.button("Fetch Chain Data", type="primary", use_container_width=True)
 
 # ── Fetch & Store ──
+# Auto-load SPY on first visit
+if 'options_df' not in st.session_state:
+    submit = True
+
 if submit:
     all_expirations = get_expiration_dates(ticker)
     today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
@@ -41,11 +45,11 @@ if submit:
         px_df = fetch_massive_data(ticker, 5)
         current_px = float(px_df['Close'].iloc[-1]) if px_df is not None and not px_df.empty else None
 
-        # Fetch all available expirations (up to 8)
+        # Pre-fetch nearest 8 expirations for surface/term structure
         term_data = {}
-        fetch_exps = expirations[:8]
+        prefetch_exps = expirations[:8]
         progress = st.progress(0, text="Loading options chain...")
-        for i, texp in enumerate(fetch_exps):
+        for i, texp in enumerate(prefetch_exps):
             try:
                 tdf = fetch_options_chain(ticker, texp)
                 if tdf is not None and not tdf.empty:
@@ -54,17 +58,17 @@ if submit:
                     term_data[texp] = tdf
             except Exception:
                 pass
-            progress.progress((i + 1) / len(fetch_exps), text=f"Loading {texp}...")
+            progress.progress((i + 1) / len(prefetch_exps), text=f"Loading {texp}...")
         progress.empty()
 
         if term_data:
-            # Use first expiration as default
             first_exp = list(term_data.keys())[0]
             st.session_state['options_df'] = term_data[first_exp]
             st.session_state['options_current_px'] = current_px
             st.session_state['options_ticker'] = ticker
             st.session_state['options_exp'] = first_exp
-            st.session_state['options_expirations'] = list(term_data.keys())
+            # ALL expirations available for selection, not just pre-fetched
+            st.session_state['options_expirations'] = expirations
             st.session_state['options_strike_range'] = strike_range
             st.session_state['options_term_data'] = term_data
             st.session_state['shared_options_ticker'] = ticker
@@ -83,10 +87,29 @@ ticker_display = st.session_state['options_ticker']
 available_exps = st.session_state.get('options_expirations', [])
 x_range_pct = st.session_state.get('options_strike_range', 15) / 100
 
-# Helper: get chain for a specific expiration (used by per-tab selectors)
+# Helper: get chain for a specific expiration — fetches on-demand if not pre-loaded
 def _get_chain_for_exp(exp_key):
     term_data = st.session_state.get('options_term_data', {})
-    return term_data.get(exp_key, st.session_state.get('options_df', pd.DataFrame()))
+    if exp_key in term_data:
+        return term_data[exp_key]
+
+    # Not pre-loaded — fetch on demand
+    ticker = st.session_state.get('options_ticker', '')
+    spot = st.session_state.get('options_current_px')
+    if ticker and exp_key:
+        try:
+            tdf = fetch_options_chain(ticker, exp_key)
+            if tdf is not None and not tdf.empty:
+                if spot:
+                    tdf = fill_missing_options_data(tdf, spot)
+                # Cache it so we don't re-fetch
+                term_data[exp_key] = tdf
+                st.session_state['options_term_data'] = term_data
+                return tdf
+        except Exception:
+            pass
+
+    return st.session_state.get('options_df', pd.DataFrame())
 
 # Default expiration and filtered data
 exp_display = st.session_state['options_exp']
