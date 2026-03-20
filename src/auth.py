@@ -68,9 +68,9 @@ STRIPE_LINKS = {
     "premium": "https://buy.stripe.com/eVq4gs3kM45G32G0hLasg01",
     "platinum": "https://buy.stripe.com/5kQ7sEf3u0TueLo4y1asg02",
     # Token packs
-    "tokens_starter": "https://buy.stripe.com/REPLACE_WITH_STARTER_TOKENS",
-    "tokens_power": "https://buy.stripe.com/REPLACE_WITH_POWER_TOKENS",
-    "tokens_elite": "https://buy.stripe.com/REPLACE_WITH_ELITE_TOKENS",
+    "tokens_starter": "https://buy.stripe.com/fZu4gs8F67hS8n07Kdasg05",
+    "tokens_power": "https://buy.stripe.com/bJedR27B2au49r49Slasg04",
+    "tokens_elite": "https://buy.stripe.com/7sY8wI8F6au4gTw8Ohasg03",
     # Customer portal (manage subscription)
     "portal": "https://billing.stripe.com/p/login/dRm8wIcVmdGgbzcaWpasg00",
 }
