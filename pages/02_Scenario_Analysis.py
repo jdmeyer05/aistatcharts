@@ -16,7 +16,7 @@ from src.auth import check_auth
 
 logger = logging.getLogger(__name__)
 
-from src.layout import setup_page
+from src.layout import setup_page, page_error_boundary, fun_loader
 setup_page("02_Scenario_Analysis")
 
 st.title("🔮 Scenario Analysis Engine")
@@ -34,7 +34,12 @@ with st.sidebar:
     horizon_label = st.selectbox("Scenario Horizon", ["3 Months", "6 Months", "12 Months"], index=2)
     horizon_map = {"3 Months": 63, "6 Months": 126, "12 Months": 252}
     horizon_days = horizon_map[horizon_label]
-    run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
+    _scenario_running = st.session_state.get("_scenario_running", False)
+    run_btn = st.button(
+        "Running..." if _scenario_running else "🚀 Run Analysis",
+        type="primary", use_container_width=True,
+        disabled=_scenario_running,
+    )
 
 # ─────────────────────────────────────────────
 # FRED HELPER
@@ -1083,6 +1088,7 @@ def load_portfolio(tickers, days):
 # Auto-load on first visit or when button clicked
 needs_load = run_btn or 'scenario_data' not in st.session_state
 if needs_load:
+    st.session_state["_scenario_running"] = True
     all_data, failed = load_portfolio(ticker_list, lookback)
     if failed:
         st.warning(f"Could not load: {', '.join(failed)}")
@@ -1095,6 +1101,7 @@ if needs_load:
     st.session_state.scenario_returns = daily_returns
     st.session_state.scenario_tickers = list(all_data.keys())
     st.session_state.scenario_value = portfolio_value
+    st.session_state["_scenario_running"] = False
 
 if 'scenario_data' in st.session_state:
     portfolio_df = st.session_state.scenario_data
@@ -1507,7 +1514,7 @@ if 'scenario_data' in st.session_state:
     # ═══════════════════════════════════════════
     driver_data = {}
     if fred_key:
-        with st.spinner("Loading economic drivers from FRED..."):
+        with fun_loader("data"):
             for sid, info in FED_DRIVERS.items():
                 df = fetch_fred_series(fred_key, sid, limit=60)
                 if not df.empty:
@@ -1527,14 +1534,17 @@ if 'scenario_data' in st.session_state:
                 corr_matrices = compute_stressed_correlations(daily_returns, factor_changes)
 
     # ═══════════════════════════════════════════
-    # TAB 5: FED & MACRO DRIVERS
+    # TAB 5: FED & MACRO DRIVERS (now a separate page)
     # ═══════════════════════════════════════════
     with tab5:
-        st.subheader("Fed Decision Drivers — Live Economic Dashboard")
-        st.caption("The key economic indicators the Federal Reserve watches most closely when setting monetary policy.")
+        st.subheader("Fed & Macro Drivers")
+        st.markdown("This section has been expanded into its own dedicated page with more detail and better layout.")
+        if st.button("Open Fed & Macro Drivers", type="primary", use_container_width=True, key="goto_fed_macro"):
+            st.switch_page("pages/21_Fed_Macro_Drivers.py")
 
+        # Still show the scorecard summary inline for quick reference
         if not fred_key:
-            st.warning("FRED API key not configured. Add FRED_API_KEY to your secrets.")
+            st.warning("FRED API key not configured.")
         elif driver_data:
             # ── Fed Dual Mandate Scorecard ──
             st.markdown("### Fed Dual Mandate Scorecard")
@@ -1577,385 +1587,15 @@ if 'scenario_data' in st.session_state:
                 nfp_change = df_nfp.iloc[-1]["value"] - df_nfp.iloc[-2]["value"]
                 sc5.metric("NFP Change (MoM)", f"{nfp_change:+,.0f}K jobs")
 
-            st.divider()
-
-            # ── Fed Signal Matrix ──
-            st.markdown("### Policy Signal Matrix")
-            st.caption("Where each indicator stands relative to thresholds that influence Fed hawkishness vs dovishness")
-
-            signal_rows = []
-            for sid, info in FED_DRIVERS.items():
-                if sid not in driver_data or driver_data[sid].empty:
-                    continue
-                df_d = driver_data[sid]
-                latest = df_d.iloc[-1]["value"]
-                prev = df_d.iloc[-2]["value"] if len(df_d) > 1 else latest
-                change = latest - prev
-
-                # Calculate YoY for index-type series
-                # For inflation, the signal depends on whether the YoY RATE is
-                # accelerating or decelerating, not whether the index level rose.
-                yoy = None
-                prev_yoy = None
-                if info["yoy"] and len(df_d) >= 13:
-                    yoy = ((df_d.iloc[-1]["value"] / df_d.iloc[-13]["value"]) - 1) * 100
-                    display_val = f"{yoy:.1f}% YoY"
-                    if len(df_d) >= 14:
-                        prev_yoy = ((df_d.iloc[-2]["value"] / df_d.iloc[-14]["value"]) - 1) * 100
-                elif info["unit"] == "%":
-                    display_val = f"{latest:.2f}%"
-                elif info["unit"] in ("K", "$M", "$B"):
-                    display_val = f"{latest:,.0f} {info['unit']}"
-                else:
-                    display_val = f"{latest:,.1f}"
-
-                # Determine signal direction based on what matters for Fed policy
-                if sid in ("CPIAUCSL", "PCEPILFE"):
-                    # Inflation: signal based on YoY rate direction, not index level
-                    if yoy is not None and prev_yoy is not None:
-                        signal = "Dovish" if yoy < prev_yoy else "Hawkish" if yoy > prev_yoy else "Neutral"
-                        change_display = f"{yoy - prev_yoy:+.2f}pp"
-                    else:
-                        signal = "Neutral"
-                        change_display = "N/A"
-                elif sid in ("RSAFS", "GDP", "INDPRO"):
-                    # Growth series: signal based on YoY rate acceleration
-                    if yoy is not None and prev_yoy is not None:
-                        signal = "Hawkish" if yoy > prev_yoy else "Dovish" if yoy < prev_yoy else "Neutral"
-                        change_display = f"{yoy - prev_yoy:+.2f}pp"
-                    else:
-                        signal = "Hawkish" if change > 0 else "Dovish"
-                        change_display = f"{change:+.2f}" if abs(change) < 100 else f"{change:+,.0f}"
-                elif sid in ("UNRATE",):
-                    # Rising unemployment = labor market weakening = dovish
-                    signal = "Dovish" if change > 0 else "Hawkish" if change < 0 else "Neutral"
-                    change_display = f"{change:+.1f}pp"
-                elif sid == "ICSA":
-                    # Rising claims = labor market weakening = dovish
-                    signal = "Dovish" if change > 0 else "Hawkish" if change < 0 else "Neutral"
-                    change_display = f"{change:+,.0f}"
-                elif sid == "PAYEMS":
-                    # NFP: the month-over-month change IS the key figure
-                    # Strong job gains = tight labor market = hawkish
-                    nfp_change = change  # already MoM change in thousands
-                    signal = "Hawkish" if nfp_change > 150 else "Dovish" if nfp_change < 100 else "Neutral"
-                    change_display = f"{nfp_change:+,.0f}K"
-                elif sid == "FEDFUNDS":
-                    signal = "Neutral"
-                    change_display = f"{change:+.2f}%"
-                elif sid == "UMCSENT":
-                    signal = "Hawkish" if change > 0 else "Dovish" if change < 0 else "Neutral"
-                    change_display = f"{change:+.1f}"
-                elif sid in ("DGS10", "DGS2"):
-                    signal = "Tightening" if change > 0 else "Easing" if change < 0 else "Neutral"
-                    change_display = f"{change:+.2f}%"
-                elif sid == "T10Y2Y":
-                    signal = "Recession Risk" if latest < 0 else "Normal"
-                    change_display = f"{change:+.2f}%"
-                elif sid == "HOUST":
-                    signal = "Hawkish" if change > 0 else "Dovish" if change < 0 else "Neutral"
-                    change_display = f"{change:+,.0f}K"
-                elif sid == "DTWEXBGS":
-                    # Stronger dollar = tighter financial conditions
-                    signal = "Tightening" if change > 0 else "Easing" if change < 0 else "Neutral"
-                    change_display = f"{change:+.1f}"
-                else:
-                    signal = "Neutral"
-                    change_display = f"{change:+.2f}" if abs(change) < 100 else f"{change:+,.0f}"
-
-                signal_rows.append({
-                    "Indicator": info["name"],
-                    "Category": info["category"],
-                    "Current": display_val,
-                    "Change": change_display,
-                    "Signal": signal,
-                    "Fed Weight": info["fed_weight"],
-                })
-
-            signal_df = pd.DataFrame(signal_rows)
-            st.dataframe(signal_df, use_container_width=True, hide_index=True)
-
-            # Count signals
-            dovish = sum(1 for r in signal_rows if r["Signal"] == "Dovish" or r["Signal"] == "Easing")
-            hawkish = sum(1 for r in signal_rows if r["Signal"] == "Hawkish" or r["Signal"] == "Tightening")
-            neutral = len(signal_rows) - dovish - hawkish
-
-            sg1, sg2, sg3 = st.columns(3)
-            sg1.metric("Dovish Signals", dovish)
-            sg2.metric("Hawkish Signals", hawkish)
-            sg3.metric("Neutral / Other", neutral)
-
-            if dovish > hawkish:
-                st.success(f"Net signal: **Dovish** ({dovish} vs {hawkish}) — Favors rate cuts")
-            elif hawkish > dovish:
-                st.error(f"Net signal: **Hawkish** ({hawkish} vs {dovish}) — Favors holding or hiking")
-            else:
-                st.info(f"Net signal: **Balanced** ({dovish} dovish, {hawkish} hawkish) — Fed likely on hold")
-
-            st.divider()
-
-            # ── Driver Sparkline Cards ──
-            st.markdown("### Driver Trend Charts")
-            st.caption("White dotted line = trimmed mean (middle 95% of data, excluding outliers)")
-            categories = sorted(set(info["category"] for info in FED_DRIVERS.values()))
-            selected_cats = st.multiselect("Filter by category", categories, default=categories, key="driver_cats")
-
-            filtered_drivers = {sid: info for sid, info in FED_DRIVERS.items()
-                               if info["category"] in selected_cats and sid in driver_data}
-
-            # Build sparkline cards — 4 per row, click to expand
-            driver_items = list(filtered_drivers.items())
-            for row_start in range(0, len(driver_items), 4):
-                cols = st.columns(4)
-                for idx, col in enumerate(cols):
-                    i = row_start + idx
-                    if i >= len(driver_items):
-                        break
-                    sid, info = driver_items[i]
-                    df_d = driver_data[sid]
-                    latest = df_d.iloc[-1]["value"]
-                    prev = df_d.iloc[-2]["value"] if len(df_d) > 1 else latest
-                    change = latest - prev
-
-                    # Compute display value
-                    if info["yoy"] and len(df_d) >= 13:
-                        yoy = ((df_d.iloc[-1]["value"] / df_d.iloc[-13]["value"]) - 1) * 100
-                        display_val = f"{yoy:.1f}%"
-                        change_str = f"{change:+.2f}"
-                    elif info["unit"] == "%":
-                        display_val = f"{latest:.2f}%"
-                        change_str = f"{change:+.2f}%"
-                    elif sid == "PAYEMS":
-                        display_val = f"{change:+,.0f}K"
-                        change_str = ""
-                    elif sid == "ICSA":
-                        display_val = f"{latest:,.0f}"
-                        change_str = f"{change:+,.0f}"
-                    else:
-                        display_val = f"{latest:,.1f}"
-                        change_str = f"{change:+.1f}"
-
-                    with col:
-                        # Sparkline mini chart
-                        fig_spark = go.Figure()
-                        if info["yoy"] and len(df_d) >= 13:
-                            y_data = ((df_d["value"] / df_d["value"].shift(12) - 1) * 100).iloc[12:]
-                            x_data = df_d["date"].iloc[12:]
-                        else:
-                            y_data = df_d["value"]
-                            x_data = df_d["date"]
-
-                        fig_spark.add_trace(go.Scatter(
-                            x=x_data, y=y_data,
-                            mode="lines", line=dict(color=info["color"], width=1.5),
-                            hoverinfo="skip",
-                        ))
-
-                        # Trimmed mean line (exclude top/bottom 2.5% outliers)
-                        y_clean = y_data.dropna()
-                        if len(y_clean) > 10:
-                            p_lo = np.percentile(y_clean, 2.5)
-                            p_hi = np.percentile(y_clean, 97.5)
-                            trimmed = y_clean[(y_clean >= p_lo) & (y_clean <= p_hi)]
-                            if len(trimmed) > 0:
-                                trimmed_mean = trimmed.mean()
-                                fig_spark.add_hline(
-                                    y=trimmed_mean, line_dash="dot",
-                                    line_color="rgba(255,255,255,0.4)", line_width=1,
-                                )
-
-                        fig_spark.update_layout(
-                            template="plotly_dark", height=80,
-                            margin=dict(t=0, b=0, l=0, r=0),
-                            xaxis=dict(visible=False), yaxis=dict(visible=False),
-                            showlegend=False,
-                        )
-                        st.markdown(f"**{info['name']}**")
-                        st.caption(f"{display_val} {change_str}")
-                        st.plotly_chart(fig_spark, use_container_width=True, key=f"spark_{sid}")
-
-
-            # ── FOMC Dot Plot ──
-            st.divider()
-            st.markdown("### FOMC Dot Plot — Federal Funds Rate Projections")
-            st.caption("Individual FOMC participant projections for the federal funds rate. "
-                       "Source: Federal Reserve Summary of Economic Projections, March 18, 2026.")
-
-            # March 2026 dot plot data (from federalreserve.gov/monetarypolicy/fomcprojtabl20260318.htm)
-            mar26_dots = {
-                "2026": {3.625: 7, 3.375: 7, 3.125: 2, 2.875: 2, 2.625: 1},
-                "2027": {3.875: 1, 3.625: 3, 3.375: 4, 3.125: 6, 2.875: 3, 2.625: 1, 2.375: 1},
-                "2028": {3.875: 1, 3.625: 3, 3.375: 3, 3.125: 7, 2.875: 3, 2.625: 2},
-                "Longer Run": {3.875: 1, 3.750: 1, 3.625: 1, 3.500: 1, 3.375: 2, 3.250: 1,
-                               3.125: 3, 3.000: 5, 2.875: 2, 2.625: 2},
-            }
-
-            # December 2025 dot plot for comparison
-            dec25_dots = {
-                "2026": {3.875: 4, 3.625: 4, 3.375: 4, 3.125: 2, 2.875: 1, 2.625: 0, 2.375: 0, 2.125: 1, 4.000: 3},
-                "2027": {3.875: 2, 3.625: 2, 3.375: 6, 3.125: 3, 2.875: 2, 2.625: 1, 2.375: 0, 4.000: 2},
-                "2028": {3.875: 2, 3.625: 2, 3.375: 2, 3.125: 3, 2.875: 4, 2.625: 0, 4.000: 2},
-                "Longer Run": {3.875: 2, 3.625: 3, 3.375: 3, 3.125: 6, 2.875: 4, 2.625: 0, 4.000: 1},
-            }
-
-            # Medians
-            mar26_medians = {"2026": 3.4, "2027": 3.1, "2028": 3.125, "Longer Run": 3.0}
-            dec25_medians = {"2026": 3.4, "2027": 3.1, "2028": 3.0, "Longer Run": 3.0}
-
-            # Build the dot plot
-            fig_dots = go.Figure()
-            periods = ["2026", "2027", "2028", "Longer Run"]
-
-            for period in periods:
-                # March 2026 dots
-                dots = mar26_dots[period]
-                for rate, count in dots.items():
-                    if count == 0:
-                        continue
-                    # Spread multiple dots horizontally so they don't overlap
-                    for i in range(count):
-                        x_offset = (i - (count - 1) / 2) * 0.03
-                        fig_dots.add_trace(go.Scatter(
-                            x=[periods.index(period) + x_offset],
-                            y=[rate],
-                            mode="markers",
-                            marker=dict(size=10, color="#00d1ff", symbol="circle",
-                                       line=dict(width=1, color="#005577")),
-                            showlegend=False,
-                            hovertemplate=f"<b>Mar 2026</b><br>{period}: {rate:.3f}%<extra></extra>",
-                        ))
-
-                # December 2025 dots (dimmed for comparison)
-                dec_dots = dec25_dots.get(period, {})
-                for rate, count in dec_dots.items():
-                    if count == 0:
-                        continue
-                    for i in range(count):
-                        x_offset = (i - (count - 1) / 2) * 0.03
-                        fig_dots.add_trace(go.Scatter(
-                            x=[periods.index(period) + x_offset],
-                            y=[rate],
-                            mode="markers",
-                            marker=dict(size=7, color="rgba(255,170,0,0.4)", symbol="circle"),
-                            showlegend=False,
-                            hovertemplate=f"<b>Dec 2025</b><br>{period}: {rate:.3f}%<extra></extra>",
-                        ))
-
-            # Median lines
-            fig_dots.add_trace(go.Scatter(
-                x=list(range(len(periods))),
-                y=[mar26_medians[p] for p in periods],
-                mode="lines+markers", name="Mar 2026 Median",
-                line=dict(color="#00d1ff", width=2, dash="dash"),
-                marker=dict(size=8, symbol="diamond"),
-            ))
-            fig_dots.add_trace(go.Scatter(
-                x=list(range(len(periods))),
-                y=[dec25_medians[p] for p in periods],
-                mode="lines+markers", name="Dec 2025 Median",
-                line=dict(color="#ffaa00", width=1.5, dash="dot"),
-                marker=dict(size=6, symbol="diamond"),
-            ))
-
-            # Current rate line
-            fig_dots.add_hline(y=3.625, line_dash="solid", line_color="rgba(255,255,255,0.3)",
-                              annotation_text="Current: 3.50-3.75%", annotation_font_size=10,
-                              annotation_position="bottom right")
-
-            fig_dots.update_layout(
-                template="plotly_dark", height=500,
-                margin=dict(t=30, b=40, l=0, r=0),
-                xaxis=dict(tickvals=list(range(len(periods))), ticktext=periods, title=""),
-                yaxis=dict(title="Federal Funds Rate (%)", dtick=0.25,
-                          range=[2.0, 4.25]),
-                hovermode="closest",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            )
-            st.plotly_chart(fig_dots, use_container_width=True)
-
-            st.caption("Cyan dots = March 2026 | Faded orange dots = December 2025 | "
-                       "Diamonds = median projection")
-
-            # ── Summary of Economic Projections ──
-            st.markdown("### Summary of Economic Projections (March 2026)")
-
-            sep_data = {
-                "": ["2026", "2027", "2028", "Longer Run"],
-                "GDP Growth": ["2.4%", "2.3%", "2.1%", "2.0%"],
-                "Unemployment": ["4.4%", "4.3%", "4.2%", "4.2%"],
-                "PCE Inflation": ["2.7%", "2.2%", "2.0%", "2.0%"],
-                "Core PCE": ["2.7%", "2.2%", "2.0%", "—"],
-                "Fed Funds (Median)": ["3.4%", "3.1%", "3.1%", "3.0%"],
-            }
-            sep_df = pd.DataFrame(sep_data).set_index("")
-            st.dataframe(sep_df, use_container_width=True)
-
-            st.caption("Key shift from December: Inflation projection raised to 2.7% (from 2.5%) "
-                       "reflecting Iran oil shock. More members now see 0-1 cuts in 2026 (14 of 19) "
-                       "vs December (7 of 19). Hawkish tilt despite weakening labor market.")
-
-            # ── Polymarket Prediction Odds ──
-            st.divider()
-            st.markdown("### Prediction Market Odds (Polymarket)")
-            st.caption("Live real-money betting odds on macro outcomes. These represent crowd consensus probabilities.")
-
-            pm_data = fetch_polymarket_data()
-            if pm_data:
-                pm_cols = st.columns(min(len(pm_data), 4))
-                for idx, item in enumerate(pm_data):
-                    col = pm_cols[idx % len(pm_cols)]
-                    with col:
-                        # Color code: red if bearish signal, green if bullish
-                        st.markdown(f"**{item['question'][:50]}{'...' if len(item['question']) > 50 else ''}**")
-                        st.metric("Yes", f"{item['yes_prob']}%", help=item['question'])
-            else:
-                st.info("Polymarket data unavailable.")
-
-            # ── StockTwits Retail Sentiment ──
-            st.divider()
-            st.markdown("### Retail Sentiment (StockTwits)")
-            st.caption("Bull/bear ratio from the last 30 posts per symbol. Useful as a contrarian indicator.")
-
-            st_data = fetch_stocktwits_sentiment()
-            if st_data:
-                st_cols = st.columns(min(len(st_data), 4))
-                for idx, item in enumerate(st_data):
-                    col = st_cols[idx % len(st_cols)]
-                    with col:
-                        signal_color = "green" if item["signal"] == "Bullish" else "red" if item["signal"] == "Bearish" else "gray"
-                        delta = f"{item['bullish']}B / {item['bearish']}Be"
-                        st.metric(item["symbol"], f"{item['bull_ratio']:.0f}% Bull", delta,
-                                 delta_color="normal" if item["signal"] == "Bullish" else "inverse")
-            else:
-                st.info("StockTwits data unavailable.")
-
-            # ── Fed Reaction Function ──
-            st.divider()
-            st.markdown("### Fed Reaction Function")
-            st.caption("Simplified model of how the Fed weighs these drivers")
-
-            st.markdown("""
-| Priority | Driver | Hawkish Threshold | Dovish Threshold | Fed Rationale |
-|----------|--------|-------------------|------------------|---------------|
-| **1** | Core PCE (YoY) | > 2.5% or accelerating | < 2.0% or decelerating | Primary inflation gauge; Fed's stated 2% target |
-| **2** | Unemployment Rate | < 4.0% (tight labor) | > 4.5% or rising fast | Dual mandate; NAIRU estimated ~4.0-4.2% |
-| **3** | NFP (MoM change) | > 200K (strong hiring) | < 100K (weakening) | Labor market momentum; breakeven ~100-150K |
-| **4** | Initial Claims | < 200K (tight) | > 300K or rising trend | Leading indicator; weekly frequency = early signal |
-| **5** | 2s10s Spread | N/A | Inverted (< 0) | Historically precedes recessions by 6-18 months |
-| **6** | Real GDP (YoY) | > 3.0% (overheating) | < 1.0% (stalling) | Overall growth trajectory |
-| **7** | Retail Sales (YoY) | Strong growth = demand-pull inflation | Declining = weakening consumer | ~70% of GDP is consumption |
-| **8** | Consumer Sentiment | Rising = durable demand | Falling sharply = recession risk | Forward-looking demand expectations |
-            """)
-
-            st.divider()
-            st.caption(
-                "**Data Note:** Live indicators are sourced from FRED (Federal Reserve Economic Data). "
-                "Signal classifications are simplified heuristics — the Fed weighs these drivers holistically, "
-                "not mechanically. Historical stress test drawdowns are based on actual peak-to-trough market data. "
-                "Macro regime scenarios and asset return estimates are illustrative models, not forecasts."
-            )
+            st.caption("Full signal matrix, trend charts, dot plot, and projections available on the dedicated page.")
 
     # ═══════════════════════════════════════════
+    # (removed: signal matrix, sparklines, dot plot, SEP, polymarket, stocktwits, reaction function
+    #  — all moved to pages/21_Fed_Macro_Drivers.py)
+    _fed_tab_placeholder = None
+    if False:
+        pass  # old tab5 content removed — now in pages/21_Fed_Macro_Drivers.py
+        _dead = driver_data  # reference to keep linter quiet
     # TAB 6: MACRO PORTFOLIO SCENARIOS
     # ═══════════════════════════════════════════
     with tab6:
@@ -1971,7 +1611,7 @@ if 'scenario_data' in st.session_state:
                 st.markdown("### AI-Powered Regime Analysis")
 
                 # Auto-run if stale (>1hr since last), otherwise load cached
-                with st.spinner("Loading Grok AI regime analysis..."):
+                with fun_loader("ai"):
                     grok_result = run_grok_if_stale(grok_key, driver_data, FED_DRIVERS, MACRO_REGIMES, fred_api_key=fred_key, ticker_list=tickers)
 
                 if grok_result and grok_result.get("success"):

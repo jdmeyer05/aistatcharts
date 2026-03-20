@@ -7,3 +7,8 @@ font = "sans serif"
 
 [client]
 toolbarMode = "minimal"
+
+[server]
+fileWatcherType = "poll"
+runOnSave = false
+enableStaticServing = true

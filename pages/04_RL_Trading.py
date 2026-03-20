@@ -10,7 +10,7 @@ import requests
 import threading
 from datetime import datetime, timedelta
 from collections import deque
-from src.layout import setup_page, card_header, error_boundary
+from src.layout import setup_page, card_header, error_boundary, get_active_ticker, set_active_ticker, fun_loader
 from src.styles import COLORS
 
 setup_page("04_RL_Trading")
@@ -1050,7 +1050,7 @@ st.markdown("Deep Q-Network ensemble discovers optimal trading strategies with w
 
 with st.sidebar:
     st.header("Training Parameters")
-    ticker_input = st.text_input("Ticker", value="SPY")
+    ticker_input = st.text_input("Ticker", value=get_active_ticker())
     timeframe = st.selectbox("Timeframe", ["Daily", "Weekly"], index=0)
     train_years = st.slider("Data Window (years)", 1, 10, 3)
     test_pct = st.slider("Out-of-Sample %", 10, 40, 20)
@@ -1082,6 +1082,7 @@ with st.sidebar:
                             help="Start training and explore other pages. You'll see a notification when it's done.")
 
 ticker = ticker_input.strip().upper()
+set_active_ticker(ticker)
 
 # Background training handler
 if train_bg:
@@ -1217,7 +1218,7 @@ if train_bg:
 
 if train_btn or f"rl_results_{ticker}" in st.session_state:
     if train_btn:
-        with st.spinner(f"Fetching data for {ticker}..."):
+        with fun_loader("data"):
             interval = "1d" if timeframe == "Daily" else "1wk"
             df = yf.download(ticker, period=f"{train_years}y", interval=interval, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
@@ -1229,7 +1230,7 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
         intermarket = fetch_intermarket(f"{train_years}y") if use_intermarket else None
 
         # Fetch enhanced data
-        with st.spinner("Fetching fundamental & alternative data..."):
+        with fun_loader("data"):
             stock_extras = fetch_stock_extras(ticker)
 
             # Sector ETF for relative strength
@@ -1270,7 +1271,7 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
         def env_factory():
             return TradingEnv(train_prices, train_features, **env_kwargs)
 
-        with st.spinner(f"Training {n_agents}-agent ensemble..."):
+        with fun_loader("compute"):
             agents, all_train_results = train_ensemble(
                 env_factory, n_agents=n_agents, n_episodes=n_episodes,
                 reward_key=reward_fn, progress_callback=progress_cb,
@@ -1296,7 +1297,7 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
         # Walk-forward (if enabled)
         wf_results = None
         if run_walkforward:
-            with st.spinner("Running walk-forward validation (this takes a while)..."):
+            with fun_loader("compute"):
                 all_p, all_f = compute_features(df, intermarket, stock_extras, sector_data)
                 all_p, all_f = all_p[warmup:], all_f[warmup:]
                 wf_results = walk_forward_validation(
@@ -1335,12 +1336,12 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
         feat_imp = compute_feature_importance(agents[0], sample_states, base_feature_names)
 
         # Bootstrap significance test
-        with st.spinner("Running statistical significance tests..."):
+        with fun_loader("compute"):
             bh_returns = np.diff(test_bh["portfolio_values"]) / test_bh["portfolio_values"][:-1]
             boot_stats = bootstrap_significance(test_bt["returns"], bh_returns)
 
         # Monte Carlo robustness
-        with st.spinner("Running Monte Carlo robustness tests (200 simulations)..."):
+        with fun_loader("compute"):
             def mc_env_factory():
                 return TradingEnv(test_prices.copy(), test_features.copy(), **env_kwargs)
             mc_stats = monte_carlo_robustness(mc_env_factory, agents, n_sims=200)
@@ -1355,7 +1356,7 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
 
         grok_strat = None
         if grok_key:
-            with st.spinner("Grok analyzing strategy..."):
+            with fun_loader("ai"):
                 actions_arr = np.array(test_bt["actions"])
                 act_pcts = {
                     "buy": np.isin(actions_arr, [1, 2, 3]).sum() / len(actions_arr) * 100,

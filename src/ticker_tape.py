@@ -42,8 +42,10 @@ def _get_ticker_tape():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _get_ticker_tape_data() -> dict:
-    """Return raw ticker data as a dict for use in the dashboard banner."""
-    data = {}
+    """Return raw ticker data as a dict for use in the dashboard banner.
+    Includes a '_fetched_at' timestamp for staleness detection."""
+    import time
+    data = {"_fetched_at": time.time()}
     for sym in TICKER_SYMBOLS:
         try:
             tk = yf.Ticker(sym)

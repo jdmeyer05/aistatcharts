@@ -6,7 +6,7 @@ import requests
 import io
 import logging
 from datetime import date
-from src.layout import setup_page
+from src.layout import setup_page, error_boundary, fun_loader
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ with st.sidebar:
 
 # --- FETCH DATA ---
 date_path = month_options[selected_month]
-with st.spinner(f"Loading ERCOT capacity data for {selected_month}..."):
+with fun_loader("data"):
     df = fetch_capacity_file(date_path, selected_month, show_planned_only)
 
 if df.empty:
@@ -432,7 +432,7 @@ with tab6:
     all_months_data = {}
     month_labels_ordered = []
 
-    with st.spinner("Loading historical monthly data..."):
+    with fun_loader("data"):
         for date_path_m, label_m in MONTHS:
             df_m = fetch_capacity_file(date_path_m, label_m, planned_only=False)
             if not df_m.empty:

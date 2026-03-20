@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker
-from src.layout import setup_page
+from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 setup_page("11_Algo_Backtester")
 
 st.title("🏗️ Algo Backtester & Optimizer")
@@ -202,7 +202,7 @@ def extract_trades(df):
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("Backtest Parameters")
-    raw_ticker = st.text_input("Ticker", value="SPY")
+    raw_ticker = st.text_input("Ticker", value=get_active_ticker())
     lookback = st.slider("Historical Data (Days)", 252, 2520, 1260, step=252)
 
     strategy = st.selectbox("Algorithmic Strategy", STRATEGIES)
@@ -218,6 +218,7 @@ with st.sidebar:
     run_opt = c2.button("Optimize", type="primary", use_container_width=True)
 
 ticker = format_massive_ticker(raw_ticker)
+set_active_ticker(ticker)
 total_cost_pct = (commission_bps + slippage_bps) / 10000  # Convert bps to decimal
 
 # --- EXECUTION ---
@@ -234,7 +235,7 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
     opt_msg = ""
 
     if run_opt:
-        with st.spinner(f"Running Grid Search Optimization for {strategy}..."):
+        with fun_loader("compute"):
             grid_p1, grid_p2, name_p1, name_p2 = get_optimization_grid(strategy)
             best_ret = -np.inf
 
@@ -272,7 +273,7 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
         st.session_state.opt_msg = None
 
     # Run final backtest
-    with st.spinner("Compiling Final Backtest..."):
+    with fun_loader("compute"):
         df = df_base.copy()
         df["Position"] = run_strategy(df, strategy, p1_final, p2_final)
         df["Strat_Returns"] = df["Position"].shift(1) * df["Returns"]

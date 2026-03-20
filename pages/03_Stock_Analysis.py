@@ -11,7 +11,7 @@ import json
 from openai import OpenAI
 from datetime import datetime, timedelta
 import re
-from src.layout import setup_page, card_header, error_boundary
+from src.layout import setup_page, card_header, error_boundary, get_active_ticker, set_active_ticker, fun_loader
 from src.styles import COLORS
 
 setup_page("03_Stock_Analysis")
@@ -584,14 +584,21 @@ st.markdown("AI-powered institutional-grade equity research. Multi-dimensional s
 # Sidebar
 with st.sidebar:
     st.header("Analysis Parameters")
-    ticker_input = st.text_input("Ticker", value="AAPL")
-    analyze_btn = st.button("Run Analysis", type="primary", use_container_width=True)
+    ticker_input = st.text_input("Ticker", value=get_active_ticker("AAPL"))
+    _is_running = st.session_state.get("_ai_running", False)
+    analyze_btn = st.button(
+        "Running..." if _is_running else "Run Analysis",
+        type="primary", use_container_width=True,
+        disabled=_is_running,
+    )
 
 ticker = ticker_input.strip().upper()
+set_active_ticker(ticker)
 
 if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
     if analyze_btn:
-        with st.spinner(f"Fetching data for {ticker}..."):
+        st.session_state["_ai_running"] = True
+        with fun_loader("data"):
             stock_data = fetch_stock_data(ticker)
             if not stock_data.get("success"):
                 st.error(f"Failed to load data for {ticker}: {stock_data.get('error', 'Unknown error')}")
@@ -633,13 +640,18 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 st.warning("No AI models available. Check your API keys or subscription tier.")
             else:
                 model_names = ", ".join(MODEL_CONFIGS[m]["name"] for m in active_models)
-                with st.spinner(f"Running AI analysis ({model_names})..."):
+                with fun_loader("ai"):
                     for model_key in active_models:
                         key = api_keys[model_key]
                         if key:
                             model_results[model_key] = run_model_stock_analysis(model_key, key, prompt, ticker)
 
-                increment_ai_usage()
+                # Only burn a token if this was a fresh API call (not a cache hit)
+                import hashlib
+                _cache_key = f"ai_charged_{ticker}_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
+                if _cache_key not in st.session_state:
+                    increment_ai_usage()
+                    st.session_state[_cache_key] = True
 
             # Blend results
             blended = blend_model_results(model_results)
@@ -652,6 +664,7 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 "blended": blended,
                 "model_results": model_results,
             }
+            st.session_state["_ai_running"] = False
 
     cached = st.session_state.get(f"stock_analysis_{ticker}")
     if not cached:

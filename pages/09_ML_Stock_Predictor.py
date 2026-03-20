@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.simulation import predict_30d_random_forest
 from src.chatbot import run_sidebar_chatbot
-from src.layout import setup_page
+from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 setup_page("09_ML_Stock_Predictor")
 
 st.title("🎲 ML Tactical Forecast (30-Day)")
@@ -15,20 +15,21 @@ st.markdown("Stochastic Recursive Random Forest: Projects 1 day ahead dynamicall
 with st.sidebar:
     st.header("Forecast Parameters")
     with st.form("ml_settings"):
-        raw_ticker = st.text_input("Ticker", value="SPY")
-        
+        raw_ticker = st.text_input("Ticker", value=get_active_ticker())
+
         st.divider()
         st.caption("Hyperparameters")
         n_trees = st.slider("Random Forest Estimators", 50, 500, 200, step=50)
         lookback = st.slider("Training Lookback (Days)", 500, 2520, 1000, step=250)
-        
+
         submit = st.form_submit_button("🚀 Run ML Forecast")
 
 ticker = format_massive_ticker(raw_ticker)
+set_active_ticker(ticker)
 
 # --- EXECUTION ---
 if submit or 'ml_forecast' not in st.session_state or st.session_state.get('ml_ticker') != ticker or st.session_state.get('ml_params') != (n_trees, lookback):
-    with st.spinner(f"Training ML Engine on {ticker} and running stochastic projections..."):
+    with fun_loader("compute"):
         # Fetch data
         df = fetch_massive_data(ticker, lookback + 150) # Buffer for rolling indicators
         if df is None or df.empty:

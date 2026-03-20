@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from src.data_engine import fetch_massive_data, format_massive_ticker
-from src.layout import setup_page
+from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 setup_page("12_Monte_Carlo")
 
 st.title("🎯 Monte Carlo Simulator")
@@ -12,7 +12,7 @@ st.markdown("Forecast terminal price distributions using Geometric Brownian Moti
 # --- SIDEBAR CONFIGURATION ---
 with st.sidebar:
     st.header("Simulation Parameters")
-    raw_ticker = st.text_input("Ticker", value="SPY")
+    raw_ticker = st.text_input("Ticker", value=get_active_ticker())
     
     st.divider()
     st.caption("Historical Data Tuning")
@@ -26,9 +26,10 @@ with st.sidebar:
     run_sim = st.button("🚀 Run Simulation", type="primary", use_container_width=True)
 
 ticker = format_massive_ticker(raw_ticker)
+set_active_ticker(ticker)
 
 if run_sim or 'mc_data' not in st.session_state or st.session_state.get('mc_ticker') != ticker:
-    with st.spinner(f"Fetching historical data for {ticker}..."):
+    with fun_loader("data"):
         df = fetch_massive_data(ticker, lookback)
         
         if df is None or df.empty:
@@ -44,7 +45,7 @@ if run_sim or 'mc_data' not in st.session_state or st.session_state.get('mc_tick
         sigma = df['Returns'].std()
         
         # --- 2. VECTORIZED GBM ENGINE ---
-        with st.spinner("Calculating stochastic probability matrix..."):
+        with fun_loader("compute"):
             # Calculate the drift component
             drift = mu - (0.5 * sigma**2)
             

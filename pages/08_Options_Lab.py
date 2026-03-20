@@ -8,7 +8,7 @@ import logging
 from scipy.stats import norm
 from datetime import date, timedelta
 from src.data_engine import format_massive_ticker, fetch_massive_data
-from src.layout import setup_page
+from src.layout import setup_page, fun_loader
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,10 @@ api_key = _get_massive_key()
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("Configuration")
-    default_ticker = st.session_state.get("shared_options_ticker", "SPY")
-    raw_ticker = st.text_input("Ticker", value=default_ticker)
+    from src.layout import get_active_ticker, set_active_ticker
+    raw_ticker = st.text_input("Ticker", value=get_active_ticker())
     ticker = format_massive_ticker(raw_ticker)
+    set_active_ticker(ticker)
     submit = st.button("Load Data", type="primary", use_container_width=True)
 
 if not api_key:
@@ -94,7 +95,7 @@ if not api_key:
 
 # --- FETCH & STORE ---
 if submit:
-    with st.spinner(f"Loading options data for {ticker}..."):
+    with fun_loader("data"):
         df_all = fetch_chain_all_exps(ticker, api_key)
         px_df = fetch_massive_data(ticker, 252)
         spot = px_df["Close"].iloc[-1] if px_df is not None else None

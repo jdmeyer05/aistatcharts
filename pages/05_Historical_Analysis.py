@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import yfinance as yf
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
-from src.layout import setup_page
+from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 setup_page("05_Historical_Analysis")
 
 st.title("🕰️ Historical & Seasonal Analysis")
@@ -15,12 +15,13 @@ st.markdown("Price action, seasonality, volatility, drawdowns, and statistical p
 with st.sidebar:
     st.header("Analysis Settings")
     with st.form("historical_settings"):
-        raw_ticker = st.text_input("Ticker", value="SPY")
+        raw_ticker = st.text_input("Ticker", value=get_active_ticker())
         lookback_years = st.slider("Lookback (Years)", 1, 10, 5)
         benchmark_ticker = st.text_input("Benchmark", value="SPY")
         submit = st.form_submit_button("Run Analysis")
 
 ticker = format_massive_ticker(raw_ticker)
+set_active_ticker(ticker)
 bench_ticker = format_massive_ticker(benchmark_ticker)
 lookback_days = lookback_years * 365 + 180  # Buffer for full calendar years
 
@@ -39,7 +40,7 @@ def fetch_macro_series(yf_ticker: str, period: str = "5y"):
 
 # --- FETCH ---
 if submit or "hist_df" not in st.session_state or st.session_state.get("hist_ticker") != ticker:
-    with st.spinner(f"Loading {lookback_years}-year history for {ticker}..."):
+    with fun_loader("data"):
         df = fetch_massive_data(ticker, lookback_days)
         if df is None or df.empty:
             st.error(f"Failed to fetch data for {ticker}.")

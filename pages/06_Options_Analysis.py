@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src.data_engine import get_expiration_dates, fetch_options_chain, fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
-from src.layout import setup_page
+from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader
 from src.styles import COLORS
 from src.options_models import fill_missing_options_data
 
@@ -17,8 +17,9 @@ st.caption("IV skew, open interest walls, gamma exposure, max pain, unusual acti
 # ── Sidebar Configuration ──
 with st.sidebar:
     st.subheader("Chain Settings")
-    raw_ticker = st.text_input("Underlying Ticker", value="SPY")
+    raw_ticker = st.text_input("Underlying Ticker", value=get_active_ticker())
     ticker = format_massive_ticker(raw_ticker)
+    set_active_ticker(ticker)
 
     if ":" in ticker or "ERCOT" in ticker.upper():
         st.error("Equities only.")
@@ -41,7 +42,7 @@ if submit:
         st.error("No expirations found. Check ticker.")
         st.stop()
 
-    with st.spinner(f"Fetching options data for {ticker}..."):
+    with fun_loader("data"):
         px_df = fetch_massive_data(ticker, 5)
         current_px = float(px_df['Close'].iloc[-1]) if px_df is not None and not px_df.empty else None
 
@@ -273,7 +274,7 @@ tab_surface, tab_skew, tab_term, tab_oi, tab_gex, tab_pain, tab_unusual, tab_gre
 
 
 # ── Tab: 3D Surface ──
-with tab_surface:
+with tab_surface, error_boundary("Vol Surface"):
     SURFACE_METRICS = {
         "Implied Volatility": {
             "field": "implied_volatility",
@@ -536,7 +537,7 @@ with tab_surface:
 
 
 # ── Tab: IV Smile / Skew ──
-with tab_skew:
+with tab_skew, error_boundary("IV Skew"):
     _skew_exp, calls, puts, dte = _exp_selector("skew")
     st.subheader("Implied Volatility Smile")
     with st.expander("What is this & how to use it?"):
@@ -607,7 +608,7 @@ with tab_skew:
 
 
 # ── Tab: IV Term Structure ──
-with tab_term:
+with tab_term, error_boundary("Term Structure"):
     st.subheader("IV Term Structure")
     with st.expander("What is this & how to use it?"):
         st.markdown("""
@@ -729,7 +730,7 @@ with tab_term:
 
 
 # ── Tab: Open Interest Profile ──
-with tab_oi:
+with tab_oi, error_boundary("Open Interest"):
     _oi_exp, calls, puts, dte = _exp_selector("oi")
     st.subheader("Open Interest Profile")
     with st.expander("What is this & how to use it?"):
@@ -783,7 +784,7 @@ with tab_oi:
 
 
 # ── Tab: Gamma Exposure (GEX) ──
-with tab_gex:
+with tab_gex, error_boundary("Gamma Exposure"):
     _gex_exp, calls, puts, dte = _exp_selector("gex")
     st.subheader("Net Gamma Exposure by Strike")
     with st.expander("What is this & how to use it?"):
@@ -859,7 +860,7 @@ with tab_gex:
 
 
 # ── Tab: Max Pain ──
-with tab_pain:
+with tab_pain, error_boundary("Max Pain"):
     _pain_exp, calls, puts, dte = _exp_selector("pain")
     st.subheader("Max Pain Analysis")
     with st.expander("What is this & how to use it?"):
@@ -927,7 +928,7 @@ with tab_pain:
 
 
 # ── Tab: Unusual Activity ──
-with tab_unusual:
+with tab_unusual, error_boundary("Unusual Activity"):
     _unusual_exp, calls, puts, dte = _exp_selector("unusual")
     st.subheader("Unusual Options Activity")
     with st.expander("What is this & how to use it?"):
@@ -1013,7 +1014,7 @@ with tab_unusual:
 
 
 # ── Tab: Greeks Heatmap ──
-with tab_greeks:
+with tab_greeks, error_boundary("Greeks Heatmap"):
     _greeks_exp, calls, puts, dte = _exp_selector("greeks")
     st.subheader("Greeks by Strike")
     with st.expander("What is this & how to use it?"):
@@ -1126,7 +1127,7 @@ with tab_greeks:
 
 
 # ── Tab: Straddle Chain View ──
-with tab_chain:
+with tab_chain, error_boundary("Chain View"):
     _chain_exp, calls, puts, dte = _exp_selector("chain")
     st.subheader("Options Chain — Straddle View")
     with st.expander("What is this & how to use it?"):

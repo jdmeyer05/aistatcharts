@@ -12,7 +12,7 @@ import concurrent.futures
 from datetime import date, datetime, timedelta
 from openai import OpenAI
 from src.data_engine import fetch_massive_data
-from src.layout import setup_page
+from src.layout import setup_page, error_boundary, fun_loader
 from src.gdelt_events import fetch_gdelt_bulk_events, summarize_gdelt_events, build_gdelt_ai_context
 
 logger = logging.getLogger(__name__)
@@ -194,29 +194,53 @@ MODEL_CONFIGS = {
         "model": "grok-3",
         "key_name": "GROK_API_KEY",
         "extra_instructions": (
-            "YOUR ROLE: Breaking news & social sentiment specialist.\n"
-            "IMPORTANT: Search X/Twitter for the very latest posts (last 1-6 hours) about the Iran war, "
-            "Strait of Hormuz, oil prices, military developments, AND infrastructure attacks.\n"
-            "CRITICAL — INFRASTRUCTURE MONITORING: Search X/Twitter specifically for:\n"
+            "YOUR ROLE: Breaking news & viral social intelligence specialist.\n\n"
+
+            "PRIORITY ACCOUNTS — check these FIRST for the latest posts:\n"
+            "  OSINT: @sentdefender, @IntelCrab, @AuroraIntel, @Faytuks, @GeoConfirmed\n"
+            "  Energy/Oil: @JavierBlas, @amaboraz, @EnergyIntel, @OilSheppard\n"
+            "  Military: @RALee85, @TheStudyofWar, @NOELreports, @OAlexanderDK\n"
+            "  Journalists: @Joyce_Karam, @IranIntl_En, @BarakRavid, @Charles_Lister\n"
+            "  Official: @CENTCOM, @IDF, @ABORAZAVI\n\n"
+
+            "VIRAL TWEET DETECTION — find the HOTTEST tweets right now:\n"
+            "  - Prioritize tweets by VELOCITY: likes + retweets per hour since posting.\n"
+            "    A tweet with 500 likes in 20 minutes is far more important than 2,000 likes over 3 days.\n"
+            "  - Flag any tweet that got >500 likes in <1 hour.\n"
+            "  - Flag tweets with >100 quote tweets (signals debate/controversy).\n"
+            "  - Flag small accounts (<10K followers) getting 10x their normal engagement (breakout signal).\n"
+            "  - Find ANALYSIS THREADS (multi-tweet chains), not just single tweets — threads have deeper insight.\n\n"
+
+            "INFRASTRUCTURE MONITORING — search X/Twitter specifically for:\n"
             "  - Attacks on oil/gas/LNG facilities (Abqaiq, Ras Tanura, Kharg Island, Ras Laffan, etc.)\n"
             "  - Strait of Hormuz shipping status, mine clearance progress\n"
             "  - Pipeline damage or repairs (Kirkuk-Ceyhan, East-West, etc.)\n"
             "  - Refinery outages or restarts across the Gulf region\n"
             "  - Red Sea / Bab el-Mandeb / Houthi attack updates\n"
             "  - Any facility coming BACK ONLINE or NEW facilities being hit\n"
-            "For EACH facility in your infrastructure_status response, search for the latest X/Twitter posts "
-            "about that specific facility and report what you find. If a facility status has CHANGED from "
-            "the baseline provided, flag it prominently in your latest_developments.\n"
-            "YOU MUST: (1) Cite specific tweets, trending topics, or breaking headlines with timestamps. "
+            "  For EACH facility in infrastructure_status, search for the latest tweets about it.\n\n"
+
+            "CONTRARIAN SIGNAL DETECTION:\n"
+            "  - If viral tweets CONTRADICT the hard data (GDELT, oil prices, ACLED), flag the divergence explicitly.\n"
+            "  - If social sentiment is moving opposite to price action, note it — this is often the most valuable signal.\n\n"
+
+            "STRUCTURED TWEET CITATIONS:\n"
+            "  In your trending_tweets array, return each tweet with: handle, engagement metrics, time posted, and content.\n"
+            "  Format: {\"handle\": \"@user\", \"content\": \"tweet text\", \"likes\": N, \"retweets\": N, \"replies\": N,\n"
+            "           \"time\": \"Xh ago\", \"velocity\": \"high/medium\", \"why_important\": \"reason\"}\n"
+            "  Include 5-8 of the most important tweets. Prioritize velocity over total engagement.\n\n"
+
+            "YOU MUST: (1) Cite specific tweets with engagement metrics and timestamps. "
             "(2) Note where social sentiment DIVERGES from the hard data provided. "
-            "(3) Flag any breaking developments not yet in the data feed.\n"
+            "(3) Flag any breaking developments not yet in the data feed. "
+            "(4) Include at least one analysis thread if available.\n"
             "Every claim in your rationale MUST reference a specific data point, tweet, or headline."
         ),
         "color": "#ff4444",
         "weight_escalation": 1.3,
         "weight_oil": 0.8,
         "weight_ceasefire": 0.9,
-        "max_tokens": 4096,
+        "max_tokens": 3500,
         "data_sections": ["timeline", "infrastructure", "oil", "gdelt_tone", "disruption", "prior"],
         "tier_required": None,  # all tiers
     },
@@ -245,7 +269,7 @@ MODEL_CONFIGS = {
         "weight_escalation": 1.1,
         "weight_oil": 1.4,
         "weight_ceasefire": 0.8,
-        "max_tokens": 4096,
+        "max_tokens": 2500,
         "data_sections": ["timeline", "infrastructure", "gdelt_intensity", "gdelt_bulk", "oil", "disruption", "prior"],
         "tier_required": None,
     },
@@ -267,7 +291,7 @@ MODEL_CONFIGS = {
         "weight_escalation": 1.0,
         "weight_oil": 0.9,
         "weight_ceasefire": 1.4,
-        "max_tokens": 4096,
+        "max_tokens": 2500,
         "data_sections": ["timeline", "infrastructure", "oil", "gdelt_tone", "acled", "disruption", "prior"],
         "tier_required": None,
     },
@@ -291,7 +315,7 @@ GPT5_CONFIG = {
     "weight_escalation": 1.2,
     "weight_oil": 1.0,
     "weight_ceasefire": 1.1,
-    "max_tokens": 16000,
+    "max_tokens": 3000,
     "data_sections": ["timeline", "infrastructure", "gdelt_intensity", "gdelt_bulk", "acled", "oil", "disruption", "prior"],
     "tier_required": "platinum",
 }
@@ -383,13 +407,16 @@ Respond with ONLY valid JSON in this exact format:
   },
   "scenario_forecast": [
     {"scenario": "name", "probability": N, "description": "...", "oil_impact": "$X-Y range", "trigger": "what would cause this scenario"}
+  ],
+  "trending_tweets": [
+    {"handle": "@username", "content": "tweet text (max 200 chars)", "likes": N, "retweets": N, "replies": N, "time": "Xh ago", "velocity": "high/medium/low", "why_important": "brief reason this tweet matters"}
   ]
 }
 
-IMPORTANT: scenario_forecast probabilities are INDEPENDENT, not mutually exclusive.
-They should NOT sum to 100%. Each scenario is assessed on its own likelihood (0-100%).
-For example, "Prolonged Stalemate" at 60% and "Ceasefire within 30d" at 25% can coexist
-because a stalemate could eventually lead to a ceasefire. Assess each scenario independently."""
+IMPORTANT: scenario_forecast probabilities MUST sum to approximately 100%.
+They are MUTUALLY EXCLUSIVE outcomes — only ONE scenario will materialize.
+Provide exactly 3 scenarios (most likely, second most likely, tail risk).
+Ensure their probabilities add up to 95-100%."""
 
 
 def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
@@ -402,7 +429,7 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
             If None, include all.
     """
     include_all = sections is None
-    lines = [f"Current data as of {datetime.now().strftime('%B %d, %Y %I:%M %p')}:"]
+    lines = [f"Current data as of {datetime.now().replace(minute=0, second=0, microsecond=0).strftime('%B %d, %Y %I:%M %p')}:"]
 
     # GDELT media intensity
     if (include_all or "gdelt_intensity" in sections) and gdelt_data:
@@ -576,13 +603,15 @@ Produce your complete analysis. JSON only."""
             client = OpenAI(**client_kwargs)
 
             is_gpt5 = "gpt-5" in config["model"]
+            # GPT-5 needs higher max_completion_tokens — it won't respond with too low a ceiling
+            effective_max = max(model_max_tokens, 8000) if is_gpt5 else model_max_tokens
             call_kwargs = dict(
                 model=config["model"],
                 messages=[
                     {"role": "system", "content": CONFLICT_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                **{"max_completion_tokens" if is_gpt5 else "max_tokens": model_max_tokens},
+                **{"max_completion_tokens" if is_gpt5 else "max_tokens": effective_max},
                 **({"temperature": 0.3} if not is_gpt5 else {}),
             )
 
@@ -648,6 +677,137 @@ def _domain_weighted_avg(results: dict, field_path: list[str], weight_key: str, 
         weighted_sum += val * w
         total_weight += w
     return round(weighted_sum / total_weight, 1) if total_weight else default
+
+
+def _scenario_cluster_key(name: str) -> str:
+    """Map a scenario name to a canonical cluster key using keyword matching.
+    This groups scenarios that describe the same theme even with different phrasing."""
+    n = name.lower()
+    # Escalation / war / closure
+    if any(w in n for w in ["escalation", "closure", "hormuz", "crisis", "regional war", "chokepoint"]):
+        return "escalation"
+    # Proxy / spillover / expansion
+    if any(w in n for w in ["proxy", "spillover", "expansion", "hezbollah", "yemen", "militia"]):
+        return "proxy_expansion"
+    # Ceasefire / de-escalation / diplomatic
+    if any(w in n for w in ["ceasefire", "de-escalation", "deconfliction", "diplomatic", "peace"]):
+        return "ceasefire"
+    # Stalemate / prolonged / status quo / infrastructure war
+    if any(w in n for w in ["stalemate", "prolonged", "status quo", "infrastructure war", "high-risk"]):
+        return "stalemate"
+    # Recovery / improvement
+    if any(w in n for w in ["recovery", "repair", "improvement", "faster", "restoration"]):
+        return "recovery"
+    # Fallback — use simplified name
+    return n.strip()[:30]
+
+
+def _blend_scenario_forecasts(successful: dict) -> list:
+    """Cluster similar scenarios from multiple models, average their probabilities,
+    and normalize so the final set sums to 100%."""
+    # Collect all raw scenarios with their source model
+    raw = []
+    for model_key, v in successful.items():
+        for s in v.get("scenario_forecast", []):
+            raw.append({**s, "_model": v.get("model_name", model_key)})
+
+    if not raw:
+        return []
+
+    # Cluster by keyword-based theme matching
+    cluster_map = {}  # cluster_key -> list of scenarios
+    for s in raw:
+        key = _scenario_cluster_key(s.get("scenario", ""))
+        cluster_map.setdefault(key, []).append(s)
+    clusters = list(cluster_map.values())
+
+    # Merge each cluster into a single scenario
+    merged = []
+    for cluster in clusters:
+        # Use the shortest name (usually the cleanest)
+        names = [s.get("scenario", "") for s in cluster]
+        best_name = min(names, key=len) if names else ""
+
+        # Average probability across models
+        probs = [s.get("probability", 0) for s in cluster]
+        avg_prob = sum(probs) / len(probs)
+
+        # Pick the longest (most detailed) description
+        descriptions = [s.get("description", "") for s in cluster]
+        best_desc = max(descriptions, key=len) if descriptions else ""
+
+        # Pick the most specific oil impact
+        oil_impacts = [s.get("oil_impact", "") for s in cluster if s.get("oil_impact")]
+        best_oil = oil_impacts[0] if oil_impacts else ""
+
+        # Collect triggers
+        triggers = [s.get("trigger", "") for s in cluster if s.get("trigger")]
+        best_trigger = max(triggers, key=len) if triggers else ""
+
+        # Note how many models agreed
+        model_names = list(set(s.get("_model", "") for s in cluster))
+
+        merged.append({
+            "scenario": best_name,
+            "probability": round(avg_prob),
+            "description": best_desc,
+            "oil_impact": best_oil,
+            "trigger": best_trigger,
+            "models_agree": len(cluster),
+            "models": model_names,
+        })
+
+    # Normalize probabilities to sum to 100%
+    total = sum(s["probability"] for s in merged)
+    if total > 0:
+        for s in merged:
+            s["probability"] = round(s["probability"] / total * 100)
+
+    # Fix rounding — adjust largest to make sum exactly 100
+    rounding_diff = 100 - sum(s["probability"] for s in merged)
+    if merged and rounding_diff != 0:
+        merged[0]["probability"] += rounding_diff
+
+    # Sort by probability descending
+    merged.sort(key=lambda s: s["probability"], reverse=True)
+
+    return merged
+
+
+_PROFANITY = {
+    "fuck", "shit", "damn", "bitch", "ass", "dick", "cock", "pussy", "cunt",
+    "stfu", "gtfo", "lmao", "lmfao", "wtf", "af", "bs", "fk", "fck",
+    "retard", "retarded", "faggot", "nigger", "nigga",
+}
+
+
+def _is_quality_tweet(content: str) -> bool:
+    """Filter out low-quality tweets: hashtag spam, ticker-only, profanity, too short."""
+    if not content or not content.strip():
+        return False
+    text = content.strip()
+    # Too short to be useful
+    if len(text) < 20:
+        return False
+    # Hashtag spam: more than 40% of the text is hashtags
+    hashtag_chars = sum(len(w) for w in text.split() if w.startswith("#"))
+    if hashtag_chars > len(text) * 0.4:
+        return False
+    # Ticker-only: just cashtags/tickers with no real content
+    words = [w for w in text.split() if not w.startswith("$") and not w.startswith("#") and not w.startswith("@")]
+    if len(words) < 3:
+        return False
+    # Profanity check
+    text_lower = text.lower()
+    for word in _PROFANITY:
+        # Check as whole word to avoid false positives (e.g. "class" matching "ass")
+        if f" {word} " in f" {text_lower} " or text_lower.startswith(f"{word} ") or text_lower.endswith(f" {word}"):
+            return False
+    # All caps spam (entire tweet is shouting)
+    alpha_chars = [c for c in text if c.isalpha()]
+    if len(alpha_chars) > 10 and sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars) > 0.8:
+        return False
+    return True
 
 
 def blend_conflict_results(results: dict, configs: dict = None) -> dict:
@@ -740,15 +900,8 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
                     all_infra_alerts.append(alert_text)
                     seen_alerts.add(alert_text.lower()[:40])
 
-    # Scenario forecasts — collect unique scenarios
-    all_scenarios = []
-    seen_scenarios = set()
-    for v in successful.values():
-        for s in v.get("scenario_forecast", []):
-            sname = s.get("scenario", "").lower()
-            if sname not in seen_scenarios:
-                all_scenarios.append(s)
-                seen_scenarios.add(sname)
+    # Scenario forecasts — cluster similar scenarios across models, average probabilities, normalize to 100%
+    all_scenarios = _blend_scenario_forecasts(successful)
 
     # Per-model assessments with citations
     model_assessments = []
@@ -843,6 +996,23 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
         "disagreements": disagreements,
         "infrastructure_alerts": all_infra_alerts,
     }
+
+    # Collect trending tweets — prioritize Grok (has live X access), then any model
+    all_tweets = []
+    seen_handles = set()
+    for model_pref in ["grok", "gemini", "claude", "openai"]:
+        if model_pref in successful:
+            for tw in successful[model_pref].get("trending_tweets", []):
+                handle = tw.get("handle", "")
+                content = tw.get("content", "")
+                if handle and handle not in seen_handles:
+                    all_tweets.append(tw)
+                    seen_handles.add(handle)
+    # Sort by velocity: high > medium > low, then by likes
+    vel_order = {"high": 0, "medium": 1, "low": 2}
+    all_tweets.sort(key=lambda t: (vel_order.get(t.get("velocity", "low"), 2), -t.get("likes", 0)))
+    blended["trending_tweets"] = all_tweets[:10]
+
     return blended
 
 
@@ -1053,20 +1223,71 @@ def fetch_eia_oil_price(eia_key: str):
         return pd.DataFrame()
 
 
-# --- FETCH DATA ---
-with st.spinner("Loading geopolitical data from GDELT..."):
-    # Core conflict queries — consolidated into fewer, broader queries
+# --- FETCH DATA (parallelized) ---
+with fun_loader("data"):
+    import threading
+
     gdelt_queries = {
         "Iran Military/War": "Iran war military attack strike",
         "Strait of Hormuz": "Hormuz shipping oil strait",
         "Iran Sanctions & Diplomacy": "Iran sanctions ceasefire nuclear diplomacy",
     }
 
-    gdelt_data, df_tone = fetch_all_gdelt_data(gdelt_queries)
+    # Run all independent data fetches in parallel
+    _results = {}
 
-    # GDELT bulk events — use cached parquet if available, fetch in background if stale
-    # This avoids blocking page load with 21 file downloads
-    import threading
+    def _fetch_gdelt():
+        _results["gdelt"] = fetch_all_gdelt_data(gdelt_queries)
+
+    def _fetch_acled():
+        acled_email = _get_key("ACLED_EMAIL")
+        acled_password = _get_key("ACLED_PASSWORD")
+        df = pd.DataFrame()
+        src = None
+        if acled_email and acled_password:
+            token = _acled_get_token(acled_email, acled_password)
+            if token:
+                df = fetch_acled_events(token, ACLED_COUNTRIES)
+                if not df.empty:
+                    src = "api"
+        if df.empty:
+            df = load_acled_csv()
+            if not df.empty:
+                src = "csv"
+        _results["acled"] = (df, src)
+
+    def _fetch_oil():
+        eia_key = _get_eia_key()
+        _results["oil"] = fetch_eia_oil_price(eia_key) if eia_key else pd.DataFrame()
+
+    def _fetch_stocks():
+        data = {}
+        for ticker in ["LMT", "RTX", "NOC", "XLE", "USO", "XOP"]:
+            px = fetch_massive_data(ticker, 180)
+            if px is not None and not px.empty:
+                data[ticker] = px
+        _results["stocks"] = data
+
+    threads = [
+        threading.Thread(target=_fetch_gdelt),
+        threading.Thread(target=_fetch_acled),
+        threading.Thread(target=_fetch_oil),
+        threading.Thread(target=_fetch_stocks),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    gdelt_data, df_tone = _results.get("gdelt", ({}, None))
+    df_acled, acled_source = _results.get("acled", (pd.DataFrame(), None))
+    df_oil = _results.get("oil", pd.DataFrame())
+    stock_data = _results.get("stocks", {})
+
+    defense_tickers = {"LMT": "Lockheed Martin", "RTX": "RTX Corp", "NOC": "Northrop Grumman"}
+    energy_tickers = {"XLE": "Energy ETF", "USO": "Oil ETF", "XOP": "Oil & Gas E&P ETF"}
+
+    # GDELT bulk — use cached parquet, refresh in background
     df_gdelt_bulk = pd.DataFrame()
     _gdelt_parquet = os.path.join(os.path.dirname(__file__), "..", "data", "gdelt_events", "iran_conflict_events.parquet")
     if os.path.exists(_gdelt_parquet):
@@ -1075,7 +1296,6 @@ with st.spinner("Loading geopolitical data from GDELT..."):
         except Exception:
             pass
 
-    # Trigger background refresh if cache is stale or missing
     if df_gdelt_bulk.empty or "gdelt_bg_started" not in st.session_state:
         st.session_state["gdelt_bg_started"] = True
         def _bg_gdelt():
@@ -1084,37 +1304,6 @@ with st.spinner("Loading geopolitical data from GDELT..."):
             except Exception:
                 pass
         threading.Thread(target=_bg_gdelt, daemon=True).start()
-
-    # ACLED conflict events — try API first, fall back to local CSV
-    acled_email = _get_key("ACLED_EMAIL")
-    acled_password = _get_key("ACLED_PASSWORD")
-    df_acled = pd.DataFrame()
-    acled_source = None
-    if acled_email and acled_password:
-        acled_token = _acled_get_token(acled_email, acled_password)
-        if acled_token:
-            df_acled = fetch_acled_events(acled_token, ACLED_COUNTRIES)
-            if not df_acled.empty:
-                acled_source = "api"
-    # Fallback to local CSV if API failed
-    if df_acled.empty:
-        df_acled = load_acled_csv()
-        if not df_acled.empty:
-            acled_source = "csv"
-
-    # Oil price
-    eia_key = _get_eia_key()
-    df_oil = fetch_eia_oil_price(eia_key) if eia_key else pd.DataFrame()
-
-    # Defense & energy stocks
-    defense_tickers = {"LMT": "Lockheed Martin", "RTX": "RTX Corp", "NOC": "Northrop Grumman"}
-    energy_tickers = {"XLE": "Energy ETF", "USO": "Oil ETF", "XOP": "Oil & Gas E&P ETF"}
-
-    stock_data = {}
-    for ticker in list(defense_tickers.keys()) + list(energy_tickers.keys()):
-        px = fetch_massive_data(ticker, 180)
-        if px is not None and not px.empty:
-            stock_data[ticker] = px
 
 
 # --- ESCALATION METRICS ---
@@ -1163,7 +1352,7 @@ tab_ai, tab_timeline, tab_acled, tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 
 # ---- TAB: AI War Analysis (4-model blend) ----
-with tab_ai:
+with tab_ai, error_boundary("AI Analysis"):
     st.subheader("AI-Powered Conflict Intelligence")
 
     # Determine which models to use based on user tier
@@ -1183,7 +1372,9 @@ with tab_ai:
     latest_conflict, is_conflict_stale = get_latest_conflict_result()
 
     # Build base context (shared across all models — timeline + infrastructure)
-    base_context = f"""Analyze the current state of the US-Israel war on Iran as of {datetime.now().strftime('%B %d, %Y %I:%M %p')}.
+    # Round to the hour so the prompt cache key stays stable within the same hour
+    _ctx_time = datetime.now().replace(minute=0, second=0, microsecond=0)
+    base_context = f"""Analyze the current state of the US-Israel war on Iran as of {_ctx_time.strftime('%B %d, %Y %I:%M %p')}.
 
 Recent timeline of key events:
 """
@@ -1228,7 +1419,12 @@ Recent timeline of key events:
     else:
         col_run, col_status = st.columns([1, 3])
         with col_run:
-            force_refresh = st.button("Run AI Analysis", type="primary", use_container_width=True)
+            _conflict_running = st.session_state.get("_conflict_running", False)
+            force_refresh = st.button(
+                "Running..." if _conflict_running else "Run AI Analysis",
+                type="primary", use_container_width=True,
+                disabled=_conflict_running,
+            )
         with col_status:
             if latest_conflict and not is_conflict_stale:
                 ts = latest_conflict.get("timestamp", "")
@@ -1242,7 +1438,12 @@ Recent timeline of key events:
         # Run analysis if stale or forced
         conflict_result = None
         if force_refresh or (is_conflict_stale and latest_conflict is None):
-            with st.spinner("Running 4-model conflict analysis..."):
+            st.session_state["_conflict_running"] = True
+            n_models = len(available_models)
+            model_names_list = [active_configs.get(mk, MODEL_CONFIGS.get(mk, {})).get("name", mk)
+                                for mk in available_models]
+
+            with fun_loader("ai"):
                 model_results = {}
                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                     futures = {}
@@ -1253,23 +1454,26 @@ Recent timeline of key events:
 
                     for future in concurrent.futures.as_completed(futures):
                         mk = futures[future]
+                        model_name = active_configs.get(mk, MODEL_CONFIGS.get(mk, {})).get("name", mk)
                         try:
                             model_results[mk] = future.result()
                         except Exception as e:
-                            model_results[mk] = {"success": False, "error": str(e), "model_name": active_configs.get(mk, MODEL_CONFIGS.get(mk, {})).get("name", mk)}
+                            model_results[mk] = {"success": False, "error": str(e), "model_name": model_name}
 
-                # Report per-model status
-                succeeded = [mk for mk, r in model_results.items() if r.get("success")]
-                failed = {mk: r.get("error", "Unknown") for mk, r in model_results.items() if not r.get("success")}
+            # Report per-model status
+            succeeded = [mk for mk, r in model_results.items() if r.get("success")]
+            failed = {mk: r.get("error", "Unknown") for mk, r in model_results.items() if not r.get("success")}
 
-                conflict_result = blend_conflict_results(model_results, active_configs)
-                if conflict_result.get("success"):
-                    save_conflict_result(conflict_result)
-                    st.success(f"Analysis complete — {len(succeeded)}/{len(model_results)} models responded: {', '.join(active_configs.get(mk, {}).get('name', mk) for mk in succeeded)}")
+            conflict_result = blend_conflict_results(model_results, active_configs)
+            if conflict_result.get("success"):
+                save_conflict_result(conflict_result)
+                st.success(f"Analysis complete — {len(succeeded)}/{n_models} models: {', '.join(active_configs.get(mk, {}).get('name', mk) for mk in succeeded)}")
 
-                if failed:
-                    for mk, err in failed.items():
-                        st.warning(f"{active_configs.get(mk, {}).get('name', mk)} failed: {err[:150]}")
+            st.session_state["_conflict_running"] = False
+
+            if failed:
+                for mk, err in failed.items():
+                    st.warning(f"{active_configs.get(mk, {}).get('name', mk)} failed: {err[:150]}")
         elif latest_conflict and latest_conflict.get("blended"):
             conflict_result = latest_conflict["blended"]
             conflict_result["success"] = True
@@ -1352,9 +1556,15 @@ Recent timeline of key events:
             model_assess = esc.get("model_assessments", [])
             for ma in model_assess:
                 role = role_map.get(ma["model"], "")
+                # Sanitize rationale — escape HTML tags and handle empty
+                rationale = ma.get("rationale", "")
+                if not rationale or not rationale.strip():
+                    rationale = "No rationale provided."
+                rationale = rationale.replace("<", "&lt;").replace(">", "&gt;")
                 citations_html = ""
                 if ma.get("citations"):
-                    cites = " · ".join(ma["citations"][:4])
+                    safe_cites = [c.replace("<", "&lt;").replace(">", "&gt;") for c in ma["citations"][:4]]
+                    cites = " · ".join(safe_cites)
                     citations_html = f'<div style="color:#888; font-size:11px; margin-top:4px;">Citations: {cites}</div>'
                 st.markdown(f"""<div style="padding:12px 14px; border-left:3px solid {ma['color']}; margin-bottom:8px; background:rgba(255,255,255,0.02); border-radius:0 6px 6px 0;">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -1364,7 +1574,7 @@ Recent timeline of key events:
                         </div>
                         <span style="font-size:20px; font-weight:bold; color:white;">{ma['score']}/10 — {ma['level']}</span>
                     </div>
-                    <div style="color:#ccc; font-size:13px; margin-top:8px; line-height:1.5;">{ma['rationale']}</div>
+                    <div style="color:#ccc; font-size:13px; margin-top:8px; line-height:1.5;">{rationale}</div>
                     {citations_html}
                 </div>""", unsafe_allow_html=True)
 
@@ -1374,12 +1584,31 @@ Recent timeline of key events:
             infra_list = conflict_result.get("infrastructure_status", [])
             if infra_list:
                 st.markdown("#### Infrastructure Status (AI Assessment)")
+                status_colors = {"offline": "#ff4b4b", "degraded": "#ffaa00", "operational": "#00ff96"}
+                status_icons = {"offline": "🔴", "degraded": "🟡", "operational": "🟢"}
+                infra_rows = ""
                 for item in infra_list:
                     status = item.get("status", "unknown")
                     changed = item.get("changed", False)
-                    icon = "🔴" if status == "offline" else "🟡" if status == "degraded" else "🟢"
-                    change_badge = ' <span style="color:#ff4b4b; font-weight:bold; font-size:11px; border:1px solid #ff4b4b; padding:1px 6px; border-radius:4px;">CHANGED</span>' if changed else ""
-                    st.markdown(f"{icon} **{item.get('name', '')}** — {status.upper()}{change_badge} — {item.get('detail', '')}", unsafe_allow_html=True)
+                    sc = status_colors.get(status, "#888")
+                    si = status_icons.get(status, "⚪")
+                    change_badge = f'<span style="color:#ff4b4b;font-size:0.65rem;font-weight:700;border:1px solid #ff4b4b;padding:1px 5px;border-radius:3px;margin-left:4px;">CHANGED</span>' if changed else ""
+                    infra_rows += (
+                        f'<tr style="border-bottom:1px solid #30363d;">'
+                        f'<td style="padding:6px 8px;font-weight:600;">{si} {item.get("name", "")}{change_badge}</td>'
+                        f'<td style="padding:6px 8px;color:{sc};font-weight:700;text-transform:uppercase;">{status}</td>'
+                        f'<td style="padding:6px 8px;color:#aaa;font-size:0.82rem;">{item.get("detail", "")}</td>'
+                        f'</tr>'
+                    )
+                st.markdown(
+                    f'<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
+                    f'<tr style="border-bottom:2px solid #30363d;">'
+                    f'<th style="padding:6px 8px;text-align:left;color:#888;">Facility</th>'
+                    f'<th style="padding:6px 8px;text-align:left;color:#888;">Status</th>'
+                    f'<th style="padding:6px 8px;text-align:left;color:#888;">Detail</th>'
+                    f'</tr>{infra_rows}</table>',
+                    unsafe_allow_html=True,
+                )
 
             st.divider()
 
@@ -1416,9 +1645,53 @@ Recent timeline of key events:
                         {oil_html}{trigger_html}
                     </div>""", unsafe_allow_html=True)
 
+            # Trending tweets from X/Twitter (primarily from Grok)
+            tweets = conflict_result.get("trending_tweets", [])
+            if tweets:
+                st.divider()
+                st.markdown("#### Trending on X")
+                st.caption("High-velocity tweets detected by Grok — sorted by engagement speed.")
+                for tw in tweets:
+                    handle = tw.get("handle", "")
+                    content = tw.get("content", "")
+                    likes = tw.get("likes", 0)
+                    rts = tw.get("retweets", 0)
+                    replies = tw.get("replies", 0)
+                    time_ago = tw.get("time", "")
+                    velocity = tw.get("velocity", "")
+                    why = tw.get("why_important", "")
+
+                    vel_color = "#ff4444" if velocity == "high" else "#ffaa00" if velocity == "medium" else "#888"
+                    vel_icon = "🔥" if velocity == "high" else "📈" if velocity == "medium" else "💬"
+
+                    metrics_parts = []
+                    if likes:
+                        metrics_parts.append(f"♥ {likes:,}")
+                    if rts:
+                        metrics_parts.append(f"🔁 {rts:,}")
+                    if replies:
+                        metrics_parts.append(f"💬 {replies:,}")
+                    metrics_str = "&nbsp;&nbsp;".join(metrics_parts)
+
+                    st.markdown(
+                        f'<div style="padding:10px 14px;border-left:3px solid {vel_color};margin-bottom:6px;'
+                        f'background:rgba(255,255,255,0.02);border-radius:0 6px 6px 0;">'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
+                        f'<span style="color:#00d1ff;font-weight:600;">{handle}</span>'
+                        f'<span style="font-size:0.7rem;color:#888;">{time_ago} {vel_icon}</span>'
+                        f'</div>'
+                        f'<div style="color:#ddd;font-size:0.85rem;line-height:1.5;margin-bottom:6px;">{content}</div>'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                        f'<span style="font-size:0.7rem;color:#888;">{metrics_str}</span>'
+                        f'<span style="font-size:0.7rem;color:{vel_color};font-style:italic;">{why}</span>'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
 
 # ---- TAB: Conflict Timeline ----
-with tab_timeline:
+with tab_timeline, error_boundary("Timeline"):
     st.subheader("Iran War Timeline & Infrastructure Impact")
 
     # ── Conflict Clock ──
@@ -1753,7 +2026,7 @@ with tab_timeline:
 
 
 # ---- TAB: ACLED Events ----
-with tab_acled:
+with tab_acled, error_boundary("ACLED Data"):
     st.subheader("Armed Conflict Events (ACLED)")
     st.caption("Real conflict events from the Armed Conflict Location & Event Data Project — battles, explosions, violence, protests across the region.")
 

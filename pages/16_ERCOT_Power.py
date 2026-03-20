@@ -4,7 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import requests
 import logging
-from src.layout import setup_page
+from src.layout import setup_page, error_boundary, fun_loader
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def fetch_ercot(endpoint: str):
 
 
 # --- FETCH ALL DATA ---
-with st.spinner("Connecting to ERCOT Grid..."):
+with fun_loader("data"):
     fuel_mix = fetch_ercot("fuel-mix")
     supply_demand = fetch_ercot("supply-demand")
     load_forecast = fetch_ercot("loadForecastVsActual")

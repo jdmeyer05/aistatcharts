@@ -6,7 +6,7 @@ import requests
 import os
 import logging
 from src.data_engine import format_massive_ticker, fetch_massive_data
-from src.layout import setup_page
+from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,9 @@ def fetch_all_expirations(symbol: str, api_key: str):
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("Configuration")
-    default_ticker = st.session_state.get("shared_options_ticker", "SPY")
-    raw_ticker = st.text_input("Ticker", value=default_ticker)
+    raw_ticker = st.text_input("Ticker", value=get_active_ticker())
     ticker = format_massive_ticker(raw_ticker)
+    set_active_ticker(ticker)
     submit = st.button("Load Options Data", type="primary", use_container_width=True)
 
 api_key = _get_massive_key()
@@ -96,7 +96,7 @@ if not api_key:
 
 # --- FETCH & STORE ---
 if submit:
-    with st.spinner(f"Loading full options chain for {ticker}..."):
+    with fun_loader("data"):
         expirations = fetch_all_expirations(ticker, api_key)
         df_chain = fetch_full_chain(ticker, api_key)
         px_df = fetch_massive_data(ticker, 5)

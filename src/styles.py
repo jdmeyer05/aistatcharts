@@ -131,10 +131,15 @@ def inject_global_css():
 
     /* ── Borders on charts, tables, and interactive elements ── */
     [data-testid="stPlotlyChart"],
+    .stPlotlyChart {{
+        border: 1px solid {COLORS['card_border']} !important;
+        border-radius: 6px !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+    }}
     [data-testid="stDataFrame"],
     [data-testid="stTable"],
     [data-testid="stImage"],
-    .stPlotlyChart,
     .stDataFrame {{
         border: 1px solid {COLORS['card_border']} !important;
         border-radius: 6px !important;
@@ -188,6 +193,20 @@ def inject_global_css():
         border-radius: 6px !important;
     }}
 
+    /* Style Streamlit's default exception/traceback display */
+    .stException {{
+        background: rgba(255, 68, 68, 0.08) !important;
+        border: 1px solid {COLORS['danger']} !important;
+        border-radius: 8px !important;
+        padding: 16px !important;
+    }}
+    .stException pre {{
+        font-size: 0.75rem !important;
+        color: {COLORS['text_muted']} !important;
+        max-height: 200px !important;
+        overflow-y: auto !important;
+    }}
+
     /* Expanders */
     [data-testid="stExpander"] {{
         border: 1px solid {COLORS['card_border']} !important;
@@ -209,12 +228,21 @@ def inject_global_css():
         display: none !important;
     }}
 
+    /* Hide Streamlit's built-in loading spinners — we use fun_loader instead */
+    [data-testid="stStatusWidget"],
+    .stSpinner,
+    [data-testid="stSpinner"],
+    [data-testid="stAppViewBlockContainer"] > div > div > [data-testid="stSpinner"] {{
+        display: none !important;
+    }}
+
     /* Reorder sidebar layout — reveal after reorder styles are applied */
     section[data-testid="stSidebar"] > div:first-child {{
         display: flex !important;
         flex-direction: column !important;
         padding-top: 0 !important;
         opacity: 1 !important;
+        visibility: visible !important;
     }}
     section[data-testid="stSidebar"] > div:first-child > div:has(.sidebar-brand) {{
         order: -2 !important;
@@ -222,13 +250,37 @@ def inject_global_css():
 
     /* Remove Streamlit default top padding */
     .stMainBlockContainer, .block-container {{
-        padding-top: 1rem !important;
+        padding-top: 0 !important;
+        padding-bottom: 40px !important;
     }}
     header[data-testid="stHeader"] {{
         background: transparent !important;
         height: 0 !important;
         min-height: 0 !important;
         padding: 0 !important;
+        margin: 0 !important;
+    }}
+    [data-testid="stAppViewContainer"] {{
+        padding-top: 0 !important;
+    }}
+    [data-testid="stAppViewContainer"] > div:first-child {{
+        padding-top: 0 !important;
+    }}
+    .appview-container {{
+        padding-top: 0 !important;
+    }}
+    .main .block-container {{
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+    }}
+    /* Collapse zero-height component iframes (footer, mobile guard) */
+    iframe[height="0"], div:has(> iframe[height="0"]) {{
+        height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        line-height: 0 !important;
     }}
 
     /* Target the main app container */
@@ -375,6 +427,8 @@ def inject_global_css():
         font-size: 0.85rem !important;
         border-radius: 4px !important;
         white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
     }}
     .stPageLink > a:hover {{
         background: rgba(0, 209, 255, 0.1) !important;
@@ -552,15 +606,22 @@ def inject_global_css():
         }}
         .stHorizontalBlock {{
             flex-wrap: wrap !important;
-            gap: 0.25rem !important;
+            gap: 0.35rem !important;
         }}
         .stHorizontalBlock > div {{
-            min-width: 45% !important;
-            flex: 1 1 45% !important;
+            min-width: 30% !important;
+            flex: 1 1 30% !important;
         }}
+        /* Nav buttons — 44px minimum touch target (Apple HIG) */
         .stPopover > button {{
-            font-size: 0.65rem !important;
-            padding: 2px 4px !important;
+            font-size: 0.8rem !important;
+            padding: 10px 8px !important;
+            min-height: 44px !important;
+        }}
+        .stMainBlockContainer .stButton > button[kind="secondary"] {{
+            font-size: 0.8rem !important;
+            padding: 10px 8px !important;
+            min-height: 44px !important;
         }}
         [data-testid="stMetric"] [data-testid="stMetricValue"] {{
             font-size: 0.85rem !important;
@@ -579,6 +640,53 @@ def inject_global_css():
             font-size: 0.7rem !important;
             padding: 4px 8px !important;
             white-space: nowrap !important;
+        }}
+    }}
+
+    /* ── Skeleton loading animation ── */
+    @keyframes shimmer {{
+        0% {{ background-position: -400px 0; }}
+        100% {{ background-position: 400px 0; }}
+    }}
+    .skeleton {{
+        background: linear-gradient(90deg, {COLORS['card_bg']} 25%, #2a2f3a 50%, {COLORS['card_bg']} 75%);
+        background-size: 800px 100%;
+        animation: shimmer 1.5s ease-in-out infinite;
+        border-radius: 6px;
+        border: 1px solid {COLORS['card_border']};
+    }}
+    .skeleton-card {{
+        padding: 16px;
+        margin-bottom: 8px;
+    }}
+    .skeleton-line {{
+        height: 12px;
+        margin: 8px 0;
+        border-radius: 4px;
+    }}
+    .skeleton-line.title {{
+        width: 60%;
+        height: 16px;
+    }}
+    .skeleton-line.price {{
+        width: 40%;
+        height: 24px;
+    }}
+    .skeleton-line.chart {{
+        width: 100%;
+        height: 80px;
+    }}
+
+    /* ── Responsive: Small phone (< 400px) ── */
+    @media (max-width: 400px) {{
+        .stHorizontalBlock > div {{
+            min-width: 45% !important;
+            flex: 1 1 45% !important;
+        }}
+        .stPopover > button,
+        .stMainBlockContainer .stButton > button[kind="secondary"] {{
+            font-size: 0.75rem !important;
+            min-height: 48px !important;
         }}
     }}
 </style>

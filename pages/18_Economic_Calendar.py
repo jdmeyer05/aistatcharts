@@ -6,13 +6,14 @@ import requests
 import os
 import logging
 from datetime import date, timedelta, datetime
-from src.layout import setup_page
+from src.layout import setup_page, error_boundary, fun_loader
+from src.styles import COLORS
 
 logger = logging.getLogger(__name__)
 
 setup_page("18_Economic_Calendar")
 
-st.title("🏛️ Economic Calendar")
+st.title("Economic Calendar")
 st.markdown("Upcoming macro releases, earnings, Treasury auctions, yield curve, and inflation data.")
 
 
@@ -30,23 +31,52 @@ def _get_key(name: str):
 # FRED CONFIG
 # ============================
 FRED_RELEASES = {
+    # High impact
     10: {"name": "CPI", "series": "CPIAUCSL", "impact": "High", "category": "Inflation"},
     50: {"name": "Nonfarm Payrolls (NFP)", "series": "PAYEMS", "impact": "High", "category": "Employment"},
     53: {"name": "GDP", "series": "GDP", "impact": "High", "category": "Growth"},
-    21: {"name": "FOMC Rate Decision", "series": "FEDFUNDS", "impact": "High", "category": "Fed"},
+    21: {"name": "FOMC Minutes/Data Release", "series": "FEDFUNDS", "impact": "High", "category": "Fed"},
     9: {"name": "Retail Sales", "series": "RSAFS", "impact": "High", "category": "Consumer"},
+    46: {"name": "PPI", "series": "PPIFIS", "impact": "High", "category": "Inflation"},
+    # Medium impact
     13: {"name": "Industrial Production", "series": "INDPRO", "impact": "Medium", "category": "Production"},
-    46: {"name": "PPI", "series": "PPIFIS", "impact": "Medium", "category": "Inflation"},
     18: {"name": "Housing Starts", "series": "HOUST", "impact": "Medium", "category": "Housing"},
     11: {"name": "Employment Cost Index", "series": "ECI", "impact": "Medium", "category": "Employment"},
     327: {"name": "Consumer Sentiment (UMich)", "series": "UMCSENT", "impact": "Medium", "category": "Consumer"},
+    22: {"name": "Existing Home Sales", "series": "EXHOSLUSM495S", "impact": "Medium", "category": "Housing"},
+    86: {"name": "New Home Sales", "series": "HSN1F", "impact": "Medium", "category": "Housing"},
+    15: {"name": "Durable Goods Orders", "series": "DGORDER", "impact": "Medium", "category": "Production"},
+    29: {"name": "PCE Price Index", "series": "PCEPI", "impact": "High", "category": "Inflation"},
+    61: {"name": "ISM Manufacturing", "series": "MANEMP", "impact": "High", "category": "Production"},
+    65: {"name": "Initial Jobless Claims", "series": "ICSA", "impact": "Medium", "category": "Employment"},
+    20: {"name": "Trade Balance", "series": "BOPGSTB", "impact": "Medium", "category": "Trade"},
+    31: {"name": "Personal Income", "series": "PI", "impact": "Medium", "category": "Consumer"},
+    14: {"name": "Capacity Utilization", "series": "TCU", "impact": "Medium", "category": "Production"},
+    17: {"name": "Building Permits", "series": "PERMIT", "impact": "Medium", "category": "Housing"},
+    83: {"name": "Consumer Confidence (CB)", "series": "CSCICP03USM665S", "impact": "Medium", "category": "Consumer"},
 }
+
+# Actual FOMC meeting decision dates (FRED only tracks minutes/data publication dates)
+FOMC_MEETINGS_2026 = [
+    "2026-01-29", "2026-03-19", "2026-05-07", "2026-06-18",
+    "2026-07-30", "2026-09-17", "2026-10-29", "2026-12-10",
+]
 
 YIELD_TENORS = [
     ("DGS1MO", "1M"), ("DGS3MO", "3M"), ("DGS6MO", "6M"), ("DGS1", "1Y"),
     ("DGS2", "2Y"), ("DGS3", "3Y"), ("DGS5", "5Y"), ("DGS7", "7Y"),
     ("DGS10", "10Y"), ("DGS20", "20Y"), ("DGS30", "30Y"),
 ]
+
+# Big-cap earnings filter — only show market-moving names by default
+BIG_CAP_SYMBOLS = {
+    "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "UNH",
+    "JNJ", "V", "XOM", "JPM", "WMT", "MA", "PG", "LLY", "HD", "CVX",
+    "MRK", "ABBV", "KO", "PEP", "AVGO", "COST", "TMO", "MCD", "CSCO", "ACN",
+    "ABT", "DHR", "NEE", "LIN", "WFC", "TXN", "PM", "AMD", "UNP", "CRM",
+    "MS", "GS", "BA", "CAT", "HON", "IBM", "GE", "NFLX", "DIS", "NKE",
+    "INTC", "QCOM", "AMAT", "SBUX", "LOW", "INTU", "ADP", "SYK", "BLK", "CI",
+}
 
 
 # ============================
@@ -74,6 +104,13 @@ def fetch_fred_calendar(fred_key: str):
                 })
         except Exception as e:
             logger.warning(f"FRED release fetch failed for {info['name']}: {e}")
+    # Inject actual FOMC meeting decision dates
+    for fomc_date in FOMC_MEETINGS_2026:
+        if fomc_date >= today_str:
+            events.append({
+                "date": fomc_date, "event": "FOMC Rate Decision",
+                "impact": "High", "category": "Fed", "series": "FEDFUNDS",
+            })
     return pd.DataFrame(events)
 
 
@@ -100,7 +137,6 @@ def fetch_fred_series(fred_key: str, series_id: str, limit: int = 60):
 
 @st.cache_data(ttl=3600)
 def fetch_yield_curve(fred_key: str):
-    """Fetch current and historical yield curves."""
     current = {}
     for sid, label in YIELD_TENORS:
         df = fetch_fred_series(fred_key, sid, limit=260)
@@ -149,10 +185,264 @@ today = date.today()
 now = datetime.now()
 week_end = today + timedelta(days=30)
 
-with st.spinner("Loading economic calendar data..."):
+with fun_loader("data"):
     df_econ = fetch_fred_calendar(fred_key) if fred_key else pd.DataFrame()
     df_earnings = fetch_earnings_calendar(finnhub_key, today.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")) if finnhub_key else pd.DataFrame()
     df_auctions = fetch_treasury_auctions()
+
+
+# ============================
+# HELPER: countdown
+# ============================
+def _make_countdown(event_date):
+    days = (event_date - today).days
+    if days < 0:
+        return None
+    if days == 0:
+        return "TODAY"
+    if days == 1:
+        return "Tomorrow"
+    return f"in {days}d"
+
+
+def _countdown_detailed(event_date):
+    """Return a more detailed countdown with hours."""
+    dt = datetime.combine(event_date, datetime.min.time().replace(hour=8, minute=30))
+    diff = dt - now
+    if diff.total_seconds() < 0:
+        return "NOW", COLORS["accent"]
+    hours = int(diff.total_seconds() // 3600)
+    if hours < 24:
+        return f"{hours}h", COLORS["danger"]
+    days = hours // 24
+    remaining_h = hours % 24
+    if days <= 2:
+        return f"{days}d {remaining_h}h", COLORS["warning"]
+    return f"{days}d", COLORS["text_muted"]
+
+
+# ═══════════════════════════════════════════════
+# TODAY'S HERO SECTION — before tabs
+# ═══════════════════════════════════════════════
+with error_boundary("Today Hero"):
+    today_events = []
+
+    # Economic releases today
+    if not df_econ.empty:
+        df_econ_parsed = df_econ.copy()
+        df_econ_parsed["date"] = pd.to_datetime(df_econ_parsed["date"])
+        today_econ = df_econ_parsed[df_econ_parsed["date"].dt.date == today]
+        for _, row in today_econ.iterrows():
+            today_events.append({"event": row["event"], "type": "Macro", "impact": row["impact"]})
+
+    # Earnings today — show big-cap individually, summarize the rest
+    if not df_earnings.empty:
+        df_earn_p = df_earnings.copy()
+        df_earn_p["date"] = pd.to_datetime(df_earn_p["date"])
+        today_earn = df_earn_p[df_earn_p["date"].dt.date == today]
+        big_today = []
+        small_count = 0
+        for _, row in today_earn.iterrows():
+            sym = row.get("symbol", "")
+            if sym in BIG_CAP_SYMBOLS:
+                big_today.append(sym)
+                today_events.append({"event": f"{sym} Earnings", "type": "Earnings", "impact": "High"})
+            else:
+                small_count += 1
+        if small_count > 0:
+            today_events.append({"event": f"+{small_count} more earnings", "type": "Earnings", "impact": "Low"})
+
+    # Treasury auctions today
+    if not df_auctions.empty:
+        df_auc_p = df_auctions.copy()
+        df_auc_p["auction_date"] = pd.to_datetime(df_auc_p["auction_date"])
+        today_auc = df_auc_p[df_auc_p["auction_date"].dt.date == today]
+        for _, row in today_auc.iterrows():
+            today_events.append({
+                "event": f"Treasury {row['security_type']} {row['security_term']}",
+                "type": "Auction", "impact": "Medium",
+            })
+
+    # Next major release countdown
+    next_major = None
+    if not df_econ.empty:
+        df_future = df_econ_parsed[
+            (df_econ_parsed["date"].dt.date >= today) &
+            (df_econ_parsed["impact"] == "High")
+        ].sort_values("date")
+        if not df_future.empty:
+            next_row = df_future.iloc[0]
+            next_cd, next_color = _countdown_detailed(next_row["date"].date())
+            next_major = {"event": next_row["event"], "date": next_row["date"], "countdown": next_cd, "color": next_color}
+
+    # ── Stat cards row: Fed Rate, Latest CPI, Unemployment, 2s10s Spread ──
+    if fred_key:
+        def _card(label, value, sub, color=COLORS["text_primary"], border=COLORS["card_border"]):
+            return (
+                f'<div style="flex:1 1 120px;text-align:center;padding:10px 8px;'
+                f'border:1px solid {border};border-radius:6px;background:rgba(255,255,255,0.02);">'
+                f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{label}</div>'
+                f'<div style="font-size:1.2rem;font-weight:700;color:{color};margin:2px 0;">{value}</div>'
+                f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{sub}</div>'
+                f'</div>'
+            )
+        stat_cards = []
+        # Fed Funds
+        df_ff_quick = fetch_fred_series(fred_key, "FEDFUNDS", limit=2)
+        if not df_ff_quick.empty:
+            ff_val = df_ff_quick.iloc[-1]["value"]
+            stat_cards.append(_card("FED FUNDS", f"{ff_val:.2f}%", "Current target", COLORS["accent"], COLORS["accent"]))
+        # CPI YoY
+        df_cpi_quick = fetch_fred_series(fred_key, "CPIAUCSL", limit=14)
+        if not df_cpi_quick.empty and len(df_cpi_quick) >= 13:
+            cpi_yoy = ((df_cpi_quick.iloc[-1]["value"] / df_cpi_quick.iloc[-13]["value"]) - 1) * 100
+            cpi_c = COLORS["danger"] if cpi_yoy > 3 else COLORS["warning"] if cpi_yoy > 2 else COLORS["success"]
+            stat_cards.append(_card("CPI", f"{cpi_yoy:.1f}%", "Year-over-Year", cpi_c, cpi_c))
+        # Unemployment
+        df_ur_quick = fetch_fred_series(fred_key, "UNRATE", limit=2)
+        if not df_ur_quick.empty:
+            ur_val = df_ur_quick.iloc[-1]["value"]
+            ur_c = COLORS["danger"] if ur_val > 5 else COLORS["warning"] if ur_val > 4 else COLORS["success"]
+            stat_cards.append(_card("UNEMPLOYMENT", f"{ur_val:.1f}%", "Latest reading", ur_c))
+        # 2s10s spread
+        df_sp_quick = fetch_fred_series(fred_key, "T10Y2Y", limit=2)
+        if not df_sp_quick.empty:
+            sp_val = df_sp_quick.iloc[-1]["value"]
+            sp_c = COLORS["danger"] if sp_val < 0 else COLORS["success"]
+            sp_label = "INVERTED" if sp_val < 0 else "Normal"
+            stat_cards.append(_card("2s10s SPREAD", f"{sp_val:.2f}%", sp_label, sp_c, sp_c))
+
+        if stat_cards:
+            st.markdown(
+                f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">{"".join(stat_cards)}</div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Today's events + next major countdown ──
+    type_colors_h = {"Macro": COLORS["danger"], "Earnings": COLORS["accent"], "Auction": COLORS["warning"]}
+    type_icons = {"Macro": "📊", "Earnings": "💰", "Auction": "🏛️"}
+
+    hero_cols = st.columns([3, 2])
+
+    with hero_cols[0]:
+        if today_events:
+            cards_html = ""
+            for ev in today_events:
+                ec = type_colors_h.get(ev["type"], "#888")
+                ei = type_icons.get(ev["type"], "•")
+                imp_badge = f'<span style="color:{COLORS["danger"]};font-size:0.6rem;font-weight:700;border:1px solid {COLORS["danger"]};padding:1px 5px;border-radius:3px;margin-left:6px;">HIGH</span>' if ev["impact"] == "High" else ""
+                cards_html += (
+                    f'<div style="display:inline-block;padding:6px 12px;margin:3px;border:1px solid {ec};'
+                    f'border-radius:6px;background:rgba({int(ec[1:3],16)},{int(ec[3:5],16)},{int(ec[5:7],16)},0.08);">'
+                    f'{ei} <strong style="color:{ec};">{ev["event"]}</strong>{imp_badge}</div>'
+                )
+            st.markdown(
+                f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-bottom:4px;">TODAY</div>'
+                f'<div style="display:flex;flex-wrap:wrap;">{cards_html}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-bottom:4px;">TODAY</div>'
+                f'<div style="color:{COLORS["text_muted"]};font-size:0.85rem;padding:4px 0;">No major events scheduled.</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Upcoming this week (next 2-3 high-impact events, not today)
+        if not df_econ.empty:
+            upcoming_high = df_econ_parsed[
+                (df_econ_parsed["date"].dt.date > today) &
+                (df_econ_parsed["date"].dt.date <= today + timedelta(days=7)) &
+                (df_econ_parsed["impact"] == "High")
+            ].sort_values("date").head(3)
+            if not upcoming_high.empty:
+                upcoming_html = ""
+                for _, row in upcoming_high.iterrows():
+                    cd, cd_color = _countdown_detailed(row["date"].date())
+                    upcoming_html += (
+                        f'<div style="display:inline-block;padding:4px 10px;margin:2px;border:1px solid {COLORS["card_border"]};'
+                        f'border-radius:4px;font-size:0.8rem;">'
+                        f'<span style="color:{cd_color};font-weight:700;margin-right:6px;">{cd}</span>'
+                        f'{row["event"]}'
+                        f'</div>'
+                    )
+                st.markdown(
+                    f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};margin-top:8px;margin-bottom:3px;">COMING UP</div>'
+                    f'<div style="display:flex;flex-wrap:wrap;">{upcoming_html}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    with hero_cols[1]:
+        if next_major:
+            st.markdown(
+                f'<div style="text-align:center;padding:12px;border:1px solid {next_major["color"]};border-radius:8px;'
+                f'background:rgba({int(next_major["color"][1:3],16)},{int(next_major["color"][3:5],16)},{int(next_major["color"][5:7],16)},0.05);">'
+                f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};letter-spacing:0.5px;">NEXT MAJOR RELEASE</div>'
+                f'<div style="font-size:2rem;font-weight:800;color:{next_major["color"]};text-shadow:0 0 10px {next_major["color"]}30;">{next_major["countdown"]}</div>'
+                f'<div style="font-size:0.95rem;font-weight:600;color:#e0e0e0;">{next_major["event"]}</div>'
+                f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{next_major["date"].strftime("%A, %b %d")}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Week event count summary
+        week_end_check = today + timedelta(days=6 - today.weekday())
+        if not df_econ.empty:
+            week_macro = len(df_econ_parsed[
+                (df_econ_parsed["date"].dt.date >= today) &
+                (df_econ_parsed["date"].dt.date <= week_end_check)
+            ])
+        else:
+            week_macro = 0
+        week_earn = 0
+        if not df_earnings.empty:
+            df_ep = df_earnings.copy()
+            df_ep["date"] = pd.to_datetime(df_ep["date"])
+            week_earn = len(df_ep[
+                (df_ep["date"].dt.date >= today) &
+                (df_ep["date"].dt.date <= week_end_check) &
+                (df_ep["symbol"].isin(BIG_CAP_SYMBOLS))
+            ])
+        week_auc = 0
+        if not df_auctions.empty:
+            df_ap = df_auctions.copy()
+            df_ap["auction_date"] = pd.to_datetime(df_ap["auction_date"])
+            week_auc = len(df_ap[
+                (df_ap["auction_date"].dt.date >= today) &
+                (df_ap["auction_date"].dt.date <= week_end_check)
+            ])
+
+        st.markdown(
+            f'<div style="display:flex;gap:8px;margin-top:8px;justify-content:center;">'
+            f'<div style="text-align:center;padding:4px 10px;border:1px solid {COLORS["card_border"]};border-radius:4px;">'
+            f'<div style="font-size:1rem;font-weight:700;color:{COLORS["danger"]};">{week_macro}</div>'
+            f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">Macro</div></div>'
+            f'<div style="text-align:center;padding:4px 10px;border:1px solid {COLORS["card_border"]};border-radius:4px;">'
+            f'<div style="font-size:1rem;font-weight:700;color:{COLORS["accent"]};">{week_earn}</div>'
+            f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">Earnings</div></div>'
+            f'<div style="text-align:center;padding:4px 10px;border:1px solid {COLORS["card_border"]};border-radius:4px;">'
+            f'<div style="font-size:1rem;font-weight:700;color:{COLORS["warning"]};">{week_auc}</div>'
+            f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">Auctions</div></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Yield curve inversion alert
+    if fred_key:
+        yield_data = fetch_yield_curve(fred_key)
+        if yield_data and "2Y" in yield_data and "10Y" in yield_data:
+            spread_2_10 = yield_data["10Y"]["current"] - yield_data["2Y"]["current"]
+            if spread_2_10 < 0:
+                st.markdown(
+                    f'<div style="background:rgba(255,68,68,0.08);border:1px solid {COLORS["danger"]};'
+                    f'border-radius:6px;padding:8px 14px;margin-top:6px;">'
+                    f'<strong style="color:{COLORS["danger"]};">Yield Curve Inverted</strong> — '
+                    f'2s10s spread at <strong>{spread_2_10:.2f}%</strong>. '
+                    f'Historically signals elevated recession risk.</div>',
+                    unsafe_allow_html=True,
+                )
+
+    st.divider()
 
 
 # ============================
@@ -171,7 +461,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 
 
 # ---- TAB 1: Week at a Glance ----
-with tab1:
+with tab1, error_boundary("Week at a Glance"):
     st.subheader("This Week — All Events")
 
     this_week_end = today + timedelta(days=(6 - today.weekday()))
@@ -180,23 +470,14 @@ with tab1:
 
     week_events = []
 
-    def _make_countdown(event_date):
-        days = (event_date - today).days
-        if days < 0:
-            return None  # filter out
-        if days == 0:
-            return "TODAY"
-        if days == 1:
-            return "Tomorrow"
-        return f"in {days}d"
-
-    # Economic releases (today through end of week only)
+    # Economic releases
     if not df_econ.empty:
         df_econ_parsed = df_econ.copy()
         df_econ_parsed["date"] = pd.to_datetime(df_econ_parsed["date"])
         this_week_econ = df_econ_parsed[
             (df_econ_parsed["date"] >= today_ts) &
-            (df_econ_parsed["date"] <= week_end_ts)
+            (df_econ_parsed["date"] <= week_end_ts) &
+            (df_econ_parsed["date"].dt.weekday < 5)
         ]
         for _, row in this_week_econ.iterrows():
             cd = _make_countdown(row["date"].date())
@@ -212,19 +493,20 @@ with tab1:
                 "Countdown": cd,
             })
 
-    # Earnings this week (today through end of week only)
+    # Earnings this week
     if not df_earnings.empty:
         df_earn_parsed = df_earnings.copy()
         df_earn_parsed["date"] = pd.to_datetime(df_earn_parsed["date"])
         this_week_earn = df_earn_parsed[
             (df_earn_parsed["date"] >= today_ts) &
-            (df_earn_parsed["date"] <= week_end_ts)
+            (df_earn_parsed["date"] <= week_end_ts) &
+            (df_earn_parsed["date"].dt.weekday < 5)
         ]
-        if "revenueEstimate" in this_week_earn.columns:
-            top_earn = this_week_earn.dropna(subset=["revenueEstimate"]).nlargest(10, "revenueEstimate")
-        else:
-            top_earn = this_week_earn.head(10)
-        for _, row in top_earn.iterrows():
+        # Filter to big-cap by default
+        big_earn = this_week_earn[this_week_earn["symbol"].isin(BIG_CAP_SYMBOLS)]
+        if big_earn.empty and "revenueEstimate" in this_week_earn.columns:
+            big_earn = this_week_earn.dropna(subset=["revenueEstimate"]).nlargest(10, "revenueEstimate")
+        for _, row in big_earn.iterrows():
             cd = _make_countdown(row["date"].date())
             if cd is None:
                 continue
@@ -234,27 +516,30 @@ with tab1:
                 "Date": row["date"].strftime("%b %d"),
                 "Event": f"{row['symbol']} Earnings",
                 "Type": "Earnings",
-                "Impact": "Medium",
+                "Impact": "High" if row["symbol"] in BIG_CAP_SYMBOLS else "Medium",
                 "Countdown": cd,
             })
 
-    # Treasury auctions this week (today through end of week only)
+    # Treasury auctions
     if not df_auctions.empty:
         df_auc_parsed = df_auctions.copy()
         df_auc_parsed["auction_date"] = pd.to_datetime(df_auc_parsed["auction_date"])
         this_week_auc = df_auc_parsed[
             (df_auc_parsed["auction_date"] >= today_ts) &
-            (df_auc_parsed["auction_date"] <= week_end_ts)
+            (df_auc_parsed["auction_date"] <= week_end_ts) &
+            (df_auc_parsed["auction_date"].dt.weekday < 5)
         ]
         for _, row in this_week_auc.iterrows():
             cd = _make_countdown(row["auction_date"].date())
             if cd is None:
                 continue
+            offering = row.get("offering_amt", "")
+            offering_str = f" (${float(offering)/1e3:.0f}B)" if offering and str(offering).replace(".", "").isdigit() and float(offering) > 0 else ""
             week_events.append({
                 "date_raw": row["auction_date"],
                 "Day": row["auction_date"].strftime("%a"),
                 "Date": row["auction_date"].strftime("%b %d"),
-                "Event": f"Treasury {row['security_type']} {row['security_term']}",
+                "Event": f"Treasury {row['security_type']} {row['security_term']}{offering_str}",
                 "Type": "Auction",
                 "Impact": "Low",
                 "Countdown": cd,
@@ -263,24 +548,48 @@ with tab1:
     if week_events:
         df_week = pd.DataFrame(week_events).sort_values("date_raw")
 
-        # Display table (without raw date)
-        st.dataframe(
-            df_week[["Day", "Date", "Event", "Type", "Impact", "Countdown"]],
-            use_container_width=True, hide_index=True,
+        # Color-coded HTML table (no spinner)
+        type_c = {"Macro": COLORS["danger"], "Earnings": COLORS["accent"], "Auction": COLORS["warning"]}
+        impact_c = {"High": COLORS["danger"], "Medium": COLORS["warning"], "Low": "#888"}
+        rows_html = ""
+        for _, r in df_week[["Day", "Date", "Event", "Type", "Impact", "Countdown"]].iterrows():
+            tc = type_c.get(r["Type"], "#888")
+            ic = impact_c.get(r["Impact"], "#888")
+            cd_color = COLORS["danger"] if r["Countdown"] == "TODAY" else COLORS["warning"] if r["Countdown"] == "Tomorrow" else COLORS["text_muted"]
+            rows_html += (
+                f'<tr style="border-bottom:1px solid {COLORS["card_border"]};">'
+                f'<td style="padding:6px 8px;color:{COLORS["text_muted"]};">{r["Day"]}</td>'
+                f'<td style="padding:6px 8px;">{r["Date"]}</td>'
+                f'<td style="padding:6px 8px;font-weight:600;">{r["Event"]}</td>'
+                f'<td style="padding:6px 8px;color:{tc};">{r["Type"]}</td>'
+                f'<td style="padding:6px 8px;color:{ic};font-weight:600;">{r["Impact"]}</td>'
+                f'<td style="padding:6px 8px;color:{cd_color};font-weight:700;">{r["Countdown"]}</td>'
+                f'</tr>'
+            )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
+            f'<tr style="border-bottom:2px solid {COLORS["card_border"]};">'
+            f'<th style="padding:6px 8px;text-align:left;color:{COLORS["text_muted"]};">Day</th>'
+            f'<th style="padding:6px 8px;text-align:left;color:{COLORS["text_muted"]};">Date</th>'
+            f'<th style="padding:6px 8px;text-align:left;color:{COLORS["text_muted"]};">Event</th>'
+            f'<th style="padding:6px 8px;text-align:left;color:{COLORS["text_muted"]};">Type</th>'
+            f'<th style="padding:6px 8px;text-align:left;color:{COLORS["text_muted"]};">Impact</th>'
+            f'<th style="padding:6px 8px;text-align:left;color:{COLORS["text_muted"]};">When</th>'
+            f'</tr>{rows_html}</table>',
+            unsafe_allow_html=True,
         )
 
         # Day-by-day visual layout
         st.subheader("Week View")
-        type_colors = {"Macro": "#ff4b4b", "Earnings": "#00d1ff", "Auction": "#ffaa00"}
+        type_colors = {"Macro": COLORS["danger"], "Earnings": COLORS["accent"], "Auction": COLORS["warning"]}
 
-        # Build columns for each remaining day of the week
-        days_remaining = (this_week_end - today).days + 1
-        day_cols = st.columns(min(days_remaining, 5))
+        weekdays = [today + timedelta(days=i) for i in range((this_week_end - today).days + 1)
+                    if (today + timedelta(days=i)).weekday() < 5]
+        day_cols = st.columns(len(weekdays)) if weekdays else []
 
-        for i, col in enumerate(day_cols):
-            day = today + timedelta(days=i)
+        for col, day in zip(day_cols, weekdays):
             day_label = day.strftime("%a %b %d")
-            day_events = df_week[df_week["date_raw"].dt.date == day]
+            day_events_df = df_week[df_week["date_raw"].dt.date == day]
 
             with col:
                 if day == today:
@@ -288,25 +597,28 @@ with tab1:
                 else:
                     st.markdown(f"**{day_label}**")
 
-                if day_events.empty:
+                if day_events_df.empty:
                     st.caption("No events")
                 else:
-                    for _, ev in day_events.iterrows():
+                    for _, ev in day_events_df.iterrows():
                         color = type_colors.get(ev["Type"], "#888")
                         icon = {"Macro": "📊", "Earnings": "💰", "Auction": "🏛️"}.get(ev["Type"], "•")
-                        st.markdown(f"{icon} {ev['Event']}")
+                        impact_dot = f'<span style="color:{COLORS["danger"]};">●</span> ' if ev["Impact"] == "High" else ""
+                        st.markdown(
+                            f'{impact_dot}{icon} {ev["Event"]}',
+                            unsafe_allow_html=True,
+                        )
     else:
         st.info("No events this week.")
 
 
-# ---- TAB 2: Economic Releases with Countdown & Filters ----
-with tab2:
+# ---- TAB 2: Economic Releases ----
+with tab2, error_boundary("Economic Releases"):
     if not df_econ.empty:
         df_econ_t2 = df_econ.copy()
         df_econ_t2["date"] = pd.to_datetime(df_econ_t2["date"])
-        df_econ_t2 = df_econ_t2.sort_values("date")
+        df_econ_t2 = df_econ_t2[df_econ_t2["date"].dt.weekday < 5].sort_values("date")
 
-        # Filters
         fc1, fc2 = st.columns(2)
         with fc1:
             impact_filter = st.multiselect("Impact", ["High", "Medium"], default=["High", "Medium"])
@@ -320,7 +632,6 @@ with tab2:
         ]
 
         if not df_filtered.empty:
-            # Add countdown — compute days from today
             display = df_filtered[["date", "event", "impact", "category"]].copy()
 
             def _countdown(d):
@@ -338,46 +649,45 @@ with tab2:
             display.columns = ["Date", "Event", "Impact", "Category", "Countdown"]
             st.dataframe(display, use_container_width=True, hide_index=True)
 
-        # Timeline — next 7 days
+        # Timeline — next 7 weekdays
         st.subheader("Next 7 Days")
         seven_days = pd.Timestamp(today + timedelta(days=7))
         df_7d = df_filtered[
             (df_filtered["date"] >= pd.Timestamp(today)) &
             (df_filtered["date"] <= seven_days)
         ].copy()
+        df_7d = df_7d[df_7d["date"].dt.weekday < 5]
 
         if not df_7d.empty:
-            impact_colors = {"High": "#ff4b4b", "Medium": "#ffaa00"}
-
-            # Build a day-by-day layout with events stacked vertically per day
+            impact_colors = {"High": COLORS["danger"], "Medium": COLORS["warning"]}
             fig_tl = go.Figure()
 
-            # Background day columns
-            for i in range(8):
-                day = today + timedelta(days=i)
+            plot_days = [today + timedelta(days=i) for i in range(8) if (today + timedelta(days=i)).weekday() < 5]
+            for i, day in enumerate(plot_days):
                 day_label = day.strftime("%a\n%b %d")
-                bg_color = "rgba(0, 209, 255, 0.08)" if i == 0 else "rgba(255,255,255,0.03)"
-                fig_tl.add_vrect(
-                    x0=i - 0.4, x1=i + 0.4, fillcolor=bg_color, line_width=0,
-                )
+                bg_color = "rgba(0, 209, 255, 0.08)" if day == today else "rgba(255,255,255,0.03)"
+                fig_tl.add_vrect(x0=i - 0.4, x1=i + 0.4, fillcolor=bg_color, line_width=0)
                 fig_tl.add_annotation(
                     x=i, y=-0.3, text=day_label, showarrow=False,
-                    font=dict(size=11, color="white" if i == 0 else "#888"),
+                    font=dict(size=11, color="white" if day == today else "#888"),
                 )
 
-            # Place events
-            day_counts = {}  # track stacking per day
+            day_counts = {}
             for _, row in df_7d.iterrows():
-                days_offset = (row["date"].date() - today).days
-                if days_offset < 0 or days_offset > 7:
+                day_offset = None
+                for i, pd_day in enumerate(plot_days):
+                    if row["date"].date() == pd_day:
+                        day_offset = i
+                        break
+                if day_offset is None:
                     continue
-                stack_idx = day_counts.get(days_offset, 0)
-                day_counts[days_offset] = stack_idx + 1
+                stack_idx = day_counts.get(day_offset, 0)
+                day_counts[day_offset] = stack_idx + 1
                 y_pos = stack_idx * 0.8 + 0.3
 
                 color = impact_colors.get(row["impact"], "#888")
                 fig_tl.add_trace(go.Scatter(
-                    x=[days_offset], y=[y_pos],
+                    x=[day_offset], y=[y_pos],
                     mode="markers+text",
                     marker=dict(size=16, color=color, symbol="diamond"),
                     text=[row["event"]],
@@ -392,14 +702,14 @@ with tab2:
                 template="plotly_dark", height=max(150, 80 + max_stack * 60),
                 margin=dict(t=10, b=40, l=10, r=10),
                 yaxis=dict(visible=False, range=[-0.5, max_stack * 0.8 + 0.5]),
-                xaxis=dict(visible=False, range=[-0.8, 7.8]),
+                xaxis=dict(visible=False, range=[-0.8, len(plot_days) - 0.2]),
                 showlegend=False,
             )
             st.plotly_chart(fig_tl, use_container_width=True)
         else:
             st.info("No releases in the next 7 days.")
 
-        # Historical surprise chart for each major indicator
+        # Historical release — actual vs estimate (surprise chart)
         st.subheader("Recent Release History")
         selected_event = st.selectbox("Select Indicator", df_filtered["event"].unique())
         series_id = df_filtered[df_filtered["event"] == selected_event]["series"].iloc[0]
@@ -409,25 +719,40 @@ with tab2:
             df_hist["change"] = df_hist["value"].diff()
             df_hist["pct_change"] = df_hist["value"].pct_change() * 100
 
-            fig_hist = go.Figure()
-            colors = ["#00ff96" if v >= 0 else "#ff4b4b" for v in df_hist["pct_change"].fillna(0)]
+            fig_hist = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4],
+                                     vertical_spacing=0.05)
+
+            # Level
+            fig_hist.add_trace(go.Scatter(
+                x=df_hist["date"], y=df_hist["value"],
+                mode="lines+markers", line=dict(color=COLORS["accent"], width=2),
+                marker=dict(size=6), name="Value",
+            ), row=1, col=1)
+
+            # Change bars
+            colors_chg = [COLORS["success"] if v >= 0 else COLORS["danger"] for v in df_hist["pct_change"].fillna(0)]
             fig_hist.add_trace(go.Bar(
                 x=df_hist["date"], y=df_hist["pct_change"],
-                marker_color=colors,
-                hovertemplate="Date: %{x|%b %Y}<br>Change: %{y:.2f}%<extra></extra>",
-            ))
-            fig_hist.add_hline(y=0, line_color="white", line_width=1)
+                marker_color=colors_chg, name="% Change",
+            ), row=2, col=1)
+            fig_hist.add_hline(y=0, line_color="white", line_width=0.5, row=2, col=1)
+
             fig_hist.update_layout(
-                template="plotly_dark", height=300, margin=dict(t=10, b=0, l=0, r=0),
-                yaxis_title="% Change (MoM)", hovermode="x unified",
+                template="plotly_dark", height=400, margin=dict(t=10, b=0, l=0, r=0),
+                hovermode="x unified", showlegend=False,
             )
+            fig_hist.update_yaxes(title_text="Value", row=1, col=1)
+            fig_hist.update_yaxes(title_text="% Change", row=2, col=1)
             st.plotly_chart(fig_hist, use_container_width=True)
     else:
         st.warning("FRED API key not configured.")
 
+# Need subplots import for tab 2
+from plotly.subplots import make_subplots
+
 
 # ---- TAB 3: Yield Curve ----
-with tab3:
+with tab3, error_boundary("Yield Curve"):
     if fred_key:
         st.subheader("US Treasury Yield Curve")
 
@@ -436,10 +761,8 @@ with tab3:
             tenor_labels = [label for _, label in YIELD_TENORS if label in yield_data]
             current_yields = [yield_data[label]["current"] for label in tenor_labels]
 
-            # Historical curves: 1 month ago, 3 months ago, 1 year ago
             fig_yc = go.Figure()
 
-            # Get historical yields for comparison
             historical_periods = [
                 (22, "1 Month Ago", "#888888", "dot"),
                 (66, "3 Months Ago", "#ffaa00", "dot"),
@@ -463,11 +786,10 @@ with tab3:
                         marker=dict(size=5),
                     ))
 
-            # Current curve (on top)
             fig_yc.add_trace(go.Scatter(
                 x=tenor_labels, y=current_yields,
                 mode="lines+markers", name="Current",
-                line=dict(color="#00d1ff", width=3),
+                line=dict(color=COLORS["accent"], width=3),
                 marker=dict(size=8),
             ))
 
@@ -479,22 +801,35 @@ with tab3:
 
             # Yield metrics
             yc1, yc2, yc3, yc4 = st.columns(4)
-            yc1.metric("2-Year", f"{yield_data.get('2Y', {}).get('current', 0):.2f}%")
-            yc2.metric("10-Year", f"{yield_data.get('10Y', {}).get('current', 0):.2f}%")
-            spread_2_10 = yield_data.get("10Y", {}).get("current", 0) - yield_data.get("2Y", {}).get("current", 0)
-            yc3.metric("2s10s Spread", f"{spread_2_10:.2f}%",
-                       delta_color="normal" if spread_2_10 > 0 else "inverse")
-            yc4.metric("30-Year", f"{yield_data.get('30Y', {}).get('current', 0):.2f}%")
+            y2 = yield_data.get("2Y", {}).get("current", 0)
+            y10 = yield_data.get("10Y", {}).get("current", 0)
+            y30 = yield_data.get("30Y", {}).get("current", 0)
+            spread_2_10 = y10 - y2
+
+            yc1.metric("2-Year", f"{y2:.2f}%")
+            yc2.metric("10-Year", f"{y10:.2f}%")
+            spread_color = "inverse" if spread_2_10 < 0 else "normal"
+            yc3.metric("2s10s Spread", f"{spread_2_10:.2f}%", delta_color=spread_color)
+            yc4.metric("30-Year", f"{y30:.2f}%")
+
+            # Inversion alert inline
+            if spread_2_10 < 0:
+                st.markdown(
+                    f'<div style="background:rgba(255,68,68,0.08);border-left:3px solid {COLORS["danger"]};'
+                    f'padding:6px 12px;border-radius:3px;font-size:0.85rem;color:{COLORS["danger"]};">'
+                    f'Yield curve is <strong>INVERTED</strong> — 2s10s at {spread_2_10:.2f}%. '
+                    f'This has preceded every US recession since 1970.</div>',
+                    unsafe_allow_html=True,
+                )
 
             # 2s10s spread over time
             st.subheader("2s10s Spread History")
             df_spread = fetch_fred_series(fred_key, "T10Y2Y", limit=260)
             if not df_spread.empty:
                 fig_spread = go.Figure()
-                colors_sp = ["#00ff96" if v >= 0 else "#ff4b4b" for v in df_spread["value"]]
                 fig_spread.add_trace(go.Scatter(
                     x=df_spread["date"], y=df_spread["value"],
-                    mode="lines", line=dict(color="#00d1ff", width=2),
+                    mode="lines", line=dict(color=COLORS["accent"], width=2),
                 ))
                 fig_spread.add_hline(y=0, line_dash="solid", line_color="white", line_width=1)
                 fig_spread.add_hrect(y0=-5, y1=0, fillcolor="rgba(255, 75, 75, 0.1)", line_width=0)
@@ -505,21 +840,29 @@ with tab3:
                 st.plotly_chart(fig_spread, use_container_width=True)
                 st.caption("Shaded red = inverted yield curve (historically signals recession)")
 
-            # FOMC Rate path
+            # Fed Funds Rate path
             st.subheader("Fed Funds Rate Path")
             df_ff = fetch_fred_series(fred_key, "FEDFUNDS", limit=120)
             if not df_ff.empty:
                 fig_ff = go.Figure()
                 fig_ff.add_trace(go.Scatter(
                     x=df_ff["date"], y=df_ff["value"],
-                    mode="lines", line=dict(color="#00d1ff", width=2.5, shape="hv"),
+                    mode="lines", line=dict(color=COLORS["accent"], width=2.5, shape="hv"),
                     name="Fed Funds Rate",
                 ))
-                # Mark FOMC dates
                 if not df_econ.empty:
                     fomc_dates = df_econ[df_econ["event"] == "FOMC Rate Decision"]["date"].tolist()
                     for fd in fomc_dates:
                         fig_ff.add_vline(x=fd, line_dash="dot", line_color="rgba(255,170,0,0.5)")
+
+                # Market-implied rate expectations (simple proxy from 2Y yield)
+                if "2Y" in yield_data:
+                    current_rate = df_ff.iloc[-1]["value"]
+                    implied_terminal = yield_data["2Y"]["current"]
+                    implied_cuts = round((current_rate - implied_terminal) / 0.25)
+                    if implied_cuts != 0:
+                        direction = "cuts" if implied_cuts > 0 else "hikes"
+                        st.caption(f"Market-implied: ~{abs(implied_cuts)} rate {direction} priced in (2Y yield at {implied_terminal:.2f}% vs Fed Funds at {current_rate:.2f}%)")
 
                 fig_ff.update_layout(
                     template="plotly_dark", height=300, margin=dict(t=10, b=0, l=0, r=0),
@@ -532,20 +875,18 @@ with tab3:
 
 
 # ---- TAB 4: Inflation Dashboard ----
-with tab4:
+with tab4, error_boundary("Inflation Dashboard"):
     if fred_key:
         st.subheader("Inflation Dashboard")
 
-        # Compute YoY rates
         inflation_series = [
-            ("CPIAUCSL", "CPI (All Items)", "#ff4b4b"),
-            ("CPILFESL", "Core CPI (ex Food & Energy)", "#ffaa00"),
-            ("PCEPI", "PCE Price Index", "#00d1ff"),
-            ("PCEPILFE", "Core PCE", "#00ff96"),
+            ("CPIAUCSL", "CPI (All Items)", COLORS["danger"]),
+            ("CPILFESL", "Core CPI (ex Food & Energy)", COLORS["warning"]),
+            ("PCEPI", "PCE Price Index", COLORS["accent"]),
+            ("PCEPILFE", "Core PCE", COLORS["success"]),
             ("PPIFIS", "PPI (Final Demand)", "#ad7fff"),
         ]
 
-        # Metrics row
         inf_cols = st.columns(len(inflation_series))
         yoy_data = {}
 
@@ -553,7 +894,7 @@ with tab4:
             df_inf = fetch_fred_series(fred_key, sid, limit=24)
             if not df_inf.empty and len(df_inf) >= 13:
                 latest = df_inf.iloc[-1]["value"]
-                year_ago = df_inf.iloc[-13]["value"] if len(df_inf) >= 13 else df_inf.iloc[0]["value"]
+                year_ago = df_inf.iloc[-13]["value"]
                 yoy = ((latest / year_ago) - 1) * 100
                 prev_latest = df_inf.iloc[-2]["value"]
                 prev_year_ago = df_inf.iloc[-14]["value"] if len(df_inf) >= 14 else df_inf.iloc[0]["value"]
@@ -577,10 +918,8 @@ with tab4:
                     line=dict(color=info["color"], width=2),
                 ))
 
-        # Fed 2% target
-        fig_inf.add_hline(y=2.0, line_dash="dash", line_color="#00ff96",
+        fig_inf.add_hline(y=2.0, line_dash="dash", line_color=COLORS["success"],
                           annotation_text="Fed 2% Target")
-
         fig_inf.update_layout(
             template="plotly_dark", height=450, margin=dict(t=10, b=0, l=0, r=0),
             yaxis_title="Year-over-Year (%)", hovermode="x unified",
@@ -594,12 +933,10 @@ with tab4:
         df_cpi = yoy_data.get("CPIAUCSL", {}).get("df", pd.DataFrame())
         if not df_cpi.empty:
             mom = df_cpi["value"].pct_change() * 100
-            colors_mom = ["#00ff96" if v <= 0.2 else "#ffaa00" if v <= 0.4 else "#ff4b4b"
+            colors_mom = [COLORS["success"] if v <= 0.2 else COLORS["warning"] if v <= 0.4 else COLORS["danger"]
                           for v in mom.fillna(0)]
-            fig_mom.add_trace(go.Bar(
-                x=df_cpi["date"], y=mom, marker_color=colors_mom, name="CPI MoM"
-            ))
-            fig_mom.add_hline(y=0.167, line_dash="dot", line_color="#00ff96",
+            fig_mom.add_trace(go.Bar(x=df_cpi["date"], y=mom, marker_color=colors_mom, name="CPI MoM"))
+            fig_mom.add_hline(y=0.167, line_dash="dot", line_color=COLORS["success"],
                               annotation_text="~2% annualized")
             fig_mom.update_layout(
                 template="plotly_dark", height=300, margin=dict(t=10, b=0, l=0, r=0),
@@ -611,11 +948,11 @@ with tab4:
         # CPI components
         st.subheader("CPI Breakdown")
         cpi_components = [
-            ("CUUR0000SA0", "All Items", "#ff4b4b"),
-            ("CUUR0000SA0L1E", "Core (ex Food & Energy)", "#ffaa00"),
-            ("CUUR0000SAF1", "Food", "#00d1ff"),
+            ("CUUR0000SA0", "All Items", COLORS["danger"]),
+            ("CUUR0000SA0L1E", "Core (ex Food & Energy)", COLORS["warning"]),
+            ("CUUR0000SAF1", "Food", COLORS["accent"]),
             ("CUUR0000SEHE01", "Shelter", "#ad7fff"),
-            ("CUUR0000SETB01", "Gasoline", "#00ff96"),
+            ("CUUR0000SETB01", "Gasoline", COLORS["success"]),
         ]
         fig_cpi_comp = go.Figure()
         for sid, label, color in cpi_components:
@@ -638,11 +975,10 @@ with tab4:
 
 
 # ---- TAB 5: Labor Market ----
-with tab5:
+with tab5, error_boundary("Labor Market"):
     if fred_key:
         st.subheader("Labor Market Dashboard")
 
-        # Metrics
         labor_metrics = [
             ("PAYEMS", "Nonfarm Payrolls", "K", 1),
             ("UNRATE", "Unemployment Rate", "%", 0),
@@ -674,7 +1010,7 @@ with tab5:
             df_nfp_plot = df_nfp.dropna(subset=["change"])
 
             fig_nfp = go.Figure()
-            colors_nfp = ["#00ff96" if v > 0 else "#ff4b4b" for v in df_nfp_plot["change"]]
+            colors_nfp = [COLORS["success"] if v > 0 else COLORS["danger"] for v in df_nfp_plot["change"]]
             fig_nfp.add_trace(go.Bar(
                 x=df_nfp_plot["date"], y=df_nfp_plot["change"],
                 marker_color=colors_nfp,
@@ -687,12 +1023,12 @@ with tab5:
             )
             st.plotly_chart(fig_nfp, use_container_width=True)
 
-        # Unemployment & labor charts
+        # Labor charts 2x2
         labor_charts = [
-            ("UNRATE", "Unemployment Rate (%)", "#ff4b4b"),
-            ("ICSA", "Weekly Initial Jobless Claims", "#ffaa00"),
-            ("JTSJOL", "Job Openings (JOLTS, Thousands)", "#00d1ff"),
-            ("CES0500000003", "Average Hourly Earnings ($)", "#00ff96"),
+            ("UNRATE", "Unemployment Rate (%)", COLORS["danger"]),
+            ("ICSA", "Weekly Initial Jobless Claims", COLORS["warning"]),
+            ("JTSJOL", "Job Openings (JOLTS, Thousands)", COLORS["accent"]),
+            ("CES0500000003", "Average Hourly Earnings ($)", COLORS["success"]),
         ]
 
         lc1, lc2 = st.columns(2)
@@ -721,7 +1057,7 @@ with tab5:
 
 
 # ---- TAB 6: Macro Dashboard ----
-with tab6:
+with tab6, error_boundary("Macro Dashboard"):
     if fred_key:
         st.subheader("Key Economic Indicators")
 
@@ -749,10 +1085,10 @@ with tab6:
         st.divider()
 
         chart_series = [
-            ("FEDFUNDS", "Fed Funds Rate (%)", "#00d1ff"),
-            ("UNRATE", "Unemployment Rate (%)", "#ff4b4b"),
-            ("CPIAUCSL", "CPI (All Urban Consumers)", "#ffaa00"),
-            ("T10Y2Y", "10Y-2Y Treasury Spread (%)", "#00ff96"),
+            ("FEDFUNDS", "Fed Funds Rate (%)", COLORS["accent"]),
+            ("UNRATE", "Unemployment Rate (%)", COLORS["danger"]),
+            ("CPIAUCSL", "CPI (All Urban Consumers)", COLORS["warning"]),
+            ("T10Y2Y", "10Y-2Y Treasury Spread (%)", COLORS["success"]),
         ]
 
         r1c1, r1c2 = st.columns(2)
@@ -791,7 +1127,7 @@ with tab6:
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(
                         x=df_s["date"], y=df_s["value"],
-                        mode="lines+markers", line=dict(color="#00d1ff", width=1.5),
+                        mode="lines+markers", line=dict(color=COLORS["accent"], width=1.5),
                     ))
                     fig.update_layout(
                         template="plotly_dark", height=250,
@@ -805,14 +1141,25 @@ with tab6:
 
 
 # ---- TAB 7: Earnings Calendar ----
-with tab7:
+with tab7, error_boundary("Earnings Calendar"):
     if not df_earnings.empty:
         st.subheader(f"Upcoming Earnings ({today.strftime('%b %d')} - {week_end.strftime('%b %d')})")
 
-        df_earnings["date"] = pd.to_datetime(df_earnings["date"])
-        df_earnings = df_earnings.sort_values(["date", "symbol"])
+        # Filter toggle
+        show_all = st.checkbox("Show all earnings (including small-cap)", value=False)
 
-        display_earn = df_earnings[["date", "symbol", "epsEstimate", "epsActual", "revenueEstimate", "revenueActual", "hour"]].copy()
+        df_earnings_t7 = df_earnings.copy()
+        df_earnings_t7["date"] = pd.to_datetime(df_earnings_t7["date"])
+        df_earnings_t7 = df_earnings_t7[df_earnings_t7["date"].dt.weekday < 5].sort_values(["date", "symbol"])
+
+        if not show_all:
+            # Filter to big-cap or companies with revenue estimates
+            big_cap = df_earnings_t7[df_earnings_t7["symbol"].isin(BIG_CAP_SYMBOLS)]
+            if big_cap.empty and "revenueEstimate" in df_earnings_t7.columns:
+                big_cap = df_earnings_t7.dropna(subset=["revenueEstimate"]).nlargest(30, "revenueEstimate")
+            df_earnings_t7 = big_cap if not big_cap.empty else df_earnings_t7.head(30)
+
+        display_earn = df_earnings_t7[["date", "symbol", "epsEstimate", "epsActual", "revenueEstimate", "revenueActual", "hour"]].copy()
         display_earn["date"] = display_earn["date"].dt.strftime("%a, %b %d")
         display_earn["epsEstimate"] = display_earn["epsEstimate"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "-")
         display_earn["epsActual"] = display_earn["epsActual"].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "-")
@@ -820,11 +1167,24 @@ with tab7:
             lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 1e9 else (f"${x/1e6:.0f}M" if pd.notna(x) and x > 0 else "-"))
         display_earn["revenueActual"] = display_earn["revenueActual"].apply(
             lambda x: f"${x/1e9:.2f}B" if pd.notna(x) and x > 1e9 else (f"${x/1e6:.0f}M" if pd.notna(x) and x > 0 else "-"))
+
+        # Beat/miss indicator
+        if "epsActual" in df_earnings_t7.columns and "epsEstimate" in df_earnings_t7.columns:
+            def _beat_miss(row):
+                if pd.isna(row.get("epsActual")) or pd.isna(row.get("epsEstimate")):
+                    return "-"
+                if row["epsActual"] > row["epsEstimate"]:
+                    return "BEAT"
+                elif row["epsActual"] < row["epsEstimate"]:
+                    return "MISS"
+                return "MET"
+            display_earn["Result"] = df_earnings_t7.apply(_beat_miss, axis=1)
+
         display_earn["hour"] = display_earn["hour"].replace({"bmo": "Pre-Market", "amc": "After-Close", "dmh": "During", "": "TBD"})
-        display_earn.columns = ["Date", "Ticker", "EPS Est.", "EPS Actual", "Rev Est.", "Rev Actual", "Timing"]
+        display_earn.columns = ["Date", "Ticker", "EPS Est.", "EPS Actual", "Rev Est.", "Rev Actual", "Timing"] + (["Result"] if "Result" in display_earn.columns else [])
 
         st.dataframe(display_earn, use_container_width=True, hide_index=True)
-        st.caption(f"Showing {len(df_earnings)} earnings reports.")
+        st.caption(f"Showing {len(display_earn)} earnings reports" + (" (big-cap only)" if not show_all else "") + ".")
     else:
         if not finnhub_key:
             st.warning("Finnhub API key not configured.")
@@ -833,33 +1193,52 @@ with tab7:
 
 
 # ---- TAB 8: Treasury Auctions ----
-with tab8:
+with tab8, error_boundary("Treasury Auctions"):
     if not df_auctions.empty:
         st.subheader("Upcoming Treasury Auctions")
 
-        display_auc = df_auctions[["auction_date", "security_type", "security_term",
-                                     "announcemt_date", "issue_date", "cusip"]].copy()
-        display_auc.columns = ["Auction Date", "Type", "Term", "Announcement", "Issue Date", "CUSIP"]
+        # Add offering amount and format
+        df_auc_display = df_auctions.copy()
+        display_cols = ["auction_date", "security_type", "security_term", "announcemt_date", "issue_date"]
+        if "offering_amt" in df_auc_display.columns:
+            df_auc_display["offering_fmt"] = df_auc_display["offering_amt"].apply(
+                lambda x: f"${float(x)/1e3:.0f}B" if x and str(x).replace(".", "").isdigit() and float(x) > 0 else "-"
+            )
+            display_cols.append("offering_fmt")
+        display_cols.append("cusip")
+
+        col_names = {
+            "auction_date": "Auction Date", "security_type": "Type", "security_term": "Term",
+            "announcemt_date": "Announcement", "issue_date": "Issue Date",
+            "offering_fmt": "Size", "cusip": "CUSIP",
+        }
+        display_auc = df_auc_display[display_cols].rename(columns=col_names)
         st.dataframe(display_auc, use_container_width=True, hide_index=True)
 
+        # Timeline chart
         df_auctions["auction_date"] = pd.to_datetime(df_auctions["auction_date"])
         type_colors = {
-            "Bill": "#00d1ff", "Note": "#00ff96", "Bond": "#ffaa00",
-            "TIPS": "#ad7fff", "FRN": "#ff4b4b", "CMB": "#888888",
+            "Bill": COLORS["accent"], "Note": COLORS["success"], "Bond": COLORS["warning"],
+            "TIPS": "#ad7fff", "FRN": COLORS["danger"], "CMB": "#888888",
         }
 
         fig_auc = go.Figure()
         for sec_type in df_auctions["security_type"].unique():
             subset = df_auctions[df_auctions["security_type"] == sec_type]
+            hover_text = []
+            for _, row in subset.iterrows():
+                offering = row.get("offering_amt", "")
+                size_str = f"<br>Size: ${float(offering)/1e3:.0f}B" if offering and str(offering).replace(".", "").isdigit() and float(offering) > 0 else ""
+                hover_text.append(f"{row['security_term']}{size_str}")
             fig_auc.add_trace(go.Scatter(
                 x=subset["auction_date"], y=subset["security_type"],
                 mode="markers", marker=dict(size=12, color=type_colors.get(sec_type, "#888")),
                 name=sec_type,
                 hovertemplate="%{x|%b %d}<br>%{y} %{text}<extra></extra>",
-                text=subset["security_term"],
+                text=hover_text,
             ))
 
-        fig_auc.add_vline(x=today.isoformat(), line_dash="dot", line_color="#00d1ff")
+        fig_auc.add_vline(x=today.isoformat(), line_dash="dot", line_color=COLORS["accent"])
         fig_auc.update_layout(
             template="plotly_dark", height=300, margin=dict(t=10, b=0, l=0, r=0),
             hovermode="closest",

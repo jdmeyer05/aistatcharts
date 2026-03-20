@@ -3,14 +3,14 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from src.eia_helpers import fetch_eia_data
-from src.layout import setup_page
+from src.layout import setup_page, error_boundary, fun_loader
 setup_page("15_NatGas_Fundamentals")
 
 st.title("♨️ Natural Gas Fundamentals")
 st.markdown("Live weekly Working Gas in Underground Storage data from the Energy Information Administration (EIA).")
 
 # --- FETCH ALL DATA ---
-with st.spinner("Connecting to EIA Database for Natural Gas..."):
+with fun_loader("data"):
     # Lower 48 working gas — fetch 6 years for 5-year average calc
     df_storage = fetch_eia_data("NG.NW2_EPG0_SWO_R48_BCF.W", tail_rows=520)
 

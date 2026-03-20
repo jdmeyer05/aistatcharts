@@ -3,14 +3,14 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from src.eia_helpers import fetch_eia_data
-from src.layout import setup_page
+from src.layout import setup_page, error_boundary, fun_loader
 setup_page("14_Oil_Fundamentals")
 
 st.title("🔥 Oil Fundamentals")
 st.markdown("Live macroeconomic supply data directly from the Energy Information Administration (EIA).")
 
 # --- FETCH ALL DATA ---
-with st.spinner("Connecting to EIA Database..."):
+with fun_loader("data"):
     # Commercial crude inventories — 6 years for 5-year avg
     df_inv = fetch_eia_data("PET.WCESTUS1.W", tail_rows=520)
     # US field production

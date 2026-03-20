@@ -112,8 +112,72 @@ def init_supabase() -> Client:
     return _supabase_client
 
 
+def set_auth_cookie(refresh_token: str):
+    """Store Supabase refresh token in a browser cookie (30-day persistence)."""
+    import streamlit.components.v1 as components
+    components.html(
+        f'<script>document.cookie="sb_refresh={refresh_token};path=/;max-age={30*24*3600};SameSite=Strict;Secure";</script>',
+        height=0,
+    )
+
+
+def set_auth_cookie_session(refresh_token: str):
+    """Store Supabase refresh token in a session cookie (expires when browser closes)."""
+    import streamlit.components.v1 as components
+    components.html(
+        f'<script>document.cookie="sb_refresh={refresh_token};path=/;SameSite=Strict;Secure";</script>',
+        height=0,
+    )
+
+
+def clear_auth_cookie():
+    """Clear the auth cookie (call on logout)."""
+    import streamlit.components.v1 as components
+    components.html(
+        '<script>document.cookie="sb_refresh=;path=/;max-age=0";</script>',
+        height=0,
+    )
+
+
+def check_session_timeout():
+    """Show a warning toast if the session is about to expire."""
+    from datetime import datetime
+    auth_time = st.session_state.get("_auth_timestamp")
+    if not auth_time:
+        return
+    elapsed_min = (datetime.now() - auth_time).total_seconds() / 60
+    # Supabase access tokens expire after ~60 min; warn at 50 min
+    if 50 <= elapsed_min < 60:
+        st.toast("Session expires soon — save your work. The page will re-authenticate automatically.", icon="⏰")
+    elif elapsed_min >= 60:
+        # Try silent re-auth via refresh token
+        supabase = init_supabase()
+        if supabase:
+            try:
+                session = supabase.auth.get_session()
+                if session:
+                    st.session_state["_auth_timestamp"] = datetime.now()
+                    return
+            except Exception:
+                pass
+            # Try cookie fallback
+            try:
+                refresh_token = st.context.cookies.get("sb_refresh")
+                if refresh_token:
+                    response = supabase.auth.refresh_session(refresh_token)
+                    if response and response.session:
+                        st.session_state["_auth_timestamp"] = datetime.now()
+                        set_auth_cookie(response.session.refresh_token)
+                        return
+            except Exception:
+                pass
+        st.toast("Session expired — refreshing authentication...", icon="🔒")
+
+
 def check_auth():
-    """Auth firewall — recovers session from Supabase client on refresh."""
+    """Auth firewall — recovers session from Supabase client on refresh.
+    Falls back to browser cookie refresh token for mobile session recovery."""
+    from datetime import datetime
     supabase = init_supabase()
 
     # 0. Skip auth entirely if Supabase isn't configured (local dev)
@@ -124,6 +188,7 @@ def check_auth():
 
     # 1. Fast Pass: Already authenticated in this active tab
     if st.session_state.get('authenticated', False):
+        check_session_timeout()
         return
 
     # 2. Recover from Supabase session (persists across refreshes via cached client)
@@ -132,11 +197,26 @@ def check_auth():
         if session:
             st.session_state['authenticated'] = True
             st.session_state['user_email'] = session.user.email
+            st.session_state['_auth_timestamp'] = datetime.now()
             return
     except Exception as e:
         logger.debug(f"Session recovery failed: {e}")
 
-    # 3. No valid session — redirect to login
+    # 3. Recover from browser cookie (mobile wake-up / server restart)
+    try:
+        refresh_token = st.context.cookies.get("sb_refresh")
+        if refresh_token:
+            response = supabase.auth.refresh_session(refresh_token)
+            if response and response.session:
+                st.session_state['authenticated'] = True
+                st.session_state['user_email'] = response.session.user.email
+                st.session_state['_auth_timestamp'] = datetime.now()
+                set_auth_cookie(response.session.refresh_token)
+                return
+    except Exception as e:
+        logger.debug(f"Cookie session recovery failed: {e}")
+
+    # 4. No valid session — redirect to login
     st.switch_page("app.py")
 
 

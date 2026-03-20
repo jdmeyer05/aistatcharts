@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import yfinance as yf
 import logging
-from src.layout import setup_page
+from src.layout import setup_page, error_boundary, fun_loader
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ def fetch_vol_data():
 
 
 # --- FETCH DATA ---
-with st.spinner("Loading futures data..."):
+with fun_loader("data"):
     df_snap = fetch_futures_snapshot()
     vol_data = fetch_vol_data()
 

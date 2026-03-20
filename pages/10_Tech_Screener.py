@@ -6,7 +6,7 @@ from plotly.subplots import make_subplots
 from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
 from src.chatbot import run_sidebar_chatbot
 
-from src.layout import setup_page
+from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 setup_page("10_Tech_Screener")
 
 st.title("🛰️ Advanced Technical Screener")
@@ -16,7 +16,7 @@ st.markdown("Multi-dimensional technical analysis: Trend (EMAs), Momentum (MACD/
 with st.sidebar:
     st.header("Screener Settings")
     with st.form("tech_settings"):
-        raw_ticker = st.text_input("Ticker", value="SPY")
+        raw_ticker = st.text_input("Ticker", value=get_active_ticker())
         lookback = st.slider("Lookback (Days)", 90, 730, 365, step=30)
         
         st.divider()
@@ -29,10 +29,11 @@ with st.sidebar:
         submit = st.form_submit_button("🚀 Run Technicals")
 
 ticker = format_massive_ticker(raw_ticker)
+set_active_ticker(ticker)
 
 # --- CALCULATE INDICATORS ---
 if submit or 'tech_df' not in st.session_state or st.session_state.get('tech_ticker') != ticker:
-    with st.spinner(f"Computing technical surface for {ticker}..."):
+    with fun_loader("compute"):
         df = fetch_massive_data(ticker, lookback)
         
         if df is None or df.empty:

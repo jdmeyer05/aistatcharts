@@ -1,5 +1,8 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import streamlit as st
-from src.auth import init_supabase
+from src.auth import init_supabase, set_auth_cookie, set_auth_cookie_session
 
 st.set_page_config(page_title="Quant Platform Login", layout="centered")
 
@@ -32,6 +35,19 @@ try:
 except Exception:
     pass
 
+# Recover from browser cookie (mobile wake-up / server restart)
+try:
+    refresh_token = st.context.cookies.get("sb_refresh")
+    if refresh_token:
+        response = supabase.auth.refresh_session(refresh_token)
+        if response and response.session:
+            st.session_state['authenticated'] = True
+            st.session_state['user_email'] = response.session.user.email
+            set_auth_cookie(response.session.refresh_token)
+            st.switch_page("pages/01_Summary.py")
+except Exception:
+    pass
+
 # --- UI RENDERING ---
 st.title("⚡ Quantitative Analysis Platform")
 st.markdown("Institutional-grade backtesting, options matrix, and macro charting.")
@@ -45,6 +61,7 @@ with tab1:
         st.subheader("Access Your Account")
         email = st.text_input("Email Address")
         password = st.text_input("Password", type="password")
+        remember_me = st.checkbox("Remember me for 30 days", value=True)
         submit_login = st.form_submit_button("Log In", type="primary", use_container_width=True)
 
         if submit_login:
@@ -53,6 +70,14 @@ with tab1:
 
                 st.session_state['authenticated'] = True
                 st.session_state['user_email'] = email
+                st.session_state['_auth_timestamp'] = __import__("datetime").datetime.now()
+
+                # Persist refresh token in browser cookie for mobile session recovery
+                if response.session and response.session.refresh_token:
+                    if remember_me:
+                        set_auth_cookie(response.session.refresh_token)
+                    else:
+                        set_auth_cookie_session(response.session.refresh_token)
 
                 st.success("Authentication successful! Rerouting...")
                 st.switch_page("pages/01_Summary.py")
