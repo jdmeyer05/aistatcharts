@@ -64,15 +64,15 @@ TOKEN_PACKS = {
 # ─────────────────────────────────────────────
 STRIPE_LINKS = {
     # Subscription plans
-    "pro": "https://buy.stripe.com/REPLACE_WITH_PRO_LINK",
-    "premium": "https://buy.stripe.com/REPLACE_WITH_PREMIUM_LINK",
-    "platinum": "https://buy.stripe.com/REPLACE_WITH_PLATINUM_LINK",
+    "pro": "https://buy.stripe.com/dRm8wIcVmdGgbzcaWpasg00",
+    "premium": "https://buy.stripe.com/eVq4gs3kM45G32G0hLasg01",
+    "platinum": "https://buy.stripe.com/5kQ7sEf3u0TueLo4y1asg02",
     # Token packs
     "tokens_starter": "https://buy.stripe.com/REPLACE_WITH_STARTER_TOKENS",
     "tokens_power": "https://buy.stripe.com/REPLACE_WITH_POWER_TOKENS",
     "tokens_elite": "https://buy.stripe.com/REPLACE_WITH_ELITE_TOKENS",
     # Customer portal (manage subscription)
-    "portal": "https://billing.stripe.com/REPLACE_WITH_PORTAL_LINK",
+    "portal": "https://billing.stripe.com/p/login/dRm8wIcVmdGgbzcaWpasg00",
 }
 
 # Admin emails always get platinum access
@@ -140,8 +140,7 @@ def check_auth():
     st.switch_page("app.py")
 
 
-# Stripe price lookup_key → tier mapping
-# Set these lookup_keys when creating prices in Stripe Dashboard
+# Stripe tier mapping — checks price metadata, lookup_key, and product name
 STRIPE_TIER_MAP = {
     "pro": "pro",
     "pro_monthly": "pro",
@@ -180,18 +179,37 @@ def verify_subscription(email: str, user_id: str) -> str:
         if not subscriptions.data:
             return "free"
 
-        # Get the lookup_key from the active subscription's price
+        # Determine tier from active subscription price
         sub = subscriptions.data[0]
         items = sub.get("items", {}).get("data", [])
-        lookup_key = ""
+        tier = "pro"  # default if we can't determine
         price_id = ""
         if items:
             price = items[0].get("price", {})
-            lookup_key = price.get("lookup_key", "")
             price_id = price.get("id", "")
+            metadata = price.get("metadata", {})
 
-        # Map lookup_key to tier
-        tier = STRIPE_TIER_MAP.get(lookup_key, "pro")  # default to pro if unknown active sub
+            # Priority 1: price metadata "tier" field
+            if metadata.get("tier"):
+                tier = STRIPE_TIER_MAP.get(metadata["tier"], metadata["tier"])
+            # Priority 2: lookup_key
+            elif price.get("lookup_key"):
+                tier = STRIPE_TIER_MAP.get(price["lookup_key"], "pro")
+            # Priority 3: check product name for tier keywords
+            else:
+                product_id = price.get("product", "")
+                if product_id:
+                    try:
+                        product = stripe.Product.retrieve(product_id)
+                        pname = product.get("name", "").lower()
+                        if "platinum" in pname:
+                            tier = "platinum"
+                        elif "premium" in pname:
+                            tier = "premium"
+                        elif "pro" in pname:
+                            tier = "pro"
+                    except Exception:
+                        pass
 
         # Sync to Supabase
         supabase = init_supabase()
