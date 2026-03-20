@@ -53,9 +53,9 @@ TIERS = {
 # TOKEN SYSTEM
 # ─────────────────────────────────────────────
 TOKEN_PACKS = {
-    "starter": {"name": "Starter", "tokens": 50, "price": 5.00, "per_token": 0.10},
-    "power": {"name": "Power", "tokens": 200, "price": 15.00, "per_token": 0.075},
-    "elite": {"name": "Elite", "tokens": 500, "price": 30.00, "per_token": 0.06},
+    "starter": {"name": "Starter", "tokens": 50, "price": 8.00, "per_token": 0.16},
+    "power": {"name": "Power", "tokens": 200, "price": 25.00, "per_token": 0.125},
+    "elite": {"name": "Elite", "tokens": 500, "price": 50.00, "per_token": 0.10},
 }
 
 # ─────────────────────────────────────────────
