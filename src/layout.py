@@ -97,18 +97,22 @@ def render_header(current_page: str):
     else:
         mkt_status, mkt_color = "AFTER-HRS", "#ffaa00"
 
-    # ── Row 1: Brand bar (pure HTML — fully responsive) ──
-    st.markdown(f"""<div class="site-header">
-        <div class="site-header-brand">
-            <span style="font-size:clamp(13px, 1.8vw, 22px); font-weight:800; color:{COLORS['accent']}; letter-spacing:1.5px;">AI STATCHARTS</span>
-        </div>
-        <div class="site-header-badges">
-            <span class="header-badge" style="color:{mkt_color}; border-color:{mkt_color};">{mkt_status}</span>
-            <span class="header-badge" style="color:{tier_color}; border-color:{tier_color};">{tier_cfg['name']}</span>
-            {_build_usage_badge()}
-            <span style="font-size:10px; color:{COLORS['text_muted']};">{now.strftime('%I:%M %p')}</span>
-        </div>
-    </div>""", unsafe_allow_html=True)
+    # ── Row 1: Brand bar ──
+    usage_badge = _build_usage_badge()
+    header_html = (
+        f'<div class="site-header">'
+        f'<div class="site-header-brand">'
+        f'<span style="font-size:20px; font-weight:800; color:{COLORS["accent"]}; letter-spacing:1.5px;">AI STATCHARTS</span>'
+        f'</div>'
+        f'<div class="site-header-badges">'
+        f'<span class="header-badge" style="color:{mkt_color}; border-color:{mkt_color};">{mkt_status}</span>'
+        f'<span class="header-badge" style="color:{tier_color}; border-color:{tier_color};">{tier_cfg["name"]}</span>'
+        f'{usage_badge}'
+        f'<span style="font-size:10px; color:{COLORS["text_muted"]};">{now.strftime("%I:%M %p")}</span>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(header_html, unsafe_allow_html=True)
 
     # ── Row 2: Nav dropdowns (Streamlit widgets for working links) ──
     nav_groups = [
