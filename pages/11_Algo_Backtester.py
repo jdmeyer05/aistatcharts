@@ -199,23 +199,21 @@ def extract_trades(df):
     return pd.DataFrame(trades)
 
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Backtest Parameters")
+# --- Controls ---
+_c1, _c2, _c3, _c4, _c5 = st.columns([2, 2, 2, 1, 1])
+with _c1:
     raw_ticker = st.text_input("Ticker", value=get_active_ticker())
+with _c2:
     lookback = st.slider("Historical Data (Days)", 252, 2520, 1260, step=252)
-
+with _c3:
     strategy = st.selectbox("Algorithmic Strategy", STRATEGIES)
-
-    st.divider()
-    st.caption("Transaction Costs")
-    commission_bps = st.number_input("Commission (bps per trade)", value=5, step=1)
-    slippage_bps = st.number_input("Slippage (bps per trade)", value=5, step=1)
-
-    st.divider()
-    c1, c2 = st.columns(2)
-    run_test = c1.button("Run Standard", use_container_width=True)
-    run_opt = c2.button("Optimize", type="primary", use_container_width=True)
+with _c4:
+    commission_bps = st.number_input("Commission (bps)", value=5, step=1)
+with _c5:
+    slippage_bps = st.number_input("Slippage (bps)", value=5, step=1)
+_b1, _b2, _ = st.columns([1, 1, 4])
+run_test = _b1.button("Run Standard", use_container_width=True)
+run_opt = _b2.button("Optimize", type="primary", use_container_width=True)
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)

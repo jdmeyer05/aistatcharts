@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import yfinance as yf
-from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
+from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer, polygon_history, polygon_symbol
 from src.chatbot import run_sidebar_chatbot
 from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 setup_page("05_Historical_Analysis")
@@ -11,14 +10,18 @@ setup_page("05_Historical_Analysis")
 st.title("🕰️ Historical & Seasonal Analysis")
 st.markdown("Price action, seasonality, volatility, drawdowns, and statistical profiling.")
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Analysis Settings")
-    with st.form("historical_settings"):
+# --- Controls ---
+with st.form("historical_settings"):
+    _c1, _c2, _c3, _c4 = st.columns([2, 2, 2, 1])
+    with _c1:
         raw_ticker = st.text_input("Ticker", value=get_active_ticker())
+    with _c2:
         lookback_years = st.slider("Lookback (Years)", 1, 10, 5)
+    with _c3:
         benchmark_ticker = st.text_input("Benchmark", value="SPY")
-        submit = st.form_submit_button("Run Analysis")
+    with _c4:
+        st.markdown("<br>", unsafe_allow_html=True)
+        submit = st.form_submit_button("Run Analysis", use_container_width=True)
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)
@@ -28,14 +31,15 @@ lookback_days = lookback_years * 365 + 180  # Buffer for full calendar years
 
 @st.cache_data(ttl=3600)
 def fetch_macro_series(yf_ticker: str, period: str = "5y"):
+    days_map = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
+    days = days_map.get(period, 1825)
     try:
-        df = yf.download(yf_ticker, period=period, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.index = pd.to_datetime(df.index).tz_localize(None)
-        return df["Close"]
-    except:
-        return pd.Series()
+        df = polygon_history(yf_ticker, days)
+        if not df.empty:
+            return df["Close"]
+    except Exception:
+        pass
+    return pd.Series()
 
 
 # --- FETCH ---

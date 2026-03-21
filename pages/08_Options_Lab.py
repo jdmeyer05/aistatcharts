@@ -80,13 +80,15 @@ def bs_price(S, K, T, r, sigma, opt_type="call"):
 
 api_key = _get_massive_key()
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Configuration")
-    from src.layout import get_active_ticker, set_active_ticker
+# --- Controls ---
+from src.layout import get_active_ticker, set_active_ticker
+_c1, _c2 = st.columns([3, 1])
+with _c1:
     raw_ticker = st.text_input("Ticker", value=get_active_ticker())
     ticker = format_massive_ticker(raw_ticker)
     set_active_ticker(ticker)
+with _c2:
+    st.markdown("<br>", unsafe_allow_html=True)
     submit = st.button("Load Data", type="primary", use_container_width=True)
 
 if not api_key:

@@ -13,136 +13,137 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **21 pages** of quantitative analysis tools
-- **4 AI models**: Grok 3, Gemini 3 Pro, Claude Sonnet, GPT-5 (Platinum)
-- **Landing page dashboard** — stat bar, relative performance chart, AI intelligence cards, watchlist
-- **Top nav header** — logo, dropdown navigation, market status, DELAYED badge, tier/usage badge
-- **Scrolling ticker tape** — market prices + StockTwits social feed (1M+ follower accounts only)
-- **Fun loader** — animated spinner with funny quips, progress bar, milestone status, and countdown ETA
-- **Session persistence** — cookie-based auth recovery, auto-reload on stale mobile connections
-- **Tier-based analyst chat** — Gemini Flash (Free/Pro/Premium) or GPT-5 (Platinum)
-- **Token system** — buy analysis tokens ($8/50, $25/200, $50/500) when daily limit is reached
-- **Subscription tiers** — Free, Pro ($12), Premium ($29), Platinum ($79)
-- **Supabase auth** — login, registration, "remember me", session timeout warning
-- **Stripe integration** — subscription billing with lookup_key tier mapping
-- **Mobile-optimized** — 44px touch targets, responsive breakpoints, pull-to-refresh, auto-reload
+- **22 pages** of quantitative analysis tools
+- **3 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus
+- **Landing page dashboard** -- stat bar, relative performance chart, AI intelligence cards, watchlist
+- **Top nav header** -- logo, dropdown navigation, market status, tier/usage badge, Settings popover
+- **Scrolling ticker tape** -- Polygon market prices + Grok X/Twitter feed + Polymarket odds + StockTwits backfill
+- **Fun loader** -- animated spinner with quips, progress bar, milestone status, countdown ETA
+- **Session persistence** -- cookie-based auth recovery, auto-reload on stale mobile connections
+- **Tier-based analyst chat** -- Gemini 2.5 Flash (all tiers) in inline expander
+- **Token system** -- buy analysis tokens ($8/50, $25/200, $50/500) when daily limit is reached
+- **Subscription tiers** -- Free, Pro ($12), Premium ($29), Platinum ($79)
+- **Supabase auth** -- login, registration, "remember me", session timeout warning
+- **Stripe integration** -- subscription billing with lookup_key tier mapping
+- **Mobile-optimized** -- 44px touch targets, responsive breakpoints, pull-to-refresh, auto-reload
+- **No sidebar** -- all controls inline via columns/expanders, sidebar fully hidden via config
 
 ## Subscription Tiers
 
 | | Free | Pro ($12/mo) | Premium ($29/mo) | Platinum ($79/mo) |
 |---|---|---|---|---|
-| **Pages** | 17 | All 21 | All 21 | All 21 |
+| **Pages** | 17 | All 22 | All 22 | All 22 |
 | **AI Analyses/day** | 0 | 5 | 20 | 50 |
-| **AI Models** | None | 3 (Grok, Gemini, Claude) | 3 (Grok, Gemini, Claude) | 4 (+GPT-5) |
+| **AI Models** | None | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 3 | 3 + Claude Opus upgrade |
 | **RL Trading** | No | No | Yes | Yes |
-| **Analyst Chat** | Gemini Flash (5/day) | Gemini Flash (unlimited) | Gemini Flash (unlimited) | GPT-5 (unlimited) |
-| **Bonus Tokens** | Buy tokens for AI analyses beyond daily limit — never expire |
+| **Analyst Chat** | Gemini Flash (5/day) | Gemini Flash (unlimited) | Gemini Flash (unlimited) | Gemini Flash (unlimited) |
+| **Bonus Tokens** | Buy tokens for AI analyses beyond daily limit -- never expire |
 
 ## Key Pages
 
 | Page | Description |
 |------|-------------|
-| **Summary** | Landing dashboard: stat bar, market grid, relative performance chart, AI intelligence (regime + conflict + alerts), quick access cards, watchlist |
+| **Summary** | Landing dashboard: stat bar, market grid, relative performance chart, AI intelligence cards, watchlist |
 | **Scenario Analysis** | 6-tab macro engine: Grok AI regime analysis, FRED data, portfolio impact modeling, stress tests |
-| **Stock Analysis** | 4-model AI consensus scorecard with blended scores, price targets, and radar chart |
+| **Stock Analysis** | 3-model AI consensus scorecard + SEC EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | **RL Trading** | Dueling DQN ensemble with 31 features, walk-forward validation, Monte Carlo robustness |
-| **Iran Conflict** | AI war analysis (4-model blend), trending tweets, conflict timeline, infrastructure table, GDELT/ACLED |
-| **Fed & Macro Drivers** | 4-tab page: signal matrix, driver trend charts, FOMC dot plot, SEP, Polymarket, StockTwits sentiment |
-| **Economic Calendar** | Hero section with today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
-| **+ 14 more** | Historical analysis, options (3 pages), ML predictor, screener, backtester, Monte Carlo, VaR, oil, natgas, ERCOT (2), futures |
+| **Iran Conflict** | 3-model AI war analysis, Grok live infrastructure monitoring, trending tweets, conflict timeline, GDELT/ACLED |
+| **Fed & Macro Drivers** | 4-tab page: signal matrix, driver trend charts, FOMC dot plot, SEP, Polymarket |
+| **Smart Money** | 13F institutional holdings, congressional trades, activist investors (13D), 8-K event search |
+| **Economic Calendar** | Today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
+| **+ 13 more** | Historical analysis, options (3 pages), ML predictor, screener, backtester, Monte Carlo, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
 
-4 models called in parallel:
+### Iran Conflict Analysis (3 models in parallel)
 
-| Model | Role | Key Capability |
-|-------|------|----------------|
-| **Grok 3** | Breaking news & viral tweets | Live X/Twitter search with velocity scoring, priority account monitoring, thread detection |
-| **Gemini 3 Pro** | Military/strategic + energy/economic | Dual-role: escalation analysis + facility-level disruption math |
-| **Claude Sonnet** | Diplomatic/probabilistic | Calibrated uncertainty, ceasefire probability, scenario trees |
-| **GPT-5** *(Platinum only)* | Deep strategic synthesis | Challenges assumptions, second/third-order effects |
+| Model | ID | Role |
+|-------|-----|------|
+| **Grok 4** | `grok-4.20-0309-reasoning` | Real-time visual OSINT: war maps, satellite imagery, X/Twitter breaking news, narrative shifts |
+| **Gemini 3.1 Pro** | `gemini-3.1-pro-preview` | Quantitative engine: facility-by-facility supply model, oil price math, economic impact |
+| **Claude Sonnet** | `claude-sonnet-4-6` | Bayesian reasoning: scenario trees, ceasefire decomposition, red-teaming, confidence intervals |
+| **Claude Opus** *(Platinum)* | `claude-opus-4-6` | Upgraded Claude with deeper reasoning |
 
-## UX Features
+### Independent Grok Calls (auto-refresh, no button needed)
 
-| Feature | Description |
-|---------|-------------|
-| **Fun loader** | Animated spinner with cycling quips, milestone status messages, progress bar, countdown ETA |
-| **Session persistence** | Cookie-based auth with "remember me" (30-day or session), auto-recovery on mobile wake |
-| **Stale data detection** | DELAYED badge when data >15min old, pull-to-refresh banner, auto-reload after 60s idle |
-| **Auto-refresh** | Ticker strip refreshes every 5min via `st.fragment`, social feed updates every 10min |
-| **Deep linking** | Active ticker follows across all pages, URL `?ticker=AAPL` support |
-| **Recent pages** | Quick-access row showing last 5 visited pages |
-| **Smart token usage** | AI cache-hit detection prevents burning tokens on duplicate analyses |
-| **Error boundaries** | Per-section error handling on all pages — one section failing doesn't crash the page |
-| **Loading states** | AI buttons show "Running..." and disable during execution to prevent double-clicks |
-| **Social feed** | StockTwits posts from 1M+ follower accounts, profanity filtered, ticker-cleaned |
-| **Watchlist** | User-configurable with price threshold alerts, integrated with ticker tape |
-| **Footer** | Fixed footer on every page via JS injection into parent document |
+| Function | Model | Refresh | Purpose |
+|----------|-------|---------|---------|
+| Infrastructure Status | Grok 4 reasoning | 30 min | Facility status from 30+ verified X accounts |
+| Live Tweets | Grok 4 fast | 10 min | Breaking news feed |
+| Breaking News Brief | Grok 4 fast | 15 min | 6-hour summary fed to all models |
+| Timeline Auto-Update | Grok 4 fast | 1 hr | New conflict events appended |
+| Ticker Scroll Posts | Grok 4 fast | 10 min | Market intelligence for scroll bar |
+
+### Data Enrichment (fed into AI models)
+
+- Polymarket prediction odds (ceasefire, oil, escalation contracts)
+- Oil futures term structure (backwardation/contango signal)
+- LNG/natgas prices (TTF, Henry Hub)
+- Brent, VIX, Gold, DXY live prices
+- SEC EDGAR 8-K defense sector filings
+- Source credibility scoring (tracks which X accounts are most accurate)
+- Historical accuracy weights (models that predicted better get more influence)
 
 ## Data Sources
 
-| Source | Type | Cache Strategy |
-|--------|------|---------------|
-| GDELT Bulk Events | Direct daily CSV download | Parquet cache, background refresh |
-| GDELT API | Media intensity/tone | 2hr cache, retry with backoff |
-| FRED | Economic indicators (24 series) | 1hr cache |
-| EIA | Energy data (WTI, natgas) | 1hr cache |
-| yfinance | Market prices | 2min cache, futures use 2d/1h fallback |
-| Polymarket | Prediction markets (11 contracts) | 30min cache |
-| StockTwits | Social feed (1M+ follower filter) | 10min cache, profanity/quality filter |
-| ACLED | Armed conflict events | API + CSV upload fallback |
-| Finnhub | Earnings calendar | 1hr cache |
+| Source | Type | Legal Status |
+|--------|------|-------------|
+| **Polygon (Massive API)** | Market prices, options, financials, insider txns | Paid (Stocks Starter) |
+| **Finnhub** | Analyst recommendations | Free tier, commercial OK |
+| **SEC EDGAR** | 13F holdings, insider txns, 8-K events, XBRL financials | Public domain |
+| **GDELT** | Media intensity, tone, bulk conflict events | Open data |
+| **ACLED** | Armed conflict events (11 ME countries) | Academic/commercial |
+| **FRED** | 24 economic indicators | Public domain |
+| **EIA** | Oil/gas prices and storage | Public domain |
+| **Polymarket** | Prediction market odds | Public API |
+| **StockTwits** | Social feed (1M+ follower filter) | Public API |
 
 ## Tech Stack
 
-- **Frontend:** Streamlit 1.55
+- **Frontend:** Streamlit
 - **Auth:** Supabase
 - **Payments:** Stripe
-- **Data viz:** Plotly
-- **ML:** scikit-learn, scipy, PyTorch (RL)
-- **AI:** OpenAI SDK, Anthropic SDK, xAI API, Google Gemini API
-- **Python:** 3.14
+- **Data viz:** Plotly (uirevision for stable charts)
+- **ML:** scikit-learn, scipy (RL: pure numpy DQN)
+- **AI:** Anthropic SDK, Google GenAI SDK, OpenAI SDK (for Grok x.ai)
+- **Market Data:** Polygon API (no yfinance dependency)
+- **OSINT:** SEC EDGAR, GDELT, ACLED
 
 ## Project Structure
 
 ```
 app.py                    Entry point (login + user agreement)
 webhook_server.py         Stripe webhook handler (Flask, port 5000)
+Dockerfile                Cloud Run deployment (4 CPU, 4GB recommended)
 static/
-  logo.png                Platform logo (512x512, transparent)
+  logo.png                Platform logo (base64-encoded into header)
 src/
   auth.py                 Auth, tiers, tokens, Stripe, session timeout, cookies
-  layout.py               setup_page(), header, nav, ticker strip, social feed, fun_loader, footer
-  styles.py               Global CSS, 5-layer background, responsive breakpoints, color system
-  ticker_tape.py           Market data feed with staleness timestamps
-  chatbot.py              Tier-based analyst chat (Gemini Flash or GPT-5)
+  layout.py               setup_page(), header, nav, ticker strip, social feed, cache warming
+  styles.py               Global CSS, 5-layer background, responsive breakpoints, Plotly defaults
+  ticker_tape.py          Polygon batch snapshots for market ticker
+  chatbot.py              Tier-based analyst chat (Gemini 2.5 Flash, inline expander)
+  edgar.py                SEC EDGAR: 13F, insider scoring, 8-K, XBRL ratios, 13D activist
   gdelt_events.py         GDELT bulk event download & processing
-  data_engine.py          Market data (Massive API -> yfinance fallback)
+  data_engine.py          Polygon API (snapshots, history, intraday, financials, ticker details)
   options_models.py       BS-Merton Jump Diffusion pricing
   eia_helpers.py          EIA API wrapper
   simulation.py           Stochastic price simulation
+  iran_conflict_history.json  AI analysis history (48 entries, auto-managed)
+  iran_infra_state.json   Self-updating infrastructure baseline (Grok-verified)
+  source_credibility.json Source reliability scores (auto-updated)
 pages/
-  01_Summary.py           Landing dashboard with stat bar, markets, relative perf, AI intel
+  01_Summary.py           Landing dashboard
   02_Scenario_Analysis.py Macro scenario engine (6 tabs)
-  03_Stock_Analysis.py    AI stock analysis (4-model blend)
+  03_Stock_Analysis.py    AI stock analysis + EDGAR insider/8-K/XBRL
   04_RL_Trading.py        Reinforcement learning trading
-  05-20                   Analysis tools, options, energy, macro
-  21_Fed_Macro_Drivers.py Fed policy dashboard (4 tabs)
+  05-21                   Analysis tools, options, energy, macro, futures, Fed
+  22_Smart_Money.py       13F holdings, congressional trades, activist investors, 8-K search
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)
 .streamlit/
-  config.toml             Theme, toolbar, file watcher, static serving
+  config.toml             Theme, toolbar, static serving, sidebar disabled
   secrets.toml            API keys (gitignored)
-```
-
-## Running
-
-```bash
-# Streamlit app
-python -m streamlit run app.py
-
-# Webhook server (separate terminal)
-python webhook_server.py
 ```
 
 ## Environment Setup
@@ -151,37 +152,48 @@ All keys in `.streamlit/secrets.toml` (gitignored):
 
 ```
 SUPABASE_URL, SUPABASE_KEY     Auth & database
-STRIPE_SECRET_KEY               Stripe billing (sk_live_ or sk_test_)
+STRIPE_SECRET_KEY               Stripe billing
 STRIPE_WEBHOOK_SECRET           Webhook signature verification
-OPENAI_API_KEY                  GPT-5
-GROK_API_KEY                    Grok 3 (xAI)
-GEMINI_API_KEY                  Gemini 2.5 Flash + 3 Pro
-ANTHROPIC_API_KEY               Claude Sonnet
+GROK_API_KEY                    Grok 4 (xAI)
+GEMINI_API_KEY                  Gemini 3.1 Pro + 2.5 Flash
+ANTHROPIC_API_KEY               Claude Sonnet / Opus
 FRED_API_KEY                    Economic data
 EIA_API_KEY                     Energy data
-MASSIVE_API_KEY                 Price data (Polygon)
-FINNHUB_API_KEY                 Earnings calendar
-FMP_API_KEY                     Financial data
+MASSIVE_API_KEY                 Polygon market data
+FINNHUB_API_KEY                 Analyst recommendations
 ACLED_EMAIL, ACLED_PASSWORD     Armed conflict data (optional)
 LOCAL_DEV = "true"              Skip auth locally
+```
+
+## Cloud Run Deployment
+
+```bash
+gcloud run deploy aistatcharts \
+  --source=. \
+  --cpu=4 \
+  --memory=4Gi \
+  --concurrency=80 \
+  --min-instances=1 \
+  --max-instances=10 \
+  --region=us-central1
 ```
 
 ## Stripe Setup
 
 Payment links in `src/auth.py` -> `STRIPE_LINKS`. Tier detection: price metadata `tier` -> lookup_key -> product name.
 
-| Product | Price | Type | Metadata |
-|---------|-------|------|----------|
-| Pro | $12/mo | Recurring | `tier: pro` |
-| Premium | $29/mo | Recurring | `tier: premium` |
-| Platinum | $79/mo | Recurring | `tier: platinum` |
-| Starter Tokens (50) | $8 | One-time | -- |
-| Power Tokens (200) | $25 | One-time | -- |
-| Elite Tokens (500) | $50 | One-time | -- |
+| Product | Price | Type |
+|---------|-------|------|
+| Pro | $12/mo | Recurring |
+| Premium | $29/mo | Recurring |
+| Platinum | $79/mo | Recurring |
+| Starter Tokens (50) | $8 | One-time |
+| Power Tokens (200) | $25 | One-time |
+| Elite Tokens (500) | $50 | One-time |
 
-**Webhook setup:** dashboard.stripe.com/webhooks -> add endpoint `/stripe/webhook` -> select events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed` -> copy signing secret to `STRIPE_WEBHOOK_SECRET`.
+**Webhook:** dashboard.stripe.com/webhooks -> endpoint `/stripe/webhook` -> events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed`
 
-**Supabase tables required:**
-- `subscriptions` -- email, plan_type, status, stripe_customer_id, stripe_price_id, updated_at
-- `user_tokens` -- email, balance, updated_at
+**Supabase tables:**
+- `subscriptions` -- email, plan_type, status, stripe_customer_id, stripe_price_id
+- `user_tokens` -- email, balance
 - `payment_failures` -- email, invoice_id, failed_at, resolved

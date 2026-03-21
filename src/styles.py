@@ -24,6 +24,22 @@ PLOTLY_CONFIG = {
 }
 
 
+def _set_plotly_defaults():
+    """Set Plotly defaults globally so all charts inherit uirevision and dark theme.
+    Call once at import time."""
+    try:
+        import plotly.io as pio
+        import plotly.graph_objects as go
+        # Set uirevision on the default template so charts don't re-animate on Streamlit reruns
+        pio.templates["plotly_dark"].layout.uirevision = "stable"
+        pio.templates.default = "plotly_dark"
+    except Exception:
+        pass
+
+
+_set_plotly_defaults()
+
+
 def inject_global_css():
     """Inject global CSS classes used across all pages. Call once per page."""
     st.markdown(f"""<style>
@@ -49,27 +65,7 @@ def inject_global_css():
         margin-right: 6px;
     }}
 
-    /* ── Sidebar branding ── */
-    .sidebar-brand {{
-        text-align: center;
-        padding: 0.5rem 0 0.25rem 0;
-        margin-bottom: 0;
-    }}
-    .sidebar-brand h2 {{
-        color: {COLORS['accent']};
-        font-size: 1.4rem;
-        font-weight: 700;
-        margin: 0;
-        letter-spacing: 1px;
-    }}
-    .sidebar-brand p {{
-        color: {COLORS['text_muted']};
-        font-size: 0.75rem;
-        margin: 4px 0 0 0;
-    }}
-    .sidebar-footer {{
-        display: none;
-    }}
+    /* (sidebar branding removed — sidebar is fully hidden) */
 
     /* ── Status bar ── */
     .status-bar {{
@@ -223,9 +219,17 @@ def inject_global_css():
        5. Vignette (darkened edges)
     ═══════════════════════════════════════ */
 
-    /* Hide sidebar navigation — top nav handles page switching */
-    [data-testid="stSidebarNav"] {{
+    /* Hide sidebar completely — all controls moved to header */
+    section[data-testid="stSidebar"],
+    [data-testid="stSidebarNav"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"] {{
         display: none !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
     }}
 
     /* Hide Streamlit's built-in loading spinners — we use fun_loader instead */
@@ -236,42 +240,36 @@ def inject_global_css():
         display: none !important;
     }}
 
-    /* Reorder sidebar layout — reveal after reorder styles are applied */
-    section[data-testid="stSidebar"] > div:first-child {{
-        display: flex !important;
-        flex-direction: column !important;
-        padding-top: 0 !important;
-        opacity: 1 !important;
-        visibility: visible !important;
+    /* Remove Streamlit default top padding — nuclear approach */
+    header[data-testid="stHeader"] {{
+        display: none !important;
     }}
-    section[data-testid="stSidebar"] > div:first-child > div:has(.sidebar-brand) {{
-        order: -2 !important;
+    .stApp > header {{
+        display: none !important;
     }}
-
-    /* Remove Streamlit default top padding */
     .stMainBlockContainer, .block-container {{
         padding-top: 0 !important;
         padding-bottom: 40px !important;
-    }}
-    header[data-testid="stHeader"] {{
-        background: transparent !important;
-        height: 0 !important;
-        min-height: 0 !important;
-        padding: 0 !important;
-        margin: 0 !important;
+        margin-top: 0 !important;
     }}
     [data-testid="stAppViewContainer"] {{
         padding-top: 0 !important;
+        margin-top: 0 !important;
     }}
-    [data-testid="stAppViewContainer"] > div:first-child {{
+    [data-testid="stAppViewContainer"] > div {{
         padding-top: 0 !important;
+        margin-top: 0 !important;
     }}
     .appview-container {{
         padding-top: 0 !important;
+        margin-top: 0 !important;
     }}
     .main .block-container {{
         padding-top: 0 !important;
         margin-top: 0 !important;
+    }}
+    .stApp [data-testid="stAppViewContainer"] > section > div > div > div {{
+        padding-top: 0 !important;
     }}
     /* Collapse zero-height component iframes (footer, mobile guard) */
     iframe[height="0"], div:has(> iframe[height="0"]) {{
@@ -338,39 +336,6 @@ def inject_global_css():
     .stApp > * {{
         position: relative;
         z-index: 1;
-    }}
-
-    /* Sidebar collapse/expand button positioning */
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="collapsedControl"],
-    button[kind="headerNoPadding"],
-    section[data-testid="stSidebar"] button[data-testid="stSidebarCollapseButton"] {{
-        position: fixed !important;
-        top: 12px !important;
-        z-index: 999 !important;
-    }}
-    [data-testid="collapsedControl"] {{
-        position: fixed !important;
-        top: 12px !important;
-        left: 12px !important;
-        z-index: 999 !important;
-    }}
-
-    /* Make sidebar slightly different to distinguish */
-    section[data-testid="stSidebar"] {{
-        background:
-            linear-gradient(180deg, rgba(0,40,80,0.15) 0%, rgba(0,0,0,0) 40%),
-            {COLORS['bg_primary']} !important;
-        overflow-y: auto !important;
-    }}
-    section[data-testid="stSidebar"] > div {{
-        overflow-y: auto !important;
-        max-height: 100vh !important;
-    }}
-    /* Fix sidebar footer blocking scroll */
-    .sidebar-footer {{
-        position: relative !important;
-        margin-top: 2rem;
     }}
 
     /* Cards need opaque backgrounds so they float above the texture */
@@ -460,76 +425,7 @@ def inject_global_css():
     }}
     /* (duplicate nav button styles removed — clamp-based styles above handle all sizes) */
 
-    /* ── Sidebar input borders ── */
-    /* Text inputs, number inputs, selectboxes, date pickers, multiselects */
-    section[data-testid="stSidebar"] [data-baseweb="input"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
-    section[data-testid="stSidebar"] [data-baseweb="popover"] > div:first-child,
-    section[data-testid="stSidebar"] .stTextInput > div > div,
-    section[data-testid="stSidebar"] .stNumberInput > div > div,
-    section[data-testid="stSidebar"] .stSelectbox > div > div,
-    section[data-testid="stSidebar"] .stMultiSelect > div > div,
-    section[data-testid="stSidebar"] .stDateInput > div > div {{
-        border: 1px solid {COLORS['card_border']} !important;
-        border-radius: 6px !important;
-        background: {COLORS['card_bg']} !important;
-    }}
-
-    /* Focused state — accent border */
-    section[data-testid="stSidebar"] [data-baseweb="input"]:focus-within,
-    section[data-testid="stSidebar"] .stTextInput > div > div:focus-within,
-    section[data-testid="stSidebar"] .stNumberInput > div > div:focus-within,
-    section[data-testid="stSidebar"] .stSelectbox > div > div:focus-within,
-    section[data-testid="stSidebar"] .stMultiSelect > div > div:focus-within,
-    section[data-testid="stSidebar"] .stDateInput > div > div:focus-within {{
-        border-color: {COLORS['accent']} !important;
-        box-shadow: 0 0 0 1px {COLORS['accent']}33 !important;
-    }}
-
-    /* Sidebar slider track */
-    section[data-testid="stSidebar"] [data-baseweb="slider"] {{
-        padding: 8px 0 !important;
-    }}
-
-    /* Sidebar buttons */
-    section[data-testid="stSidebar"] .stButton > button {{
-        border: 1px solid {COLORS['card_border']} !important;
-        border-radius: 6px !important;
-        background: {COLORS['card_bg']} !important;
-        color: {COLORS['text_primary']} !important;
-        transition: border-color 0.2s ease !important;
-    }}
-    section[data-testid="stSidebar"] .stButton > button:hover {{
-        border-color: {COLORS['accent']} !important;
-    }}
-
-    /* Sidebar radio buttons and checkboxes — container border */
-    section[data-testid="stSidebar"] .stRadio,
-    section[data-testid="stSidebar"] .stCheckbox {{
-        border: 1px solid {COLORS['card_border']} !important;
-        border-radius: 6px !important;
-        padding: 8px 12px !important;
-        background: {COLORS['card_bg']} !important;
-    }}
-
-    /* Sidebar section labels */
-    section[data-testid="stSidebar"] .stMarkdown p {{
-        color: {COLORS['text_primary']} !important;
-    }}
-
-    /* Sidebar widget labels */
-    section[data-testid="stSidebar"] label {{
-        color: {COLORS['text_primary']} !important;
-        font-size: 0.85rem !important;
-    }}
-
-    /* File uploader in sidebar */
-    section[data-testid="stSidebar"] [data-testid="stFileUploader"] {{
-        border: 1px solid {COLORS['card_border']} !important;
-        border-radius: 6px !important;
-        padding: 8px !important;
-        background: {COLORS['card_bg']} !important;
-    }}
+    /* (sidebar styles removed — sidebar is fully hidden) */
 
     /* ═══════════════════════════════════════
        RESPONSIVE BREAKPOINTS
@@ -625,12 +521,6 @@ def inject_global_css():
         }}
         [data-testid="stMetric"] [data-testid="stMetricValue"] {{
             font-size: 0.85rem !important;
-        }}
-        [data-testid="stSidebarNav"] a,
-        [data-testid="stSidebarNav"] a span,
-        section[data-testid="stSidebar"] nav a span,
-        section[data-testid="stSidebar"] ul li a span {{
-            font-size: 0.9rem !important;
         }}
         .stTabs [data-baseweb="tab-list"] {{
             overflow-x: auto !important;

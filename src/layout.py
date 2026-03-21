@@ -16,6 +16,17 @@ from src.auth import check_auth, check_page_access, render_upgrade_prompt, get_u
 
 logger = logging.getLogger(__name__)
 
+# Base64-encode logo once at import time
+_LOGO_B64 = ""
+try:
+    import base64 as _b64
+    _logo_path = os.path.join(_project_root, "static", "logo.png")
+    if os.path.exists(_logo_path):
+        with open(_logo_path, "rb") as _f:
+            _LOGO_B64 = _b64.b64encode(_f.read()).decode()
+except Exception:
+    pass
+
 # Page registry: filename key → (title, icon)
 PAGE_CONFIG = {
     "01_Summary":            ("Summary | AI Statcharts", "🎯"),
@@ -39,39 +50,59 @@ PAGE_CONFIG = {
     "19_Iran_Conflict":      ("Iran Conflict | AI Statcharts", "🎖️"),
     "20_Futures":            ("Futures | AI Statcharts", "📈"),
     "21_Fed_Macro_Drivers":  ("Fed & Macro Drivers | AI Statcharts", "🏦"),
+    "22_Smart_Money":        ("Smart Money | AI Statcharts", "🏛️"),
 }
+
+
+def _warm_caches():
+    """Pre-fetch data that every page needs. Runs once per session in a background thread."""
+    if st.session_state.get("_caches_warmed"):
+        return
+    st.session_state["_caches_warmed"] = True
+    import threading
+
+    def _warm():
+        try:
+            _get_ticker_tape_data()
+        except Exception:
+            pass
+        try:
+            _get_polymarket_scroll()
+        except Exception:
+            pass
+        try:
+            _get_social_feed("")
+        except Exception:
+            pass
+
+    threading.Thread(target=_warm, daemon=True).start()
 
 
 def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collapsed"):
     """Universal page setup. Call this as the FIRST thing on every page.
     Handles: page_config, auth, global CSS, header, ticker tape, tier gating."""
+    _warm_caches()
     title, icon = PAGE_CONFIG.get(page_key, ("AI Statcharts", "📊"))
     st.set_page_config(page_title=title, page_icon=icon, layout=layout,
                        initial_sidebar_state=sidebar_state)
-    # Hide sidebar content + default nav immediately to prevent flash.
-    # This CSS loads as the very first element, before auth or any rendering.
+    # Hide sidebar completely — all controls now in header.
     st.markdown("""<style>
-        section[data-testid="stSidebar"] > div:first-child {
-            opacity: 0 !important;
-            visibility: hidden !important;
-        }
-        [data-testid="stSidebarNav"],
-        [data-testid="stSidebarNavItems"],
-        [data-testid="stSidebarNavSeparator"],
-        [data-testid="stSidebarNavLink"],
-        section[data-testid="stSidebar"] nav,
-        section[data-testid="stSidebar"] ul {
+        section[data-testid="stSidebar"],
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="collapsedControl"] {
             display: none !important;
-            height: 0 !important;
-            overflow: hidden !important;
         }
-        /* Kill all top gaps */
-        header[data-testid="stHeader"] { background: transparent !important; height: 0 !important; min-height: 0 !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; }
+        /* Kill all top gaps — nuclear approach */
+        header[data-testid="stHeader"] { display: none !important; }
+        .stApp > header { display: none !important; }
         .stApp > div:first-child { margin-top: 0 !important; padding-top: 0 !important; }
         [data-testid="stAppViewContainer"] { padding-top: 0 !important; margin-top: 0 !important; }
-        .stMainBlockContainer { padding-top: 0 !important; margin-top: 0 !important; }
-        .block-container { padding-top: 0 !important; margin-top: 0 !important; }
+        [data-testid="stAppViewContainer"] > div { padding-top: 0 !important; margin-top: 0 !important; }
+        .stMainBlockContainer, .block-container, .main .block-container,
+        .stMainBlockContainer > div, .appview-container { padding-top: 0 !important; margin-top: 0 !important; }
         div[data-testid="stVerticalBlock"] > div:first-child { margin-top: 0 !important; }
+        /* Catch any Streamlit-injected top spacers */
+        .stApp [data-testid="stAppViewContainer"] > section > div > div > div { padding-top: 0 !important; }
     </style>""", unsafe_allow_html=True)
     check_auth()
     inject_global_css()
@@ -228,10 +259,11 @@ def render_header(current_page: str):
         f'<span class="header-badge" style="color:#ff4444; border-color:#ff4444;">DELAYED {data_age_min:.0f}m</span>'
         if is_delayed else ""
     )
+    logo_html = f'<img src="data:image/png;base64,{_LOGO_B64}" width="28" height="28" style="vertical-align:middle;margin-right:8px;border-radius:6px;"/>' if _LOGO_B64 else ''
     header_html = (
         f'<div class="site-header">'
         f'<div class="site-header-brand">'
-        f'<img src="./static/logo.png" width="28" height="28" style="vertical-align:middle;margin-right:8px;border-radius:6px;"/>'
+        f'{logo_html}'
         f'<span style="font-size:20px; font-weight:800; color:{COLORS["accent"]}; letter-spacing:1.5px;">AI STATCHARTS</span>'
         f'</div>'
         f'<div class="site-header-badges">'
@@ -275,10 +307,11 @@ def render_header(current_page: str):
             ("18_Economic_Calendar", "Economic Calendar", "pages/18_Economic_Calendar.py"),
             ("20_Futures", "Futures", "pages/20_Futures.py"),
             ("21_Fed_Macro_Drivers", "Fed & Macro", "pages/21_Fed_Macro_Drivers.py"),
+            ("22_Smart_Money", "Smart Money", "pages/22_Smart_Money.py"),
         ]),
     ]
 
-    nav_cols = st.columns(len(nav_groups))
+    nav_cols = st.columns(len(nav_groups) + 1)
     for col, (group_name, pages) in zip(nav_cols, nav_groups):
         with col:
             if len(pages) == 1:
@@ -289,6 +322,33 @@ def render_header(current_page: str):
                 with st.popover(group_name, use_container_width=True):
                     for key, label, path in pages:
                         st.page_link(path, label=label, icon=PAGE_CONFIG.get(key, ("", "📊"))[1])
+
+    # Settings popover — scroll feed toggle + logout
+    with nav_cols[-1]:
+        with st.popover("Settings", use_container_width=True):
+            # Scroll feed source toggle
+            wl = st.session_state.get("watchlist", {})
+            wl_count = len(wl)
+            scroll_options = ["Market Feed"]
+            if wl_count > 0:
+                scroll_options.append(f"My Watchlist ({wl_count})")
+            scroll_choice = st.radio(
+                "Ticker Feed Source", scroll_options, key="scroll_feed_radio",
+                horizontal=True,
+            )
+            st.session_state["scroll_use_watchlist"] = scroll_choice != "Market Feed"
+
+            st.divider()
+
+            # Account info + logout
+            email = st.session_state.get("user_email", "")
+            if email and email != "local-dev@preview":
+                st.caption(f"Signed in as **{email}**")
+                if st.button("Log Out", key="header_logout", use_container_width=True):
+                    clear_auth_cookie()
+                    for key in list(st.session_state.keys()):
+                        del st.session_state[key]
+                    st.switch_page("app.py")
 
     # ── Recently visited pages (quick-access row) ──
     _track_recent_page(current_page)
@@ -365,13 +425,37 @@ def _render_ticker_strip(ticker_data: dict = None, render_time: datetime = None)
     else:
         age_str = f'<span style="color:#555;">{now.strftime("%I:%M %p")}</span>'
 
+    import math
     items = []
+    # Build a map of social posts keyed by ticker symbol for pairing
+    use_watchlist = st.session_state.get("scroll_use_watchlist", False)
+    if use_watchlist:
+        wl = st.session_state.get("watchlist", {})
+        wl_symbols = list(wl.keys()) if wl else []
+        symbols_key = ",".join(wl_symbols) if wl_symbols else ""
+    else:
+        symbols_key = ""
+    social_posts = _get_social_feed(symbols_key) if symbols_key or not use_watchlist else []
+    # Map StockTwits symbol → best post for that ticker
+    _sym_map = {"^GSPC": "SPY", "QQQ": "QQQ", "CL=F": "OIL", "GC=F": "GLD",
+                "^VIX": "VIX", "DX-Y.NYB": "UUP", "TLT": "TLT", "BTC-USD": "BTC"}
+    social_by_sym = {}
+    for p in social_posts:
+        s = p["symbol"].upper()
+        if s not in social_by_sym:
+            social_by_sym[s] = p
+
     for sym in ["^GSPC", "QQQ", "CL=F", "GC=F", "^VIX", "DX-Y.NYB", "TLT", "BTC-USD"]:
         d = ticker_data.get(sym, {})
         if not d or not isinstance(d, dict):
             continue
         price = d.get("price", 0)
         chg = d.get("change", 0)
+        # Skip tickers with NaN or zero price
+        if price is None or (isinstance(price, float) and (math.isnan(price) or price == 0)):
+            continue
+        if chg is None or (isinstance(chg, float) and math.isnan(chg)):
+            chg = 0
         label = d.get("label", sym)
         if sym == "^VIX":
             color = "#ff4444" if chg > 0 else "#00ff96"
@@ -390,10 +474,25 @@ def _render_ticker_strip(ticker_data: dict = None, render_time: datetime = None)
         else:
             pstr = f"${price:.2f}"
 
+        # Pair with a social post for this ticker
+        social_sym = _sym_map.get(sym, "")
+        post = social_by_sym.get(social_sym)
+        tweet_html = ""
+        if post:
+            body = post["body"].replace("<", "&lt;").replace(">", "&gt;")
+            handle = post.get("user", "")
+            handle_html = f'<span style="color:#666;">{handle}</span> ' if handle else ""
+            tweet_html = (
+                f' &nbsp;<span style="color:#555;">│</span>&nbsp; '
+                f'{handle_html}'
+                f'<span style="color:#bbb;font-size:12px;font-style:italic;">{body}</span>'
+            )
+
         items.append(
             f'<span style="color:#999;font-weight:600;">{label}</span> '
             f'<span style="color:#e0e0e0;">{pstr}</span> '
             f'<span style="color:{color};text-shadow:0 0 6px {color}40;">{arrow}{abs(chg):.1f}%</span>'
+            f'{tweet_html}'
         )
 
     # Append threat indicators
@@ -403,6 +502,17 @@ def _render_ticker_strip(ticker_data: dict = None, render_time: datetime = None)
         f'<span style="color:#999;font-weight:600;">IRAN WAR</span> '
         f'<span style="color:{esc_color};text-shadow:0 0 8px {esc_color}50;">Day {days_of_conflict} · {esc_score}/10 {esc_level}</span>'
     )
+
+    # Polymarket prediction odds
+    pm_data = _get_polymarket_scroll()
+    for pm in pm_data:
+        prob = pm["yes_prob"]
+        pm_color = "#00ff96" if prob >= 60 else "#ff4444" if prob <= 30 else "#ffaa00"
+        items.append(
+            f'<span style="color:#ad7fff;font-weight:600;">{pm["label"]}</span> '
+            f'<span style="color:{pm_color};text-shadow:0 0 6px {pm_color}40;">{prob}%</span>'
+        )
+
     items.append(age_str)
 
     separator = '&nbsp;&nbsp;&nbsp;<span style="color:#30363d;opacity:0.6;">◆</span>&nbsp;&nbsp;&nbsp;'
@@ -411,38 +521,31 @@ def _render_ticker_strip(ticker_data: dict = None, render_time: datetime = None)
 
     elapsed = _time.time() % 40
 
-    # ── Append social posts to the same tape ──
-    # Use watchlist tickers if user opted in, otherwise default macro tickers
-    use_watchlist = st.session_state.get("scroll_use_watchlist", False)
-    if use_watchlist:
-        wl = st.session_state.get("watchlist", {})
-        wl_symbols = list(wl.keys()) if wl else []
-        symbols_key = ",".join(wl_symbols) if wl_symbols else ""
-    else:
-        symbols_key = ""
-    social_posts = _get_social_feed(symbols_key) if symbols_key or not use_watchlist else []
-    if social_posts:
-        for p in social_posts:
-            sym = p["symbol"]
-            body = p["body"].replace("<", "&lt;").replace(">", "&gt;")
-            user_handle = p.get("user", "")
-            sent = p.get("sentiment", "")
-            if sent == "Bullish":
-                sc = "#00ff96"
-                si = "▲"
-            elif sent == "Bearish":
-                sc = "#ff4444"
-                si = "▼"
-            else:
-                sc = "#888"
-                si = "●"
-            handle_html = f'<span style="color:#666;">{user_handle}</span> ' if user_handle else ""
-            items.append(
-                f'<span style="color:{sc};">{si}</span> '
-                f'<span style="color:{COLORS["accent"]};font-weight:600;">${sym}</span> '
-                f'{handle_html}'
-                f'<span style="color:#bbb;">{body}</span>'
-            )
+    # Append any remaining social posts not paired with a ticker
+    paired_syms = set(_sym_map.values())
+    for p in social_posts:
+        if p["symbol"].upper() in paired_syms:
+            continue
+        sym = p["symbol"]
+        body = p["body"].replace("<", "&lt;").replace(">", "&gt;")
+        user_handle = p.get("user", "")
+        sent = p.get("sentiment", "")
+        if sent == "Bullish":
+            sc = "#00ff96"
+            si = "▲"
+        elif sent == "Bearish":
+            sc = "#ff4444"
+            si = "▼"
+        else:
+            sc = "#888"
+            si = "●"
+        handle_html = f'<span style="color:#666;">{user_handle}</span> ' if user_handle else ""
+        items.append(
+            f'<span style="color:{sc};">{si}</span> '
+            f'<span style="color:{COLORS["accent"]};font-weight:600;">${sym}</span> '
+            f'{handle_html}'
+            f'<span style="color:#bbb;">{body}</span>'
+        )
 
     # Rebuild tape with combined items
     separator = '&nbsp;&nbsp;&nbsp;<span style="color:#30363d;opacity:0.6;">◆</span>&nbsp;&nbsp;&nbsp;'
@@ -450,7 +553,8 @@ def _render_ticker_strip(ticker_data: dict = None, render_time: datetime = None)
     full_tape = f"{single_tape}{separator}{single_tape}{separator}{single_tape}"
 
     # Slower scroll to accommodate more content
-    scroll_duration = 40 + (len(social_posts) * 3 if social_posts else 0)
+    n_social = sum(1 for p in social_posts if p["symbol"].upper() not in paired_syms)
+    scroll_duration = 40 + (n_social * 3 if n_social else 0)
     elapsed = _time.time() % scroll_duration
 
     st.markdown(
@@ -541,63 +645,248 @@ def _clean_tweet_tickers(body: str, primary_symbol: str) -> str:
     return cleaned
 
 
-_DEFAULT_SOCIAL_SYMBOLS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "OIL", "GLD", "BTC.X", "VIX"]
+_DEFAULT_SOCIAL_SYMBOLS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "OIL", "GLD", "BTC.X", "VIX", "TLT", "UUP"]
+
+_SCROLL_POLYMARKET_SLUGS = {
+    "iran-ceasefire-2026": "Ceasefire",
+    "oil-price-above-100-2026": "Oil >$100",
+    "us-iran-war-escalation": "Escalation",
+    "fed-rate-cut-june-2026": "Fed Cut Jun",
+    "us-recession-2026": "Recession 2026",
+}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _get_polymarket_scroll() -> list:
+    """Fetch key Polymarket odds for the ticker scroll."""
+    import requests as _req
+    results = []
+    for slug, label in _SCROLL_POLYMARKET_SLUGS.items():
+        try:
+            r = _req.get(f"https://gamma-api.polymarket.com/markets?slug={slug}", timeout=6)
+            data = r.json()
+            if data and isinstance(data, list) and data[0].get("outcomePrices"):
+                prices = json.loads(data[0]["outcomePrices"])
+                yes_prob = round(float(prices[0]) * 100, 1)
+                results.append({"label": label, "yes_prob": yes_prob, "slug": slug})
+        except Exception:
+            pass
+    return results
 _MIN_FOLLOWERS = 1000000  # Minimum followers for a trusted source
+
+
+def _ai_filter_social_posts(posts: list) -> list:
+    """Filter social posts through Gemini for high-impact informational value."""
+    if not posts or len(posts) <= 3:
+        return posts
+
+    import os, json
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("GEMINI_API_KEY")
+        except Exception:
+            pass
+    if not api_key:
+        return posts
+
+    post_lines = []
+    for i, p in enumerate(posts):
+        post_lines.append(f'{i}: ${p["symbol"]} @{p.get("user","")} — {p["body"]}')
+    post_block = "\n".join(post_lines)
+
+    prompt = (
+        "Score each social media post for informational value to an active trader.\n\n"
+        "HIGH IMPACT (score 7-10): specific price targets, earnings data, analyst upgrades/downgrades, "
+        "macro data releases, Fed signals, sector rotation insights, unusual options activity, "
+        "breaking news with market implications.\n\n"
+        "LOW IMPACT (score 1-6): vague sentiment ('bullish!', 'to the moon'), memes, "
+        "generic commentary, questions, personal trades without thesis, pump/dump language.\n\n"
+        "Return ONLY a JSON array: [{\"index\": N, \"score\": 1-10}]\n\n"
+        f"Posts:\n{post_block}"
+    )
+
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                max_output_tokens=500,
+                temperature=0.1,
+            ),
+        )
+        scores = json.loads(response.text)
+        keep_indices = {s["index"] for s in scores if s.get("score", 0) >= 7}
+        filtered = [p for i, p in enumerate(posts) if i in keep_indices]
+        return filtered if filtered else posts[:5]
+    except Exception:
+        return posts
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _get_grok_ticker_posts() -> list:
+    """Fetch high-impact market posts from verified X/Twitter accounts via Grok."""
+    import os, json
+    grok_key = os.environ.get("GROK_API_KEY")
+    if not grok_key:
+        try:
+            grok_key = st.secrets.get("GROK_API_KEY")
+        except Exception:
+            pass
+    if not grok_key:
+        return []
+
+    today = __import__("datetime").datetime.now().strftime("%B %d, %Y")
+    prompt = f"""TODAY: {today}. Search X (formerly Twitter) RIGHT NOW for high-impact market posts from the last 3 hours.
+
+PRIORITY ACCOUNTS (trusted — search these first):
+  Energy & Markets: @JavierBlas, @amaboraz, @EnergyIntel, @OilSheppard, @QatarEnergy, @HFI_Research
+  OSINT & Military: @sentdefender, @TheStudyofWar, @CriticalThreats, @AuroraIntel, @IntelSky, @Conflict_Radar
+  Journalists: @IranIntl_En, @MiddleEastEye, @Shayan86, @BarakRavid, @AndrewMills1, @RezaSayahNews
+  Official: @Khamenei_ir, @araghchi, @IsraeliPM, @IDF, @IsraelWarRoom, @CENTCOM
+  Gulf: @badralbusaidi, @ONA_eng, @MofaQatar_EN, @MBA_AlThani_, @modgovae, @AnwarGargash
+  Finance: @zerohedge, @cryptorand, @clement_molin
+
+For any other accounts, require 250K+ followers.
+
+QUALITY RULES — every post you return MUST meet ALL of these:
+1. It must be a REAL post you found on X right now — do NOT fabricate posts or cite future dates.
+2. It must contain specific, actionable information: a data point, price level, event, or breaking news.
+3. REJECT: vague sentiment ("markets looking rough"), memes, jokes, self-promotion, engagement bait,
+   generic commentary ("big day ahead"), questions without data, or reposts without added insight.
+4. ACCEPT: earnings data, price targets, facility status changes, military updates, diplomatic signals,
+   unusual options/futures activity, official statements, analyst calls with specific numbers.
+5. The body must be the ACTUAL text from the post (paraphrased to max 200 chars if needed).
+6. Assign the most relevant ticker symbol (SPY/QQQ/OIL/GLD/VIX/BTC/TLT/DXY or specific stock).
+
+Return ONLY a JSON array of 6-10 posts that pass ALL quality rules:
+[{{"handle": "@user", "symbol": "TICKER", "body": "actual post content max 200 chars", "sentiment": "Bullish/Bearish/Neutral"}}]
+
+If fewer than 6 posts pass the quality bar, return fewer. Quality over quantity."""
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        response = client.chat.completions.create(
+            model="grok-4-1-fast-reasoning",
+            messages=[
+                {"role": "system", "content": "You are a market intelligence scanner with real-time X (formerly Twitter) access. Search for REAL posts that are currently live on X. Only return posts you actually found — never fabricate. Every post must contain specific, actionable market intelligence. Return JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1500,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
+        if not raw:
+            return []
+        import re as _re2
+        cleaned = _re2.sub(r"^```json?\s*", "", raw.strip())
+        cleaned = _re2.sub(r"\s*```$", "", cleaned)
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            return parsed
+        elif isinstance(parsed, dict):
+            return parsed.get("posts", parsed.get("tweets", []))
+        return []
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _get_social_feed(_symbols_key: str = "") -> list:
-    """Fetch trending StockTwits posts, filtered for quality and trusted sources.
+    """Fetch posts from Grok X/Twitter feed + StockTwits, filtered for quality.
     _symbols_key is a comma-joined string used as cache key (hashable)."""
-    symbols = _symbols_key.split(",") if _symbols_key else _DEFAULT_SOCIAL_SYMBOLS
+
+    # Primary: Grok-sourced posts from verified X accounts
+    grok_posts = _get_grok_ticker_posts()
     posts = []
+    # Reject phrases that indicate fabricated/generic posts
+    _reject_phrases = [
+        "markets looking", "big day", "stay tuned", "what do you think",
+        "follow me", "like and retweet", "thread", "breaking:", "just in:",
+        "happening now", "wow", "let's go", "lfg", "to the moon",
+    ]
+    for p in grok_posts:
+        body = p.get("body", "").replace("\n", " ").strip()
+        handle = p.get("handle", "")
+        if not body or len(body) < 20 or not handle:
+            continue
+        # Reject generic/vague posts
+        body_lower = body.lower()
+        if any(phrase in body_lower for phrase in _reject_phrases):
+            continue
+        # Must contain at least one specific element: a number, $, %, or proper noun
+        import re as _re3
+        has_specific = bool(_re3.search(r'[\d$%]|mbpd|bpd|crude|brent|wti|hormuz|iran|ceasefire|fed|gdp|cpi', body_lower))
+        if not has_specific:
+            continue
+        posts.append({
+            "symbol": p.get("symbol", "SPY"),
+            "body": body[:200],
+            "sentiment": p.get("sentiment", ""),
+            "likes": 0,
+            "user": handle,
+            "followers": 0,
+            "source": "x",
+            })
+
+    # Secondary: StockTwits backfill for tickers not covered by Grok
+    grok_symbols = {p["symbol"].upper() for p in posts}
+    symbols = _symbols_key.split(",") if _symbols_key else _DEFAULT_SOCIAL_SYMBOLS
     try:
         from curl_cffi import requests as cffi_requests
     except ImportError:
-        return posts
-    for sym in symbols:
-        sym = sym.strip()
-        if not sym:
-            continue
-        # StockTwits uses .X suffix for crypto
-        api_sym = sym if "." in sym else (f"{sym}.X" if sym in ("BTC", "ETH", "SOL", "DOGE") else sym)
-        try:
-            r = cffi_requests.get(
-                f"https://api.stocktwits.com/api/2/streams/symbol/{api_sym}.json?limit=15",
-                impersonate="chrome", timeout=8,
-            )
-            if r.status_code != 200:
+        cffi_requests = None
+
+    if cffi_requests:
+        for sym in symbols:
+            sym = sym.strip()
+            if not sym or sym.upper() in grok_symbols:
                 continue
-            data = r.json()
-            clean_sym = sym.replace(".X", "")
-            for m in data.get("messages", []):
-                # Trust filter: require minimum follower count
-                user = m.get("user", {})
-                followers = user.get("followers", 0)
-                is_official = user.get("official", False)
-                if not is_official and followers < _MIN_FOLLOWERS:
+            api_sym = sym if "." in sym else (f"{sym}.X" if sym in ("BTC", "ETH", "SOL", "DOGE") else sym)
+            try:
+                r = cffi_requests.get(
+                    f"https://api.stocktwits.com/api/2/streams/symbol/{api_sym}.json?limit=15",
+                    impersonate="chrome", timeout=8,
+                )
+                if r.status_code != 200:
                     continue
-                body = m.get("body", "").replace("\n", " ").strip()
-                if not _is_clean_post(body):
-                    continue
-                body = _clean_tweet_tickers(body, clean_sym)
-                if len(body) < 15 or len(body) > 100:
-                    continue
-                sent = (m.get("entities", {}).get("sentiment") or {}).get("basic", "")
-                likes = m.get("likes", {}).get("total", 0)
-                username = user.get("username", "")
-                posts.append({
-                    "symbol": clean_sym,
-                    "body": body[:100],
-                    "sentiment": sent,
-                    "likes": likes,
-                    "user": f"@{username}" if username else "",
-                    "followers": followers,
-                })
-        except Exception:
-            continue
-    # Sort by likes descending, take top 15
-    posts.sort(key=lambda p: p.get("likes", 0), reverse=True)
+                data = r.json()
+                clean_sym = sym.replace(".X", "")
+                for m in data.get("messages", []):
+                    user = m.get("user", {})
+                    followers = user.get("followers", 0)
+                    is_official = user.get("official", False)
+                    if not is_official and followers < _MIN_FOLLOWERS:
+                        continue
+                    body = m.get("body", "").replace("\n", " ").strip()
+                    if not _is_clean_post(body):
+                        continue
+                    body = _clean_tweet_tickers(body, clean_sym)
+                    if len(body) < 15 or len(body) > 200:
+                        continue
+                    sent = (m.get("entities", {}).get("sentiment") or {}).get("basic", "")
+                    likes = m.get("likes", {}).get("total", 0)
+                    username = user.get("username", "")
+                    posts.append({
+                        "symbol": clean_sym,
+                        "body": body[:200],
+                        "sentiment": sent,
+                        "likes": likes,
+                        "user": f"@{username}" if username else "",
+                        "followers": followers,
+                        "source": "stocktwits",
+                    })
+            except Exception:
+                continue
+
+    # Sort: Grok posts first (more reliable), then by likes
+    posts.sort(key=lambda p: (0 if p.get("source") == "x" else 1, -p.get("likes", 0)))
     return posts[:15]
 
 
@@ -625,52 +914,9 @@ def _get_escalation_data() -> dict:
 
 
 def render_sidebar_brand():
-    """Render branded sidebar header and footer with tier badge."""
-    tier = get_user_tier()
-    config = get_tier_config(tier)
-    tier_colors = {"free": "#888", "pro": "#00d1ff", "premium": "#ffaa00", "platinum": "#00ff96"}
-    tier_color = tier_colors.get(tier, "#888")
-
-    st.sidebar.markdown(f"""<div class="sidebar-brand">
-<svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" style="margin-bottom:6px;">
-  <rect width="48" height="48" rx="10" fill="#0e1117" stroke="#00d1ff" stroke-width="1.5"/>
-  <polyline points="8,36 16,28 22,32 30,18 38,22" fill="none" stroke="#00d1ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <polyline points="8,38 16,34 22,36 30,26 38,30" fill="none" stroke="#00ff96" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
-  <circle cx="30" cy="18" r="3" fill="#00d1ff" opacity="0.8"/>
-  <circle cx="38" cy="22" r="2" fill="#00d1ff" opacity="0.6"/>
-  <text x="10" y="15" font-size="10" font-weight="700" fill="#00d1ff" font-family="sans-serif">AI</text>
-</svg>
-<h2>AI STATCHARTS</h2>
-<p>Quantitative Analysis Platform</p>
-<span style="display:inline-block;margin-top:6px;padding:2px 10px;border:1px solid {tier_color};
-border-radius:10px;font-size:0.7rem;color:{tier_color};letter-spacing:0.5px;">{config['name']}</span>
-<div style="font-size:0.65rem;color:{COLORS['text_muted']};margin-top:4px;">v{APP_VERSION}</div>
-</div>""", unsafe_allow_html=True)
-
-    # Scroll feed source toggle
-    st.sidebar.markdown("---")
-    wl = st.session_state.get("watchlist", {})
-    wl_count = len(wl)
-    scroll_options = ["Market Feed"]
-    if wl_count > 0:
-        scroll_options.append(f"My Watchlist ({wl_count})")
-    scroll_choice = st.sidebar.radio(
-        "Social Feed", scroll_options, key="scroll_feed_radio",
-        horizontal=True, label_visibility="collapsed",
-    )
-    st.session_state["scroll_use_watchlist"] = scroll_choice != "Market Feed"
-    st.sidebar.caption("Social feed in ticker tape")
-
-    # Logout button
-    st.sidebar.markdown("---")
-    email = st.session_state.get("user_email", "")
-    if email and email != "local-dev@preview":
-        st.sidebar.caption(f"Signed in as **{email}**")
-        if st.sidebar.button("Log Out", key="sidebar_logout", use_container_width=True):
-            clear_auth_cookie()
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.switch_page("app.py")
+    """No-op — sidebar content has been moved into the header.
+    Kept for backwards compatibility with setup_page() call."""
+    pass
 
 
 

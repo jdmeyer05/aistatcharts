@@ -9,21 +9,19 @@ setup_page("12_Monte_Carlo")
 st.title("🎯 Monte Carlo Simulator")
 st.markdown("Forecast terminal price distributions using Geometric Brownian Motion (GBM).")
 
-# --- SIDEBAR CONFIGURATION ---
-with st.sidebar:
-    st.header("Simulation Parameters")
+# --- Controls ---
+_c1, _c2, _c3, _c4, _c5 = st.columns([2, 2, 2, 2, 1])
+with _c1:
     raw_ticker = st.text_input("Ticker", value=get_active_ticker())
-    
-    st.divider()
-    st.caption("Historical Data Tuning")
-    lookback = st.slider("Lookback Window (Days)", 252, 1260, 252, step=252, help="Used to calculate historical drift and volatility.")
-    
-    st.divider()
-    st.caption("Future Path Tuning")
+with _c2:
+    lookback = st.slider("Lookback (Days)", 252, 1260, 252, step=252, help="Historical drift and volatility window.")
+with _c3:
     sim_days = st.number_input("Days to Simulate", min_value=10, max_value=500, value=252, step=10)
-    sim_count = st.selectbox("Number of Simulations", [100, 500, 1000, 5000], index=2)
-    
-    run_sim = st.button("🚀 Run Simulation", type="primary", use_container_width=True)
+with _c4:
+    sim_count = st.selectbox("Simulations", [100, 500, 1000, 5000], index=2)
+with _c5:
+    st.markdown("<br>", unsafe_allow_html=True)
+    run_sim = st.button("Run Simulation", type="primary", use_container_width=True)
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)

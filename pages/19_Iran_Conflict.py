@@ -14,6 +14,7 @@ from openai import OpenAI
 from src.data_engine import fetch_massive_data
 from src.layout import setup_page, error_boundary, fun_loader
 from src.gdelt_events import fetch_gdelt_bulk_events, summarize_gdelt_events, build_gdelt_ai_context
+from src.edgar import fetch_recent_8k as _fetch_edgar_8k
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,58 @@ def _get_key(name: str):
 # ─────────────────────────────────────────────
 
 CONFLICT_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "..", "src", "iran_conflict_history.json")
+INFRA_STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "src", "iran_infra_state.json")
+
+
+def _load_infra_state() -> list:
+    """Load the last Grok-verified infrastructure state from disk."""
+    try:
+        if os.path.exists(INFRA_STATE_FILE):
+            with open(INFRA_STATE_FILE, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load infra state: {e}")
+    return []
+
+
+def _save_infra_state(infra: list):
+    """Persist Grok-verified infrastructure state to disk for next check."""
+    try:
+        os.makedirs(os.path.dirname(INFRA_STATE_FILE), exist_ok=True)
+        with open(INFRA_STATE_FILE, "w") as f:
+            json.dump(infra, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save infra state: {e}")
+
+# Finance blogs and analysis sources — referenced by AI models for background context
+FINANCE_BLOG_SOURCES = {
+    "investing": [
+        ("The Big Picture", "ritholtz.com"),
+        ("A Wealth of Common Sense", "awealthofcommonsense.com"),
+        ("Seeking Alpha", "seekingalpha.com"),
+        ("The Motley Fool", "fool.com"),
+        ("Financial Samurai", "financialsamurai.com"),
+        ("Zacks Investment Research", "zacks.com"),
+        ("ZeroHedge", "zerohedge.com"),
+    ],
+    "economics": [
+        ("Marginal Revolution", "marginalrevolution.com"),
+        ("Calculated Risk", "calculatedriskblog.com"),
+        ("Money Stuff (Bloomberg)", "bloomberg.com"),
+        ("FT Alphaville", "ft.com"),
+        ("Of Dollars and Data", "ofdollarsanddata.com"),
+        ("White Coat Investor", "whitecoatinvestor.com"),
+    ],
+    "personal_finance": [
+        ("Get Rich Slowly", "getrichslowly.org"),
+        ("Mr. Money Mustache", "mrmoneymustache.com"),
+        ("The Penny Hoarder", "thepennyhoarder.com"),
+        ("Afford Anything", "affordanything.com"),
+        ("Budgets Are Sexy", "budgetsaresexy.com"),
+        ("The Simple Dollar", "thesimpledollar.com"),
+        ("I Will Teach You To Be Rich", "iwillteachyoutoberich.com"),
+    ],
+}
 
 CONFLICT_TIMELINE_EVENTS = [
     {"date": "2026-02-28", "event": "US-Israel joint strikes begin on Iranian nuclear facilities",
@@ -87,59 +140,66 @@ CONFLICT_TIMELINE_EVENTS = [
 INFRASTRUCTURE_TARGETS = {
     "Strait of Hormuz": {
         "capacity": "18-21 mbpd (20% of global oil)",
-        "status": "Partially mined; US minesweeping ongoing",
+        "status": "Effectively closed to commercial traffic; Iranian mines, drones, missiles; US minesweeping underway but limited assets; transits in single digits daily (vs ~100+ pre-war)",
         "impact_level": "Critical",
         "color": "#ff4b4b",
         "lat": 26.56, "lon": 56.25,
     },
     "Abqaiq (Saudi Arabia)": {
         "capacity": "7 mbpd processing",
-        "status": "5.7 mbpd offline after Mar 7 strike; repairs underway",
-        "impact_level": "Critical",
-        "color": "#ff6b35",
+        "status": "Operational — no confirmed 2026 strike; Saudi production cuts due to Hormuz export constraints, not facility damage; East-West pipeline bypass active",
+        "impact_level": "Moderate",
+        "color": "#00ff96",
         "lat": 25.94, "lon": 49.67,
     },
     "Ras Tanura (Saudi Arabia)": {
-        "capacity": "6.5 mbpd export terminal",
-        "status": "Operating at 60% capacity",
+        "capacity": "6.5 mbpd export / 550 kbpd refinery",
+        "status": "Refinery restarted after early Mar drone strike; export limited by Hormuz closure; some rerouting to Yanbu/Red Sea",
         "impact_level": "Severe",
         "color": "#ffaa00",
         "lat": 26.64, "lon": 50.17,
     },
     "Kharg Island (Iran)": {
         "capacity": "5 mbpd (90% of Iran exports)",
-        "status": "Under US naval blockade; exports near zero",
-        "impact_level": "Critical",
-        "color": "#ff4b4b",
+        "status": "Military targets struck Mar 13-14 but oil infrastructure spared; exports continue at 1.1-1.5 mbpd via shadow fleet tankers, mostly to China",
+        "impact_level": "Severe",
+        "color": "#ffaa00",
         "lat": 29.23, "lon": 50.31,
     },
     "Kirkuk-Ceyhan Pipeline": {
         "capacity": "450 kbpd",
-        "status": "Shut after Mar 13 strike on Kirkuk fields",
+        "status": "Restarting after years of political disputes (not struck); Iraq-KRG agreement Mar 17; initial flows ~250 kbpd to Ceyhan as Hormuz bypass",
         "impact_level": "Moderate",
-        "color": "#ffaa00",
+        "color": "#00ff96",
         "lat": 35.47, "lon": 44.39,
     },
     "Fujairah (UAE)": {
         "capacity": "Major bunkering hub & storage",
-        "status": "Operations disrupted; rerouting via Oman",
-        "impact_level": "Moderate",
+        "status": "Multiple drone strikes mid-March caused fires and loading suspensions; operations disrupted; partial rerouting via Oman",
+        "impact_level": "Severe",
         "color": "#ffaa00",
         "lat": 25.12, "lon": 56.33,
     },
     "Bab el-Mandeb / Red Sea": {
         "capacity": "4.8 mbpd transit",
-        "status": "Houthi attacks intensifying; Suez traffic -40%",
+        "status": "Houthi threats renewed in solidarity with Iran; Suez traffic sharply below pre-crisis levels; Cape rerouting elevated",
         "impact_level": "Severe",
         "color": "#ff6b35",
         "lat": 12.58, "lon": 43.33,
     },
     "Qatar LNG (Ras Laffan)": {
-        "capacity": "77 mtpa LNG",
-        "status": "Significant damage from recent attacks; major export disruption",
+        "capacity": "77 mtpa LNG (~20-25% global supply)",
+        "status": "Extensive damage from Iranian missile strikes Mar 18-19; production halted; force majeure declared; repairs could take months to years for some capacity",
         "impact_level": "Critical",
         "color": "#ff4b4b",
         "lat": 25.93, "lon": 51.53,
+    },
+    "Assaluyeh / South Pars (Iran)": {
+        "capacity": "Major gas processing complex",
+        "status": "Israeli/US strikes on treatment plants mid-March; phases offline; contributing to retaliatory cycle",
+        "impact_level": "Critical",
+        "color": "#ff4b4b",
+        "lat": 27.48, "lon": 52.61,
     },
 }
 
@@ -173,182 +233,385 @@ DISRUPTION_TIMELINE = [
 
 # Single source of truth for facility-by-facility disruption (used in waterfall + AI prompt)
 DISRUPTION_BREAKDOWN = [
-    {"facility": "Kharg Island (Iran exports)", "mbpd": -4.0},
-    {"facility": "Abqaiq (Saudi processing)", "mbpd": -5.7},
-    {"facility": "Ras Tanura (reduced capacity)", "mbpd": -2.6},
-    {"facility": "Kirkuk-Ceyhan pipeline", "mbpd": -0.45},
-    {"facility": "Red Sea / Suez rerouting", "mbpd": -1.2},
-    {"facility": "Qatar LNG (Ras Laffan attacks)", "mbpd": -2.0},
+    {"facility": "Hormuz closure (commercial traffic near-zero)", "mbpd": -15.0},
+    {"facility": "Kharg Island (still exporting 1.1-1.5 mbpd via shadow fleet)", "mbpd": -3.0},
+    {"facility": "Qatar LNG (Ras Laffan offline, ~2 mbpd equiv)", "mbpd": -2.0},
+    {"facility": "Assaluyeh / South Pars (gas processing damaged)", "mbpd": -0.5},
+    {"facility": "Fujairah (drone strikes, loading disrupted)", "mbpd": -0.5},
+    {"facility": "Red Sea / Houthi rerouting", "mbpd": -1.0},
+    {"facility": "Saudi East-West pipeline bypass", "mbpd": 4.5},
+    {"facility": "Kirkuk-Ceyhan restart (~250 kbpd)", "mbpd": 0.25},
     {"facility": "SPR releases (US+G7)", "mbpd": 1.5},
     {"facility": "Saudi spare capacity activated", "mbpd": 1.2},
-    {"facility": "UAE/Kuwait increases", "mbpd": 0.8},
+    {"facility": "UAE/Kuwait increases via non-Hormuz routes", "mbpd": 0.8},
 ]
-CURRENT_NET_DISRUPTION = round(sum(d["mbpd"] for d in DISRUPTION_BREAKDOWN), 2)  # -10.75
+CURRENT_NET_DISRUPTION = round(sum(d["mbpd"] for d in DISRUPTION_BREAKDOWN), 2)
+
+
+@st.cache_data(ttl=7200, show_spinner=False)
+def _validate_infrastructure_baseline() -> dict:
+    """Use Grok (with real-time X access) to fact-check the hardcoded infrastructure baseline.
+    Returns corrected infrastructure dict and disruption breakdown. Cached 2 hours."""
+    grok_key = _get_key("GROK_API_KEY")
+    if not grok_key:
+        return {}
+
+    # Build the current baseline for Grok to check
+    baseline_lines = []
+    for name, info in INFRASTRUCTURE_TARGETS.items():
+        baseline_lines.append(f"- {name}: capacity={info['capacity']}, status={info['status']}, impact={info['impact_level']}")
+    baseline_lines.append("\nDisruption breakdown:")
+    for d in DISRUPTION_BREAKDOWN:
+        baseline_lines.append(f"  {d['facility']}: {d['mbpd']:+.1f} mbpd")
+    baseline_lines.append(f"  NET: {CURRENT_NET_DISRUPTION:+.2f} mbpd")
+    baseline_text = "\n".join(baseline_lines)
+
+    prompt = f"""You have real-time access to X/Twitter and current news. Fact-check this infrastructure status baseline for the US-Israel-Iran conflict as of right now.
+
+CURRENT BASELINE (may be outdated or inaccurate):
+{baseline_text}
+
+ACCURACY IS CRITICAL. Customers pay for this data. For EACH facility:
+1. Search X/Twitter and news for the CURRENT status RIGHT NOW (March 2026).
+2. Is it actually offline, degraded, or operational? What do satellite data, tanker tracking, and journalist reports say?
+3. What is the REAL disruption volume (mbpd)? Do NOT accept the baseline number if it's wrong — CORRECT IT.
+4. If the baseline claims a strike that never happened (e.g., no confirmed March 7 Abqaiq strike), mark it as inaccurate.
+5. If exports are still flowing (e.g., Kharg Island tankers still loading), say so with the actual flow rate.
+
+KNOWN ISSUES IN THE BASELINE THAT MAY NEED CORRECTION:
+- Kharg Island: Check if exports are actually near zero or if tankers are still loading (1-2 mbpd reported)
+- Abqaiq: Verify if a March 7 strike actually occurred — may be fabricated/confused with 2019 attack
+- Kirkuk-Ceyhan: Verify if a March 13 strike occurred — pipeline may have been inactive for years
+- Ras Tanura: Check if the refinery has restarted since early March
+
+Return ONLY valid JSON. You MUST include ALL 8 facilities from the baseline plus any offsets:
+{{
+  "facilities": [
+    {{"name": "facility name (must match baseline exactly)", "status": "operational/degraded/offline", "detail": "VERIFIED current status citing specific sources (e.g., 'per Reuters March 19' or 'satellite shows tankers loading')", "mbpd_loss": N, "update": "latest status update, or null if no change needed", "confidence": "high/medium/low"}}
+  ],
+  "offsets": [
+    {{"name": "offset name", "mbpd_gain": N, "detail": "current status"}}
+  ],
+  "net_disruption_mbpd": N,
+  "summary": "2-3 sentences: what the baseline got wrong and what the verified net disruption actually is"
+}}
+
+CRITICAL: This data is displayed to paying customers as VERIFIED intelligence.
+- Do NOT rubber-stamp the baseline. ACTIVELY CHALLENGE every claim.
+- If you cannot verify a claim, set confidence to "low" and say so in the detail.
+- Your net_disruption_mbpd must reflect YOUR verified numbers, not the baseline's."""
+
+    try:
+        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        response = client.chat.completions.create(
+            model="grok-4.20-0309-reasoning",
+            messages=[
+                {"role": "system", "content": "You are an energy infrastructure intelligence analyst with real-time X/Twitter access. Your job is to FACT-CHECK claims about facility status. Be skeptical — challenge every claim against current sources. Accuracy is paramount."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=3000,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
+        if not raw:
+            return {}
+
+        cleaned = re.sub(r"^```json?\s*", "", raw.strip())
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        result = json.loads(cleaned)
+
+        # Validate the response has the expected structure
+        if not isinstance(result.get("facilities"), list) or not result.get("net_disruption_mbpd"):
+            return {}
+
+        logger.info(f"Infrastructure validation: {result.get('summary', '')}")
+        return result
+    except Exception as e:
+        logger.warning(f"Infrastructure validation failed: {e}")
+        return {}
+
+
+def get_validated_infrastructure() -> tuple:
+    """Return validated infrastructure data. Falls back to hardcoded if validation unavailable.
+    Returns (infrastructure_targets_dict, disruption_breakdown_list, net_disruption, validation_summary)."""
+    validated = _validate_infrastructure_baseline()
+    if not validated or not validated.get("facilities"):
+        return INFRASTRUCTURE_TARGETS, DISRUPTION_BREAKDOWN, CURRENT_NET_DISRUPTION, None
+
+    # Build corrected infrastructure targets
+    corrected_targets = {}
+    status_colors = {"offline": "#ff4b4b", "degraded": "#ffaa00", "operational": "#00ff96"}
+    status_levels = {"offline": "Critical", "degraded": "Severe", "operational": "Operational"}
+
+    # Start with hardcoded targets for lat/lon/capacity, then overlay corrections
+    for name, info in INFRASTRUCTURE_TARGETS.items():
+        corrected_targets[name] = dict(info)  # copy
+
+    for f in validated["facilities"]:
+        fname = f.get("name", "")
+        # Try to match to existing facility
+        matched_key = None
+        for key in corrected_targets:
+            if fname.lower() in key.lower() or key.lower() in fname.lower():
+                matched_key = key
+                break
+
+        if matched_key:
+            status = f.get("status", "degraded")
+            corrected_targets[matched_key]["status"] = f.get("detail", corrected_targets[matched_key]["status"])
+            corrected_targets[matched_key]["impact_level"] = status_levels.get(status, "Severe")
+            corrected_targets[matched_key]["color"] = status_colors.get(status, "#ffaa00")
+            corrected_targets[matched_key]["_update"] = f.get("update", f.get("correction", ""))
+            corrected_targets[matched_key]["_confidence"] = f.get("confidence", "medium")
+
+    # Build corrected disruption breakdown
+    corrected_breakdown = []
+    for f in validated["facilities"]:
+        loss = f.get("mbpd_loss", 0)
+        if loss:
+            corrected_breakdown.append({
+                "facility": f.get("name", "Unknown"),
+                "mbpd": -abs(loss),
+            })
+    for o in validated.get("offsets", []):
+        gain = o.get("mbpd_gain", 0)
+        if gain:
+            corrected_breakdown.append({
+                "facility": o.get("name", "Unknown offset"),
+                "mbpd": abs(gain),
+            })
+
+    net = validated.get("net_disruption_mbpd", CURRENT_NET_DISRUPTION)
+    summary = validated.get("summary", "")
+
+    # Fall back to hardcoded if corrected breakdown is empty
+    if not corrected_breakdown:
+        corrected_breakdown = DISRUPTION_BREAKDOWN
+
+    return corrected_targets, corrected_breakdown, net, summary
 
 # Base models (always used): Grok, Gemini, Claude
-# Platinum-only: GPT-5 (added at runtime if tier = platinum)
+# Platinum tier upgrades Claude Sonnet → Opus at runtime
 MODEL_CONFIGS = {
     "grok": {
-        "name": "Grok 3",
+        "name": "Grok 4",
         "base_url": "https://api.x.ai/v1",
-        "model": "grok-3",
+        "model": "grok-4.20-0309-reasoning",
         "key_name": "GROK_API_KEY",
         "extra_instructions": (
-            "YOUR ROLE: Breaking news & viral social intelligence specialist.\n\n"
+            "YOUR ROLE: Real-time intelligence & visual OSINT specialist.\n"
+            "You are the ONLY model with live X/Twitter access. The other models are blind to what's "
+            "happening right now. Your job is to be their eyes and ears.\n\n"
 
-            "PRIORITY ACCOUNTS — check these FIRST for the latest posts:\n"
-            "  OSINT: @sentdefender, @IntelCrab, @AuroraIntel, @Faytuks, @GeoConfirmed\n"
-            "  Energy/Oil: @JavierBlas, @amaboraz, @EnergyIntel, @OilSheppard\n"
-            "  Military: @RALee85, @TheStudyofWar, @NOELreports, @OAlexanderDK\n"
-            "  Journalists: @Joyce_Karam, @IranIntl_En, @BarakRavid, @Charles_Lister\n"
-            "  Official: @CENTCOM, @IDF, @ABORAZAVI\n\n"
+            "1. VISUAL INTELLIGENCE — WAR MAPS & SATELLITE IMAGERY:\n"
+            "  Search X for war maps, satellite photos, and visual OSINT posted in the last 24 hours.\n"
+            "  Priority map accounts: @TheStudyofWar (ISW maps), @GeoConfirmed (geolocation), "
+            "@AuroraIntel (satellite), @Faytuks (strike maps), @NOELreports (naval tracking), "
+            "@IntelSky (flight/missile tracking), @Conflict_Radar (situation maps).\n"
+            "  For each map/image you find, describe: what it shows, what changed from previous maps, "
+            "and what it implies for the conflict trajectory.\n"
+            "  Look for: strike damage assessment photos, tanker tracking maps, Hormuz naval deployment maps, "
+            "infrastructure damage before/after satellite imagery, missile trajectory maps, "
+            "frontline/zone-of-control maps, shipping lane closure maps.\n\n"
 
-            "VIRAL TWEET DETECTION — find the HOTTEST tweets right now:\n"
-            "  - Prioritize tweets by VELOCITY: likes + retweets per hour since posting.\n"
-            "    A tweet with 500 likes in 20 minutes is far more important than 2,000 likes over 3 days.\n"
-            "  - Flag any tweet that got >500 likes in <1 hour.\n"
-            "  - Flag tweets with >100 quote tweets (signals debate/controversy).\n"
-            "  - Flag small accounts (<10K followers) getting 10x their normal engagement (breakout signal).\n"
-            "  - Find ANALYSIS THREADS (multi-tweet chains), not just single tweets — threads have deeper insight.\n\n"
+            "2. BREAKING INTELLIGENCE (last 6 hours):\n"
+            "  Priority accounts:\n"
+            "    OSINT: @sentdefender, @IntelCrab, @AuroraIntel, @Faytuks, @GeoConfirmed\n"
+            "    Energy: @JavierBlas, @amaboraz, @EnergyIntel, @OilSheppard, @HFI_Research\n"
+            "    Military: @RALee85, @TheStudyofWar, @NOELreports, @OAlexanderDK\n"
+            "    Journalists: @Joyce_Karam, @IranIntl_En, @BarakRavid, @Charles_Lister, @MiddleEastEye\n"
+            "    Official: @CENTCOM, @IDF, @IsraelWarRoom, @Khamenei_ir, @araghchi\n"
+            "  For each development: cite the source, time, engagement velocity, and whether it's confirmed by 2+ sources.\n\n"
 
-            "INFRASTRUCTURE MONITORING — search X/Twitter specifically for:\n"
-            "  - Attacks on oil/gas/LNG facilities (Abqaiq, Ras Tanura, Kharg Island, Ras Laffan, etc.)\n"
-            "  - Strait of Hormuz shipping status, mine clearance progress\n"
-            "  - Pipeline damage or repairs (Kirkuk-Ceyhan, East-West, etc.)\n"
-            "  - Refinery outages or restarts across the Gulf region\n"
-            "  - Red Sea / Bab el-Mandeb / Houthi attack updates\n"
-            "  - Any facility coming BACK ONLINE or NEW facilities being hit\n"
-            "  For EACH facility in infrastructure_status, search for the latest tweets about it.\n\n"
+            "3. NARRATIVE SHIFT DETECTION:\n"
+            "  Compare the dominant narrative on X RIGHT NOW vs 24 hours ago.\n"
+            "  Is sentiment shifting hawkish or dovish? Are new hashtags trending?\n"
+            "  Are officials changing tone (e.g., ceasefire language appearing/disappearing)?\n"
+            "  Flag any CONTRARIAN signals — where social sentiment diverges from price action.\n\n"
 
-            "CONTRARIAN SIGNAL DETECTION:\n"
-            "  - If viral tweets CONTRADICT the hard data (GDELT, oil prices, ACLED), flag the divergence explicitly.\n"
-            "  - If social sentiment is moving opposite to price action, note it — this is often the most valuable signal.\n\n"
+            "4. CROSS-REFERENCING:\n"
+            "  For every major claim, check if 2+ independent sources corroborate it.\n"
+            "  If only one source reports something, flag it as UNCONFIRMED.\n"
+            "  Note which claims are backed by visual evidence (satellite, photos) vs. text-only reports.\n\n"
 
-            "STRUCTURED TWEET CITATIONS:\n"
-            "  In your trending_tweets array, return each tweet with: handle, engagement metrics, time posted, and content.\n"
-            "  Format: {\"handle\": \"@user\", \"content\": \"tweet text\", \"likes\": N, \"retweets\": N, \"replies\": N,\n"
-            "           \"time\": \"Xh ago\", \"velocity\": \"high/medium\", \"why_important\": \"reason\"}\n"
-            "  Include 5-8 of the most important tweets. Prioritize velocity over total engagement.\n\n"
+            "5. TRENDING TWEETS:\n"
+            "  Return 5-8 highest-velocity tweets with: handle, content, engagement metrics, time, velocity, why_important.\n"
+            "  Prioritize: tweets with visual evidence > analysis threads > single text tweets.\n"
 
-            "YOU MUST: (1) Cite specific tweets with engagement metrics and timestamps. "
-            "(2) Note where social sentiment DIVERGES from the hard data provided. "
-            "(3) Flag any breaking developments not yet in the data feed. "
-            "(4) Include at least one analysis thread if available.\n"
-            "Every claim in your rationale MUST reference a specific data point, tweet, or headline."
+            "YOUR SITUATION SUMMARY must lead with the most recent visual/satellite intelligence, "
+            "then breaking developments, then narrative shifts."
         ),
         "color": "#ff4444",
         "weight_escalation": 1.3,
         "weight_oil": 0.8,
         "weight_ceasefire": 0.9,
-        "max_tokens": 3500,
-        "data_sections": ["timeline", "infrastructure", "oil", "gdelt_tone", "disruption", "prior"],
-        "tier_required": None,  # all tiers
+        "max_tokens": 16000,
+        "data_sections": ["timeline", "infrastructure", "oil", "market", "gdelt_tone", "disruption", "prior"],
+        "tier_required": None,
     },
     "gemini": {
-        "name": "Gemini 3 Pro",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "model": "gemini-3-pro-preview",
+        "name": "Gemini 3.1 Pro",
+        "base_url": "gemini_native",
+        "model": "gemini-3.1-pro-preview",
         "key_name": "GEMINI_API_KEY",
         "extra_instructions": (
-            "YOUR ROLE: Military strategy & energy markets specialist.\n"
-            "You cover TWO domains — provide analysis on BOTH:\n\n"
-            "MILITARY & STRATEGIC:\n"
-            "  (1) Military balance of forces and operational tempo.\n"
-            "  (2) Historical parallels — compare to 1980 Iran-Iraq War, 1990 Gulf War, 2019 Soleimani escalation.\n"
-            "  (3) Escalation ladder — what would move this conflict to the next level vs. de-escalation.\n"
-            "  Every escalation score must reference a comparable historical event at that level.\n\n"
-            "ENERGY & ECONOMIC:\n"
-            "  (1) Exact supply disruption by facility (mbpd offline at each chokepoint).\n"
-            "  (2) Oil price mechanics — spare capacity, SPR drawdown math, shipping rerouting costs.\n"
-            "  (3) Second-order economic effects — inflation pass-through, refinery margins, LNG substitution.\n"
-            "  Your disruption estimate must add up facility-by-facility.\n\n"
-            "YOU MUST: Ground your analysis in the LIVE DATA provided. Cite GDELT scores, oil prices, "
-            "event counts, and specific facility statuses."
+            "YOUR ROLE: Quantitative energy & military analyst. You are the math engine.\n\n"
+
+            "1. SUPPLY/DEMAND MODEL — build a complete quantitative model:\n"
+            "  For EVERY facility in the data, calculate:\n"
+            "    - Pre-war capacity (mbpd or mtpa)\n"
+            "    - Current operating rate (%)\n"
+            "    - Net loss (mbpd)\n"
+            "    - Estimated days to restore (based on damage type: mine clearing = 2-4 weeks, "
+            "refinery repair = 3-6 months, pipeline = 1-2 weeks, port = 2-4 weeks)\n"
+            "    - Recovery trajectory: when will each facility return to X% capacity?\n"
+            "  Sum it all: total offline, total degraded, net disruption, offset by SPR + spare capacity.\n"
+            "  Your numbers MUST add up. Show the math.\n\n"
+
+            "2. OIL PRICE MODEL:\n"
+            "  Use the supply gap + demand elasticity to calculate price impact:\n"
+            "    - Short-run elasticity: ~0.05 (1% supply loss ≈ 20% price increase)\n"
+            "    - Factor in: SPR releases (how many days of supply?), Saudi spare capacity limits, "
+            "shipping rerouting costs (Cape vs Suez), insurance premiums, refinery margin compression.\n"
+            "  Produce a 30-day price forecast with LOW/BASE/HIGH scenarios and the assumptions behind each.\n"
+            "  Cross-reference with the oil futures term structure data provided — does the curve agree with your model?\n\n"
+
+            "3. SECOND-ORDER ECONOMIC IMPACTS:\n"
+            "  Calculate the inflation pass-through: oil price → gasoline → CPI → Fed response.\n"
+            "  Estimate GDP drag from the energy shock (use historical analogs: 1973, 1979, 1990, 2022).\n"
+            "  Model the LNG substitution effect: with Qatar offline, what happens to European gas prices? "
+            "Asian LNG spot? Use the TTF and Henry Hub data provided.\n"
+            "  Defense sector revenue uplift: estimate incremental revenue for LMT, RTX, NOC from this conflict.\n\n"
+
+            "4. HISTORICAL CALIBRATION:\n"
+            "  For your escalation score, map the current situation to the EXACT historical parallel:\n"
+            "    - What was the oil price impact of that parallel event?\n"
+            "    - How long did the disruption last?\n"
+            "    - What ended it?\n"
+            "  Use this to calibrate your 30-day and 90-day outlooks.\n\n"
+
+            "YOUR SITUATION SUMMARY must lead with quantitative facts: exact mbpd offline, price levels, "
+            "% changes, and specific facility status numbers."
         ),
         "color": "#4285f4",
         "weight_escalation": 1.1,
         "weight_oil": 1.4,
         "weight_ceasefire": 0.8,
-        "max_tokens": 2500,
-        "data_sections": ["timeline", "infrastructure", "gdelt_intensity", "gdelt_bulk", "oil", "disruption", "prior"],
+        "max_tokens": 16000,
+        "data_sections": ["timeline", "infrastructure", "gdelt_intensity", "gdelt_bulk", "oil", "market", "disruption", "prior"],
         "tier_required": None,
     },
     "claude": {
         "name": "Claude Sonnet",
         "base_url": "anthropic",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6",
         "key_name": "ANTHROPIC_API_KEY",
         "extra_instructions": (
-            "YOUR ROLE: Diplomatic & probabilistic reasoning specialist.\n"
-            "Focus on: (1) Ceasefire probability — who are the mediators, what are the obstacles, "
-            "what concessions are each side likely to make. "
-            "(2) Scenario tree — map out the 3-5 most likely paths forward with conditional probabilities. "
-            "(3) Second-order geopolitical effects — alliances, UN Security Council dynamics, China/Russia positioning.\n"
-            "YOU MUST: Express uncertainty explicitly. Use calibrated probability ranges, not point estimates "
-            "where uncertain. Cite specific diplomatic signals from the data provided."
+            "YOUR ROLE: Strategic reasoning & probability specialist. You are the decision-making engine.\n\n"
+
+            "1. BAYESIAN SCENARIO ANALYSIS:\n"
+            "  For each scenario in your forecast, show your reasoning chain:\n"
+            "    PRIOR: What was the base probability before today's events?\n"
+            "    EVIDENCE: What new data points shift the probability? (cite specific data from the feed)\n"
+            "    POSTERIOR: Updated probability after incorporating evidence.\n"
+            "  Model CONDITIONAL probabilities: 'IF Hormuz reopens within 2 weeks (P=X%), "
+            "THEN oil drops to $Y (P=Z% | Hormuz open)'\n"
+            "  Identify the single most important SWING VARIABLE — the one thing that, if it changes, "
+            "would most dramatically shift all scenarios.\n\n"
+
+            "2. DIPLOMATIC DEEP DIVE:\n"
+            "  Map every active diplomatic channel:\n"
+            "    - Omani mediation: who is at the table, what are the demands, what's the timeline?\n"
+            "    - UN Security Council: any resolution drafts? China/Russia veto risk?\n"
+            "    - Back-channel signals: any tone shifts from @Khamenei_ir, @araghchi, @IsraeliPM?\n"
+            "    - Regional mediators: Qatar, Turkey, Saudi — who has leverage?\n"
+            "  For ceasefire probability: decompose into SUB-PROBABILITIES:\n"
+            "    P(ceasefire talks continue) × P(terms acceptable to both) × P(implementation holds)\n"
+            "  Identify the most likely DEAL STRUCTURE if a ceasefire happens.\n\n"
+
+            "3. RED TEAM — CHALLENGE THE CONSENSUS:\n"
+            "  Where are the other models (Grok, Gemini) likely to be WRONG?\n"
+            "  What are they probably overweighting? Underweighting?\n"
+            "  What's the most dangerous blind spot in the current analysis?\n"
+            "  What's the 'black swan' scenario that nobody is pricing in?\n\n"
+
+            "4. CONFIDENCE CALIBRATION:\n"
+            "  For EVERY number you produce, provide a confidence interval:\n"
+            "    - Escalation score: X/10 (90% CI: [Y, Z])\n"
+            "    - Ceasefire probability: X% (range: Y%-Z%)\n"
+            "    - Oil forecast: $X base (80% CI: [$Y, $Z])\n"
+            "  If you're uncertain about something, SAY SO with a specific reason.\n"
+            "  Never false-precision: '73%' implies you know it within 1% — use '70-75%' if uncertain.\n\n"
+
+            "5. SECOND & THIRD ORDER EFFECTS:\n"
+            "  What are the effects that cascade BEYOND the immediate conflict?\n"
+            "    - Alliance shifts (does this push Saudi toward China? Does Turkey pivot?)\n"
+            "    - Nuclear proliferation implications\n"
+            "    - Global energy transition acceleration/deceleration\n"
+            "    - US election impact\n"
+            "    - Petrodollar/petrocurrency effects\n\n"
+
+            "YOUR SITUATION SUMMARY must lead with the probability assessment and what changed it, "
+            "then the key uncertainty, then the most important thing to watch next."
         ),
         "color": "#d4a574",
         "weight_escalation": 1.0,
         "weight_oil": 0.9,
         "weight_ceasefire": 1.4,
-        "max_tokens": 2500,
-        "data_sections": ["timeline", "infrastructure", "oil", "gdelt_tone", "acled", "disruption", "prior"],
+        "max_tokens": 16000,
+        "data_sections": ["timeline", "infrastructure", "oil", "market", "gdelt_tone", "acled", "disruption", "prior"],
         "tier_required": None,
     },
 }
 
-# Platinum-only model — added to MODEL_CONFIGS at runtime for platinum users
-GPT5_CONFIG = {
-    "name": "GPT-5",
-    "base_url": None,
-    "model": "gpt-5",
-    "key_name": "OPENAI_API_KEY",
-    "extra_instructions": (
-        "YOUR ROLE: Deep strategic analysis & synthesis specialist.\n"
-        "Focus on: (1) Synthesize intelligence from all dimensions — military, economic, diplomatic. "
-        "(2) Identify non-obvious second and third-order effects. "
-        "(3) Historical parallels with precise calibration. "
-        "(4) Challenge assumptions in the other models' likely conclusions.\n"
-        "YOU MUST: Provide the most rigorous, nuanced analysis. Cite specific data points."
-    ),
-    "color": "#00cc66",
-    "weight_escalation": 1.2,
-    "weight_oil": 1.0,
-    "weight_ceasefire": 1.1,
-    "max_tokens": 3000,
-    "data_sections": ["timeline", "infrastructure", "gdelt_intensity", "gdelt_bulk", "acled", "oil", "disruption", "prior"],
-    "tier_required": "platinum",
-}
 
 CONFLICT_SYSTEM_PROMPT = """You are an elite geopolitical intelligence analyst specializing in Middle East conflicts and energy security.
+
+CRITICAL FACTUAL CONTEXT (post-November 2024 — your training data may not include these):
+
+US POLITICS:
+- President: Donald Trump (2nd term, inaugurated Jan 20, 2025). Joe Biden is NO LONGER president.
+- VP: JD Vance. Secretary of State: Marco Rubio. SecDef: Pete Hegseth. NSA: Mike Waltz.
+- Trump withdrew from the 2015 Iran nuclear deal (JCPOA) again and imposed "maximum pressure" sanctions.
+- US policy toward Iran is significantly more hawkish than the Biden administration.
+
+MIDDLE EAST LEADERS:
+- Israel PM: Benjamin Netanyahu (coalition with far-right partners Ben Gvir, Smotrich).
+- Iran: Supreme Leader Ali Khamenei. President Masoud Pezeshkian (elected 2024, reformist). FM Abbas Araghchi.
+- Saudi Arabia: Crown Prince Mohammed bin Salman (MBS), de facto ruler.
+- UAE: President Mohammed bin Zayed (MBZ).
+- Qatar: Emir Sheikh Tamim bin Hamad Al Thani. PM Mohammed bin Abdulrahman Al Thani.
+- Oman: Sultan Haitham bin Tariq (key mediator in Iran diplomacy).
+
+KEY EVENTS BETWEEN NOV 2024 AND FEB 2026:
+- Trump re-elected November 2024, inaugurated January 2025.
+- Israel-Hamas war continued through 2025 with multiple ceasefire attempts.
+- Houthi Red Sea attacks persisted through 2025, disrupting global shipping.
+- Iran accelerated uranium enrichment to near-weapons-grade (60%+) through 2025.
+- Oil prices were volatile in 2025: $70-90 range before the Feb 2026 escalation.
+- Fed cut rates through 2025, reaching 3.50-3.75% by early 2026.
+- US-Israel launched joint strikes on Iran Feb 28, 2026 — the current conflict.
+
+CURRENT YEAR: 2026. Do NOT reference Biden, Blinken, Austin, or Sullivan as current officials.
 
 You are analyzing the ongoing US-Israel war on Iran that began February 28, 2026.
 
 Key context:
 - US-Israel launched joint strikes on Iranian nuclear facilities on Feb 28, 2026
 - Iran retaliated with ballistic missiles; IRGC mined the Strait of Hormuz
-- Abqaiq processing facility in Saudi Arabia was struck on Mar 7 (5.7 mbpd offline)
+- Multiple Gulf energy facilities have been damaged or disrupted (see LIVE DATA for current status)
 - Houthi attacks on Red Sea shipping intensified in solidarity
 - Partial ceasefire talks via Omani mediation began Mar 16
 - FOMC held rates Mar 18, citing oil shock uncertainty
 - Attacks on Qatar Ras Laffan LNG facility caused significant damage on Mar 19
 - Oil peaked at $126/bbl (Brent); currently elevated above $100
+- IMPORTANT: Facility-level status and disruption numbers in LIVE DATA have been verified in real-time. Use those, not your training data.
 
-VERIFIED SUPPLY DISRUPTION BREAKDOWN (use these exact numbers as your baseline):
-  Losses:
-    Kharg Island (Iran exports): -4.0 mbpd (blockaded, near zero exports)
-    Abqaiq (Saudi processing): -5.7 mbpd (struck Mar 7, repairs underway)
-    Ras Tanura (Saudi export): -2.6 mbpd (operating at 60%)
-    Kirkuk-Ceyhan pipeline: -0.45 mbpd (shut after Mar 13 strike)
-    Red Sea / Suez rerouting: -1.2 mbpd (Houthi attacks, Suez -40%)
-    Qatar LNG (Ras Laffan): -2.0 mbpd equivalent (significant damage from attacks Mar 19)
-  Offsets:
-    SPR releases (US+G7): +1.5 mbpd equivalent
-    Saudi spare capacity: +1.2 mbpd
-    UAE/Kuwait increases: +0.8 mbpd
-  NET DISRUPTION: -12.45 mbpd
-Your current_disruption_mbpd estimate MUST be close to 12.45 unless you have specific evidence
-that a facility has come back online or a new facility has been hit. If you deviate, explain why.
+SUPPLY DISRUPTION: A verified, real-time disruption breakdown is provided in the LIVE DATA section
+of the user prompt. Use those numbers as your baseline — they have been fact-checked against
+current sources. Your current_disruption_mbpd MUST be close to the NET DISRUPTION figure provided.
+If you deviate, you MUST cite specific evidence (a facility coming back online, a new attack, etc.).
 
 CALIBRATION ANCHORS — use these to ground your escalation_risk score:
   10 = Cuban Missile Crisis (1962) — imminent nuclear exchange, civilization-level risk
@@ -369,64 +632,47 @@ CITATION RULES — every claim must be grounded:
 - If you are uncertain about a fact, say so explicitly — do NOT fabricate
 - If the live data contradicts your prior beliefs, trust the data and note the divergence
 
+ADDITIONAL SOURCES — check these finance blogs/sites for market analysis and economic context:
+  Investing: ritholtz.com, awealthofcommonsense.com, seekingalpha.com, fool.com, financialsamurai.com, zacks.com, zerohedge.com
+  Economics: marginalrevolution.com, calculatedriskblog.com, bloomberg.com (Money Stuff), ft.com (Alphaville), ofdollarsanddata.com
+  Cross-reference these with live data when forming your market implications and scenario forecasts.
+
 ANTI-DRIFT: You will be given your MOST RECENT PRIOR analysis (if any). Do NOT continue trends
 just because prior runs showed movement. Each analysis is independent. Only shift your scores
 if the LIVE DATA justifies it. If nothing material changed, your scores should be similar to last time.
 
-Respond with ONLY valid JSON in this exact format:
-{
-  "situation_summary": "3-5 sentence executive summary citing specific data points",
-  "latest_developments": ["development 1 (cite source)", "development 2 (cite source)", "development 3"],
-  "escalation_risk": {
-    "level": "Critical/High/Elevated/Moderate/Low",
-    "score": N (1-10, calibrated to the anchor scale above),
-    "rationale": "MUST cite 2+ data points: e.g., 'GDELT intensity at X (up Y% from 30d avg), N ACLED events this week with Z fatalities, oil at $X (+Y%). Comparable to [historical anchor] because...'",
-    "citations": ["data point 1", "data point 2"]
-  },
-  "oil_impact": {
-    "current_disruption_mbpd": N,
-    "price_forecast_30d": {"low": N, "base": N, "high": N},
-    "key_chokepoints": ["chokepoint: capacity, current status, disruption estimate"]
-  },
-  "infrastructure_status": [
-    {"name": "facility name", "status": "operational/degraded/offline", "detail": "capacity and current state", "changed": true/false}
-  ],
-  "infrastructure_alerts": ["IMPORTANT: List any facility whose status has CHANGED from the baseline data provided. Include: facility name, old status, new status, and source/evidence for the change. If nothing changed, return empty array."],
-  "diplomatic_outlook": {
-    "ceasefire_probability_30d": N,
-    "confidence_range": [low_N, high_N],
-    "key_mediators": ["..."],
-    "obstacles": ["..."],
-    "signals": ["specific diplomatic signal cited"]
-  },
-  "market_implications": {
-    "energy": "cite oil price level and direction",
-    "equities": "cite specific sector impacts",
-    "safe_havens": "gold, treasuries, USD",
-    "currencies": "petrocurrency and import-dependent impacts"
-  },
-  "scenario_forecast": [
-    {"scenario": "name", "probability": N, "description": "...", "oil_impact": "$X-Y range", "trigger": "what would cause this scenario"}
-  ],
-  "trending_tweets": [
-    {"handle": "@username", "content": "tweet text (max 200 chars)", "likes": N, "retweets": N, "replies": N, "time": "Xh ago", "velocity": "high/medium/low", "why_important": "brief reason this tweet matters"}
-  ]
-}
+Respond with ONLY valid JSON. The exact fields depend on your assigned role (provided in the user prompt).
 
-IMPORTANT: scenario_forecast probabilities MUST sum to approximately 100%.
-They are MUTUALLY EXCLUSIVE outcomes — only ONE scenario will materialize.
-Provide exactly 3 scenarios (most likely, second most likely, tail risk).
-Ensure their probabilities add up to 95-100%."""
+CORE FIELDS (all models must produce):
+  "situation_summary": "Start with a comprehensive recap of key events from the last 24 hours in reverse chronological order (most recent first), citing specific times, sources, and data points. Then provide 2-3 sentences of forward-looking analysis. Total: 5-8 sentences.",
+  "latest_developments": ["development 1 (cite source)", "development 2"],
+  "escalation_risk": {"level": "Critical/High/Elevated/Moderate/Low", "score": N (1-10, calibrated above), "rationale": "cite 2+ data points", "citations": ["data point 1", "data point 2"]},
+  "oil_impact": {"current_disruption_mbpd": N, "price_forecast_30d": {"low": N, "base": N, "high": N}},
+  "infrastructure_status": [{"name": "facility", "status": "operational/degraded/offline", "detail": "...", "changed": true/false}],
+  "infrastructure_alerts": ["facility status changes only — empty array if none"],
+  "market_implications": {"energy": "...", "equities": "...", "safe_havens": "...", "currencies": "..."},
+  "scenario_forecast": [{"scenario": "name", "probability": N, "description": "...", "oil_impact": "$X-Y", "trigger": "..."}]
+
+SPECIALIST FIELDS (only produce if your role covers this domain):
+  "diplomatic_outlook": {"ceasefire_probability_30d": N, "confidence_range": [low, high], "key_mediators": [...], "obstacles": [...], "signals": [...]},
+  "trending_tweets": [{"handle": "@user", "content": "max 200 chars", "likes": N, "retweets": N, "replies": N, "time": "Xh ago", "velocity": "high/medium/low", "why_important": "..."}]
+
+scenario_forecast: exactly 3 mutually exclusive scenarios summing to ~100%.
+Only include specialist fields if they are part of your assigned role."""
 
 
 def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
-                            sections: list[str] | None = None) -> str:
+                            sections: list[str] | None = None,
+                            market_context: dict = None,
+                            disruption_data: tuple = None) -> str:
     """Build a live data block to inject into the AI prompt.
 
     Args:
         sections: optional filter — only include these data sections.
-            Valid: gdelt_intensity, gdelt_tone, oil, acled, disruption
+            Valid: gdelt_intensity, gdelt_tone, oil, acled, disruption, market
             If None, include all.
+        market_context: dict with brent, vix, gold, dxy price/change data.
+        disruption_data: (breakdown_list, net_disruption) override for validated data.
     """
     include_all = sections is None
     lines = [f"Current data as of {datetime.now().replace(minute=0, second=0, microsecond=0).strftime('%B %d, %Y %I:%M %p')}:"]
@@ -468,6 +714,22 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
                      f"7d: {chg_7d:+.1f}%, 30d: {chg_30d:+.1f}%")
         lines.append(f"  180d range: ${low_180d:.2f} — ${high_180d:.2f}")
 
+    # Broader market context (Brent, VIX, Gold, DXY)
+    if (include_all or "market" in sections) and market_context:
+        mc = market_context
+        if mc.get("brent"):
+            lines.append(f"\nBrent Crude (Middle East benchmark):")
+            lines.append(f"  Current: ${mc['brent']['price']}/bbl, 1d: {mc['brent']['change']:+.1f}%")
+        if mc.get("vix"):
+            lines.append(f"\nVIX (equity fear gauge):")
+            lines.append(f"  Current: {mc['vix']['price']}, 1d: {mc['vix']['change']:+.1f}%")
+        if mc.get("gold"):
+            lines.append(f"\nGold (safe haven):")
+            lines.append(f"  Current: ${mc['gold']['price']}/oz, 1d: {mc['gold']['change']:+.1f}%")
+        if mc.get("dxy"):
+            lines.append(f"\nUS Dollar Index:")
+            lines.append(f"  Current: {mc['dxy']['price']}, 1d: {mc['dxy']['change']:+.1f}%")
+
     # ACLED conflict events
     if (include_all or "acled" in sections) and df_acled is not None and not df_acled.empty:
         lines.append(f"\nACLED Conflict Events:")
@@ -493,13 +755,16 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
     elif include_all or "acled" in sections:
         lines.append("")
 
-    # Verified disruption breakdown
+    # Verified disruption breakdown (uses Grok-validated data if available)
     if include_all or "disruption" in sections:
-        lines.append(f"\nSupply Disruption ({DISRUPTION_TIMELINE[-1]['date']}):")
-        for d in DISRUPTION_BREAKDOWN:
+        _bd, _net = (DISRUPTION_BREAKDOWN, CURRENT_NET_DISRUPTION)
+        if disruption_data:
+            _bd, _net = disruption_data
+        lines.append(f"\nSupply Disruption (VERIFIED via real-time sources):")
+        for d in _bd:
             lines.append(f"  {d['facility']}: {d['mbpd']:+.1f} mbpd")
-        lines.append(f"  NET DISRUPTION: {CURRENT_NET_DISRUPTION:+.2f} mbpd")
-        lines.append("  YOUR current_disruption_mbpd MUST match ~12.45 unless you cite a specific change.")
+        lines.append(f"  NET DISRUPTION: {_net:+.2f} mbpd")
+        lines.append(f"  YOUR current_disruption_mbpd MUST be close to {abs(_net):.1f} unless you cite a specific change.")
 
     return "\n".join(lines)
 
@@ -541,8 +806,52 @@ def load_conflict_history() -> list:
     return []
 
 
+def _compute_model_accuracy(history: list) -> dict:
+    """Compute per-model accuracy weights from history.
+    Compares each model's prior oil price forecast against actual oil price movement.
+    Returns {model_key: weight} where higher = more accurate historically."""
+    if len(history) < 3:
+        return {}
+
+    # We need pairs: a prediction entry and a later entry with actual data
+    model_errors = {}  # model_key -> list of absolute errors
+    for i in range(len(history) - 1):
+        entry = history[i]
+        blended = entry.get("blended", {})
+        assessments = blended.get("escalation_risk", {}).get("model_assessments", [])
+        # Get the actual escalation from the NEXT entry as "ground truth"
+        next_blended = history[i + 1].get("blended", {})
+        actual_esc = next_blended.get("escalation_risk", {}).get("score", 0)
+        if not actual_esc:
+            continue
+
+        for ma in assessments:
+            mk = ma.get("model_key", "")
+            pred_score = ma.get("score", 0)
+            if mk and pred_score:
+                model_errors.setdefault(mk, []).append(abs(pred_score - actual_esc))
+
+    if not model_errors:
+        return {}
+
+    # Convert errors to weights: lower error = higher weight
+    weights = {}
+    for mk, errors in model_errors.items():
+        avg_err = sum(errors) / len(errors)
+        # Inverse error with floor (0.5 min weight, 2.0 max)
+        weights[mk] = max(0.5, min(2.0, 1.0 / (avg_err + 0.5)))
+
+    return weights
+
+
 def save_conflict_result(result: dict) -> None:
     history = load_conflict_history()
+
+    # Compute and store accuracy weights before saving
+    accuracy_weights = _compute_model_accuracy(history)
+    if accuracy_weights:
+        result["_accuracy_weights"] = accuracy_weights
+
     entry = {
         "timestamp": datetime.now().isoformat(),
         "models_used": result.get("models_used", []),
@@ -557,6 +866,12 @@ def save_conflict_result(result: dict) -> None:
             json.dump(history, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save conflict history: {e}")
+
+    # Update source credibility scores based on cited sources and accuracy
+    try:
+        _update_source_credibility(result, history)
+    except Exception as e:
+        logger.warning(f"Source credibility update failed: {e}")
 
 
 def get_latest_conflict_result() -> tuple:
@@ -573,10 +888,183 @@ def get_latest_conflict_result() -> tuple:
     return latest, is_stale
 
 
+def _validate_model_response(result: dict, model_name: str = "") -> dict:
+    """Validate and fix out-of-range values in a model's JSON response."""
+    warnings = []
+
+    # Escalation risk: must be 1-10
+    esc = result.get("escalation_risk", {})
+    if isinstance(esc, dict):
+        score = esc.get("score", 0)
+        if not isinstance(score, (int, float)) or score < 1 or score > 10:
+            esc["score"] = max(1, min(10, int(score) if isinstance(score, (int, float)) else 5))
+            warnings.append(f"escalation score clamped to {esc['score']}")
+        if not esc.get("rationale"):
+            esc["rationale"] = "No rationale provided."
+            warnings.append("missing escalation rationale")
+
+    # Ceasefire probability: must be 0-100
+    diplo = result.get("diplomatic_outlook", {})
+    if isinstance(diplo, dict):
+        cf = diplo.get("ceasefire_probability_30d", 0)
+        if not isinstance(cf, (int, float)) or cf < 0 or cf > 100:
+            diplo["ceasefire_probability_30d"] = max(0, min(100, int(cf) if isinstance(cf, (int, float)) else 10))
+            warnings.append(f"ceasefire probability clamped to {diplo['ceasefire_probability_30d']}")
+
+    # Oil disruption: should be near CURRENT_NET_DISRUPTION (±5 mbpd is suspicious)
+    oil = result.get("oil_impact", {})
+    if isinstance(oil, dict):
+        disruption = oil.get("current_disruption_mbpd", 0)
+        if isinstance(disruption, (int, float)) and abs(disruption - abs(CURRENT_NET_DISRUPTION)) > 5:
+            warnings.append(f"disruption estimate {disruption} deviates >5 mbpd from verified {abs(CURRENT_NET_DISRUPTION)}")
+        # Price forecast sanity: base should be between low and high
+        fc = oil.get("price_forecast_30d", {})
+        if isinstance(fc, dict):
+            low, base, high = fc.get("low", 0), fc.get("base", 0), fc.get("high", 0)
+            if base > 0 and (base < low or base > high):
+                fc["low"] = min(low, base)
+                fc["high"] = max(high, base)
+
+    # Ensure required top-level fields exist
+    result.setdefault("situation_summary", "")
+    result.setdefault("latest_developments", [])
+    result.setdefault("escalation_risk", {"score": 5, "level": "Unknown", "rationale": ""})
+    result.setdefault("oil_impact", {"current_disruption_mbpd": 0, "price_forecast_30d": {"low": 0, "base": 0, "high": 0}})
+    result.setdefault("infrastructure_status", [])
+    result.setdefault("diplomatic_outlook", {"ceasefire_probability_30d": 0})
+    result.setdefault("market_implications", {})
+    result.setdefault("scenario_forecast", [])
+
+    if warnings:
+        result["_validation_warnings"] = warnings
+        logger.warning(f"{model_name} validation: {', '.join(warnings)}")
+
+    return result
+
+
+def _close_json(s: str) -> str:
+    """Close any unterminated strings, arrays, and objects in a JSON fragment."""
+    if s.count('"') % 2 == 1:
+        s += '"'
+    s += "]" * max(0, s.count("[") - s.count("]"))
+    s += "}" * max(0, s.count("{") - s.count("}"))
+    return s
+
+
+def _sanitize_json(raw: str) -> str:
+    """Clean common LLM JSON mistakes before parsing."""
+    s = raw
+    # Strip JS-style comments (// and /* */)
+    s = re.sub(r'//[^\n]*', '', s)
+    s = re.sub(r'/\*.*?\*/', '', s, flags=re.DOTALL)
+    # Replace unquoted special values
+    s = re.sub(r'\bundefined\b', 'null', s)
+    s = re.sub(r'\bNaN\b', 'null', s)
+    s = re.sub(r'\bInfinity\b', '999999', s)
+    # Trailing commas before ] or }
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    # Missing commas at line boundaries between elements
+    s = re.sub(r'("|true|false|null|\d)\s*\n(\s*")', r'\1,\n\2', s)
+    s = re.sub(r'(\})\s*\n(\s*[\{"])', r'\1,\n\2', s)
+    s = re.sub(r'(\])\s*\n(\s*[\["])', r'\1,\n\2', s)
+    # Missing commas on same line: }" or ]" or number"
+    s = re.sub(r'(\})(\s*")', r'\1,\2', s)
+    s = re.sub(r'(\])(\s*")', r'\1,\2', s)
+    # Empty values: "key": , → "key": null,
+    s = re.sub(r':\s*,', ': null,', s)
+    # Empty values at end of object: "key": } → "key": null}
+    s = re.sub(r':\s*\}', ': null}', s)
+    return s
+
+
+def _repair_json(raw: str, model_name: str = "") -> dict:
+    """Multi-strategy JSON repair for malformed LLM output."""
+
+    # Strategy 1: Sanitize and try parsing
+    sanitized = _sanitize_json(raw)
+    closed = _close_json(sanitized)
+    try:
+        return json.loads(closed)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Iteratively fix errors at reported positions (up to 15 attempts)
+    attempt = sanitized
+    for _ in range(15):
+        try:
+            return json.loads(_close_json(attempt))
+        except json.JSONDecodeError as e:
+            pos = e.pos
+            if pos is None or pos >= len(attempt):
+                break
+            msg = str(e).lower()
+            if "delimiter" in msg and "expecting value" not in msg:
+                # Missing comma — insert one
+                attempt = attempt[:pos] + "," + attempt[pos:]
+            elif "expecting value" in msg:
+                # Look back to see what caused the missing value
+                before = attempt[:pos].rstrip()
+                if before.endswith(","):
+                    # Trailing comma: remove it
+                    attempt = attempt[:len(before)-1] + attempt[pos:]
+                elif before.endswith(":"):
+                    # Empty value after colon: insert null
+                    attempt = attempt[:pos] + "null" + attempt[pos:]
+                else:
+                    # Unknown context — insert null
+                    attempt = attempt[:pos] + "null" + attempt[pos:]
+            elif "unterminated string" in msg:
+                # Find the opening quote and close it
+                attempt = attempt[:pos] + '"' + attempt[pos:]
+            else:
+                break
+
+    # Strategy 3: Truncate at first error and close structures
+    try:
+        json.loads(raw)
+        pos = len(raw)
+    except json.JSONDecodeError as e:
+        pos = e.pos or len(raw)
+    # Walk back to the last complete key-value pair
+    truncated = raw[:pos]
+    # Remove any partial value at the end
+    truncated = re.sub(r',\s*"[^"]*"?\s*:?\s*[^,}\]]*$', '', truncated)
+    truncated = truncated.rstrip().rstrip(",")
+    truncated = _close_json(truncated)
+    try:
+        logger.warning(f"{model_name} JSON repaired by truncating at position {pos}/{len(raw)}")
+        return json.loads(truncated)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 4: Extract the largest valid JSON object from the raw string
+    best = None
+    for i in range(len(raw)):
+        if raw[i] == '{':
+            depth = 0
+            for j in range(i, len(raw)):
+                if raw[j] == '{': depth += 1
+                elif raw[j] == '}': depth -= 1
+                if depth == 0:
+                    try:
+                        candidate = json.loads(raw[i:j+1])
+                        if best is None or len(raw[i:j+1]) > len(str(best)):
+                            best = candidate
+                    except json.JSONDecodeError:
+                        pass
+                    break
+    if best:
+        logger.warning(f"{model_name} JSON recovered via largest-object extraction")
+        return best
+
+    # All strategies failed — raise so caller handles it
+    raise json.JSONDecodeError(f"All repair strategies failed for {model_name}", raw, 0)
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def run_single_conflict_model(model_key: str, api_key: str, context_prompt: str, model_config: dict = None) -> dict:
     """Call a single AI model for conflict analysis."""
-    config = model_config or MODEL_CONFIGS.get(model_key) or GPT5_CONFIG
+    config = model_config or MODEL_CONFIGS.get(model_key, {})
     model_max_tokens = config.get("max_tokens", 3000)
 
     user_prompt = f"""{context_prompt}
@@ -585,7 +1073,38 @@ def run_single_conflict_model(model_key: str, api_key: str, context_prompt: str,
 Produce your complete analysis. JSON only."""
 
     try:
-        if config["base_url"] == "anthropic":
+        if config["base_url"] == "gemini_native":
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=api_key)
+            _gemini_config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                max_output_tokens=model_max_tokens,
+                temperature=0.3,
+            )
+            _gemini_contents = f"{CONFLICT_SYSTEM_PROMPT}\n\n{user_prompt}"
+
+            # Try up to 2 attempts — Gemini can produce malformed JSON on first try
+            raw = None
+            for _attempt in range(2):
+                response = client.models.generate_content(
+                    model=config["model"],
+                    contents=_gemini_contents,
+                    config=_gemini_config,
+                )
+                raw = response.text
+                if response.candidates and response.candidates[0].finish_reason.name == "MAX_TOKENS":
+                    logger.warning(f"{config['name']} response truncated (finish_reason=MAX_TOKENS)")
+                # Quick check: does it parse?
+                try:
+                    json.loads(raw)
+                    break  # Valid JSON, no need to retry
+                except (json.JSONDecodeError, TypeError):
+                    if _attempt == 0:
+                        logger.warning(f"{config['name']} attempt 1 produced invalid JSON, retrying...")
+                        continue
+                    # Second attempt also failed — raw will go through repair pipeline below
+        elif config["base_url"] == "anthropic":
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
@@ -596,23 +1115,22 @@ Produce your complete analysis. JSON only."""
                 messages=[{"role": "user", "content": user_prompt}],
             )
             raw = response.content[0].text
+            if response.stop_reason == "max_tokens":
+                logger.warning(f"{config['name']} response truncated (stop_reason=max_tokens)")
         else:
             client_kwargs = {"api_key": api_key}
             if config["base_url"]:
                 client_kwargs["base_url"] = config["base_url"]
             client = OpenAI(**client_kwargs)
 
-            is_gpt5 = "gpt-5" in config["model"]
-            # GPT-5 needs higher max_completion_tokens — it won't respond with too low a ceiling
-            effective_max = max(model_max_tokens, 8000) if is_gpt5 else model_max_tokens
             call_kwargs = dict(
                 model=config["model"],
                 messages=[
                     {"role": "system", "content": CONFLICT_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                **{"max_completion_tokens" if is_gpt5 else "max_tokens": effective_max},
-                **({"temperature": 0.3} if not is_gpt5 else {}),
+                max_tokens=model_max_tokens,
+                temperature=0.3,
             )
 
             # response_format not supported by all providers — try with, fallback without
@@ -639,32 +1157,39 @@ Produce your complete analysis. JSON only."""
         if not cleaned:
             return {"success": False, "error": "Response contained no JSON content", "model_name": config["name"]}
 
-        # Attempt to repair truncated JSON (e.g., missing closing braces)
+        # Attempt to repair malformed JSON from LLM output
+        was_repaired = False
         try:
             result = json.loads(cleaned)
-        except json.JSONDecodeError:
-            # Try closing open strings, arrays, and objects
-            repaired = cleaned
-            # Close any unterminated string
-            if repaired.count('"') % 2 == 1:
-                repaired += '"'
-            # Close brackets/braces by counting opens vs closes
-            open_braces = repaired.count("{") - repaired.count("}")
-            open_brackets = repaired.count("[") - repaired.count("]")
-            repaired += "]" * max(0, open_brackets)
-            repaired += "}" * max(0, open_braces)
-            result = json.loads(repaired)
+        except json.JSONDecodeError as first_err:
+            result = _repair_json(cleaned, config["name"])
+            was_repaired = True
+
+        # Check if the repaired result has meaningful content
+        # If it's a near-empty shell (missing situation_summary AND escalation score), it's garbage
+        has_summary = bool(result.get("situation_summary", "").strip())
+        has_escalation = isinstance(result.get("escalation_risk", {}).get("score"), (int, float)) and result["escalation_risk"]["score"] != 5
+        if was_repaired and not has_summary and not has_escalation:
+            return {"success": False, "error": "JSON repair salvaged too little data — response was too malformed",
+                    "model_name": config["name"]}
+
+        # Validate and clamp fields
+        result = _validate_model_response(result, config["name"])
         result["success"] = True
         result["model_name"] = config["name"]
+        if was_repaired:
+            result["_partial"] = True
         return result
     except Exception as e:
         logger.error(f"{config['name']} conflict analysis failed: {e}")
         return {"success": False, "error": str(e), "model_name": config["name"]}
 
 
-def _domain_weighted_avg(results: dict, field_path: list[str], weight_key: str, default: float = 0, configs: dict = None) -> float:
-    """Compute a domain-weighted average for a nested field across model results."""
+def _domain_weighted_avg(results: dict, field_path: list[str], weight_key: str, default: float = 0,
+                         configs: dict = None, accuracy_weights: dict = None) -> float:
+    """Compute a domain-weighted average, optionally boosted by historical accuracy."""
     _cfgs = configs or MODEL_CONFIGS
+    _acc = accuracy_weights or {}
     total_weight = 0
     weighted_sum = 0
     for k, v in results.items():
@@ -673,7 +1198,9 @@ def _domain_weighted_avg(results: dict, field_path: list[str], weight_key: str, 
             val = val.get(key, {}) if isinstance(val, dict) else default
         if not isinstance(val, (int, float)):
             val = default
-        w = _cfgs.get(k, {}).get(weight_key, 1.0)
+        domain_w = _cfgs.get(k, {}).get(weight_key, 1.0)
+        acc_w = _acc.get(k, 1.0)
+        w = domain_w * acc_w
         weighted_sum += val * w
         total_weight += w
     return round(weighted_sum / total_weight, 1) if total_weight else default
@@ -810,6 +1337,712 @@ def _is_quality_tweet(content: str) -> bool:
     return True
 
 
+def _ai_filter_tweets(tweets: list, configs: dict = None) -> list:
+    """Run tweets through a fast AI call to score informational value.
+    Keeps only tweets scored 7+ out of 10 for relevance to the Iran conflict."""
+    if not tweets or len(tweets) <= 2:
+        return tweets
+
+    # Use Gemini (cheap/fast) if available, otherwise skip filtering
+    _cfgs = configs or MODEL_CONFIGS
+    gemini_cfg = _cfgs.get("gemini")
+    if not gemini_cfg:
+        return tweets
+    api_key = _get_key(gemini_cfg["key_name"])
+    if not api_key:
+        return tweets
+
+    # Build a compact prompt with numbered tweets
+    tweet_lines = []
+    for i, tw in enumerate(tweets):
+        tweet_lines.append(f'{i}: @{tw.get("handle","")} — {tw.get("content","")}')
+    tweet_block = "\n".join(tweet_lines)
+
+    prompt = f"""Score each tweet for informational value to a trader monitoring the US-Israel-Iran conflict.
+
+Criteria:
+- Contains specific, actionable intelligence (facility status, troop movements, diplomatic signals, oil flow data)
+- From a credible source (OSINT analysts, journalists, officials, energy analysts)
+- NOT vague commentary, emotional reactions, memes, generic news headlines, or repetitive content
+
+Return ONLY a JSON array of objects: [{{"index": N, "score": 1-10, "reason": "brief"}}]
+Score 7+ = keep, below 7 = discard.
+
+Tweets:
+{tweet_block}"""
+
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=gemini_cfg["model"],
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                max_output_tokens=1000,
+                temperature=0.1,
+            ),
+        )
+        scores = json.loads(response.text)
+        keep_indices = {s["index"] for s in scores if s.get("score", 0) >= 7}
+        filtered = [tw for i, tw in enumerate(tweets) if i in keep_indices]
+        return filtered if filtered else tweets[:3]  # fallback: keep top 3 if all filtered out
+    except Exception as e:
+        logger.warning(f"AI tweet filter failed, returning unfiltered: {e}")
+        return tweets
+
+
+_LIVE_TWEET_PROMPT = """You have real-time access to X/Twitter. Search for the LATEST high-impact tweets about the US-Israel-Iran conflict, oil supply disruptions, and Middle East military developments.
+
+PRIORITY ACCOUNTS — check these FIRST:
+  OSINT: @sentdefender, @IntelCrab, @AuroraIntel, @Faytuks, @GeoConfirmed
+  Energy: @JavierBlas, @amaboraz, @EnergyIntel, @OilSheppard
+  Military: @RALee85, @TheStudyofWar, @NOELreports, @OAlexanderDK
+  Journalists: @Joyce_Karam, @IranIntl_En, @BarakRavid, @Charles_Lister
+  Official: @CENTCOM, @IDF
+
+SEARCH TERMS: Iran strike, Hormuz, Abqaiq, Ras Laffan, oil disruption, ceasefire Iran, IRGC, Houthi Red Sea
+
+RULES:
+- Only include tweets from the last 6 hours. If nothing from 6h, expand to 12h max.
+- Prioritize VELOCITY (likes per hour) over total engagement.
+- Include 6-10 tweets. Each must have specific, actionable information — not vague commentary.
+- Content must be max 200 chars. Truncate if needed but keep the key intel.
+
+Return ONLY valid JSON:
+[{"handle": "@user", "content": "tweet text", "likes": N, "retweets": N, "replies": N, "time": "Xh ago", "velocity": "high/medium/low", "why_important": "1-line reason"}]"""
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+# ─────────────────────────────────────────────
+# 1. AUTO-UPDATE CONFLICT TIMELINE VIA GROK
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _auto_update_timeline() -> list:
+    """Use Grok to discover new conflict events since the last hardcoded entry.
+    Returns the full timeline (hardcoded + new events). Cached 1 hour."""
+    last_date = CONFLICT_TIMELINE_EVENTS[-1]["date"]
+    grok_key = _get_key("GROK_API_KEY")
+    if not grok_key:
+        return CONFLICT_TIMELINE_EVENTS
+
+    prompt = f"""You have real-time access to X/Twitter and news. The last event in our Iran conflict timeline is:
+  {last_date}: {CONFLICT_TIMELINE_EVENTS[-1]['event']}
+
+Search for MAJOR conflict developments that occurred AFTER {last_date} (up to right now).
+Only include events that are significant enough to move oil prices, change military posture, or shift diplomatic dynamics.
+Check: Reuters, Bloomberg, AP, @sentdefender, @IranIntl_En, @JavierBlas, @IDF, @CENTCOM.
+
+Return ONLY a JSON array of NEW events (empty array if nothing major happened):
+[{{"date": "YYYY-MM-DD", "event": "what happened", "category": "Military/Escalation/Diplomatic/Policy/Supply", "impact": "market/geopolitical impact", "infrastructure": "any infrastructure affected"}}]
+
+Only include CONFIRMED events from credible sources. Do NOT fabricate."""
+
+    try:
+        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        response = client.chat.completions.create(
+            model="grok-4-1-fast-reasoning",
+            messages=[
+                {"role": "system", "content": "You are a conflict timeline analyst. Return only confirmed, major events in JSON format."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1500,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
+        if not raw:
+            return CONFLICT_TIMELINE_EVENTS
+
+        cleaned = re.sub(r"^```json?\s*", "", raw.strip())
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        parsed = json.loads(cleaned)
+
+        new_events = parsed if isinstance(parsed, list) else parsed.get("events", parsed.get("timeline", []))
+        if not new_events:
+            return CONFLICT_TIMELINE_EVENTS
+
+        # Merge: hardcoded + new, deduplicate by date+event similarity
+        existing_dates = {e["date"] for e in CONFLICT_TIMELINE_EVENTS}
+        merged = list(CONFLICT_TIMELINE_EVENTS)
+        for evt in new_events:
+            if evt.get("date") and evt["date"] not in existing_dates:
+                merged.append(evt)
+                existing_dates.add(evt["date"])
+
+        merged.sort(key=lambda e: e.get("date", ""))
+        return merged
+    except Exception as e:
+        logger.warning(f"Timeline auto-update failed: {e}")
+        return CONFLICT_TIMELINE_EVENTS
+
+
+# ─────────────────────────────────────────────
+# 2. POLYMARKET PREDICTION ODDS
+# ─────────────────────────────────────────────
+
+IRAN_POLYMARKET_SLUGS = {
+    "iran-ceasefire-2026": "Iran Ceasefire by June 2026",
+    "oil-price-above-100-2026": "Oil Above $100 End of 2026",
+    "iran-nuclear-deal-2026": "Iran Nuclear Deal 2026",
+    "us-iran-war-escalation": "US-Iran War Major Escalation",
+    "strait-of-hormuz-closure": "Strait of Hormuz Full Closure",
+}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _fetch_iran_polymarket() -> list:
+    """Fetch Polymarket prediction odds for Iran conflict contracts."""
+    results = []
+    for slug, label in IRAN_POLYMARKET_SLUGS.items():
+        try:
+            r = requests.get(f"https://gamma-api.polymarket.com/markets?slug={slug}", timeout=8)
+            data = r.json()
+            if data and isinstance(data, list) and data[0].get("outcomePrices"):
+                prices = json.loads(data[0]["outcomePrices"])
+                yes_prob = round(float(prices[0]) * 100, 1)
+                results.append({"question": label, "yes_prob": yes_prob, "slug": slug})
+        except Exception:
+            pass
+    return results
+
+
+# ─────────────────────────────────────────────
+# 3. OIL FUTURES TERM STRUCTURE
+# ─────────────────────────────────────────────
+
+OIL_FUTURES_CONTRACTS = ["CL=F", "CLK26.NYM", "CLM26.NYM", "CLN26.NYM", "CLQ26.NYM", "CLU26.NYM"]
+OIL_FUTURES_LABELS = ["Front Month", "May 26", "Jun 26", "Jul 26", "Aug 26", "Sep 26"]
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_oil_term_structure() -> dict:
+    """Fetch oil futures term structure for backwardation/contango signal."""
+    from src.data_engine import polygon_snapshot
+    try:
+        prices = {}
+        for sym, label in zip(OIL_FUTURES_CONTRACTS, OIL_FUTURES_LABELS):
+            snap = polygon_snapshot(sym)
+            if snap and snap.get("price"):
+                prices[label] = round(float(snap["price"]), 2)
+        if len(prices) >= 2:
+            front = list(prices.values())[0]
+            back = list(prices.values())[-1]
+            spread = round(front - back, 2)
+            structure = "backwardation" if spread > 0 else "contango"
+            return {"prices": prices, "spread": spread, "structure": structure}
+    except Exception as e:
+        logger.warning(f"Oil term structure fetch failed: {e}")
+    return {}
+
+
+# ─────────────────────────────────────────────
+# 4. GROK PRE-PASS — BREAKING NEWS BRIEF
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _grok_breaking_news_brief() -> str:
+    """Quick Grok scan: what happened in the last 6 hours re: Iran conflict.
+    Fed into Claude/Gemini context so they have breaking awareness. Cached 15 min."""
+    grok_key = _get_key("GROK_API_KEY")
+    if not grok_key:
+        return ""
+
+    prompt = """Search X/Twitter RIGHT NOW for the latest developments in the US-Israel-Iran conflict from the LAST 6 HOURS.
+
+Check these accounts first:
+  @sentdefender, @IranIntl_En, @JavierBlas, @IDF, @CENTCOM, @Khamenei_ir, @IsraelWarRoom,
+  @TheStudyofWar, @CriticalThreats, @BarakRavid, @OilSheppard, @MiddleEastEye
+
+Summarize in 5-8 bullet points:
+- Any new strikes, attacks, or military operations
+- Any facility status changes (oil/gas/LNG infrastructure)
+- Any diplomatic signals (ceasefire talks, UN activity, mediator statements)
+- Any market-moving developments (oil price spikes, shipping changes, sanctions)
+- Any viral OSINT or breaking reports gaining traction
+
+Be specific: include times, sources, and numbers. If nothing significant happened in 6 hours, say so briefly.
+Return plain text, not JSON."""
+
+    try:
+        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        response = client.chat.completions.create(
+            model="grok-4-1-fast-reasoning",
+            messages=[
+                {"role": "system", "content": "You are a real-time conflict intelligence briefer. Be concise and cite sources."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=800,
+            temperature=0.1,
+        )
+        brief = response.choices[0].message.content
+        return brief.strip() if brief else ""
+    except Exception as e:
+        logger.warning(f"Grok breaking news brief failed: {e}")
+        return ""
+
+
+# ─────────────────────────────────────────────
+# 5. SCENARIO TRACKING SCORECARD
+# ─────────────────────────────────────────────
+
+def _build_scenario_scorecard(history: list) -> list:
+    """Compare past scenario predictions against what actually happened.
+    Returns a list of scored scenarios from the last 5 analysis runs."""
+    if len(history) < 2:
+        return []
+
+    scorecard = []
+    # Look at the last 5 entries (skip the most recent since we can't score it yet)
+    entries = history[-6:-1] if len(history) >= 6 else history[:-1]
+
+    for i, entry in enumerate(entries):
+        blended = entry.get("blended", {})
+        ts = entry.get("timestamp", "")
+        scenarios = blended.get("scenario_forecast", [])
+        esc_score = blended.get("escalation_risk", {}).get("score", 0)
+        oil_base = blended.get("oil_impact", {}).get("price_forecast_30d", {}).get("base", 0)
+
+        # Compare against the NEXT entry's actual values
+        if i + 1 < len(entries):
+            next_blended = entries[i + 1].get("blended", {})
+        else:
+            # Use the most recent entry
+            next_blended = history[-1].get("blended", {})
+
+        actual_esc = next_blended.get("escalation_risk", {}).get("score", 0)
+        actual_oil = next_blended.get("oil_impact", {}).get("price_forecast_30d", {}).get("base", 0)
+
+        esc_error = abs(esc_score - actual_esc) if actual_esc else None
+        oil_error = abs(oil_base - actual_oil) if actual_oil else None
+
+        scorecard.append({
+            "timestamp": ts,
+            "predicted_escalation": esc_score,
+            "actual_escalation": actual_esc,
+            "escalation_error": esc_error,
+            "predicted_oil": oil_base,
+            "actual_oil": actual_oil,
+            "oil_error": oil_error,
+            "scenarios": [s.get("scenario", "") for s in scenarios[:3]],
+        })
+
+    return scorecard
+
+
+# ─────────────────────────────────────────────
+# 6. LNG / NATURAL GAS PRICING
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_lng_natgas_prices() -> dict:
+    """Fetch TTF (European gas), US Henry Hub, and Asian LNG proxy prices."""
+    from src.data_engine import polygon_snapshot
+    result = {}
+    syms = {"TTF=F": ("ttf", "TTF (European Gas)"), "NG=F": ("henry_hub", "Henry Hub (US Gas)")}
+    for sym, (key, name) in syms.items():
+        try:
+            snap = polygon_snapshot(sym)
+            if snap and snap.get("price") and snap.get("prev_close"):
+                price = snap["price"]
+                prev = snap["prev_close"]
+                chg = (price / prev - 1) * 100 if prev > 0 else 0
+                result[key] = {"price": round(price, 2), "change": round(chg, 2), "name": name}
+        except Exception:
+            pass
+    return result
+
+
+# ─────────────────────────────────────────────
+# 7. CONTINUOUS MONITORING — CHANGE DETECTION
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _monitor_escalation_changes() -> dict | None:
+    """Compare the latest analysis against the previous one.
+    Returns alert info if escalation changed by >1 point or a facility status changed."""
+    history_file = os.path.join(os.path.dirname(__file__), "..", "src", "iran_conflict_history.json")
+    try:
+        if not os.path.exists(history_file):
+            return None
+        with open(history_file, "r") as f:
+            history = json.load(f)
+        if len(history) < 2:
+            return None
+
+        current = history[-1].get("blended", {})
+        previous = history[-2].get("blended", {})
+
+        alerts = []
+
+        # Escalation score change
+        curr_esc = current.get("escalation_risk", {}).get("score", 0)
+        prev_esc = previous.get("escalation_risk", {}).get("score", 0)
+        if curr_esc and prev_esc and abs(curr_esc - prev_esc) >= 1:
+            direction = "UP" if curr_esc > prev_esc else "DOWN"
+            color = "#ff4444" if direction == "UP" else "#00ff96"
+            alerts.append({
+                "type": "escalation",
+                "message": f"Escalation {direction}: {prev_esc}/10 → {curr_esc}/10",
+                "color": color,
+            })
+
+        # Oil price forecast change
+        curr_oil = current.get("oil_impact", {}).get("price_forecast_30d", {}).get("base", 0)
+        prev_oil = previous.get("oil_impact", {}).get("price_forecast_30d", {}).get("base", 0)
+        if curr_oil and prev_oil and abs(curr_oil - prev_oil) >= 5:
+            direction = "UP" if curr_oil > prev_oil else "DOWN"
+            color = "#ff4444" if direction == "UP" else "#00ff96"
+            alerts.append({
+                "type": "oil",
+                "message": f"Oil forecast {direction}: ${prev_oil} → ${curr_oil}/bbl (30d base)",
+                "color": color,
+            })
+
+        # Ceasefire probability change
+        curr_cf = current.get("diplomatic_outlook", {}).get("ceasefire_probability_30d", 0)
+        prev_cf = previous.get("diplomatic_outlook", {}).get("ceasefire_probability_30d", 0)
+        if abs(curr_cf - prev_cf) >= 10:
+            direction = "UP" if curr_cf > prev_cf else "DOWN"
+            color = "#00ff96" if direction == "UP" else "#ff4444"
+            alerts.append({
+                "type": "ceasefire",
+                "message": f"Ceasefire probability {direction}: {prev_cf}% → {curr_cf}%",
+                "color": color,
+            })
+
+        # Timestamp
+        curr_ts = history[-1].get("timestamp", "")
+        prev_ts = history[-2].get("timestamp", "")
+
+        if alerts:
+            return {"alerts": alerts, "current_ts": curr_ts, "previous_ts": prev_ts}
+        return None
+    except Exception as e:
+        logger.warning(f"Escalation monitoring failed: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────
+# 8. SOURCE CREDIBILITY SCORING
+# ─────────────────────────────────────────────
+
+# Track which sources have been cited in analyses and how accurate the associated predictions were
+SOURCE_CREDIBILITY_FILE = os.path.join(os.path.dirname(__file__), "..", "src", "source_credibility.json")
+
+
+def _load_source_credibility() -> dict:
+    """Load source credibility scores from file."""
+    try:
+        if os.path.exists(SOURCE_CREDIBILITY_FILE):
+            with open(SOURCE_CREDIBILITY_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_source_credibility(data: dict):
+    """Persist source credibility scores."""
+    try:
+        os.makedirs(os.path.dirname(SOURCE_CREDIBILITY_FILE), exist_ok=True)
+        with open(SOURCE_CREDIBILITY_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save source credibility: {e}")
+
+
+def _update_source_credibility(conflict_result: dict, history: list):
+    """Update credibility scores based on cited sources and prediction accuracy.
+    Sources cited in accurate predictions get boosted; those in inaccurate ones get penalized."""
+    if len(history) < 2:
+        return
+
+    cred = _load_source_credibility()
+
+    # Extract cited sources from the latest result
+    cited_sources = set()
+    for ma in conflict_result.get("escalation_risk", {}).get("model_assessments", []):
+        for cite in ma.get("citations", []):
+            # Extract @handles from citation text
+            handles = re.findall(r'@\w+', cite)
+            cited_sources.update(h.lower() for h in handles)
+        # Also check rationale for @handles
+        rationale = ma.get("rationale", "")
+        handles = re.findall(r'@\w+', rationale)
+        cited_sources.update(h.lower() for h in handles)
+
+    if not cited_sources:
+        return
+
+    # Compare current prediction accuracy against previous
+    current = conflict_result
+    previous = history[-2].get("blended", {}) if len(history) >= 2 else {}
+
+    curr_esc = current.get("escalation_risk", {}).get("score", 0)
+    prev_esc = previous.get("escalation_risk", {}).get("score", 0)
+    # Lower error = more accurate
+    esc_error = abs(curr_esc - prev_esc) if prev_esc else 0
+
+    for source in cited_sources:
+        if source not in cred:
+            cred[source] = {"citations": 0, "accuracy_sum": 0, "score": 50}
+
+        cred[source]["citations"] += 1
+        # Accuracy: 100 if error <= 0.5, scaling down to 0 at error >= 5
+        accuracy = max(0, min(100, 100 - (esc_error * 20)))
+        cred[source]["accuracy_sum"] += accuracy
+        # Rolling score: weighted average of historical accuracy
+        cred[source]["score"] = round(cred[source]["accuracy_sum"] / cred[source]["citations"])
+
+    _save_source_credibility(cred)
+
+
+def _get_top_sources(n: int = 10) -> list:
+    """Get the most-cited sources ranked by credibility score."""
+    cred = _load_source_credibility()
+    if not cred:
+        return []
+    ranked = sorted(cred.items(), key=lambda x: (x[1]["score"], x[1]["citations"]), reverse=True)
+    return [{"handle": h, **data} for h, data in ranked[:n]]
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _grok_infrastructure_status(_cache_key: str) -> list:
+    """Independent Grok-only infrastructure status check.
+    Uses the last verified state as baseline (self-updating loop).
+    Falls back to hardcoded INFRASTRUCTURE_TARGETS on first run."""
+    grok_key = _get_key("GROK_API_KEY")
+
+    # Load last verified state, fall back to hardcoded baseline
+    saved_state = _load_infra_state()
+    if not grok_key:
+        if saved_state:
+            return saved_state
+        return [{"name": n, "status": "degraded" if i.get("impact_level") in ("Critical", "Severe") else "operational",
+                 "detail": i.get("status", ""), "changed": False, "update": None}
+                for n, i in INFRASTRUCTURE_TARGETS.items()]
+
+    # Build current table from saved state or hardcoded baseline
+    if saved_state:
+        current_table = [{"name": s.get("name", ""), "status": s.get("status", ""),
+                          "detail": s.get("detail", "")} for s in saved_state]
+    else:
+        current_table = []
+        for name, info in INFRASTRUCTURE_TARGETS.items():
+            current_table.append({
+                "name": name,
+                "capacity": info.get("capacity", ""),
+                "status": info.get("status", ""),
+                "impact_level": info.get("impact_level", ""),
+            })
+
+    today = datetime.now().strftime("%B %d, %Y")
+    prompt = f"""TODAY'S DATE: {today}. You have REAL-TIME access to X/Twitter and current news. USE IT.
+
+You are monitoring energy infrastructure impacted by the US-Israel-Iran conflict (started Feb 28, 2026).
+
+CURRENT TABLE (may be outdated):
+{json.dumps(current_table, indent=2)}
+
+YOUR TASK — you MUST provide a status for every facility:
+1. Search X/Twitter and news for the latest on EACH facility. Use these PRIORITY ACCOUNTS:
+  Energy & Markets: @JavierBlas, @amaboraz, @EnergyIntel, @OilSheppard
+  OSINT & Military: @sentdefender, @TheStudyofWar, @CriticalThreats, @AuroraIntel, @IntelSky, @Conflict_Radar
+  Journalists: @IranIntl_En, @MiddleEastEye, @Shayan86, @BarakRavid, @AndrewMills1, @RezaSayahNews
+  Iran Official: @Khamenei_ir, @araghchi, @Iran_GOV
+  Israel Official: @IsraeliPM, @IDF, @IsraelMFA, @IsraelWarRoom
+  Oman & Qatar: @badralbusaidi, @ONA_eng, @MG_MOD_OMAN, @MofaQatar_EN, @MBA_AlThani_, @IMO_Qatar
+  UAE: @modgovae, @AnwarGargash
+  Energy Companies: @QatarEnergy
+  Other: @cryptorand, @clement_molin, @zerohedge, @HFI_Research
+  Also check: Reuters, Bloomberg, AP, Al Jazeera, IEA, S&P Global Platts, Argus Media.
+  Finance blogs: zerohedge.com, seekingalpha.com, ritholtz.com, calculatedriskblog.com, ft.com, bloomberg.com
+2. For EACH facility, provide your best assessment of the current status based on what you find.
+3. Add any NEW impacted facilities not in the table.
+
+IMPORTANT GUIDELINES:
+- You have real-time search access — USE IT. Do not return "unverified" for everything. Search and report what you find.
+- For each facility, give a status (operational/degraded/offline) and a description of current conditions.
+- When you cite a source, make sure it's a real post you found (not from a future date — today is {today}).
+- If you find conflicting reports, mention both and note the uncertainty.
+- Use "estimated" for numbers you're not 100% certain about, but still provide your best estimate.
+- Only mark something "unverified" as a last resort if you genuinely cannot find ANY information about that specific facility.
+
+Return ONLY a JSON object:
+{{
+  "facilities": [
+    {{"name": "facility name", "status": "operational/degraded/offline", "detail": "current status based on your search findings", "changed": true/false, "update": "what changed since the baseline, or null if no change"}}
+  ],
+  "last_checked": "{today}",
+  "sources_consulted": ["list of sources/accounts you searched"]
+}}
+
+RULES:
+- Include ALL facilities from the current table — never drop any.
+- You MUST set status to operational, degraded, or offline for each — not "unverified".
+- Add new impacted facilities if found."""
+
+    try:
+        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        response = client.chat.completions.create(
+            model="grok-4.20-0309-reasoning",
+            messages=[
+                {"role": "system", "content": (
+                    "You are a real-time energy infrastructure monitor with live X/Twitter access. "
+                    "You MUST search for and report the current status of each facility. "
+                    "Use your real-time access to find the latest reports — do not default to 'unverified'. "
+                    "Every facility must get a status: operational, degraded, or offline. "
+                    "When citing sources, use ones you actually found — do not cite future dates. "
+                    "Use 'estimated' for uncertain numbers rather than inventing precise figures. "
+                    "Your output is displayed to paying customers as live intelligence."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=4000,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
+        if not raw:
+            return []
+
+        cleaned = re.sub(r"^```json?\s*", "", raw.strip())
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        parsed = json.loads(cleaned)
+
+        if isinstance(parsed, list):
+            result = parsed
+        elif isinstance(parsed, dict):
+            result = parsed.get("facilities", parsed.get("infrastructure_status", []))
+        else:
+            result = []
+
+        # Save verified state as the new baseline for next check
+        if result:
+            _save_infra_state(result)
+            logger.info(f"Infrastructure state saved: {len(result)} facilities")
+
+        return result
+    except Exception as e:
+        logger.warning(f"Grok infrastructure status failed: {e}")
+        # Return saved state if Grok fails
+        return saved_state if saved_state else []
+
+
+def _fetch_live_tweets() -> list:
+    """Fetch live trending tweets via Grok (has real-time X access). Cached 10 min."""
+    grok_key = _get_key("GROK_API_KEY")
+    if not grok_key:
+        return []
+
+    try:
+        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        response = client.chat.completions.create(
+            model="grok-4-1-fast-reasoning",
+            messages=[
+                {"role": "system", "content": "You are a real-time X/Twitter intelligence analyst. Return only JSON."},
+                {"role": "user", "content": _LIVE_TWEET_PROMPT},
+            ],
+            max_tokens=1500,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
+        if not raw:
+            return []
+
+        cleaned = re.sub(r"^```json?\s*", "", raw.strip())
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        parsed = json.loads(cleaned)
+
+        # Handle both {"tweets": [...]} and direct [...] formats
+        if isinstance(parsed, dict):
+            tweets = parsed.get("tweets", parsed.get("trending_tweets", []))
+        elif isinstance(parsed, list):
+            tweets = parsed
+        else:
+            return []
+
+        # Quality filter
+        return [tw for tw in tweets if _is_quality_tweet(tw.get("content", ""))][:10]
+    except Exception as e:
+        logger.warning(f"Live tweet fetch failed: {e}")
+        return []
+
+
+def _synthesize_summary(successful: dict, configs: dict = None) -> str:
+    """Use a fast AI call to merge all model summaries into one coherent narrative."""
+    _cfgs = configs or MODEL_CONFIGS
+    summaries = {}  # keyed by model_key
+    for k, v in successful.items():
+        s = v.get("situation_summary", "")
+        if s:
+            summaries[k] = s
+
+    if not summaries:
+        return ""
+    if len(summaries) == 1:
+        return list(summaries.values())[0]
+
+    # Try Gemini Flash for fast synthesis
+    api_key = _get_key("GEMINI_API_KEY")
+    if not api_key:
+        # Fallback: pick Grok's or longest
+        for pref in ["grok", "openai", "gemini", "claude"]:
+            if pref in summaries:
+                return summaries[pref]
+        return max(summaries.values(), key=len)
+
+    model_block = "\n\n".join(
+        f"**{_cfgs.get(k, {}).get('name', k)}:**\n{text}" for k, text in summaries.items()
+    )
+    prompt = (
+        "You are merging conflict intelligence summaries from multiple AI analysts into ONE executive summary.\n\n"
+        f"{model_block}\n\n"
+        "STRUCTURE (follow this exactly):\n"
+        "FIRST PARAGRAPH: Comprehensive recap of the last 24 hours in REVERSE chronological order "
+        "(most recent events first). Include specific times, dates, sources, and data points. "
+        "Cover: military actions, infrastructure damage, diplomatic signals, market moves, and official statements. "
+        "This should read like a news wire briefing — dense with facts, no filler.\n\n"
+        "SECOND PARAGRAPH: Forward-looking analysis — what this means for the next 24-72 hours. "
+        "Key risks, potential catalysts, and what to watch.\n\n"
+        "Rules:\n"
+        "- Total: 6-10 sentences across both paragraphs.\n"
+        "- Where models agree, state the consensus confidently.\n"
+        "- Where models disagree, note the divergence.\n"
+        "- Preserve ALL specific data points (numbers, dates, facility names, oil prices).\n"
+        "- Do NOT add information not present in the inputs.\n"
+        "- Write in present tense, active voice. No preamble. Start directly with the most recent event."
+    )
+
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=2000,
+                temperature=0.2,
+            ),
+        )
+        result = response.text.strip()
+        if result and len(result) > 50:
+            return result
+    except Exception as e:
+        logger.warning(f"Summary synthesis failed: {e}")
+
+    # Fallback
+    for pref in ["grok", "openai", "gemini", "claude"]:
+        if pref in summaries:
+            return summaries[pref]
+    return max(summaries.values(), key=len)
+
+
 def blend_conflict_results(results: dict, configs: dict = None) -> dict:
     """Blend multiple model outputs into a unified conflict assessment with domain-weighted scoring."""
     if configs is None:
@@ -821,25 +2054,31 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
     n = len(successful)
     models_used = [v.get("model_name", k) for k, v in successful.items()]
 
-    # Domain-weighted escalation
+    # Load historical accuracy weights
+    history = load_conflict_history()
+    acc_weights = _compute_model_accuracy(history)
+    if acc_weights:
+        logger.info(f"Accuracy weights: {acc_weights}")
+
+    # Domain-weighted escalation (boosted by historical accuracy)
     avg_escalation = _domain_weighted_avg(
-        successful, ["escalation_risk", "score"], "weight_escalation", 5, configs)
+        successful, ["escalation_risk", "score"], "weight_escalation", 5, configs, acc_weights)
 
     # Domain-weighted oil disruption
     avg_disruption = _domain_weighted_avg(
-        successful, ["oil_impact", "current_disruption_mbpd"], "weight_oil", 0, configs)
+        successful, ["oil_impact", "current_disruption_mbpd"], "weight_oil", 0, configs, acc_weights)
 
     # Domain-weighted oil price forecasts
     price_low = _domain_weighted_avg(
-        successful, ["oil_impact", "price_forecast_30d", "low"], "weight_oil", 0, configs)
+        successful, ["oil_impact", "price_forecast_30d", "low"], "weight_oil", 0, configs, acc_weights)
     price_base = _domain_weighted_avg(
-        successful, ["oil_impact", "price_forecast_30d", "base"], "weight_oil", 0, configs)
+        successful, ["oil_impact", "price_forecast_30d", "base"], "weight_oil", 0, configs, acc_weights)
     price_high = _domain_weighted_avg(
-        successful, ["oil_impact", "price_forecast_30d", "high"], "weight_oil", 0, configs)
+        successful, ["oil_impact", "price_forecast_30d", "high"], "weight_oil", 0, configs, acc_weights)
 
     # Domain-weighted ceasefire probability
     avg_ceasefire = round(_domain_weighted_avg(
-        successful, ["diplomatic_outlook", "ceasefire_probability_30d"], "weight_ceasefire", 0, configs))
+        successful, ["diplomatic_outlook", "ceasefire_probability_30d"], "weight_ceasefire", 0, configs, acc_weights))
 
     # Collect all unique developments
     all_devs = []
@@ -851,13 +2090,21 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
                 all_devs.append(d)
                 seen.add(d_lower)
 
-    # Best situation summary — prefer Grok (live data), then longest
-    summaries = [(k, v.get("situation_summary", "")) for k, v in successful.items()]
-    summaries.sort(key=lambda x: (x[0] == "grok", len(x[1])), reverse=True)
-    best_summary = summaries[0][1] if summaries else ""
+    # Synthesize situation summary from all models
+    best_summary = _synthesize_summary(successful, configs)
 
-    # Collect all infrastructure statuses
+    # Collect infrastructure statuses — specialist-priority:
+    # Gemini (energy specialist) > Grok (latest news) > others
+    infra_priority = ["gemini", "grok", "openai", "claude"]
     infra_map = {}
+    for model_key in infra_priority:
+        if model_key not in successful:
+            continue
+        for item in successful[model_key].get("infrastructure_status", []):
+            name = item.get("name", "")
+            if name and name not in infra_map:
+                infra_map[name] = item
+    # Fill in any facilities from remaining models not already covered
     for v in successful.values():
         for item in v.get("infrastructure_status", []):
             name = item.get("name", "")
@@ -920,6 +2167,7 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
             "rationale": esc.get("rationale", ""),
             "citations": esc.get("citations", []),
             "color": configs.get(k, {}).get("color", "#ffffff"),
+            "_partial": v.get("_partial", False),
         })
 
     # Disagreement detection
@@ -1005,12 +2253,14 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
             for tw in successful[model_pref].get("trending_tweets", []):
                 handle = tw.get("handle", "")
                 content = tw.get("content", "")
-                if handle and handle not in seen_handles:
+                if handle and handle not in seen_handles and _is_quality_tweet(content):
                     all_tweets.append(tw)
                     seen_handles.add(handle)
     # Sort by velocity: high > medium > low, then by likes
     vel_order = {"high": 0, "medium": 1, "low": 2}
     all_tweets.sort(key=lambda t: (vel_order.get(t.get("velocity", "low"), 2), -t.get("likes", 0)))
+    # AI quality filter — score each tweet for informational value
+    all_tweets = _ai_filter_tweets(all_tweets, configs)
     blended["trending_tweets"] = all_tweets[:10]
 
     return blended
@@ -1093,14 +2343,27 @@ def fetch_gdelt_tone(query: str, timespan: str = "180d"):
 
 @st.cache_data(ttl=7200, show_spinner=False)
 def fetch_all_gdelt_data(queries: dict, timespan: str = "180d"):
-    """Fetch all GDELT queries in one cached call to minimize API hits."""
+    """Fetch all GDELT queries in parallel."""
     results = {}
-    for label, query in queries.items():
+    import concurrent.futures as _cf
+    def _fetch_one(label, query):
         df = fetch_gdelt_timeline(query, timespan)
-        if not df.empty:
-            results[label] = df
-        time.sleep(2)
-    tone = fetch_gdelt_tone(list(queries.values())[0], timespan)
+        return label, df
+    with _cf.ThreadPoolExecutor(max_workers=4) as ex:
+        futures = [ex.submit(_fetch_one, lbl, q) for lbl, q in queries.items()]
+        # Also fetch tone in parallel
+        tone_future = ex.submit(fetch_gdelt_tone, list(queries.values())[0], timespan)
+        for f in _cf.as_completed(futures):
+            try:
+                label, df = f.result()
+                if not df.empty:
+                    results[label] = df
+            except Exception:
+                pass
+        try:
+            tone = tone_future.result()
+        except Exception:
+            tone = pd.DataFrame()
     return results, tone
 
 
@@ -1260,6 +2523,18 @@ with fun_loader("data"):
         eia_key = _get_eia_key()
         _results["oil"] = fetch_eia_oil_price(eia_key) if eia_key else pd.DataFrame()
 
+    def _fetch_market_context():
+        """Fetch Brent, VIX, Gold, DXY for AI context enrichment via Polygon."""
+        from src.data_engine import polygon_batch_snapshot
+        syms = ["BZ=F", "^VIX", "GC=F", "DX-Y.NYB"]
+        labels = {"BZ=F": "brent", "^VIX": "vix", "GC=F": "gold", "DX-Y.NYB": "dxy"}
+        ctx = {}
+        snapshots = polygon_batch_snapshot(syms)
+        for sym, label in labels.items():
+            if sym in snapshots:
+                ctx[label] = snapshots[sym]
+        _results["market_context"] = ctx
+
     def _fetch_stocks():
         data = {}
         for ticker in ["LMT", "RTX", "NOC", "XLE", "USO", "XOP"]:
@@ -1268,21 +2543,64 @@ with fun_loader("data"):
                 data[ticker] = px
         _results["stocks"] = data
 
-    threads = [
+    def _fetch_infra_validation():
+        _results["infra_validation"] = get_validated_infrastructure()
+
+    def _fetch_timeline_update():
+        _results["timeline"] = _auto_update_timeline()
+
+    def _fetch_polymarket():
+        _results["polymarket"] = _fetch_iran_polymarket()
+
+    def _fetch_oil_curve():
+        _results["oil_curve"] = _fetch_oil_term_structure()
+
+    def _fetch_breaking_news():
+        _results["breaking_news"] = _grok_breaking_news_brief()
+
+    def _fetch_lng():
+        _results["lng_prices"] = _fetch_lng_natgas_prices()
+
+    # ── Critical path: data needed for initial page render (escalation dashboard + charts) ──
+    critical_threads = [
         threading.Thread(target=_fetch_gdelt),
-        threading.Thread(target=_fetch_acled),
         threading.Thread(target=_fetch_oil),
         threading.Thread(target=_fetch_stocks),
     ]
-    for t in threads:
+    # ── Deferred: data for AI tab and supplementary sections (can load while user reads dashboard) ──
+    deferred_threads = [
+        threading.Thread(target=_fetch_acled),
+        threading.Thread(target=_fetch_market_context),
+        threading.Thread(target=_fetch_infra_validation),
+        threading.Thread(target=_fetch_timeline_update),
+        threading.Thread(target=_fetch_polymarket),
+        threading.Thread(target=_fetch_oil_curve),
+        threading.Thread(target=_fetch_breaking_news),
+        threading.Thread(target=_fetch_lng),
+    ]
+    # Start everything
+    for t in critical_threads + deferred_threads:
         t.start()
-    for t in threads:
-        t.join(timeout=30)
+    # Wait only for critical path (page can render with this)
+    for t in critical_threads:
+        t.join(timeout=15)
 
     gdelt_data, df_tone = _results.get("gdelt", ({}, None))
-    df_acled, acled_source = _results.get("acled", (pd.DataFrame(), None))
     df_oil = _results.get("oil", pd.DataFrame())
     stock_data = _results.get("stocks", {})
+
+    # Give deferred threads a short grace period to finish (most will be done by now)
+    for t in deferred_threads:
+        t.join(timeout=5)
+
+    df_acled, acled_source = _results.get("acled", (pd.DataFrame(), None))
+    market_context = _results.get("market_context", {})
+    _prefetched_infra = _results.get("infra_validation")
+    live_timeline = _results.get("timeline", CONFLICT_TIMELINE_EVENTS)
+    polymarket_data = _results.get("polymarket", [])
+    oil_curve = _results.get("oil_curve", {})
+    breaking_news = _results.get("breaking_news", "")
+    lng_prices = _results.get("lng_prices", {})
 
     defense_tickers = {"LMT": "Lockheed Martin", "RTX": "RTX Corp", "NOC": "Northrop Grumman"}
     energy_tickers = {"XLE": "Energy ETF", "USO": "Oil ETF", "XOP": "Oil & Gas E&P ETF"}
@@ -1338,6 +2656,26 @@ if main_data is not None and not main_data.empty:
     st.divider()
 
 
+# --- CHANGE ALERTS (runs before tabs, visible at top) ---
+_change_alerts = _monitor_escalation_changes()
+if _change_alerts and _change_alerts.get("alerts"):
+    alert_items = ""
+    for a in _change_alerts["alerts"]:
+        alert_items += f'<span style="color:{a["color"]};font-weight:600;margin-right:16px;">{a["message"]}</span>'
+    try:
+        _prev_fmt = pd.Timestamp(_change_alerts["previous_ts"]).strftime("%b %d %I:%M%p")
+    except Exception:
+        _prev_fmt = ""
+    st.markdown(
+        f'<div style="padding:8px 14px;border:1px solid #ffaa0044;border-radius:6px;'
+        f'background:rgba(255,170,0,0.06);margin-bottom:8px;display:flex;align-items:center;'
+        f'justify-content:space-between;flex-wrap:wrap;">'
+        f'<div>{alert_items}</div>'
+        f'<span style="color:#888;font-size:0.72rem;">Since {_prev_fmt}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
 # --- TABS ---
 tab_ai, tab_timeline, tab_acled, tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "AI War Analysis",
@@ -1360,33 +2698,99 @@ with tab_ai, error_boundary("AI Analysis"):
     user_tier = get_user_tier()
     active_configs = dict(MODEL_CONFIGS)
     if user_tier == "platinum":
-        gpt5_key = _get_key(GPT5_CONFIG["key_name"])
-        if gpt5_key:
-            active_configs["openai"] = GPT5_CONFIG
+        # Platinum: upgrade Claude Sonnet → Opus
+        active_configs["claude"] = dict(active_configs["claude"])
+        active_configs["claude"]["model"] = "claude-opus-4-6"
+        active_configs["claude"]["name"] = "Claude Opus"
 
     model_names = ", ".join(mc["name"] for mc in active_configs.values())
-    platinum_note = " (Platinum tier: +GPT-5)" if user_tier == "platinum" else ""
-    st.caption(f"Blended analysis from {model_names}{platinum_note} — updated hourly.")
+    tier_note = " (Platinum: Claude Opus)" if user_tier == "platinum" else ""
+    st.caption(f"Blended analysis from {model_names}{tier_note} — updated hourly.")
 
     # Check for cached result
     latest_conflict, is_conflict_stale = get_latest_conflict_result()
+
+    # Validate infrastructure baseline via Grok before building prompts
+    # Use pre-fetched validation from parallel data load, fallback to live call
+    if _prefetched_infra:
+        validated_infra, validated_breakdown, validated_net, validation_summary = _prefetched_infra
+    else:
+        validated_infra, validated_breakdown, validated_net, validation_summary = get_validated_infrastructure()
 
     # Build base context (shared across all models — timeline + infrastructure)
     # Round to the hour so the prompt cache key stays stable within the same hour
     _ctx_time = datetime.now().replace(minute=0, second=0, microsecond=0)
     base_context = f"""Analyze the current state of the US-Israel war on Iran as of {_ctx_time.strftime('%B %d, %Y %I:%M %p')}.
 
-Recent timeline of key events:
+Recent timeline of key events (auto-updated):
 """
-    for evt in CONFLICT_TIMELINE_EVENTS[-6:]:
-        base_context += f"- {evt['date']}: {evt['event']} (Impact: {evt['impact']})\n"
-    base_context += "\nKey infrastructure status:\n"
-    for name, info in INFRASTRUCTURE_TARGETS.items():
-        base_context += f"- {name}: {info['capacity']} — {info['status']}\n"
+    # Use live timeline (Grok-updated) instead of hardcoded
+    for evt in live_timeline[-8:]:
+        base_context += f"- {evt['date']}: {evt['event']} (Impact: {evt.get('impact', 'N/A')})\n"
+
+    base_context += "\nKey infrastructure status (VERIFIED via real-time sources):\n"
+    for name, info in validated_infra.items():
+        correction_note = ""
+        if info.get("_update") and info["_update"].lower() not in ("null", "none", "accurate", "no update"):
+            correction_note = f" [Updated: {info['_update']}]"
+        base_context += f"- {name}: {info['capacity']} — {info['status']}{correction_note}\n"
+    if validation_summary:
+        base_context += f"\nValidation note: {validation_summary}\n"
+
+    # Polymarket prediction market odds
+    if polymarket_data:
+        base_context += "\nPrediction Market Odds (Polymarket — real money, market-implied probabilities):\n"
+        for pm in polymarket_data:
+            base_context += f"  {pm['question']}: {pm['yes_prob']}% YES\n"
+        base_context += "  Use these as calibration anchors — if your probability diverges >20% from Polymarket, explain why.\n"
+
+    # Oil futures term structure
+    if oil_curve and oil_curve.get("prices"):
+        base_context += f"\nOil Futures Term Structure ({oil_curve['structure'].upper()}, spread: ${oil_curve['spread']:+.2f}):\n"
+        for label, price in oil_curve["prices"].items():
+            base_context += f"  {label}: ${price}\n"
+        base_context += f"  Market signal: {'Short-term supply fear (near-term premium)' if oil_curve['structure'] == 'backwardation' else 'Market expects supply relief (deferred premium)'}\n"
+
+    # Source credibility — tell models which sources have been most reliable
+    top_sources = _get_top_sources(10)
+    if top_sources:
+        reliable = [f"{s['handle']} (reliability: {s['score']}/100, cited {s['citations']}x)" for s in top_sources if s["score"] >= 60]
+        if reliable:
+            base_context += "\nMost reliable sources based on prediction accuracy tracking:\n"
+            base_context += "  " + ", ".join(reliable) + "\n"
+            base_context += "  Weight these sources more heavily when they conflict with lower-ranked accounts.\n"
+
+    # SEC EDGAR: defense sector 8-K filings for AI context
+    try:
+        defense_8ks = []
+        for dticker in ["LMT", "RTX", "NOC", "GD", "BA"]:
+            evts = _fetch_edgar_8k(dticker, days=14)
+            for e in (evts or []):
+                defense_8ks.append(f"  {e.get('filed', '')}: {e.get('company', '')} — {e.get('form', '8-K')}")
+        if defense_8ks:
+            base_context += "\nRecent SEC 8-K Filings (defense sector, last 14 days):\n"
+            base_context += "\n".join(defense_8ks[:10]) + "\n"
+    except Exception:
+        pass
+
+    # Grok breaking news brief — inject into all models so they have real-time awareness
+    if breaking_news:
+        base_context += f"\n=== BREAKING NEWS (last 6 hours via Grok/X) ===\n{breaking_news}\n"
+
+    # LNG / Natural gas prices — critical for Ras Laffan impact assessment
+    if lng_prices:
+        base_context += "\nNatural Gas / LNG Prices:\n"
+        for key, data in lng_prices.items():
+            base_context += f"  {data['name']}: ${data['price']} ({data['change']:+.1f}%)\n"
+        base_context += "  (Qatar Ras Laffan damage is a major LNG story — use these prices in your analysis)\n"
 
     # Pre-build data sections (cached strings)
     prior_ctx = build_prior_analysis_context()
     gdelt_bulk_ctx = build_gdelt_ai_context(df_gdelt_bulk) if not df_gdelt_bulk.empty else ""
+
+    # Capture closure variables explicitly
+    _mkt_ctx = market_context
+    _disruption_override = (validated_breakdown, validated_net)
 
     def _build_model_context(model_key: str) -> str:
         """Build a slimmed-down context for a specific model based on its data_sections."""
@@ -1397,7 +2801,8 @@ Recent timeline of key events:
         if sections is None or "timeline" in sections or "infrastructure" in sections:
             pass  # already in base_context
 
-        ctx += "\n" + build_live_data_context(gdelt_data, df_oil, df_acled, df_tone, sections=sections)
+        ctx += "\n" + build_live_data_context(gdelt_data, df_oil, df_acled, df_tone, sections=sections,
+                                              market_context=_mkt_ctx, disruption_data=_disruption_override)
 
         if (sections is None or "gdelt_bulk" in sections) and gdelt_bulk_ctx:
             ctx += "\n" + gdelt_bulk_ctx
@@ -1420,11 +2825,11 @@ Recent timeline of key events:
         col_run, col_status = st.columns([1, 3])
         with col_run:
             _conflict_running = st.session_state.get("_conflict_running", False)
-            force_refresh = st.button(
-                "Running..." if _conflict_running else "Run AI Analysis",
-                type="primary", use_container_width=True,
-                disabled=_conflict_running,
-            )
+            if _conflict_running:
+                st.button("Running...", type="primary", use_container_width=True, disabled=True)
+                force_refresh = False
+            else:
+                force_refresh = st.button("Run AI Analysis", type="primary", use_container_width=True)
         with col_status:
             if latest_conflict and not is_conflict_stale:
                 ts = latest_conflict.get("timestamp", "")
@@ -1437,14 +2842,19 @@ Recent timeline of key events:
 
         # Run analysis if stale or forced
         conflict_result = None
-        if force_refresh or (is_conflict_stale and latest_conflict is None):
+        if (force_refresh or (is_conflict_stale and latest_conflict is None)) and not st.session_state.get("_conflict_running", False):
             st.session_state["_conflict_running"] = True
             n_models = len(available_models)
             model_names_list = [active_configs.get(mk, MODEL_CONFIGS.get(mk, {})).get("name", mk)
                                 for mk in available_models]
 
-            with fun_loader("ai"):
+            try:
+                # Progressive rendering — show each model as it completes
+                progress_container = st.container()
+                model_status = progress_container.empty()
                 model_results = {}
+                completed_names = []
+
                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                     futures = {}
                     for mk, api_key in available_models.items():
@@ -1452,28 +2862,42 @@ Recent timeline of key events:
                         mc = active_configs.get(mk)
                         futures[executor.submit(run_single_conflict_model, mk, api_key, model_ctx, mc)] = mk
 
+                    model_status.info(f"Querying {n_models} models: {', '.join(model_names_list)}...")
+
                     for future in concurrent.futures.as_completed(futures):
                         mk = futures[future]
                         model_name = active_configs.get(mk, MODEL_CONFIGS.get(mk, {})).get("name", mk)
+                        model_color = active_configs.get(mk, {}).get("color", "#888")
                         try:
                             model_results[mk] = future.result()
+                            completed_names.append(f'<span style="color:{model_color}">{model_name} ✓</span>')
                         except Exception as e:
                             model_results[mk] = {"success": False, "error": str(e), "model_name": model_name}
+                            completed_names.append(f'<span style="color:#ff4444">{model_name} ✗</span>')
 
-            # Report per-model status
-            succeeded = [mk for mk, r in model_results.items() if r.get("success")]
-            failed = {mk: r.get("error", "Unknown") for mk, r in model_results.items() if not r.get("success")}
+                        remaining = n_models - len(completed_names)
+                        status_html = " &nbsp;│&nbsp; ".join(completed_names)
+                        if remaining > 0:
+                            status_html += f' &nbsp;│&nbsp; <span style="color:#888">{remaining} remaining...</span>'
+                        model_status.markdown(status_html, unsafe_allow_html=True)
 
-            conflict_result = blend_conflict_results(model_results, active_configs)
-            if conflict_result.get("success"):
-                save_conflict_result(conflict_result)
-                st.success(f"Analysis complete — {len(succeeded)}/{n_models} models: {', '.join(active_configs.get(mk, {}).get('name', mk) for mk in succeeded)}")
+                # Blend and save
+                succeeded = [mk for mk, r in model_results.items() if r.get("success")]
+                failed = {mk: r.get("error", "Unknown") for mk, r in model_results.items() if not r.get("success")}
 
-            st.session_state["_conflict_running"] = False
+                model_status.empty()
+                conflict_result = blend_conflict_results(model_results, active_configs)
+                if conflict_result.get("success"):
+                    save_conflict_result(conflict_result)
+                    st.success(f"Analysis complete — {len(succeeded)}/{n_models} models: {', '.join(active_configs.get(mk, {}).get('name', mk) for mk in succeeded)}")
 
-            if failed:
-                for mk, err in failed.items():
-                    st.warning(f"{active_configs.get(mk, {}).get('name', mk)} failed: {err[:150]}")
+                if failed:
+                    for mk, err in failed.items():
+                        st.warning(f"{active_configs.get(mk, {}).get('name', mk)} failed: {err[:150]}")
+            except Exception as e:
+                st.error(f"Analysis failed: {e}")
+            finally:
+                st.session_state["_conflict_running"] = False
         elif latest_conflict and latest_conflict.get("blended"):
             conflict_result = latest_conflict["blended"]
             conflict_result["success"] = True
@@ -1502,43 +2926,114 @@ Recent timeline of key events:
                     <div style="color:#888; font-size:11px; margin-top:6px;">Source: AI models scanning X/Twitter and news feeds. Verify independently before acting.</div>
                 </div>""", unsafe_allow_html=True)
 
-            mc1, mc2, mc3, mc4 = st.columns(4)
-            mc1.markdown(f"""<div style="text-align:center; padding:12px; border:1px solid {esc_color}; border-radius:8px;">
-                <div style="font-size:32px; font-weight:bold; color:{esc_color};">{esc_score}/10</div>
-                <div style="color:{esc_color}; font-weight:bold;">{esc_level}</div>
-                <div style="color:#888; font-size:12px;">Escalation Risk</div>
-            </div>""", unsafe_allow_html=True)
+            # Extract model rationales for the metric cards
+            model_assess = esc.get("model_assessments", [])
+            _grok_rationale = ""
+            _claude_rationale = ""
+            _gemini_rationale = ""
+            _grok_esc_score = ""
+            _claude_esc_score = ""
+            _gemini_esc_score = ""
+            _claude_ceasefire = ""
+            for ma in model_assess:
+                mk = ma.get("model_key", "")
+                rat = ma.get("rationale", "").replace("<", "&lt;").replace(">", "&gt;")
+                if mk == "grok" and rat:
+                    _grok_rationale = rat[:300]
+                    _grok_esc_score = f"{ma.get('score', '')}/10"
+                elif mk == "claude" and rat:
+                    _claude_rationale = rat[:300]
+                    _claude_esc_score = f"{ma.get('score', '')}/10"
+                elif mk == "gemini" and rat:
+                    _gemini_rationale = rat[:300]
+                    _gemini_esc_score = f"{ma.get('score', '')}/10"
 
+            # Get Claude's ceasefire detail from the raw results if available
+            if "claude" in {ma.get("model_key") for ma in model_assess}:
+                for mk_key, mk_val in conflict_result.get("_raw_results", {}).items():
+                    if mk_key == "claude":
+                        _claude_ceasefire = str(mk_val.get("diplomatic_outlook", {}).get("ceasefire_probability_30d", ""))
+
+            n_models = len(conflict_result.get("models_used", []))
+            mc1, mc2, mc3 = st.columns(3)
+
+            # Escalation card with description + Grok rationale
+            esc_desc = ("Measures the probability and severity of military escalation on a 1-10 scale, "
+                        "calibrated to historical conflicts (10 = Cuban Missile Crisis, 7 = Tanker War, 5 = Houthi crisis).")
+            esc_rationale_html = (
+                f'<div style="text-align:left;color:#666;font-size:0.72rem;line-height:1.3;margin-top:8px;'
+                f'border-top:1px solid #30363d;padding-top:6px;">{esc_desc}</div>'
+            )
+            if _grok_rationale:
+                esc_rationale_html += (
+                    f'<div style="text-align:left;color:#aaa;font-size:0.75rem;line-height:1.4;margin-top:6px;">'
+                    f'<span style="color:#ff4444;font-weight:600;">Grok ({_grok_esc_score}):</span> {_grok_rationale}'
+                    f'</div>'
+                )
+            mc1.markdown(
+                f'<div style="padding:12px; border:1px solid {esc_color}; border-radius:8px;">'
+                f'<div style="text-align:center;">'
+                f'<div style="font-size:32px; font-weight:bold; color:{esc_color};">{esc_score}/10</div>'
+                f'<div style="color:{esc_color}; font-weight:bold;">{esc_level}</div>'
+                f'<div style="color:#888; font-size:11px;">Escalation Risk</div>'
+                f'<div style="color:#555; font-size:10px;">Weighted blend of {n_models} models</div>'
+                f'</div>'
+                f'{esc_rationale_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Disruption card with Gemini rationale
             ai_disruption = oil.get("current_disruption_mbpd", 0)
-            verified_disruption = abs(CURRENT_NET_DISRUPTION)
-            # Use verified baseline; flag if AI significantly disagrees
+            verified_disruption = abs(validated_net)
             disruption_display = verified_disruption
-            disruption_note = "Verified facility-by-facility"
+            disruption_note = "Grok-verified" if validation_summary else "Baseline estimate"
             if ai_disruption and abs(ai_disruption - verified_disruption) > 1.0:
                 disruption_note = f"Verified: {verified_disruption} | AI est: {ai_disruption}"
-            mc2.markdown(f"""<div style="text-align:center; padding:12px; border:1px solid #ff6b35; border-radius:8px;">
-                <div style="font-size:32px; font-weight:bold; color:#ff6b35;">{disruption_display} mbpd</div>
-                <div style="color:#888; font-size:12px;">{disruption_note}</div>
-            </div>""", unsafe_allow_html=True)
+            disruption_rationale_html = ""
+            if _gemini_rationale:
+                disruption_rationale_html = (
+                    f'<div style="text-align:left;color:#aaa;font-size:0.75rem;line-height:1.4;margin-top:8px;'
+                    f'border-top:1px solid #30363d;padding-top:6px;">'
+                    f'<span style="color:#4285f4;font-weight:600;">Gemini ({_gemini_esc_score}):</span> {_gemini_rationale}'
+                    f'</div>'
+                )
+            mc2.markdown(
+                f'<div style="padding:12px; border:1px solid #ff6b35; border-radius:8px;">'
+                f'<div style="text-align:center;">'
+                f'<div style="font-size:32px; font-weight:bold; color:#ff6b35;">{disruption_display} mbpd</div>'
+                f'<div style="color:#888; font-size:11px;">Supply Disruption</div>'
+                f'<div style="color:#555; font-size:10px;">{disruption_note}</div>'
+                f'</div>'
+                f'{disruption_rationale_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-            price_fc = oil.get("price_forecast_30d", {})
-            mc3.markdown(f"""<div style="text-align:center; padding:12px; border:1px solid #00d1ff; border-radius:8px;">
-                <div style="font-size:32px; font-weight:bold; color:#00d1ff;">${price_fc.get('base', 0)}</div>
-                <div style="color:#888; font-size:12px;">Oil 30d Base (${price_fc.get('low', 0)}-${price_fc.get('high', 0)})</div>
-            </div>""", unsafe_allow_html=True)
-
+            # Ceasefire card with Claude rationale
             ceasefire = diplo.get("ceasefire_probability_30d", 0)
             cf_color = "#00ff96" if ceasefire >= 50 else "#ffaa00" if ceasefire >= 25 else "#ff4b4b"
-            mc4.markdown(f"""<div style="text-align:center; padding:12px; border:1px solid {cf_color}; border-radius:8px;">
-                <div style="font-size:32px; font-weight:bold; color:{cf_color};">{ceasefire}%</div>
-                <div style="color:#888; font-size:12px;">Ceasefire Prob (30d)</div>
-            </div>""", unsafe_allow_html=True)
+            cf_rationale_html = ""
+            if _claude_rationale:
+                cf_rationale_html = (
+                    f'<div style="text-align:left;color:#aaa;font-size:0.75rem;line-height:1.4;margin-top:8px;'
+                    f'border-top:1px solid #30363d;padding-top:6px;">'
+                    f'<span style="color:#d4a574;font-weight:600;">Claude ({_claude_esc_score}):</span> {_claude_rationale}'
+                    f'</div>'
+                )
+            mc3.markdown(
+                f'<div style="padding:12px; border:1px solid {cf_color}; border-radius:8px;">'
+                f'<div style="text-align:center;">'
+                f'<div style="font-size:32px; font-weight:bold; color:{cf_color};">{ceasefire}%</div>'
+                f'<div style="color:#888; font-size:11px;">Ceasefire Prob (30d)</div>'
+                f'<div style="color:#555; font-size:10px;">Claude-weighted blend · accuracy-adjusted</div>'
+                f'</div>'
+                f'{cf_rationale_html}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
             st.divider()
-
-            # Situation summary
-            st.markdown("#### Situation Summary")
-            st.markdown(conflict_result.get("situation_summary", ""))
 
             # Latest developments
             devs = conflict_result.get("latest_developments", [])
@@ -1551,11 +3046,13 @@ Recent timeline of key events:
 
             # Per-model escalation assessments — stacked for full readability
             st.markdown("#### Model Assessments")
-            role_map = {"Grok 3": "Breaking News", "GPT-5": "Strategic Synthesis",
-                        "Gemini 3 Pro": "Military/Energy", "Claude Sonnet": "Diplomatic"}
+            role_map = {"Grok 4": "Breaking News",
+                        "Gemini 3.1 Pro": "Military/Energy", "Claude Sonnet": "Diplomatic"}
             model_assess = esc.get("model_assessments", [])
             for ma in model_assess:
                 role = role_map.get(ma["model"], "")
+                is_partial = ma.get("_partial", False)
+                partial_badge = '<span style="color:#ffaa00;font-size:10px;font-weight:700;border:1px solid #ffaa00;padding:1px 5px;border-radius:3px;margin-left:8px;">PARTIAL</span>' if is_partial else ""
                 # Sanitize rationale — escape HTML tags and handle empty
                 rationale = ma.get("rationale", "")
                 if not rationale or not rationale.strip():
@@ -1570,7 +3067,7 @@ Recent timeline of key events:
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div>
                             <span style="color:{ma['color']}; font-weight:bold; font-size:14px;">{ma['model']}</span>
-                            <span style="color:#888; font-size:11px; margin-left:8px;">{role}</span>
+                            <span style="color:#888; font-size:11px; margin-left:8px;">{role}</span>{partial_badge}
                         </div>
                         <span style="font-size:20px; font-weight:bold; color:white;">{ma['score']}/10 — {ma['level']}</span>
                     </div>
@@ -1580,24 +3077,45 @@ Recent timeline of key events:
 
             st.divider()
 
-            # Infrastructure status from AI
-            infra_list = conflict_result.get("infrastructure_status", [])
-            if infra_list:
-                st.markdown("#### Infrastructure Status (AI Assessment)")
+            # Infrastructure status — auto-refreshing fragment (independent of analysis)
+            @st.fragment(run_every=1800)
+            def _render_infra_status():
+                _infra_cache_key = datetime.now().strftime("%Y-%m-%d-%H") + ("-30" if datetime.now().minute >= 30 else "-00")
+                grok_infra = _grok_infrastructure_status(_infra_cache_key)
+                if not grok_infra:
+                    return
+                st.markdown(
+                    '#### Infrastructure Status &nbsp;'
+                    '<span style="font-size:10px;color:#00ff96;border:1px solid #00ff96;'
+                    'padding:1px 6px;border-radius:3px;">Live via Grok</span>',
+                    unsafe_allow_html=True,
+                )
+                st.caption("Auto-refreshes every 30 min — sourced from verified accounts and major news wires.")
+
                 status_colors = {"offline": "#ff4b4b", "degraded": "#ffaa00", "operational": "#00ff96"}
                 status_icons = {"offline": "🔴", "degraded": "🟡", "operational": "🟢"}
                 infra_rows = ""
-                for item in infra_list:
-                    status = item.get("status", "unknown")
-                    changed = item.get("changed", False)
+                for item in grok_infra:
+                    status = item.get("status", "unknown").lower()
                     sc = status_colors.get(status, "#888")
                     si = status_icons.get(status, "⚪")
-                    change_badge = f'<span style="color:#ff4b4b;font-size:0.65rem;font-weight:700;border:1px solid #ff4b4b;padding:1px 5px;border-radius:3px;margin-left:4px;">CHANGED</span>' if changed else ""
+                    detail = item.get("detail", "")
+                    update = item.get("update")
+                    changed = item.get("changed", False)
+
+                    change_badge = ""
+                    if changed:
+                        change_badge = '<span style="color:#ff4b4b;font-size:0.65rem;font-weight:700;border:1px solid #ff4b4b;padding:1px 5px;border-radius:3px;margin-left:4px;">UPDATED</span>'
+
+                    update_html = ""
+                    if update and str(update).lower() not in ("null", "none", "no update", "no change"):
+                        update_html = f'<div style="color:#00ff96;font-size:0.72rem;margin-top:2px;">{update}</div>'
+
                     infra_rows += (
                         f'<tr style="border-bottom:1px solid #30363d;">'
                         f'<td style="padding:6px 8px;font-weight:600;">{si} {item.get("name", "")}{change_badge}</td>'
                         f'<td style="padding:6px 8px;color:{sc};font-weight:700;text-transform:uppercase;">{status}</td>'
-                        f'<td style="padding:6px 8px;color:#aaa;font-size:0.82rem;">{item.get("detail", "")}</td>'
+                        f'<td style="padding:6px 8px;color:#aaa;font-size:0.82rem;">{detail}{update_html}</td>'
                         f'</tr>'
                     )
                 st.markdown(
@@ -1610,15 +3128,47 @@ Recent timeline of key events:
                     unsafe_allow_html=True,
                 )
 
+            _render_infra_status()
+
             st.divider()
 
-            # Market implications
+            # Market implications — styled cards with live price data
             mkt = conflict_result.get("market_implications", {})
             if any(mkt.values()):
                 st.markdown("#### Market Implications")
+                _mc = market_context or {}
+                sector_config = {
+                    "energy": {"icon": "🛢️", "color": "#ff6b35",
+                               "live": f"Brent ${_mc['brent']['price']}/bbl ({_mc['brent']['change']:+.1f}%)" if _mc.get("brent") else None},
+                    "equities": {"icon": "📊", "color": "#00d1ff",
+                                 "live": f"VIX {_mc['vix']['price']} ({_mc['vix']['change']:+.1f}%)" if _mc.get("vix") else None},
+                    "safe_havens": {"icon": "🛡️", "color": "#ffaa00",
+                                    "live": f"Gold ${_mc['gold']['price']:,.0f}/oz ({_mc['gold']['change']:+.1f}%)" if _mc.get("gold") else None},
+                    "currencies": {"icon": "💱", "color": "#00ff96",
+                                   "live": f"DXY {_mc['dxy']['price']} ({_mc['dxy']['change']:+.1f}%)" if _mc.get("dxy") else None},
+                }
+                mkt_cols = st.columns(len([k for k in mkt if mkt[k]]))
+                col_idx = 0
                 for sector, text in mkt.items():
-                    if text:
-                        st.markdown(f"**{sector.replace('_', ' ').title()}:** {text}")
+                    if not text:
+                        continue
+                    cfg = sector_config.get(sector, {"icon": "📈", "color": "#888", "live": None})
+                    safe_text = text.replace("<", "&lt;").replace(">", "&gt;")
+                    live_html = ""
+                    if cfg["live"]:
+                        live_html = f'<div style="font-size:0.8rem;color:{cfg["color"]};font-weight:600;margin-bottom:6px;">{cfg["live"]}</div>'
+                    with mkt_cols[col_idx]:
+                        st.markdown(
+                            f'<div style="padding:12px;border:1px solid {cfg["color"]}33;border-radius:8px;'
+                            f'border-left:3px solid {cfg["color"]};background:rgba(255,255,255,0.02);height:100%;">'
+                            f'<div style="font-size:0.9rem;font-weight:700;color:{cfg["color"]};margin-bottom:6px;">'
+                            f'{cfg["icon"]} {sector.replace("_", " ").title()}</div>'
+                            f'{live_html}'
+                            f'<div style="color:#ccc;font-size:0.82rem;line-height:1.5;">{safe_text}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    col_idx += 1
 
             # Scenario forecasts — independent probabilities
             scenarios = conflict_result.get("scenario_forecast", [])
@@ -1645,12 +3195,87 @@ Recent timeline of key events:
                         {oil_html}{trigger_html}
                     </div>""", unsafe_allow_html=True)
 
-            # Trending tweets from X/Twitter (primarily from Grok)
-            tweets = conflict_result.get("trending_tweets", [])
-            if tweets:
+            # Scenario tracking scorecard — how accurate were past predictions
+            history = load_conflict_history()
+            scorecard = _build_scenario_scorecard(history)
+            if scorecard:
+                st.divider()
+                st.markdown("#### Prediction Accuracy Tracker")
+                st.caption("Comparing past analysis predictions against subsequent outcomes.")
+                sc_rows = ""
+                for sc in scorecard:
+                    ts = sc["timestamp"]
+                    try:
+                        ts_fmt = pd.Timestamp(ts).strftime("%b %d %I:%M%p")
+                    except Exception:
+                        ts_fmt = ts[:16]
+
+                    esc_err = sc.get("escalation_error")
+                    oil_err = sc.get("oil_error")
+                    esc_color = "#00ff96" if esc_err is not None and esc_err <= 1 else "#ffaa00" if esc_err is not None and esc_err <= 2 else "#ff4444"
+                    oil_color = "#00ff96" if oil_err is not None and oil_err <= 5 else "#ffaa00" if oil_err is not None and oil_err <= 10 else "#ff4444"
+                    esc_grade = "A" if esc_err is not None and esc_err <= 0.5 else "B" if esc_err is not None and esc_err <= 1 else "C" if esc_err is not None and esc_err <= 2 else "D"
+                    oil_grade = "A" if oil_err is not None and oil_err <= 3 else "B" if oil_err is not None and oil_err <= 5 else "C" if oil_err is not None and oil_err <= 10 else "D"
+
+                    sc_rows += (
+                        f'<tr style="border-bottom:1px solid #30363d;">'
+                        f'<td style="padding:5px 8px;color:#888;font-size:0.78rem;">{ts_fmt}</td>'
+                        f'<td style="padding:5px 8px;text-align:center;">'
+                        f'<span style="color:{esc_color};font-weight:600;">{sc.get("predicted_escalation", "?")}</span>'
+                        f'<span style="color:#555;"> → </span>'
+                        f'<span style="color:#ccc;">{sc.get("actual_escalation", "?")}</span>'
+                        f' <span style="color:{esc_color};font-size:0.7rem;">({esc_grade})</span></td>'
+                        f'<td style="padding:5px 8px;text-align:center;">'
+                        f'<span style="color:{oil_color};font-weight:600;">${sc.get("predicted_oil", "?")}</span>'
+                        f'<span style="color:#555;"> → </span>'
+                        f'<span style="color:#ccc;">${sc.get("actual_oil", "?")}</span>'
+                        f' <span style="color:{oil_color};font-size:0.7rem;">({oil_grade})</span></td>'
+                        f'</tr>'
+                    )
+                st.markdown(
+                    f'<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
+                    f'<tr style="border-bottom:2px solid #30363d;">'
+                    f'<th style="padding:5px 8px;text-align:left;color:#888;">Run</th>'
+                    f'<th style="padding:5px 8px;text-align:center;color:#888;">Escalation (pred → actual)</th>'
+                    f'<th style="padding:5px 8px;text-align:center;color:#888;">Oil Base (pred → actual)</th>'
+                    f'</tr>{sc_rows}</table>',
+                    unsafe_allow_html=True,
+                )
+
+            # Source credibility ranking
+            top_sources = _get_top_sources(8)
+            if top_sources:
+                st.divider()
+                st.markdown("#### Source Reliability")
+                st.caption("Ranked by prediction accuracy when cited — updated after each analysis run.")
+                src_items = ""
+                for src in top_sources:
+                    score = src.get("score", 50)
+                    citations = src.get("citations", 0)
+                    sc = "#00ff96" if score >= 70 else "#ffaa00" if score >= 50 else "#ff4444"
+                    bar_w = max(2, min(score, 100))
+                    src_items += (
+                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                        f'<span style="color:#00d1ff;font-weight:600;min-width:120px;font-size:0.82rem;">{src["handle"]}</span>'
+                        f'<div style="flex:1;background:#1c1f26;border-radius:3px;height:8px;border:1px solid #30363d;">'
+                        f'<div style="width:{bar_w}%;height:100%;background:{sc};border-radius:3px;"></div></div>'
+                        f'<span style="color:{sc};font-size:0.78rem;min-width:35px;text-align:right;">{score}</span>'
+                        f'<span style="color:#555;font-size:0.7rem;min-width:30px;">({citations}x)</span>'
+                        f'</div>'
+                    )
+                st.markdown(src_items, unsafe_allow_html=True)
+
+            # Trending tweets — auto-refreshing fragment (independent of analysis)
+            @st.fragment(run_every=600)
+            def _render_live_tweets():
+                tweets = _fetch_live_tweets()
+                if not tweets:
+                    tweets = conflict_result.get("trending_tweets", [])
+                if not tweets:
+                    return
                 st.divider()
                 st.markdown("#### Trending on X")
-                st.caption("High-velocity tweets detected by Grok — sorted by engagement speed.")
+                st.caption("Live feed via Grok — auto-refreshes every 10 min.")
                 for tw in tweets:
                     handle = tw.get("handle", "")
                     content = tw.get("content", "")
@@ -1689,6 +3314,8 @@ Recent timeline of key events:
                         unsafe_allow_html=True,
                     )
 
+            _render_live_tweets()
+
 
 # ---- TAB: Conflict Timeline ----
 with tab_timeline, error_boundary("Timeline"):
@@ -1697,7 +3324,7 @@ with tab_timeline, error_boundary("Timeline"):
     # ── Conflict Clock ──
     war_start = pd.Timestamp("2026-02-28")
     days_of_conflict = (pd.Timestamp.now() - war_start).days
-    total_events = len(CONFLICT_TIMELINE_EVENTS)
+    total_events = len(live_timeline)
     current_disruption = abs(CURRENT_NET_DISRUPTION)
     peak_disruption = max(d["disruption"] for d in DISRUPTION_TIMELINE)
     current_phase = "Unknown"
@@ -1747,7 +3374,7 @@ with tab_timeline, error_boundary("Timeline"):
             min_value=date(2026, 2, 28), max_value=date.today(), key="tl_date_range")
 
     # Build filtered timeline
-    timeline_df = pd.DataFrame(CONFLICT_TIMELINE_EVENTS)
+    timeline_df = pd.DataFrame(live_timeline)
     timeline_df["date"] = pd.to_datetime(timeline_df["date"])
     if selected_cats:
         timeline_df = timeline_df[timeline_df["category"].isin(selected_cats)]
@@ -1955,7 +3582,7 @@ with tab_timeline, error_boundary("Timeline"):
 
     # ── Detailed Event Cards ──
     st.markdown("#### Event Detail")
-    for evt in reversed(CONFLICT_TIMELINE_EVENTS):
+    for evt in reversed(live_timeline):
         cat = evt["category"]
         if cat not in selected_cats:
             continue

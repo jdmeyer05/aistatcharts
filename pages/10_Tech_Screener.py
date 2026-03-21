@@ -12,21 +12,22 @@ setup_page("10_Tech_Screener")
 st.title("🛰️ Advanced Technical Screener")
 st.markdown("Multi-dimensional technical analysis: Trend (EMAs), Momentum (MACD/RSI), and Volatility (Bollinger Bands).")
 
-# --- SIDEBAR CONFIGURATION ---
-with st.sidebar:
-    st.header("Screener Settings")
-    with st.form("tech_settings"):
+# --- Controls ---
+with st.form("tech_settings"):
+    _c1, _c2, _c3, _c4, _c5, _c6 = st.columns([2, 2, 1, 1, 1, 1])
+    with _c1:
         raw_ticker = st.text_input("Ticker", value=get_active_ticker())
+    with _c2:
         lookback = st.slider("Lookback (Days)", 90, 730, 365, step=30)
-        
-        st.divider()
-        st.caption("Indicator Parameters")
+    with _c3:
         rsi_period = st.number_input("RSI Period", value=14)
+    with _c4:
         macd_fast = st.number_input("MACD Fast", value=12)
+    with _c5:
         macd_slow = st.number_input("MACD Slow", value=26)
+    with _c6:
         bb_window = st.number_input("Bollinger Period", value=20)
-        
-        submit = st.form_submit_button("🚀 Run Technicals")
+    submit = st.form_submit_button("Run Technicals", use_container_width=True)
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)

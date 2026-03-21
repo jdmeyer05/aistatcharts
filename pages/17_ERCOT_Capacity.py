@@ -104,11 +104,12 @@ def fetch_capacity_file(date_path: str, month_label: str, planned_only: bool = F
         return pd.DataFrame()
 
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Data Selection")
-    month_options = {label: path for path, label in MONTHS}
+# --- Controls ---
+month_options = {label: path for path, label in MONTHS}
+_c1, _c2 = st.columns([2, 2])
+with _c1:
     selected_month = st.selectbox("Report Month", list(month_options.keys()))
+with _c2:
     show_planned_only = st.checkbox("Planned Only (Financial Security Posted)", value=False)
 
 # --- FETCH DATA ---

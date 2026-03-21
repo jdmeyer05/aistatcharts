@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import yfinance as yf
 import logging
 from src.layout import setup_page, error_boundary, fun_loader
+from src.data_engine import polygon_snapshot, polygon_history
 
 logger = logging.getLogger(__name__)
 
@@ -117,12 +117,12 @@ def fetch_futures_snapshot():
     for sector, tickers in FUTURES.items():
         for ticker, name in tickers.items():
             try:
-                hist = yf.Ticker(ticker).history(period="5d")
-                if not hist.empty and len(hist) >= 2:
-                    close = hist["Close"].iloc[-1]
-                    prev = hist["Close"].iloc[-2]
+                snap = polygon_snapshot(ticker)
+                if snap and snap.get("price"):
+                    close = snap["price"]
+                    prev = snap.get("prev_close", close)
                     change = close - prev
-                    pct = (change / prev) * 100
+                    pct = (change / prev) * 100 if prev else 0
                     rows.append({
                         "ticker": ticker, "name": name, "sector": sector,
                         "price": close, "change": change, "pct_change": pct,
@@ -135,11 +135,10 @@ def fetch_futures_snapshot():
 @st.cache_data(ttl=300)
 def fetch_futures_history(ticker: str, period: str = "6mo"):
     """Fetch historical data for a single futures contract."""
+    days_map = {"1d": 5, "5d": 10, "1mo": 35, "3mo": 95, "6mo": 185, "1y": 370}
+    days = days_map.get(period, 185)
     try:
-        df = yf.download(ticker, period=period, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.index = pd.to_datetime(df.index).tz_localize(None)
+        df = polygon_history(ticker, days)
         return df
     except Exception as e:
         logger.error(f"Failed to fetch history for {ticker}: {e}")
@@ -153,30 +152,29 @@ def fetch_term_structure(name: str):
     prices = []
     for ticker, label in zip(config["tickers"], config["labels"]):
         try:
-            hist = yf.Ticker(ticker).history(period="1d")
-            if not hist.empty:
-                prices.append({"label": label, "ticker": ticker, "price": hist["Close"].iloc[-1]})
-        except:
+            snap = polygon_snapshot(ticker)
+            if snap and snap.get("price"):
+                prices.append({"label": label, "ticker": ticker, "price": snap["price"]})
+        except Exception:
             pass
     return prices
 
 
 @st.cache_data(ttl=3600)
 def fetch_curve_history(name: str, period: str = "3mo"):
-    """Fetch historical closing prices for all contract months to track curve changes."""
+    """Fetch historical closing prices for all contract months."""
     config = TERM_STRUCTURES[name]
+    days_map = {"1mo": 35, "3mo": 95, "6mo": 185}
+    days = days_map.get(period, 95)
     all_hist = {}
     for ticker, label in zip(config["tickers"], config["labels"]):
         if label == "Front":
-            continue  # Front month rolls, skip for historical comparison
+            continue
         try:
-            df = yf.download(ticker, period=period, progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            df = polygon_history(ticker, days)
             if not df.empty:
-                df.index = pd.to_datetime(df.index).tz_localize(None)
                 all_hist[label] = df["Close"]
-        except:
+        except Exception:
             pass
     if all_hist:
         return pd.DataFrame(all_hist).dropna()
@@ -189,14 +187,14 @@ def fetch_vol_data():
     rows = []
     for ticker, name in VOL_TICKERS.items():
         try:
-            hist = yf.Ticker(ticker).history(period="6mo")
-            if not hist.empty:
-                latest = hist["Close"].iloc[-1]
-                prev = hist["Close"].iloc[-2] if len(hist) >= 2 else latest
+            df = polygon_history(ticker, 180)
+            if not df.empty:
+                latest = df["Close"].iloc[-1]
+                prev = df["Close"].iloc[-2] if len(df) >= 2 else latest
                 rows.append({
                     "ticker": ticker, "name": name,
                     "value": latest, "change": latest - prev,
-                    "hist": hist,
+                    "hist": df,
                 })
         except:
             pass

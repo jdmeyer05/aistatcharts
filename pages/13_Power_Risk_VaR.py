@@ -11,11 +11,14 @@ setup_page("13_Power_Risk_VaR")
 
 st.title("🛡️ Portfolio Risk & VaR Engine")
 
-with st.sidebar:
-    st.header("Risk Parameters")
+_c1, _c2, _c3, _c4 = st.columns([3, 2, 2, 1])
+with _c1:
     raw_tickers = st.text_input("Portfolio Tickers (comma separated)", "TLT,USO,QQQ")
+with _c2:
     portfolio_value = st.number_input("Total Portfolio Value ($)", value=100000, step=10000)
+with _c3:
     lookback = st.slider("Historical Lookback (Days)", 90, 1000, 365)
+with _c4:
     confidence_level = st.selectbox("Confidence Level", [0.95, 0.99])
 
 # Parse tickers

@@ -80,12 +80,14 @@ def fetch_all_expirations(symbol: str, api_key: str):
     return sorted(set(c["expiration_date"] for c in contracts))
 
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.header("Configuration")
+# --- Controls ---
+_c1, _c2 = st.columns([3, 1])
+with _c1:
     raw_ticker = st.text_input("Ticker", value=get_active_ticker())
     ticker = format_massive_ticker(raw_ticker)
     set_active_ticker(ticker)
+with _c2:
+    st.markdown("<br>", unsafe_allow_html=True)
     submit = st.button("Load Options Data", type="primary", use_container_width=True)
 
 api_key = _get_massive_key()

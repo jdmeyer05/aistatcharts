@@ -14,19 +14,21 @@ setup_page("06_Options_Analysis")
 st.title("Options Surface Analysis")
 st.caption("IV skew, open interest walls, gamma exposure, max pain, unusual activity, and Greeks across strikes.")
 
-# ── Sidebar Configuration ──
-with st.sidebar:
-    st.subheader("Chain Settings")
+# ── Controls ──
+_c1, _c2, _c3 = st.columns([2, 2, 1])
+with _c1:
     raw_ticker = st.text_input("Underlying Ticker", value=get_active_ticker())
     ticker = format_massive_ticker(raw_ticker)
     set_active_ticker(ticker)
-
-    if ":" in ticker or "ERCOT" in ticker.upper():
-        st.error("Equities only.")
-        st.stop()
-
+with _c2:
     strike_range = st.slider("Strike Range (% from spot)", 5, 30, 15)
+with _c3:
+    st.markdown("<br>", unsafe_allow_html=True)
     submit = st.button("Fetch Chain Data", type="primary", use_container_width=True)
+
+if ":" in ticker or "ERCOT" in ticker.upper():
+    st.error("Equities only.")
+    st.stop()
 
 # ── Fetch & Store ──
 # Auto-load SPY on first visit

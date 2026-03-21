@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import yfinance as yf
+from src.data_engine import polygon_history, polygon_ticker_details, polygon_snapshot
 import logging
 import os
 import requests
@@ -347,11 +347,11 @@ def fetch_intermarket(period="3y"):
         ("^VIX", "vix"), ("^TNX", "tnx"), ("DX-Y.NYB", "dxy"),
         ("GLD", "gold"), ("USO", "oil"),  # cross-asset momentum
     ]
+    days_map = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
+    days = days_map.get(period, 1095)
     for sym, label in symbols:
         try:
-            df = yf.download(sym, period=period, interval="1d", progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            df = polygon_history(sym, days)
             if not df.empty:
                 data[label] = df["Close"]
         except Exception:
@@ -364,38 +364,12 @@ def fetch_stock_extras(ticker: str) -> dict:
     """Fetch fundamental/alternative data for RL features: insider txns, short interest, earnings."""
     extras = {}
     try:
-        tk = yf.Ticker(ticker)
-        info = tk.info or {}
-        extras["short_pct"] = info.get("shortPercentOfFloat", 0) or 0
-        extras["beta"] = info.get("beta", 1.0) or 1.0
+        info = polygon_ticker_details(ticker) or {}
+        extras["short_pct"] = 0  # Not available via Polygon free tier
+        extras["beta"] = 1.0  # Not available via Polygon free tier
         extras["sector"] = info.get("sector", "Unknown")
-
-        # Earnings dates
-        try:
-            cal = tk.calendar
-            if cal is not None and not cal.empty:
-                if isinstance(cal, pd.DataFrame):
-                    earnings_date = cal.iloc[0, 0] if cal.shape[1] > 0 else None
-                else:
-                    earnings_date = cal.get("Earnings Date", [None])[0]
-                extras["next_earnings"] = pd.Timestamp(earnings_date) if earnings_date else None
-            else:
-                extras["next_earnings"] = None
-        except Exception:
-            extras["next_earnings"] = None
-
-        # Insider transactions (net buys last 90 days)
-        try:
-            insider = tk.insider_transactions
-            if insider is not None and not insider.empty:
-                recent = insider.head(20)
-                buys = recent[recent["Text"].str.contains("Purchase|Buy", case=False, na=False)].shape[0]
-                sells = recent[recent["Text"].str.contains("Sale|Sell", case=False, na=False)].shape[0]
-                extras["insider_net"] = buys - sells  # positive = net buying
-            else:
-                extras["insider_net"] = 0
-        except Exception:
-            extras["insider_net"] = 0
+        extras["next_earnings"] = None  # Not available via Polygon free tier
+        extras["insider_net"] = 0  # Not available via Polygon free tier
 
         # Sector ETF for relative strength
         sector_etfs = {
@@ -1048,36 +1022,47 @@ Respond with JSON:
 st.title("🦾 RL Trading Strategy Optimizer")
 st.markdown("Deep Q-Network ensemble discovers optimal trading strategies with walk-forward validation.")
 
-with st.sidebar:
-    st.header("Training Parameters")
-    ticker_input = st.text_input("Ticker", value=get_active_ticker())
-    timeframe = st.selectbox("Timeframe", ["Daily", "Weekly"], index=0)
-    train_years = st.slider("Data Window (years)", 1, 10, 3)
-    test_pct = st.slider("Out-of-Sample %", 10, 40, 20)
+with st.expander("Training Parameters", expanded=True):
+    _p1, _p2, _p3, _p4 = st.columns(4)
+    with _p1:
+        ticker_input = st.text_input("Ticker", value=get_active_ticker())
+    with _p2:
+        timeframe = st.selectbox("Timeframe", ["Daily", "Weekly"], index=0)
+    with _p3:
+        train_years = st.slider("Data Window (years)", 1, 10, 3)
+    with _p4:
+        test_pct = st.slider("Out-of-Sample %", 10, 40, 20)
 
-    st.divider()
-    st.caption("Model Configuration")
-    n_episodes = st.select_slider("Episodes per Agent", [50, 100, 200, 500], value=200)
-    n_agents = st.select_slider("Ensemble Size", [1, 3, 5, 7], value=3)
-    reward_fn = st.selectbox("Reward Function", list(REWARD_FUNCTIONS.keys()), index=3)
+    _m1, _m2, _m3 = st.columns(3)
+    with _m1:
+        n_episodes = st.select_slider("Episodes per Agent", [50, 100, 200, 500], value=200)
+    with _m2:
+        n_agents = st.select_slider("Ensemble Size", [1, 3, 5, 7], value=3)
+    with _m3:
+        reward_fn = st.selectbox("Reward Function", list(REWARD_FUNCTIONS.keys()), index=3)
 
-    st.divider()
-    st.caption("Risk Management")
-    commission = st.number_input("Commission (%)", 0.0, 1.0, 0.1, 0.05) / 100
-    spread_bps = st.number_input("Spread (bps)", 0, 20, 2)
-    slippage_bps = st.number_input("Slippage (bps)", 0, 20, 5)
-    stop_loss = st.number_input("Stop Loss (%)", 1.0, 20.0, 5.0, 1.0) / 100
-    max_daily_loss = st.number_input("Max Daily Loss (%)", 1.0, 10.0, 3.0, 0.5) / 100
-    initial_cash = st.number_input("Capital ($)", 10000, 1000000, 100000, 10000)
+    _r1, _r2, _r3, _r4, _r5, _r6 = st.columns(6)
+    with _r1:
+        commission = st.number_input("Commission (%)", 0.0, 1.0, 0.1, 0.05) / 100
+    with _r2:
+        spread_bps = st.number_input("Spread (bps)", 0, 20, 2)
+    with _r3:
+        slippage_bps = st.number_input("Slippage (bps)", 0, 20, 5)
+    with _r4:
+        stop_loss = st.number_input("Stop Loss (%)", 1.0, 20.0, 5.0, 1.0) / 100
+    with _r5:
+        max_daily_loss = st.number_input("Max Daily Loss (%)", 1.0, 10.0, 3.0, 0.5) / 100
+    with _r6:
+        initial_cash = st.number_input("Capital ($)", 10000, 1000000, 100000, 10000)
 
-    st.divider()
-    use_intermarket = st.checkbox("Include Intermarket Features (VIX, 10Y, Dollar)", value=True)
-    run_walkforward = st.checkbox("Run Walk-Forward Validation", value=False)
-
-    train_col1, train_col2 = st.columns(2)
-    with train_col1:
+    _o1, _o2, _o3, _o4 = st.columns(4)
+    with _o1:
+        use_intermarket = st.checkbox("Include Intermarket Features (VIX, 10Y, Dollar)", value=True)
+    with _o2:
+        run_walkforward = st.checkbox("Run Walk-Forward Validation", value=False)
+    with _o3:
         train_btn = st.button("Train Agent", type="primary", use_container_width=True)
-    with train_col2:
+    with _o4:
         train_bg = st.button("Train in Background", use_container_width=True,
                             help="Start training and explore other pages. You'll see a notification when it's done.")
 
@@ -1094,23 +1079,20 @@ if train_bg:
             st.session_state["rl_bg_ticker"] = ticker
             st.session_state["rl_bg_progress"] = 0
 
-            interval_bg = "1d" if timeframe == "Daily" else "1wk"
-            df_bg = yf.download(ticker, period=f"{train_years}y", interval=interval_bg, progress=False)
-            if isinstance(df_bg.columns, pd.MultiIndex):
-                df_bg.columns = df_bg.columns.get_level_values(0)
+            _days_bg = train_years * 365
+            df_bg = polygon_history(ticker, _days_bg)
             if df_bg.empty or len(df_bg) < 100:
                 st.session_state["rl_bg_status"] = "error"
                 st.session_state["rl_bg_error"] = "Not enough data"
                 return
+            if timeframe == "Weekly":
+                df_bg = df_bg.resample("W-FRI").last().dropna()
 
             intermarket_bg = fetch_intermarket(f"{train_years}y") if use_intermarket else None
             extras_bg = fetch_stock_extras(ticker)
             sect_bg = None
             try:
-                sdf = yf.download(extras_bg.get("sector_etf", "SPY"), period=f"{train_years}y",
-                                 interval=interval_bg, progress=False)
-                if isinstance(sdf.columns, pd.MultiIndex):
-                    sdf.columns = sdf.columns.get_level_values(0)
+                sdf = polygon_history(extras_bg.get("sector_etf", "SPY"), _days_bg)
                 if not sdf.empty:
                     sect_bg = sdf["Close"]
             except Exception:
@@ -1219,13 +1201,13 @@ if train_bg:
 if train_btn or f"rl_results_{ticker}" in st.session_state:
     if train_btn:
         with fun_loader("data"):
-            interval = "1d" if timeframe == "Daily" else "1wk"
-            df = yf.download(ticker, period=f"{train_years}y", interval=interval, progress=False)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            _days_fg = train_years * 365
+            df = polygon_history(ticker, _days_fg)
             if df.empty or len(df) < 100:
                 st.error("Not enough data.")
                 st.stop()
+            if timeframe == "Weekly":
+                df = df.resample("W-FRI").last().dropna()
 
         intermarket = fetch_intermarket(f"{train_years}y") if use_intermarket else None
 
@@ -1237,9 +1219,7 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
             sector_etf = stock_extras.get("sector_etf", "SPY")
             sector_data = None
             try:
-                sdf = yf.download(sector_etf, period=f"{train_years}y", interval=interval, progress=False)
-                if isinstance(sdf.columns, pd.MultiIndex):
-                    sdf.columns = sdf.columns.get_level_values(0)
+                sdf = polygon_history(sector_etf, _days_fg)
                 if not sdf.empty:
                     sector_data = sdf["Close"]
             except Exception:

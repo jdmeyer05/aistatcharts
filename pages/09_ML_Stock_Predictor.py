@@ -11,18 +11,18 @@ setup_page("09_ML_Stock_Predictor")
 st.title("🎲 ML Tactical Forecast (30-Day)")
 st.markdown("Stochastic Recursive Random Forest: Projects 1 day ahead dynamically to generate a realistic, volatility-adjusted price path.")
 
-# --- SIDEBAR CONFIGURATION ---
-with st.sidebar:
-    st.header("Forecast Parameters")
-    with st.form("ml_settings"):
+# --- Controls ---
+with st.form("ml_settings"):
+    _c1, _c2, _c3, _c4 = st.columns([2, 2, 2, 1])
+    with _c1:
         raw_ticker = st.text_input("Ticker", value=get_active_ticker())
-
-        st.divider()
-        st.caption("Hyperparameters")
-        n_trees = st.slider("Random Forest Estimators", 50, 500, 200, step=50)
+    with _c2:
+        n_trees = st.slider("RF Estimators", 50, 500, 200, step=50)
+    with _c3:
         lookback = st.slider("Training Lookback (Days)", 500, 2520, 1000, step=250)
-
-        submit = st.form_submit_button("🚀 Run ML Forecast")
+    with _c4:
+        st.markdown("<br>", unsafe_allow_html=True)
+        submit = st.form_submit_button("Run ML Forecast", use_container_width=True)
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)

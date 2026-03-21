@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import plotly.graph_objects as go
+from src.data_engine import polygon_snapshot, polygon_history, polygon_intraday
 from plotly.subplots import make_subplots
 import json
 import os
@@ -47,58 +47,22 @@ CONFLICT_HISTORY = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_market_data(ticker: str) -> dict:
     try:
-        tk = yf.Ticker(ticker)
-        daily = tk.history(period="1mo")
+        # Get daily history for context
+        daily = polygon_history(ticker, 30)
         if daily.empty or len(daily) < 2:
             return None
         prev_close = float(daily["Close"].iloc[-2])
         last = float(daily["Close"].iloc[-1])
-        is_crypto = ticker in ("BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD")
-        is_futures = ticker.endswith("=F") or ticker in ("DX-Y.NYB",)
-        intra = pd.DataFrame()
-        if is_crypto:
-            try:
-                intra = tk.history(period="2d", interval="1h")
-                if not intra.empty:
-                    cutoff = pd.Timestamp.now(tz=intra.index.tz) - pd.Timedelta(hours=24)
-                    intra = intra[intra.index >= cutoff]
-            except Exception:
-                pass
-        elif is_futures:
-            # Futures/FX — same approach as crypto: 2d hourly, keep last 24h
-            try:
-                intra = tk.history(period="2d", interval="1h")
-                if not intra.empty:
-                    cutoff = pd.Timestamp.now(tz=intra.index.tz) - pd.Timedelta(hours=24)
-                    intra = intra[intra.index >= cutoff]
-                    if len(intra) < 3:
-                        intra = tk.history(period="5d", interval="1h").tail(24)
-            except Exception:
-                pass
-        else:
-            for interval in ["5m", "15m", "30m"]:
-                try:
-                    intra = tk.history(period="1d", interval=interval)
-                    if not intra.empty and len(intra) >= 3:
-                        break
-                except Exception:
-                    continue
-        # Final fallback: 5d hourly (covers sparse tickers like yields)
-        if (intra.empty or len(intra) < 3) and not is_crypto:
-            try:
-                intra = tk.history(period="5d", interval="1h")
-                if not intra.empty:
-                    last_date = intra.index[-1].date()
-                    day_bars = intra[intra.index.date == last_date]
-                    intra = day_bars if len(day_bars) >= 3 else intra.tail(24)
-            except Exception:
-                pass
+
+        # Try intraday (5-min bars) for mini-chart, fallback to hourly, then daily
+        intra = polygon_intraday(ticker, interval_min=5, bars=80)
+        if intra.empty or len(intra) < 3:
+            intra = polygon_intraday(ticker, interval_min=60, bars=24)
         if not intra.empty and len(intra) >= 3:
             chart_close = intra["Close"]
             chart_dates = intra.index
             last = float(chart_close.iloc[-1])
         else:
-            # Use last 20 daily bars for a smoother chart when intraday is unavailable
             chart_close = daily["Close"].tail(20)
             chart_dates = daily.index[-20:]
         day_chg = (last / prev_close - 1) * 100 if prev_close > 0 else 0
@@ -361,15 +325,14 @@ ASSET_CLASS_CONFIG = [
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_relative_data(tickers_key: str, period: str = "1mo"):
     """Fetch daily data for relative performance. Filters to weekdays only."""
-    import yfinance as yf
+    days_map = {"1d": 5, "5d": 10, "1mo": 35, "3mo": 95, "6mo": 185, "1y": 370}
+    days = days_map.get(period, 35)
     tickers = tickers_key.split(",")
     result = {}
     for sym in tickers:
         try:
-            tk = yf.Ticker(sym)
-            hist = tk.history(period=period)
+            hist = polygon_history(sym, days)
             if not hist.empty and len(hist) >= 2:
-                # Filter to weekdays only so crypto aligns with equities
                 hist = hist[hist.index.weekday < 5]
                 if len(hist) >= 2:
                     result[sym] = hist[["Close"]].copy()

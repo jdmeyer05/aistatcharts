@@ -1,5 +1,6 @@
+import math
 import streamlit as st
-import yfinance as yf
+from src.data_engine import polygon_batch_snapshot
 
 TICKER_SYMBOLS = ["^GSPC", "QQQ", "DIA", "IWM", "TLT", "GC=F", "CL=F", "BTC-USD", "DX-Y.NYB", "^VIX"]
 TICKER_LABELS = {
@@ -12,51 +13,46 @@ TICKER_LABELS = {
 @st.cache_data(ttl=300, show_spinner=False)
 def _get_ticker_tape():
     items = []
+    snapshots = polygon_batch_snapshot(TICKER_SYMBOLS)
     for sym in TICKER_SYMBOLS:
-        try:
-            tk = yf.Ticker(sym)
-            hist = tk.history(period="2d")
-            if len(hist) >= 2:
-                price = hist["Close"].iloc[-1]
-                prev = hist["Close"].iloc[-2]
-                chg = (price / prev - 1) * 100
-                label = TICKER_LABELS.get(sym, sym)
-                color = "#00ff96" if chg >= 0 else "#ff4444"
-                arrow = "▲" if chg >= 0 else "▼"
-                if sym in ("^VIX", "DX-Y.NYB"):
-                    items.append(f'<span style="color:{color}">{label} {price:.1f} {arrow}{abs(chg):.1f}%</span>')
-                elif sym == "^GSPC":
-                    items.append(f'<span style="color:{color}">{label} {price:,.0f} {arrow}{abs(chg):.1f}%</span>')
-                elif sym == "BTC-USD":
-                    items.append(f'<span style="color:{color}">{label} ${price:,.0f} {arrow}{abs(chg):.1f}%</span>')
-                elif sym == "CL=F":
-                    items.append(f'<span style="color:{color}">{label} ${price:.2f}/bbl {arrow}{abs(chg):.1f}%</span>')
-                elif sym == "GC=F":
-                    items.append(f'<span style="color:{color}">{label} ${price:,.0f}/oz {arrow}{abs(chg):.1f}%</span>')
-                else:
-                    items.append(f'<span style="color:{color}">{label} ${price:.2f} {arrow}{abs(chg):.1f}%</span>')
-        except Exception:
-            pass
+        snap = snapshots.get(sym)
+        if not snap or not snap.get("price"):
+            continue
+        price = snap["price"]
+        chg = snap.get("change", 0)
+        label = TICKER_LABELS.get(sym, sym)
+        color = "#00ff96" if chg >= 0 else "#ff4444"
+        arrow = "▲" if chg >= 0 else "▼"
+        if sym in ("^VIX", "DX-Y.NYB"):
+            items.append(f'<span style="color:{color}">{label} {price:.1f} {arrow}{abs(chg):.1f}%</span>')
+        elif sym == "^GSPC":
+            items.append(f'<span style="color:{color}">{label} {price:,.0f} {arrow}{abs(chg):.1f}%</span>')
+        elif sym == "BTC-USD":
+            items.append(f'<span style="color:{color}">{label} ${price:,.0f} {arrow}{abs(chg):.1f}%</span>')
+        elif sym == "CL=F":
+            items.append(f'<span style="color:{color}">{label} ${price:.2f}/bbl {arrow}{abs(chg):.1f}%</span>')
+        elif sym == "GC=F":
+            items.append(f'<span style="color:{color}">{label} ${price:,.0f}/oz {arrow}{abs(chg):.1f}%</span>')
+        else:
+            items.append(f'<span style="color:{color}">{label} ${price:.2f} {arrow}{abs(chg):.1f}%</span>')
     return items
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _get_ticker_tape_data() -> dict:
-    """Return raw ticker data as a dict for use in the dashboard banner.
-    Includes a '_fetched_at' timestamp for staleness detection."""
+    """Return raw ticker data as a dict for use in the dashboard banner."""
     import time
     data = {"_fetched_at": time.time()}
+    snapshots = polygon_batch_snapshot(TICKER_SYMBOLS)
     for sym in TICKER_SYMBOLS:
-        try:
-            tk = yf.Ticker(sym)
-            hist = tk.history(period="2d")
-            if len(hist) >= 2:
-                price = hist["Close"].iloc[-1]
-                prev = hist["Close"].iloc[-2]
-                chg = (price / prev - 1) * 100
-                data[sym] = {"price": price, "change": chg, "label": TICKER_LABELS.get(sym, sym)}
-        except Exception:
-            pass
+        snap = snapshots.get(sym)
+        if not snap or not snap.get("price"):
+            continue
+        price = snap["price"]
+        chg = snap.get("change", 0)
+        if isinstance(price, float) and math.isnan(price):
+            continue
+        data[sym] = {"price": price, "change": chg, "label": TICKER_LABELS.get(sym, sym)}
     return data
 
 
@@ -66,10 +62,8 @@ def render_ticker_tape():
     if ticker_items:
         separator = '&nbsp;&nbsp;&nbsp;│&nbsp;&nbsp;&nbsp;'
         tape_html = separator.join(ticker_items)
-        # Use current time to compute a negative animation-delay so the scroll
-        # picks up roughly where it "would have been" if it had been running continuously.
         import time
-        elapsed = time.time() % 30  # position within the 30s animation cycle
+        elapsed = time.time() % 30
         st.markdown(
             f"""<div style="overflow:hidden;white-space:nowrap;background:#111;padding:8px 0;margin-bottom:12px;border-radius:4px;font-size:14px;font-weight:500;">
 <div style="display:inline-block;animation:scroll 30s linear infinite;animation-delay:-{elapsed:.1f}s;">

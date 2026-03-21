@@ -3,8 +3,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 from src.auth import init_supabase, set_auth_cookie, set_auth_cookie_session
+from src.styles import inject_global_css, COLORS
 
-st.set_page_config(page_title="Quant Platform Login", layout="centered")
+st.set_page_config(page_title="Quant Platform Login", layout="centered",
+                   initial_sidebar_state="collapsed")
+
+# Hide sidebar completely on login page
+st.markdown("""<style>
+    section[data-testid="stSidebar"] { display: none !important; }
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"] { display: none !important; }
+</style>""", unsafe_allow_html=True)
+
+inject_global_css()
 
 # Initialize Supabase
 supabase = init_supabase()
@@ -49,9 +60,17 @@ except Exception:
     pass
 
 # --- UI RENDERING ---
-st.title("⚡ Quantitative Analysis Platform")
-st.markdown("Institutional-grade backtesting, options matrix, and macro charting.")
-st.divider()
+st.markdown(
+    f'<div style="text-align:center; padding:2rem 0 1rem 0;">'
+    f'<div style="font-size:2.2rem; font-weight:700; color:{COLORS["accent"]}; letter-spacing:1px;">'
+    f'AI Statcharts</div>'
+    f'<div style="color:{COLORS["text_muted"]}; font-size:0.95rem; margin-top:6px;">'
+    f'Institutional-grade backtesting, options matrix, and macro charting.</div>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+st.markdown(f'<hr style="border:none; border-top:1px solid {COLORS["card_border"]}; margin:0 0 1rem 0;">',
+            unsafe_allow_html=True)
 
 tab1, tab2 = st.tabs(["🔒 Log In", "📝 Register"])
 
@@ -142,5 +161,8 @@ with tab2:
                 except Exception as e:
                     st.error(f"Registration failed: {e}")
 
-st.divider()
-st.caption("Protected by standard AES encryption and Supabase Auth routing.")
+st.markdown(f'<hr style="border:none; border-top:1px solid {COLORS["card_border"]}; margin:1rem 0 0.5rem 0;">',
+            unsafe_allow_html=True)
+st.markdown(f'<div style="text-align:center; color:{COLORS["text_muted"]}; font-size:0.75rem;">'
+            f'Protected by standard AES encryption and Supabase Auth routing.</div>',
+            unsafe_allow_html=True)

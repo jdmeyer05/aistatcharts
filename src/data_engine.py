@@ -4,12 +4,154 @@ import pandas as pd
 import numpy as np
 from scipy.stats import norm
 import requests
-import yfinance as yf
 from datetime import date, timedelta
 from supabase import create_client, Client
 import streamlit as st
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────
+# POLYGON (MASSIVE) API HELPERS
+# ─────────────────────────────────────────────
+
+def _get_polygon_key():
+    key = os.environ.get("MASSIVE_API_KEY")
+    if not key:
+        try:
+            key = st.secrets["MASSIVE_API_KEY"]
+        except Exception:
+            pass
+    return key
+
+
+# Map common yfinance symbols to Polygon format
+_POLYGON_SYMBOL_MAP = {
+    "^GSPC": "SPX", "^VIX": "VIX", "^DJI": "DJI", "^IXIC": "COMP",
+    "DX-Y.NYB": "DXY", "BZ=F": "BZ1!", "CL=F": "CL1!", "GC=F": "GC1!",
+    "SI=F": "SI1!", "NG=F": "NG1!", "TTF=F": "TTF1!", "HG=F": "HG1!",
+    "ZB=F": "ZB1!", "ZN=F": "ZN1!", "ES=F": "ES1!", "NQ=F": "NQ1!",
+    "BTC-USD": "X:BTCUSD", "ETH-USD": "X:ETHUSD",
+}
+
+
+def polygon_symbol(yf_symbol: str) -> str:
+    """Convert a yfinance-style symbol to Polygon format."""
+    return _POLYGON_SYMBOL_MAP.get(yf_symbol, yf_symbol)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def polygon_snapshot(symbol: str) -> dict | None:
+    """Get latest price + previous close for a single ticker via Polygon snapshot."""
+    api_key = _get_polygon_key()
+    if not api_key:
+        return None
+    sym = polygon_symbol(symbol)
+    try:
+        # Try stocks/indices snapshot first
+        r = requests.get(
+            f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{sym}",
+            params={"apiKey": api_key}, timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            ticker = data.get("ticker", {})
+            if ticker:
+                day = ticker.get("day", {})
+                prev = ticker.get("prevDay", {})
+                price = day.get("c") or prev.get("c", 0)
+                prev_close = prev.get("c", 0)
+                return {"price": price, "prev_close": prev_close}
+    except Exception:
+        pass
+
+    # Try aggs fallback (works for futures, forex, crypto)
+    try:
+        end = date.today()
+        start = end - timedelta(days=7)
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{sym}/range/1/day/{start}/{end}",
+            params={"apiKey": api_key, "sort": "desc", "limit": 2}, timeout=10,
+        )
+        if r.status_code == 200:
+            results = r.json().get("results", [])
+            if len(results) >= 2:
+                return {"price": results[0]["c"], "prev_close": results[1]["c"]}
+            elif len(results) == 1:
+                return {"price": results[0]["c"], "prev_close": results[0]["o"]}
+    except Exception as e:
+        logger.warning(f"Polygon snapshot failed for {sym}: {e}")
+    return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def polygon_batch_snapshot(symbols: list) -> dict:
+    """Get price snapshots for multiple symbols via Polygon all-tickers snapshot.
+    Returns {original_symbol: {price, prev_close, change}}."""
+    api_key = _get_polygon_key()
+    results = {}
+    if not api_key:
+        return results
+
+    # Try the bulk snapshot endpoint first (one API call for all tickers)
+    try:
+        # Build a set of polygon-formatted symbols for matching
+        sym_map = {polygon_symbol(s): s for s in symbols}
+        poly_syms = ",".join(sym_map.keys())
+        r = requests.get(
+            f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers",
+            params={"tickers": poly_syms, "apiKey": api_key}, timeout=15,
+        )
+        if r.status_code == 200:
+            for ticker in r.json().get("tickers", []):
+                tsym = ticker.get("ticker", "")
+                orig_sym = sym_map.get(tsym)
+                if orig_sym:
+                    day = ticker.get("day", {})
+                    prev = ticker.get("prevDay", {})
+                    price = day.get("c") or prev.get("c", 0)
+                    prev_close = prev.get("c", 0)
+                    if price and prev_close:
+                        chg = ((price / prev_close) - 1) * 100
+                        results[orig_sym] = {"price": price, "change": round(chg, 2)}
+    except Exception as e:
+        logger.warning(f"Polygon batch snapshot failed: {e}")
+
+    # Fill any missing symbols with individual calls
+    for sym in symbols:
+        if sym not in results:
+            snap = polygon_snapshot(sym)
+            if snap and snap.get("price"):
+                prev = snap.get("prev_close") or snap["price"]
+                chg = ((snap["price"] / prev) - 1) * 100 if prev > 0 else 0
+                results[sym] = {"price": snap["price"], "change": round(chg, 2)}
+    return results
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def polygon_history(symbol: str, days: int) -> pd.DataFrame:
+    """Fetch daily OHLC history from Polygon. Returns DataFrame with Close column."""
+    api_key = _get_polygon_key()
+    if not api_key:
+        return pd.DataFrame()
+    sym = polygon_symbol(symbol)
+    end = date.today()
+    start = end - timedelta(days=days)
+    try:
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{sym}/range/1/day/{start}/{end}",
+            params={"apiKey": api_key, "sort": "asc", "limit": 50000}, timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if "results" in data:
+            df = pd.DataFrame(data["results"])
+            df["Date"] = pd.to_datetime(df["t"], unit="ms")
+            df.set_index("Date", inplace=True)
+            return df[["c"]].rename(columns={"c": "Close"})
+    except Exception as e:
+        logger.warning(f"Polygon history failed for {sym}: {e}")
+    return pd.DataFrame()
 
 # --- HELPER FUNCTIONS ---
 def get_supabase_client() -> Client:
@@ -39,40 +181,23 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
     start_date = end_date - timedelta(days=days)
     formatted_symbol = format_massive_ticker(symbol)
     
-    # Tier 1: Massive
-    api_key = os.environ.get("MASSIVE_API_KEY")
+    api_key = _get_polygon_key()
     if not api_key:
-        try:
-            api_key = st.secrets["MASSIVE_API_KEY"]
-        except Exception:
-            pass
-    if api_key:
-        try:
-            url = f"https://api.polygon.io/v2/aggs/ticker/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
-            res = requests.get(url, params={"apiKey": api_key}, timeout=30)
-            res.raise_for_status()
-            data = res.json()
-            if 'results' in data:
-                st.session_state['current_data_source'] = "Massive API (Live Feed)"
-                df = pd.DataFrame(data['results'])
-                df['Date'] = pd.to_datetime(df['t'], unit='ms')
-                df.set_index('Date', inplace=True)
-                return df[['c']].rename(columns={'c': 'Close'})
-        except Exception as e:
-            logger.warning(f"Massive API fetch failed for {formatted_symbol}: {e}")
-
-    # Tier 2: Yahoo Fallback
+        logger.error("No MASSIVE_API_KEY configured")
+        return None
     try:
-        df_yf = yf.download(translate_to_yahoo(formatted_symbol), start=start_date, end=end_date, progress=False)
-        if not df_yf.empty:
-            st.session_state['current_data_source'] = "Yahoo Finance (Fallback API)"
-            df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
-            # Flatten MultiIndex columns from newer yfinance versions
-            if isinstance(df_yf.columns, pd.MultiIndex):
-                df_yf.columns = df_yf.columns.get_level_values(0)
-            return df_yf[['Close']]
+        url = f"https://api.polygon.io/v2/aggs/ticker/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
+        res = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50000}, timeout=30)
+        res.raise_for_status()
+        data = res.json()
+        if 'results' in data:
+            st.session_state['current_data_source'] = "Massive API (Live Feed)"
+            df = pd.DataFrame(data['results'])
+            df['Date'] = pd.to_datetime(df['t'], unit='ms')
+            df.set_index('Date', inplace=True)
+            return df[['c']].rename(columns={'c': 'Close'})
     except Exception as e:
-        logger.warning(f"Yahoo Finance fallback failed for {formatted_symbol}: {e}")
+        logger.warning(f"Massive API fetch failed for {formatted_symbol}: {e}")
     return None
 
 # --- OPTIONS ENGINE ---
@@ -112,13 +237,7 @@ def get_expiration_dates(symbol: str):
         except Exception as e:
             logger.warning(f"Massive expirations fetch failed for {symbol}: {e}")
 
-    # Fallback: yfinance
-    try:
-        tk = yf.Ticker(translate_to_yahoo(symbol))
-        return list(tk.options)
-    except Exception as e:
-        logger.error(f"Failed to fetch expirations: {e}")
-        return []
+    return []
 
 
 @st.cache_data(ttl=3600, show_spinner="Fetching options chain from Massive...")
@@ -171,58 +290,202 @@ def fetch_options_chain(symbol: str, expiration: str = None) -> pd.DataFrame:
         except Exception as e:
             logger.warning(f"Massive options chain fetch failed for {symbol}: {e}")
 
-    # Fallback: yfinance + Black-Scholes
+    return None
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def polygon_ticker_details(symbol: str) -> dict:
+    """Fetch company metadata from Polygon Reference API. Replaces yf.Ticker().info."""
+    api_key = _get_polygon_key()
+    if not api_key:
+        return {}
+    sym = polygon_symbol(symbol)
     try:
-        tk = yf.Ticker(translate_to_yahoo(symbol))
-        exps = tk.options
-        if not exps: return None
-
-        target_exp = expiration if expiration else exps[0]
-        chain = tk.option_chain(target_exp)
-
-        calls, puts = chain.calls, chain.puts
-        calls['contract_type'] = 'call'
-        puts['contract_type'] = 'put'
-
-        df = pd.concat([calls, puts], ignore_index=True)
-        df = df.rename(columns={
-            'strike': 'strike_price', 'impliedVolatility': 'implied_volatility',
-            'openInterest': 'open_interest', 'volume': 'volume',
-            'lastPrice': 'last_price',
-        })
-        df['expiration_date'] = target_exp
-
-        # After hours, bid/ask are 0 — use lastPrice as fallback
-        if 'last_price' in df.columns:
-            df['bid'] = np.where((df['bid'] == 0) & (df['last_price'] > 0),
-                                 df['last_price'] * 0.98, df['bid'])
-            df['ask'] = np.where((df['ask'] == 0) & (df['last_price'] > 0),
-                                 df['last_price'] * 1.02, df['ask'])
-
-        RISK_FREE_RATE = 0.045
-        hist = tk.history(period="5d")
-        spot = hist['Close'].iloc[-1] if not hist.empty else df['strike_price'].median()
-        t = (pd.to_datetime(target_exp) - pd.Timestamp.now()).days / 365.0
-        if t <= 0: t = 0.001
-
-        iv = np.where((df['implied_volatility'].isna()) | (df['implied_volatility'] <= 0), 0.001, df['implied_volatility'])
-        d1 = (np.log(spot / df['strike_price']) + (RISK_FREE_RATE + (iv**2)/2) * t) / (iv * np.sqrt(t))
-        d2 = d1 - iv * np.sqrt(t)
-
-        df['delta'] = np.where(df['contract_type'] == 'call', norm.cdf(d1), norm.cdf(d1) - 1)
-        df['gamma'] = norm.pdf(d1) / (spot * iv * np.sqrt(t))
-        # Theta differs for calls vs puts
-        common_theta = -(spot * iv * norm.pdf(d1)) / (2 * np.sqrt(t))
-        call_theta = (common_theta - RISK_FREE_RATE * df['strike_price'] * np.exp(-RISK_FREE_RATE * t) * norm.cdf(d2)) / 365
-        put_theta = (common_theta + RISK_FREE_RATE * df['strike_price'] * np.exp(-RISK_FREE_RATE * t) * norm.cdf(-d2)) / 365
-        df['theta'] = np.where(df['contract_type'] == 'call', call_theta, put_theta)
-        df['vega'] = spot * np.sqrt(t) * norm.pdf(d1) / 100  # per 1% IV change
-
-        st.session_state['current_data_source'] = "Yahoo Finance + SciPy (Fallback)"
-        return df
+        r = requests.get(
+            f"https://api.polygon.io/v3/reference/tickers/{sym}",
+            params={"apiKey": api_key}, timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json().get("results", {})
+            return {
+                "shortName": data.get("name", symbol),
+                "longName": data.get("name", symbol),
+                "sector": data.get("sic_description", ""),
+                "industry": data.get("sic_description", ""),
+                "market_cap": data.get("market_cap", 0),
+                "currency": data.get("currency_name", "USD"),
+                "exchange": data.get("primary_exchange", ""),
+                "type": data.get("type", ""),
+                "locale": data.get("locale", ""),
+            }
     except Exception as e:
-        logger.error(f"Options fetch failed: {e}")
-        return None
+        logger.warning(f"Polygon ticker details failed for {sym}: {e}")
+    return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def polygon_intraday(symbol: str, interval_min: int = 5, bars: int = 100) -> pd.DataFrame:
+    """Fetch intraday bars from Polygon. Returns DataFrame with Close, Open, High, Low, Volume."""
+    api_key = _get_polygon_key()
+    if not api_key:
+        return pd.DataFrame()
+    sym = polygon_symbol(symbol)
+    end = date.today()
+    # Go back enough days to get bars (weekends, holidays)
+    start = end - timedelta(days=7)
+    try:
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{sym}/range/{interval_min}/minute/{start}/{end}",
+            params={"apiKey": api_key, "sort": "desc", "limit": bars}, timeout=15,
+        )
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if results:
+            df = pd.DataFrame(results)
+            df["Date"] = pd.to_datetime(df["t"], unit="ms")
+            df.set_index("Date", inplace=True)
+            df = df.sort_index()
+            df = df.rename(columns={"o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"})
+            return df[["Open", "High", "Low", "Close", "Volume"]]
+    except Exception as e:
+        logger.warning(f"Polygon intraday failed for {sym}: {e}")
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def polygon_financials(symbol: str, timeframe: str = "annual", limit: int = 4) -> dict:
+    """Fetch income statement, balance sheet, and cash flow from Polygon financials API.
+    Returns {'income': DataFrame, 'balance': DataFrame, 'cashflow': DataFrame}."""
+    api_key = _get_polygon_key()
+    if not api_key:
+        return {"income": pd.DataFrame(), "balance": pd.DataFrame(), "cashflow": pd.DataFrame()}
+    sym = polygon_symbol(symbol)
+    try:
+        r = requests.get(
+            f"https://api.polygon.io/vX/reference/financials",
+            params={"ticker": sym, "timeframe": timeframe, "limit": limit, "apiKey": api_key},
+            timeout=15,
+        )
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return {"income": pd.DataFrame(), "balance": pd.DataFrame(), "cashflow": pd.DataFrame()}
+
+        income_rows, balance_rows, cashflow_rows = [], [], []
+        for filing in results:
+            period = filing.get("fiscal_period", "")
+            year = filing.get("fiscal_year", "")
+            label = f"{period} {year}" if period else str(year)
+            fins = filing.get("financials", {})
+
+            # Income statement
+            inc = fins.get("income_statement", {})
+            inc_row = {"period": label}
+            for key, val in inc.items():
+                if isinstance(val, dict) and "value" in val:
+                    inc_row[val.get("label", key)] = val["value"]
+            if len(inc_row) > 1:
+                income_rows.append(inc_row)
+
+            # Balance sheet
+            bs = fins.get("balance_sheet", {})
+            bs_row = {"period": label}
+            for key, val in bs.items():
+                if isinstance(val, dict) and "value" in val:
+                    bs_row[val.get("label", key)] = val["value"]
+            if len(bs_row) > 1:
+                balance_rows.append(bs_row)
+
+            # Cash flow
+            cf = fins.get("cash_flow_statement", {})
+            cf_row = {"period": label}
+            for key, val in cf.items():
+                if isinstance(val, dict) and "value" in val:
+                    cf_row[val.get("label", key)] = val["value"]
+            if len(cf_row) > 1:
+                cashflow_rows.append(cf_row)
+
+        return {
+            "income": pd.DataFrame(income_rows).set_index("period") if income_rows else pd.DataFrame(),
+            "balance": pd.DataFrame(balance_rows).set_index("period") if balance_rows else pd.DataFrame(),
+            "cashflow": pd.DataFrame(cashflow_rows).set_index("period") if cashflow_rows else pd.DataFrame(),
+        }
+    except Exception as e:
+        logger.warning(f"Polygon financials failed for {sym}: {e}")
+        return {"income": pd.DataFrame(), "balance": pd.DataFrame(), "cashflow": pd.DataFrame()}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_insider_transactions(symbol: str, limit: int = 20) -> pd.DataFrame:
+    """Fetch insider transactions from SEC EDGAR (public domain, zero legal risk)."""
+    sym = polygon_symbol(symbol).replace("X:", "").upper()
+    try:
+        # SEC EDGAR full-text search for Form 4 filings
+        r = requests.get(
+            "https://efts.sec.gov/LATEST/search-index",
+            params={"q": sym, "forms": "4", "dateRange": "custom",
+                    "startdt": (date.today() - timedelta(days=180)).isoformat(),
+                    "enddt": date.today().isoformat()},
+            headers={"User-Agent": "AIStatcharts/2.0 (jdmeyer05@gmail.com)"},
+            timeout=10,
+        )
+        # Fallback: use Polygon insider transactions if available
+        api_key = _get_polygon_key()
+        if api_key:
+            r2 = requests.get(
+                f"https://api.polygon.io/vX/reference/insiders/transactions",
+                params={"ticker": sym, "limit": limit, "apiKey": api_key},
+                timeout=10,
+            )
+            if r2.status_code == 200:
+                results = r2.json().get("results", [])
+                if results:
+                    rows = []
+                    for txn in results:
+                        rows.append({
+                            "Date": txn.get("filing_date", ""),
+                            "Insider": txn.get("name", ""),
+                            "Title": txn.get("title", ""),
+                            "Transaction": txn.get("transaction_type", ""),
+                            "Shares": txn.get("shares", 0),
+                            "Price": txn.get("price", 0),
+                            "Value": txn.get("shares", 0) * txn.get("price", 0),
+                        })
+                    return pd.DataFrame(rows)
+    except Exception as e:
+        logger.warning(f"Insider transactions fetch failed for {sym}: {e}")
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=43200, show_spinner=False)
+def fetch_analyst_recommendations(symbol: str) -> pd.DataFrame:
+    """Fetch analyst recommendations from Finnhub (free tier, commercial use allowed)."""
+    import os
+    finnhub_key = os.environ.get("FINNHUB_API_KEY")
+    if not finnhub_key:
+        try:
+            finnhub_key = st.secrets.get("FINNHUB_API_KEY")
+        except Exception:
+            pass
+    if not finnhub_key:
+        return pd.DataFrame()
+
+    sym = polygon_symbol(symbol).replace("X:", "").upper()
+    try:
+        r = requests.get(
+            f"https://finnhub.io/api/v1/stock/recommendation",
+            params={"symbol": sym, "token": finnhub_key},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data:
+                df = pd.DataFrame(data)
+                df = df.sort_values("period", ascending=False).head(12)
+                return df
+    except Exception as e:
+        logger.warning(f"Analyst recommendations fetch failed for {sym}: {e}")
+    return pd.DataFrame()
+
 
 def render_data_source_footer():
     st.markdown("---")

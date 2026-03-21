@@ -46,22 +46,23 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | File | Purpose |
 |------|---------|
 | `auth.py` | Supabase auth, session recovery, **subscription tier system** (free/pro/premium/platinum), page gating, AI quota enforcement, Stripe integration |
-| `layout.py` | `setup_page()` universal page setup, **threat dashboard banner** (S&P 500, WTI Crude, VIX, Gold, DXY, Fed rate, Iran war day count, AI escalation score), sidebar branding with SVG logo + tier badge, data freshness status bar, background task notifications, error boundaries |
-| `styles.py` | Centralized color system (10 semantic colors), global CSS injection (cards, backgrounds, borders, 5-layer background system, metric styling, sidebar input borders) |
-| `ticker_tape.py` | Scrolling market ticker (10 assets: ^GSPC, QQQ, DIA, IWM, TLT, GLD, CL=F, BTC, DXY, VIX), time-synced animation, raw data API for threat dashboard |
-| `gdelt_events.py` | GDELT bulk event download & processing — downloads daily CSVs from data.gdeltproject.org, filters to Iran-region conflict events (11 countries, CAMEO conflict codes), caches to parquet |
-| `chatbot.py` | Tier-based analyst chat — Gemini Flash (Free/Pro) or GPT-5 (Premium/Platinum), daily limits for free tier, 50-msg history cap |
-| `data_engine.py` | Market data fetcher: Massive API → yfinance fallback, ticker normalization, options chains |
+| `layout.py` | `setup_page()` universal page setup, header bar with logo (base64), nav dropdowns, Settings popover (scroll feed toggle + logout), ticker strip, cache warming, error boundaries |
+| `styles.py` | Centralized color system, global CSS injection, 5-layer background, Plotly `uirevision` defaults, sidebar fully hidden |
+| `ticker_tape.py` | Polygon batch snapshots for 10 market tickers, paired with Grok X/Twitter posts |
+| `edgar.py` | SEC EDGAR: CIK lookup, XBRL financials/ratios, 13F holdings parser, insider scoring (0-100), 8-K events, 13D activist, congressional trades |
+| `gdelt_events.py` | GDELT bulk event download & processing, conflict event filtering, parquet cache |
+| `chatbot.py` | Tier-based analyst chat (Gemini 2.5 Flash), inline expander with form input |
+| `data_engine.py` | Polygon API: snapshots, batch snapshots, history, intraday, ticker details, financials, insider txns, analyst recs |
 | `eia_helpers.py` | EIA API v2 wrapper for energy timeseries |
 | `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
 
-### pages/ — 20 App Pages
+### pages/ — 22 App Pages
 
 | # | File | What It Does |
 |---|------|-------------|
 | 01 | `Summary.py` | Dashboard: 12 candlestick charts (indices, commodities, rates), Grok macro pulse, AI alerts, portfolio snapshot, account management |
 | 02 | `Scenario_Analysis.py` | **Flagship** — 7-tab macro scenario engine (see deep dive below) |
-| 03 | `Stock_Analysis.py` | 4-model AI stock scorecard (Grok + GPT-5 + Gemini 3 Pro + Claude), blended consensus, radar chart, price targets |
+| 03 | `Stock_Analysis.py` | 3-model AI stock scorecard (Grok + Gemini + Claude), EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | 04 | `RL_Trading.py` | Dueling DQN ensemble with prioritized replay, 31 features, 10-tab analysis including walk-forward, bootstrap significance, Monte Carlo robustness, Grok AI assessment |
 | 05 | `Historical_Analysis.py` | Multi-year price history, seasonal decomposition, volatility, drawdown |
 | 06 | `Options_Analysis.py` | IV skew, open interest walls, Greek exposures |
@@ -77,8 +78,10 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 16 | `ERCOT_Power.py` | Real-time TX grid |
 | 17 | `ERCOT_Capacity.py` | Generation pipeline |
 | 18 | `Economic_Calendar.py` | FRED releases, yield curve |
-| 19 | `Iran_Conflict.py` | **AI-Powered Conflict Intelligence** (see deep dive below) |
+| 19 | `Iran_Conflict.py` | **AI-Powered Conflict Intelligence** — 3 specialized models, self-updating infrastructure, Polymarket, oil term structure |
 | 20 | `Futures.py` | Multi-asset futures snapshot |
+| 21 | `Fed_Macro_Drivers.py` | Fed policy dashboard (4 tabs) |
+| 22 | `Smart_Money.py` | 13F institutional holdings, congressional trades, activist investors, 8-K events |
 
 ---
 
@@ -89,9 +92,9 @@ Defined in `src/auth.py`. Enforced by `setup_page()` in `src/layout.py`. Stripe 
 | Tier | Pages | AI Models | Daily Analyses | RL Trading | Analyst Chat | Price |
 |------|-------|-----------|---------------|------------|-------------|-------|
 | **Free** | 17 (no 02, 03, 04) | None | 0 | No | Gemini Flash (5/day) | $0 |
-| **Pro** | All 20 | 3 (Grok, Gemini, Claude) | 5/day | No | Gemini Flash (unlimited) | $12/mo |
-| **Premium** | All 20 | 3 (Grok, Gemini, Claude) | 20/day | Yes | Gemini Flash (unlimited) | $29/mo |
-| **Platinum** | All 20 | 4 (+GPT-5) | 50/day | Yes | GPT-5 (unlimited) | $79/mo |
+| **Pro** | All 22 | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 5/day | No | Gemini Flash (unlimited) | $12/mo |
+| **Premium** | All 22 | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 20/day | Yes | Gemini Flash (unlimited) | $29/mo |
+| **Platinum** | All 22 | 3 + Claude Opus upgrade | 50/day | Yes | Gemini Flash (unlimited) | $79/mo |
 
 Admin emails (`jdmeyer05@gmail.com`, `local-dev@preview`) always get Platinum.
 

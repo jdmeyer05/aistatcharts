@@ -23,20 +23,24 @@ st.title("🔮 Scenario Analysis Engine")
 st.markdown("Stress test portfolios against historical shocks, custom what-if scenarios, bull/bear projections, and event-driven catalysts.")
 
 # ─────────────────────────────────────────────
-# SIDEBAR
+# CONTROLS
 # ─────────────────────────────────────────────
-with st.sidebar:
-    st.header("Scenario Parameters")
+_c1, _c2, _c3, _c4, _c5 = st.columns([3, 2, 2, 2, 1])
+with _c1:
     raw_tickers = st.text_input("Tickers (comma separated)", "SPY,QQQ,TLT,USO,GLD")
+with _c2:
     portfolio_value = st.number_input("Portfolio Value ($)", value=100_000, step=10_000)
+with _c3:
     lookback = st.slider("Historical Lookback (Days)", 252, 2520, 756)
-    st.divider()
+with _c4:
     horizon_label = st.selectbox("Scenario Horizon", ["3 Months", "6 Months", "12 Months"], index=2)
     horizon_map = {"3 Months": 63, "6 Months": 126, "12 Months": 252}
     horizon_days = horizon_map[horizon_label]
+with _c5:
+    st.markdown("<br>", unsafe_allow_html=True)
     _scenario_running = st.session_state.get("_scenario_running", False)
     run_btn = st.button(
-        "Running..." if _scenario_running else "🚀 Run Analysis",
+        "Running..." if _scenario_running else "Run Analysis",
         type="primary", use_container_width=True,
         disabled=_scenario_running,
     )

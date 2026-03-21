@@ -3,8 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import yfinance as yf
 import requests
+from src.data_engine import polygon_history, polygon_ticker_details, polygon_snapshot, polygon_financials, fetch_insider_transactions, fetch_analyst_recommendations
+from src.edgar import calculate_financial_ratios, get_ratio_history, fetch_recent_8k, score_insider_transactions
 import os
 import logging
 import json
@@ -36,39 +37,26 @@ fred_key = _get_key("FRED_API_KEY")
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_stock_data(ticker: str) -> dict:
-    """Fetch comprehensive stock data from yfinance."""
+    """Fetch stock data from Polygon API."""
     try:
-        tk = yf.Ticker(ticker)
-        info = tk.info or {}
-        hist_1y = tk.history(period="1y")
-        hist_3m = tk.history(period="3mo")
-        hist_5y = tk.history(period="5y")
+        info = polygon_ticker_details(ticker) or {}
+        # Add current price to info
+        snap = polygon_snapshot(ticker)
+        if snap:
+            info["currentPrice"] = snap.get("price", 0)
+            info["previousClose"] = snap.get("prev_close", 0)
 
-        # Financials
-        try:
-            income = tk.income_stmt
-        except Exception:
-            income = pd.DataFrame()
-        try:
-            balance = tk.balance_sheet
-        except Exception:
-            balance = pd.DataFrame()
-        try:
-            cashflow = tk.cashflow
-        except Exception:
-            cashflow = pd.DataFrame()
+        hist_1y = polygon_history(ticker, 365)
+        hist_3m = polygon_history(ticker, 90)
+        hist_5y = polygon_history(ticker, 1825)
 
-        # Analyst data
-        try:
-            recommendations = tk.recommendations
-        except Exception:
-            recommendations = pd.DataFrame()
-
-        # Insider transactions
-        try:
-            insider = tk.insider_transactions
-        except Exception:
-            insider = pd.DataFrame()
+        # Financials from Polygon Stocks Starter
+        fins = polygon_financials(ticker, timeframe="annual", limit=4)
+        income = fins.get("income", pd.DataFrame())
+        balance = fins.get("balance", pd.DataFrame())
+        cashflow = fins.get("cashflow", pd.DataFrame())
+        recommendations = fetch_analyst_recommendations(ticker)
+        insider = fetch_insider_transactions(ticker)
 
         return {
             "info": info,
@@ -377,14 +365,6 @@ MODEL_CONFIGS = {
         "extra_instructions": "IMPORTANT: Search X/Twitter for the latest sentiment, news, and analyst commentary on this ticker. Factor in any breaking news, earnings reactions, or insider activity.",
         "color": "#ff4444",
     },
-    "openai": {
-        "name": "GPT-5",
-        "base_url": None,  # default OpenAI
-        "model": "gpt-5",
-        "key_name": "OPENAI_API_KEY",
-        "extra_instructions": "Use your training data and knowledge to assess the latest market conditions, analyst consensus, and any recent news for this ticker.",
-        "color": "#00cc66",
-    },
     "gemini": {
         "name": "Gemini 3 Pro",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -433,8 +413,7 @@ Produce your complete analysis for {ticker}. JSON only."""
             if config["base_url"]:
                 client_kwargs["base_url"] = config["base_url"]
             client = OpenAI(**client_kwargs)
-            # GPT-5 uses max_completion_tokens and doesn't support temperature
-            is_gpt5 = "gpt-5" in config["model"]
+            is_gpt5 = False
             model_kwargs = {
                 "model": config["model"],
                 "messages": [
@@ -581,10 +560,12 @@ def blend_model_results(results: dict) -> dict:
 st.title("🧠 Stock Analysis & Recommendation")
 st.markdown("AI-powered institutional-grade equity research. Multi-dimensional scoring with quantitative backing.")
 
-# Sidebar
-with st.sidebar:
-    st.header("Analysis Parameters")
+# Controls
+_ctrl1, _ctrl2 = st.columns([2, 1])
+with _ctrl1:
     ticker_input = st.text_input("Ticker", value=get_active_ticker("AAPL"))
+with _ctrl2:
+    st.markdown("<br>", unsafe_allow_html=True)
     _is_running = st.session_state.get("_ai_running", False)
     analyze_btn = st.button(
         "Running..." if _is_running else "Run Analysis",
@@ -621,7 +602,6 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
 
             # Run AI models in parallel
             prompt = build_stock_prompt(ticker, fundamentals, technicals, sentiment, macro_ctx)
-            openai_key = _get_key("OPENAI_API_KEY")
             gemini_key = _get_key("GEMINI_API_KEY")
             anthropic_key = _get_key("ANTHROPIC_API_KEY")
 
@@ -632,7 +612,7 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 st.stop()
 
             allowed_models = get_allowed_models()
-            api_keys = {"grok": grok_key, "openai": openai_key, "gemini": gemini_key, "claude": anthropic_key}
+            api_keys = {"grok": grok_key, "gemini": gemini_key, "claude": anthropic_key}
 
             model_results = {}
             active_models = [m for m in allowed_models if api_keys.get(m)]
@@ -1014,6 +994,115 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                     st.caption(f"Targets: ${pt.get('bear',0):.0f} / ${pt.get('base',0):.0f} / ${pt.get('bull',0):.0f}")
 
     st.divider()
+
+    # ── EDGAR: Insider Score ──
+    with error_boundary("Insider Score"):
+        insider_data = fetch_insider_transactions(ticker)
+        if not insider_data.empty:
+            insider_score = score_insider_transactions(insider_data)
+            sc = insider_score["score"]
+            sig = insider_score["signal"]
+            bd = insider_score["breakdown"]
+            sc_color = "#00ff96" if sc >= 60 else "#ff4444" if sc <= 40 else "#ffaa00"
+
+            st.markdown("#### Insider Activity Score")
+            _is1, _is2 = st.columns([1, 3])
+            with _is1:
+                st.markdown(
+                    f'<div style="text-align:center;padding:16px;border:2px solid {sc_color};border-radius:10px;">'
+                    f'<div style="font-size:36px;font-weight:bold;color:{sc_color};">{sc}</div>'
+                    f'<div style="color:{sc_color};font-weight:600;font-size:14px;">{sig}</div>'
+                    f'<div style="color:#888;font-size:11px;">Insider Score (0-100)</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with _is2:
+                bd_items = []
+                bd_items.append(f"Buys: {bd.get('buys', 0)} | Sells: {bd.get('sells', 0)}")
+                if bd.get("csuite_buys"):
+                    bd_items.append(f"C-Suite buys: {bd['csuite_buys']} (strong signal)")
+                if bd.get("cluster_buy"):
+                    bd_items.append("Cluster buying detected (3+ insiders within 7 days)")
+                if bd.get("large_buys"):
+                    bd_items.append(f"Large buys (>$100K): {bd['large_buys']}")
+                for item in bd_items:
+                    st.markdown(f"- {item}")
+
+                # Show recent transactions table
+                if len(insider_data) > 0:
+                    display_cols = [c for c in ["Date", "Insider", "Title", "Transaction", "Shares", "Value"] if c in insider_data.columns]
+                    if display_cols:
+                        st.dataframe(insider_data[display_cols].head(10), use_container_width=True, hide_index=True)
+            st.divider()
+
+    # ── EDGAR: 8-K Material Events ──
+    with error_boundary("8-K Events"):
+        events_8k = fetch_recent_8k(ticker, days=90)
+        if events_8k:
+            st.markdown("#### Recent Material Events (8-K)")
+            for evt in events_8k[:8]:
+                filed = evt.get("filed", "")
+                company = evt.get("company", "")
+                form = evt.get("form", "8-K")
+                st.markdown(
+                    f'<div style="padding:6px 10px;border-left:2px solid #00d1ff;margin-bottom:4px;'
+                    f'background:rgba(255,255,255,0.02);border-radius:0 4px 4px 0;">'
+                    f'<span style="color:#888;font-size:0.78rem;">{filed}</span> &nbsp;'
+                    f'<span style="color:#00d1ff;font-weight:600;">{form}</span> &nbsp;'
+                    f'<span style="color:#ccc;">{company}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            st.divider()
+
+    # ── EDGAR: XBRL Financial Ratios ──
+    with error_boundary("Financial Ratios"):
+        ratios = calculate_financial_ratios(ticker)
+        if ratios:
+            st.markdown("#### Financial Ratios (SEC XBRL)")
+            _r1, _r2, _r3, _r4, _r5, _r6 = st.columns(6)
+            ratio_display = [
+                (_r1, "Net Margin", ratios.get("net_margin"), "%"),
+                (_r2, "Op. Margin", ratios.get("operating_margin"), "%"),
+                (_r3, "ROE", ratios.get("roe"), "%"),
+                (_r4, "ROA", ratios.get("roa"), "%"),
+                (_r5, "D/E", ratios.get("debt_to_equity"), "x"),
+                (_r6, "Current", ratios.get("current_ratio"), "x"),
+            ]
+            for col, label, val, suffix in ratio_display:
+                if val is not None:
+                    col.metric(label, f"{val}{suffix}")
+                else:
+                    col.metric(label, "N/A")
+
+            # Revenue and EPS history charts
+            rev_hist = get_ratio_history(ticker, "Revenues")
+            if rev_hist.empty:
+                rev_hist = get_ratio_history(ticker, "RevenueFromContractWithCustomerExcludingAssessedTax")
+            ni_hist = get_ratio_history(ticker, "NetIncomeLoss")
+
+            if not rev_hist.empty or not ni_hist.empty:
+                import plotly.graph_objects as go
+                _rc1, _rc2 = st.columns(2)
+                if not rev_hist.empty:
+                    with _rc1:
+                        fig = go.Figure()
+                        fig.add_trace(go.Bar(x=rev_hist["end"], y=rev_hist["val"] / 1e6,
+                                            marker_color="#00d1ff", name="Revenue"))
+                        fig.update_layout(template="plotly_dark", height=250, title="Revenue ($M)",
+                                         margin=dict(l=0, r=0, t=30, b=0))
+                        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                if not ni_hist.empty:
+                    with _rc2:
+                        colors = ["#00ff96" if v >= 0 else "#ff4444" for v in ni_hist["val"]]
+                        fig = go.Figure()
+                        fig.add_trace(go.Bar(x=ni_hist["end"], y=ni_hist["val"] / 1e6,
+                                            marker_color=colors, name="Net Income"))
+                        fig.update_layout(template="plotly_dark", height=250, title="Net Income ($M)",
+                                         margin=dict(l=0, r=0, t=30, b=0))
+                        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.divider()
+
     n_models = len(successful_models) if successful_models else 0
     model_names = ", ".join(v.get("model_name", k) for k, v in successful_models.items()) if successful_models else "none"
     st.caption(f"**Disclaimer:** This analysis is AI-generated using {model_names} with live market data, "

@@ -44,7 +44,7 @@ TIERS = {
         "name": "Platinum",
         "pages": "__all__",
         "daily_ai_analyses": 50,
-        "ai_models": ["grok", "openai", "gemini", "claude"],
+        "ai_models": ["grok", "gemini", "claude"],
         "rl_enabled": True,
     },
 }
@@ -515,7 +515,7 @@ def render_pricing_cards(current_tier: str = "free"):
          "features": ["All 20 pages", "20 AI analyses/day", "3 AI models", "RL Trading", "Unlimited chat"],
          "color": "#ffaa00"},
         {"key": "platinum", "name": "Platinum", "price": "$79", "period": "/mo",
-         "features": ["All 20 pages", "50 AI analyses/day", "4 AI models (+GPT-5)", "RL Trading", "GPT-5 chat"],
+         "features": ["All 20 pages", "50 AI analyses/day", "3 AI models + Claude Opus", "RL Trading", "Unlimited chat"],
          "color": "#00ff96"},
     ]
 
