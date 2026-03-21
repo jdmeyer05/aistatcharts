@@ -299,13 +299,15 @@ def render_header(current_page: str):
             ("12_Monte_Carlo", "Monte Carlo", "pages/12_Monte_Carlo.py"),
             ("13_Power_Risk_VaR", "Portfolio VaR", "pages/13_Power_Risk_VaR.py"),
         ]),
-        ("Energy & Macro", [
+        ("Energy", [
             ("14_Oil_Fundamentals", "Oil", "pages/14_Oil_Fundamentals.py"),
             ("15_NatGas_Fundamentals", "Natural Gas", "pages/15_NatGas_Fundamentals.py"),
             ("16_ERCOT_Power", "ERCOT Power", "pages/16_ERCOT_Power.py"),
             ("17_ERCOT_Capacity", "ERCOT Capacity", "pages/17_ERCOT_Capacity.py"),
-            ("18_Economic_Calendar", "Economic Calendar", "pages/18_Economic_Calendar.py"),
             ("20_Futures", "Futures", "pages/20_Futures.py"),
+        ]),
+        ("Macro", [
+            ("18_Economic_Calendar", "Economic Calendar", "pages/18_Economic_Calendar.py"),
             ("21_Fed_Macro_Drivers", "Fed & Macro", "pages/21_Fed_Macro_Drivers.py"),
             ("22_Smart_Money", "Smart Money", "pages/22_Smart_Money.py"),
         ]),

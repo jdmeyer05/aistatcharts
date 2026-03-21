@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import logging
 from src.layout import setup_page, error_boundary, fun_loader
-from src.data_engine import polygon_snapshot, polygon_history
+from src.data_engine import polygon_snapshot, polygon_snapshot_with_fallback, polygon_history
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ def fetch_futures_snapshot():
     for sector, tickers in FUTURES.items():
         for ticker, name in tickers.items():
             try:
-                snap = polygon_snapshot(ticker)
+                snap = polygon_snapshot_with_fallback(ticker)
                 if snap and snap.get("price"):
                     close = snap["price"]
                     prev = snap.get("prev_close", close)
@@ -152,7 +152,7 @@ def fetch_term_structure(name: str):
     prices = []
     for ticker, label in zip(config["tickers"], config["labels"]):
         try:
-            snap = polygon_snapshot(ticker)
+            snap = polygon_snapshot_with_fallback(ticker)
             if snap and snap.get("price"):
                 prices.append({"label": label, "ticker": ticker, "price": snap["price"]})
         except Exception:

@@ -126,7 +126,7 @@ with tab2:
             '(5) accept that reinforcement learning strategies are research tools only and should not be '
             'deployed without independent validation.</p>'
             '<p>The platform aggregates data from third-party sources (FRED, yfinance, Polymarket, StockTwits, X/Twitter) '
-            'that may be delayed, incomplete, or incorrect. AI models (Grok, GPT-4o, Gemini, Claude) can hallucinate.</p>'
+            'that may be delayed, incomplete, or incorrect. AI models (Grok, Gemini, Claude) can hallucinate.</p>'
             '<p>To the maximum extent permitted by law, the creators shall not be liable for any losses '
             'resulting from use of this platform.</p>'
             '<p><em>Full agreement: USER_AGREEMENT.md in the project repository.</em></p>'

@@ -413,15 +413,15 @@ Produce your complete analysis for {ticker}. JSON only."""
             if config["base_url"]:
                 client_kwargs["base_url"] = config["base_url"]
             client = OpenAI(**client_kwargs)
-            is_gpt5 = False
+            # Standard model call
             model_kwargs = {
                 "model": config["model"],
                 "messages": [
                     {"role": "system", "content": STOCK_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                "max_completion_tokens" if is_gpt5 else "max_tokens": 16000 if is_gpt5 else 3000,
-                **({"temperature": 0.3} if not is_gpt5 else {}),
+                "max_tokens": 3000,
+                "temperature": 0.3,
             }
             try:
                 response = client.chat.completions.create(

@@ -1,6 +1,6 @@
 import math
 import streamlit as st
-from src.data_engine import polygon_batch_snapshot
+from src.data_engine import polygon_batch_snapshot, polygon_snapshot_with_fallback
 
 TICKER_SYMBOLS = ["^GSPC", "QQQ", "DIA", "IWM", "TLT", "GC=F", "CL=F", "BTC-USD", "DX-Y.NYB", "^VIX"]
 TICKER_LABELS = {

@@ -27,17 +27,36 @@ def _get_polygon_key():
 
 # Map common yfinance symbols to Polygon format
 _POLYGON_SYMBOL_MAP = {
-    "^GSPC": "SPX", "^VIX": "VIX", "^DJI": "DJI", "^IXIC": "COMP",
-    "DX-Y.NYB": "DXY", "BZ=F": "BZ1!", "CL=F": "CL1!", "GC=F": "GC1!",
-    "SI=F": "SI1!", "NG=F": "NG1!", "TTF=F": "TTF1!", "HG=F": "HG1!",
-    "ZB=F": "ZB1!", "ZN=F": "ZN1!", "ES=F": "ES1!", "NQ=F": "NQ1!",
+    # Indices & volatility
+    "^GSPC": "SPX", "^VIX": "VIX", "^OVX": "OVX", "^GVZ": "GVZ",
+    "^DJI": "DJI", "^IXIC": "COMP", "DX-Y.NYB": "DXY",
+    # Index futures (Polygon uses bare symbols for continuous contracts)
+    "ES=F": "ES", "NQ=F": "NQ", "YM=F": "YM", "RTY=F": "RTY",
+    # Energy futures
+    "CL=F": "CL", "BZ=F": "BZ", "NG=F": "NG", "TTF=F": "TTF",
+    "RB=F": "RB", "HO=F": "HO",
+    # Metals futures
+    "GC=F": "GC", "SI=F": "SI", "HG=F": "HG", "PL=F": "PL",
+    # Rates futures
+    "ZB=F": "ZB", "ZN=F": "ZN", "ZF=F": "ZF", "ZT=F": "ZT",
+    # Agriculture futures
+    "ZC=F": "ZC", "ZS=F": "ZS", "ZW=F": "ZW", "KC=F": "KC",
+    # FX futures
+    "6E=F": "6E", "6J=F": "6J", "6B=F": "6B", "DX=F": "DX",
+    # Crypto
     "BTC-USD": "X:BTCUSD", "ETH-USD": "X:ETHUSD",
 }
 
 
 def polygon_symbol(yf_symbol: str) -> str:
     """Convert a yfinance-style symbol to Polygon format."""
-    return _POLYGON_SYMBOL_MAP.get(yf_symbol, yf_symbol)
+    if yf_symbol in _POLYGON_SYMBOL_MAP:
+        return _POLYGON_SYMBOL_MAP[yf_symbol]
+    # Handle specific contract months like CLK26.NYM → CLK2026
+    if "." in yf_symbol and yf_symbol.endswith(".NYM"):
+        base = yf_symbol.split(".")[0]  # e.g., CLK26
+        return base
+    return yf_symbol
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -117,10 +136,10 @@ def polygon_batch_snapshot(symbols: list) -> dict:
     except Exception as e:
         logger.warning(f"Polygon batch snapshot failed: {e}")
 
-    # Fill any missing symbols with individual calls
+    # Fill any missing symbols with individual calls + FRED fallback
     for sym in symbols:
         if sym not in results:
-            snap = polygon_snapshot(sym)
+            snap = polygon_snapshot_with_fallback(sym)
             if snap and snap.get("price"):
                 prev = snap.get("prev_close") or snap["price"]
                 chg = ((snap["price"] / prev) - 1) * 100 if prev > 0 else 0
@@ -148,7 +167,10 @@ def polygon_history(symbol: str, days: int) -> pd.DataFrame:
             df = pd.DataFrame(data["results"])
             df["Date"] = pd.to_datetime(df["t"], unit="ms")
             df.set_index("Date", inplace=True)
-            return df[["c"]].rename(columns={"c": "Close"})
+            rename_map = {"o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"}
+            available = {k: v for k, v in rename_map.items() if k in df.columns}
+            df = df.rename(columns=available)
+            return df[[v for v in available.values()]]
     except Exception as e:
         logger.warning(f"Polygon history failed for {sym}: {e}")
     return pd.DataFrame()
@@ -485,6 +507,68 @@ def fetch_analyst_recommendations(symbol: str) -> pd.DataFrame:
     except Exception as e:
         logger.warning(f"Analyst recommendations fetch failed for {sym}: {e}")
     return pd.DataFrame()
+
+
+# FRED series for data Polygon can't provide (futures, indices, rates)
+_FRED_FALLBACK_MAP = {
+    "^VIX": "VIXCLS",
+    "^OVX": "OVXCLS",
+    "GC=F": "GOLDPMGBD228NLBM",
+    "SI=F": "SLVPRUSD",
+    "DX-Y.NYB": "DTWEXBGS",
+    "DX=F": "DTWEXBGS",
+    "ZN=F": "DGS10",
+    "ZB=F": "DGS30",
+    "ZF=F": "DGS5",
+    "ZT=F": "DGS2",
+}
+
+
+def _get_fred_key():
+    key = os.environ.get("FRED_API_KEY")
+    if not key:
+        try:
+            key = st.secrets["FRED_API_KEY"]
+        except Exception:
+            pass
+    return key
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fred_latest(series_id: str) -> dict | None:
+    """Fetch latest value + previous from FRED. Returns {price, prev_close} or None."""
+    key = _get_fred_key()
+    if not key:
+        return None
+    try:
+        r = requests.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": series_id, "api_key": key, "file_type": "json",
+                    "sort_order": "desc", "limit": 5},
+            timeout=10,
+        )
+        obs = r.json().get("observations", [])
+        # Filter out "." placeholder values
+        vals = [o for o in obs if o.get("value", ".") != "."]
+        if len(vals) >= 2:
+            return {"price": float(vals[0]["value"]), "prev_close": float(vals[1]["value"])}
+        elif len(vals) == 1:
+            return {"price": float(vals[0]["value"]), "prev_close": float(vals[0]["value"])}
+    except Exception as e:
+        logger.warning(f"FRED fetch failed for {series_id}: {e}")
+    return None
+
+
+def polygon_snapshot_with_fallback(symbol: str) -> dict | None:
+    """Try Polygon first, fall back to FRED for futures/indices that Polygon doesn't cover."""
+    snap = polygon_snapshot(symbol)
+    if snap and snap.get("price"):
+        return snap
+    # Try FRED fallback
+    fred_series = _FRED_FALLBACK_MAP.get(symbol)
+    if fred_series:
+        return _fred_latest(fred_series)
+    return None
 
 
 def render_data_source_footer():

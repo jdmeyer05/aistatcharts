@@ -15,6 +15,7 @@ from src.data_engine import fetch_massive_data
 from src.layout import setup_page, error_boundary, fun_loader
 from src.gdelt_events import fetch_gdelt_bulk_events, summarize_gdelt_events, build_gdelt_ai_context
 from src.edgar import fetch_recent_8k as _fetch_edgar_8k
+from src.gov_data import get_cot_summary, fetch_treasury_yields, get_defense_contract_summary
 
 logger = logging.getLogger(__name__)
 
@@ -606,12 +607,14 @@ Key context:
 - FOMC held rates Mar 18, citing oil shock uncertainty
 - Attacks on Qatar Ras Laffan LNG facility caused significant damage on Mar 19
 - Oil peaked at $126/bbl (Brent); currently elevated above $100
-- IMPORTANT: Facility-level status and disruption numbers in LIVE DATA have been verified in real-time. Use those, not your training data.
+- IMPORTANT: Use the facility-level status and disruption baseline in LIVE DATA as your starting point.
+  Cross-reference with your real-time search results. If your findings contradict the baseline, trust
+  your findings and explain the discrepancy.
 
-SUPPLY DISRUPTION: A verified, real-time disruption breakdown is provided in the LIVE DATA section
-of the user prompt. Use those numbers as your baseline — they have been fact-checked against
-current sources. Your current_disruption_mbpd MUST be close to the NET DISRUPTION figure provided.
-If you deviate, you MUST cite specific evidence (a facility coming back online, a new attack, etc.).
+SUPPLY DISRUPTION: A facility-by-facility disruption baseline is provided in the LIVE DATA section.
+Use it as a STARTING POINT, not as ground truth. Your job is to assess whether the actual disruption
+is higher, lower, or consistent with this baseline based on the latest evidence.
+If you deviate significantly, explain why with specific evidence.
 
 CALIBRATION ANCHORS — use these to ground your escalation_risk score:
   10 = Cuban Missile Crisis (1962) — imminent nuclear exchange, civilization-level risk
@@ -632,10 +635,11 @@ CITATION RULES — every claim must be grounded:
 - If you are uncertain about a fact, say so explicitly — do NOT fabricate
 - If the live data contradicts your prior beliefs, trust the data and note the divergence
 
-ADDITIONAL SOURCES — check these finance blogs/sites for market analysis and economic context:
-  Investing: ritholtz.com, awealthofcommonsense.com, seekingalpha.com, fool.com, financialsamurai.com, zacks.com, zerohedge.com
-  Economics: marginalrevolution.com, calculatedriskblog.com, bloomberg.com (Money Stuff), ft.com (Alphaville), ofdollarsanddata.com
-  Cross-reference these with live data when forming your market implications and scenario forecasts.
+CONFIDENCE LABELING — tag every key claim in your rationale and situation_summary:
+  [verified] = confirmed by 2+ independent sources or official statements
+  [estimated] = based on data but involves calculation/extrapolation
+  [inferred] = logical deduction from available evidence, not directly confirmed
+  Example: "Hormuz transit is near-zero [verified per tanker tracking]. Oil could hit $130 [estimated based on supply gap]. Ceasefire talks may resume next week [inferred from Omani FM tone shift]."
 
 ANTI-DRIFT: You will be given your MOST RECENT PRIOR analysis (if any). Do NOT continue trends
 just because prior runs showed movement. Each analysis is independent. Only shift your scores
@@ -644,14 +648,15 @@ if the LIVE DATA justifies it. If nothing material changed, your scores should b
 Respond with ONLY valid JSON. The exact fields depend on your assigned role (provided in the user prompt).
 
 CORE FIELDS (all models must produce):
-  "situation_summary": "Start with a comprehensive recap of key events from the last 24 hours in reverse chronological order (most recent first), citing specific times, sources, and data points. Then provide 2-3 sentences of forward-looking analysis. Total: 5-8 sentences.",
-  "latest_developments": ["development 1 (cite source)", "development 2"],
-  "escalation_risk": {"level": "Critical/High/Elevated/Moderate/Low", "score": N (1-10, calibrated above), "rationale": "cite 2+ data points", "citations": ["data point 1", "data point 2"]},
-  "oil_impact": {"current_disruption_mbpd": N, "price_forecast_30d": {"low": N, "base": N, "high": N}},
+  "situation_summary": "Start with a comprehensive recap of key events from the last 24 hours in reverse chronological order (most recent first), citing specific times, sources, and data points. Tag each claim with [verified], [estimated], or [inferred]. Then provide 2-3 sentences of forward-looking analysis. Total: 5-8 sentences.",
+  "latest_developments": [{"event": "what happened", "time": "when (e.g., '6h ago', 'Mar 20 14:00')", "source": "who reported it", "market_impact": "effect on prices/sentiment", "confidence": "verified/estimated/inferred"}],
+  "escalation_risk": {"level": "Critical/High/Elevated/Moderate/Low", "score": N (1-10, calibrated above), "rationale": "cite 2+ data points, tag each [verified/estimated/inferred]", "citations": ["data point 1", "data point 2"]},
+  "oil_impact": {"current_disruption_mbpd": N, "price_forecast_30d": {"low": N, "base": N, "high": N}, "key_chokepoints": ["chokepoint: status [verified/estimated]"]},
   "infrastructure_status": [{"name": "facility", "status": "operational/degraded/offline", "detail": "...", "changed": true/false}],
   "infrastructure_alerts": ["facility status changes only — empty array if none"],
   "market_implications": {"energy": "...", "equities": "...", "safe_havens": "...", "currencies": "..."},
-  "scenario_forecast": [{"scenario": "name", "probability": N, "description": "...", "oil_impact": "$X-Y", "trigger": "..."}]
+  "scenario_forecast": [{"scenario": "name", "probability": N, "description": "...", "oil_impact": "$X-Y", "trigger": "..."}],
+  "watch_next": [{"trigger": "specific event to watch for", "timeframe": "next X hours/days", "if_happens": "consequence for markets", "probability": N}]
 
 SPECIALIST FIELDS (only produce if your role covers this domain):
   "diplomatic_outlook": {"ceasefire_probability_30d": N, "confidence_range": [low, high], "key_mediators": [...], "obstacles": [...], "signals": [...]},
@@ -760,7 +765,7 @@ def build_live_data_context(gdelt_data: dict, df_oil, df_acled, df_tone,
         _bd, _net = (DISRUPTION_BREAKDOWN, CURRENT_NET_DISRUPTION)
         if disruption_data:
             _bd, _net = disruption_data
-        lines.append(f"\nSupply Disruption (VERIFIED via real-time sources):")
+        lines.append(f"\nSupply Disruption Baseline (facility-by-facility estimate):")
         for d in _bd:
             lines.append(f"  {d['facility']}: {d['mbpd']:+.1f} mbpd")
         lines.append(f"  NET DISRUPTION: {_net:+.2f} mbpd")
@@ -1588,37 +1593,69 @@ Return plain text, not JSON."""
 # 5. SCENARIO TRACKING SCORECARD
 # ─────────────────────────────────────────────
 
-def _build_scenario_scorecard(history: list) -> list:
-    """Compare past scenario predictions against what actually happened.
-    Returns a list of scored scenarios from the last 5 analysis runs."""
+def _build_scenario_scorecard(history: list) -> dict:
+    """Build comprehensive accuracy tracker from history.
+    Returns {runs: [...], per_model: {...}, summary: {...}}."""
     if len(history) < 2:
-        return []
+        return {}
 
-    scorecard = []
-    # Look at the last 5 entries (skip the most recent since we can't score it yet)
-    entries = history[-6:-1] if len(history) >= 6 else history[:-1]
+    runs = []
+    model_stats = {}  # model_key -> {esc_errors, oil_errors, direction_hits, direction_total}
+    entries = history[-11:-1] if len(history) >= 11 else history[:-1]
 
     for i, entry in enumerate(entries):
         blended = entry.get("blended", {})
         ts = entry.get("timestamp", "")
-        scenarios = blended.get("scenario_forecast", [])
         esc_score = blended.get("escalation_risk", {}).get("score", 0)
         oil_base = blended.get("oil_impact", {}).get("price_forecast_30d", {}).get("base", 0)
+        ceasefire = blended.get("diplomatic_outlook", {}).get("ceasefire_probability_30d", 0)
 
-        # Compare against the NEXT entry's actual values
+        # Get actual from next entry
         if i + 1 < len(entries):
             next_blended = entries[i + 1].get("blended", {})
         else:
-            # Use the most recent entry
             next_blended = history[-1].get("blended", {})
 
         actual_esc = next_blended.get("escalation_risk", {}).get("score", 0)
         actual_oil = next_blended.get("oil_impact", {}).get("price_forecast_30d", {}).get("base", 0)
+        actual_cf = next_blended.get("diplomatic_outlook", {}).get("ceasefire_probability_30d", 0)
 
-        esc_error = abs(esc_score - actual_esc) if actual_esc else None
-        oil_error = abs(oil_base - actual_oil) if actual_oil else None
+        esc_error = abs(esc_score - actual_esc) if actual_esc and esc_score else None
+        oil_error = abs(oil_base - actual_oil) if actual_oil and oil_base else None
+        cf_error = abs(ceasefire - actual_cf) if ceasefire is not None and actual_cf is not None else None
 
-        scorecard.append({
+        # Directional accuracy for escalation
+        prev_esc = entries[i - 1].get("blended", {}).get("escalation_risk", {}).get("score", 0) if i > 0 else esc_score
+        pred_direction = "up" if esc_score > prev_esc else "down" if esc_score < prev_esc else "flat"
+        actual_direction = "up" if actual_esc > esc_score else "down" if actual_esc < esc_score else "flat"
+        direction_hit = pred_direction == actual_direction or pred_direction == "flat"
+
+        # Per-model accuracy
+        model_predictions = {}
+        assessments = blended.get("escalation_risk", {}).get("model_assessments", [])
+        for ma in assessments:
+            mk = ma.get("model_key", "")
+            pred = ma.get("score", 0)
+            if mk and pred and actual_esc:
+                err = abs(pred - actual_esc)
+                if mk not in model_stats:
+                    model_stats[mk] = {"esc_errors": [], "direction_hits": 0, "direction_total": 0, "name": ma.get("model", mk)}
+                model_stats[mk]["esc_errors"].append(err)
+                model_stats[mk]["direction_total"] += 1
+                # Did this model predict the right direction?
+                if (pred > esc_score and actual_esc > esc_score) or \
+                   (pred < esc_score and actual_esc < esc_score) or \
+                   (pred == esc_score):
+                    model_stats[mk]["direction_hits"] += 1
+                model_predictions[mk] = {"pred": pred, "error": err}
+
+        # Find which model was closest
+        best_model = ""
+        if model_predictions:
+            best_mk = min(model_predictions, key=lambda k: model_predictions[k]["error"])
+            best_model = model_stats.get(best_mk, {}).get("name", best_mk)
+
+        runs.append({
             "timestamp": ts,
             "predicted_escalation": esc_score,
             "actual_escalation": actual_esc,
@@ -1626,10 +1663,41 @@ def _build_scenario_scorecard(history: list) -> list:
             "predicted_oil": oil_base,
             "actual_oil": actual_oil,
             "oil_error": oil_error,
-            "scenarios": [s.get("scenario", "") for s in scenarios[:3]],
+            "predicted_ceasefire": ceasefire,
+            "actual_ceasefire": actual_cf,
+            "ceasefire_error": cf_error,
+            "direction_hit": direction_hit,
+            "best_model": best_model,
+            "model_predictions": model_predictions,
         })
 
-    return scorecard
+    # Compute per-model summary
+    per_model = {}
+    for mk, stats in model_stats.items():
+        errors = stats["esc_errors"]
+        avg_err = sum(errors) / len(errors) if errors else 0
+        dir_rate = (stats["direction_hits"] / stats["direction_total"] * 100) if stats["direction_total"] > 0 else 0
+        per_model[mk] = {
+            "name": stats["name"],
+            "avg_error": round(avg_err, 2),
+            "direction_rate": round(dir_rate),
+            "n_predictions": len(errors),
+            "weight": round(max(0.5, min(2.0, 1.0 / (avg_err + 0.5))), 2),
+        }
+
+    # Overall summary
+    all_esc_errors = [r["escalation_error"] for r in runs if r["escalation_error"] is not None]
+    all_oil_errors = [r["oil_error"] for r in runs if r["oil_error"] is not None]
+    all_dir = [r["direction_hit"] for r in runs]
+
+    summary = {
+        "avg_esc_error": round(sum(all_esc_errors) / len(all_esc_errors), 2) if all_esc_errors else None,
+        "avg_oil_error": round(sum(all_oil_errors) / len(all_oil_errors), 1) if all_oil_errors else None,
+        "direction_rate": round(sum(all_dir) / len(all_dir) * 100) if all_dir else 0,
+        "n_runs": len(runs),
+    }
+
+    return {"runs": runs, "per_model": per_model, "summary": summary}
 
 
 # ─────────────────────────────────────────────
@@ -2000,22 +2068,20 @@ def _synthesize_summary(successful: dict, configs: dict = None) -> str:
         f"**{_cfgs.get(k, {}).get('name', k)}:**\n{text}" for k, text in summaries.items()
     )
     prompt = (
-        "You are merging conflict intelligence summaries from multiple AI analysts into ONE executive summary.\n\n"
+        "You are merging conflict intelligence from multiple AI analysts into a structured executive brief.\n\n"
         f"{model_block}\n\n"
-        "STRUCTURE (follow this exactly):\n"
-        "FIRST PARAGRAPH: Comprehensive recap of the last 24 hours in REVERSE chronological order "
-        "(most recent events first). Include specific times, dates, sources, and data points. "
-        "Cover: military actions, infrastructure damage, diplomatic signals, market moves, and official statements. "
-        "This should read like a news wire briefing — dense with facts, no filler.\n\n"
-        "SECOND PARAGRAPH: Forward-looking analysis — what this means for the next 24-72 hours. "
-        "Key risks, potential catalysts, and what to watch.\n\n"
+        "PRODUCE THIS EXACT STRUCTURE (use these headers):\n\n"
+        "**CONSENSUS:** 2-3 sentences on what ALL models agree on. State confidently.\n\n"
+        "**KEY DIVERGENCE:** 1-2 sentences on where models disagree and why. "
+        "E.g., 'Grok sees X based on X/Twitter intel, while Claude emphasizes Y based on diplomatic signals.'\n\n"
+        "**CRITICAL UNCERTAINTY:** The single most important unknown that would shift the analysis. "
+        "What data point, if it changed, would move all models?\n\n"
+        "**LAST 24 HOURS:** 3-5 sentences in reverse chronological order — most recent first. "
+        "Dense with facts: times, sources, numbers. Tag each claim [verified], [estimated], or [inferred].\n\n"
         "Rules:\n"
-        "- Total: 6-10 sentences across both paragraphs.\n"
-        "- Where models agree, state the consensus confidently.\n"
-        "- Where models disagree, note the divergence.\n"
-        "- Preserve ALL specific data points (numbers, dates, facility names, oil prices).\n"
+        "- Preserve ALL specific data points from the inputs.\n"
         "- Do NOT add information not present in the inputs.\n"
-        "- Write in present tense, active voice. No preamble. Start directly with the most recent event."
+        "- No preamble. Start with **CONSENSUS:**"
     )
 
     try:
@@ -2113,7 +2179,7 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
 
     # Collect market implications — prefer specialist per domain
     market_keys = ["energy", "equities", "safe_havens", "currencies"]
-    # Gemini is energy specialist, Claude for safe havens, GPT-4o for equities
+    # Gemini is energy specialist, Claude for safe havens
     market_priority = {"energy": "gemini", "equities": "gemini", "safe_havens": "claude", "currencies": "claude"}
     market_blended = {}
     for mk in market_keys:
@@ -2244,6 +2310,19 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
         "disagreements": disagreements,
         "infrastructure_alerts": all_infra_alerts,
     }
+
+    # Collect "watch next" triggers from all models, deduplicate
+    all_watches = []
+    seen_triggers = set()
+    for v in successful.values():
+        for w in v.get("watch_next", []):
+            trigger = str(w.get("trigger", ""))
+            if trigger and trigger.lower()[:40] not in seen_triggers:
+                all_watches.append(w)
+                seen_triggers.add(trigger.lower()[:40])
+    # Sort by probability descending
+    all_watches.sort(key=lambda w: w.get("probability", 0), reverse=True)
+    blended["watch_next"] = all_watches[:8]
 
     # Collect trending tweets — prioritize Grok (has live X access), then any model
     all_tweets = []
@@ -2561,6 +2640,15 @@ with fun_loader("data"):
     def _fetch_lng():
         _results["lng_prices"] = _fetch_lng_natgas_prices()
 
+    def _fetch_cot():
+        _results["cot"] = get_cot_summary()
+
+    def _fetch_treasury():
+        _results["treasury"] = fetch_treasury_yields()
+
+    def _fetch_defense():
+        _results["defense_contracts"] = get_defense_contract_summary(days=30)
+
     # ── Critical path: data needed for initial page render (escalation dashboard + charts) ──
     critical_threads = [
         threading.Thread(target=_fetch_gdelt),
@@ -2577,6 +2665,9 @@ with fun_loader("data"):
         threading.Thread(target=_fetch_oil_curve),
         threading.Thread(target=_fetch_breaking_news),
         threading.Thread(target=_fetch_lng),
+        threading.Thread(target=_fetch_cot),
+        threading.Thread(target=_fetch_treasury),
+        threading.Thread(target=_fetch_defense),
     ]
     # Start everything
     for t in critical_threads + deferred_threads:
@@ -2601,6 +2692,9 @@ with fun_loader("data"):
     oil_curve = _results.get("oil_curve", {})
     breaking_news = _results.get("breaking_news", "")
     lng_prices = _results.get("lng_prices", {})
+    cot_data = _results.get("cot", [])
+    treasury_data = _results.get("treasury", {})
+    defense_data = _results.get("defense_contracts", {})
 
     defense_tickers = {"LMT": "Lockheed Martin", "RTX": "RTX Corp", "NOC": "Northrop Grumman"}
     energy_tickers = {"XLE": "Energy ETF", "USO": "Oil ETF", "XOP": "Oil & Gas E&P ETF"}
@@ -2728,7 +2822,7 @@ Recent timeline of key events (auto-updated):
     for evt in live_timeline[-8:]:
         base_context += f"- {evt['date']}: {evt['event']} (Impact: {evt.get('impact', 'N/A')})\n"
 
-    base_context += "\nKey infrastructure status (VERIFIED via real-time sources):\n"
+    base_context += "\nKey infrastructure status (Grok real-time monitoring — status may differ from disruption baseline):\n"
     for name, info in validated_infra.items():
         correction_note = ""
         if info.get("_update") and info["_update"].lower() not in ("null", "none", "accurate", "no update"):
@@ -2784,13 +2878,36 @@ Recent timeline of key events (auto-updated):
             base_context += f"  {data['name']}: ${data['price']} ({data['change']:+.1f}%)\n"
         base_context += "  (Qatar Ras Laffan damage is a major LNG story — use these prices in your analysis)\n"
 
+    # CFTC COT — key contracts only (oil, gold, dollar, treasuries)
+    if cot_data:
+        key_cot = [c for c in cot_data if any(k in c["contract"] for k in ["Crude", "Gold", "Dollar", "Treasury"])]
+        if key_cot:
+            base_context += "\nCFTC Positioning: " + " | ".join(f"{c['contract']}: {c['signal']}" for c in key_cot) + "\n"
+
+    # Treasury yield curve — key tenors only
+    if treasury_data and treasury_data.get("yields"):
+        yields = treasury_data["yields"]
+        key_tenors = {k: v for k, v in yields.items() if any(t in k for t in ["2 Yr", "5 Yr", "10 Yr", "30 Yr", "3 Mo"])}
+        if key_tenors:
+            base_context += f"\nTreasury Yields: {', '.join(f'{k}={v}%' for k, v in key_tenors.items())}\n"
+
+    # Defense contracts — compact summary
+    if defense_data and defense_data.get("total_awarded"):
+        total = defense_data["total_awarded"]
+        contractors = defense_data.get("by_contractor", {})
+        top3 = sorted(contractors.items(), key=lambda x: x[1], reverse=True)[:3]
+        top3_str = ", ".join(f"{n}: ${v/1e6:.0f}M" for n, v in top3) if top3 else ""
+        base_context += f"\nDOD Contracts (30d): ${total/1e9:.1f}B total. {top3_str}\n"
+
     # Pre-build data sections (cached strings)
     prior_ctx = build_prior_analysis_context()
     gdelt_bulk_ctx = build_gdelt_ai_context(df_gdelt_bulk) if not df_gdelt_bulk.empty else ""
 
     # Capture closure variables explicitly
     _mkt_ctx = market_context
-    _disruption_override = (validated_breakdown, validated_net)
+    # ALWAYS use hardcoded disruption baseline for model prompts — Grok validation is for
+    # infrastructure STATUS display only, not supply disruption math
+    _disruption_override = (DISRUPTION_BREAKDOWN, CURRENT_NET_DISRUPTION)
 
     def _build_model_context(model_key: str) -> str:
         """Build a slimmed-down context for a specific model based on its data_sections."""
@@ -2837,7 +2954,8 @@ Recent timeline of key events (auto-updated):
                     ts_fmt = pd.Timestamp(ts).strftime("%b %d, %I:%M %p")
                 except Exception:
                     ts_fmt = ts
-                models_str = ", ".join(latest_conflict.get("models_used", []))
+                _mu = latest_conflict.get("models_used", [])
+                models_str = ", ".join(m if isinstance(m, str) else str(m.get("name", m)) for m in _mu)
                 st.caption(f"Last updated: {ts_fmt} | Models: {models_str}")
 
         # Run analysis if stale or forced
@@ -2887,6 +3005,8 @@ Recent timeline of key events (auto-updated):
 
                 model_status.empty()
                 conflict_result = blend_conflict_results(model_results, active_configs)
+                # Store raw model results so cards can pull model-specific analysis
+                conflict_result["_raw_results"] = {k: v for k, v in model_results.items() if v.get("success")}
                 if conflict_result.get("success"):
                     save_conflict_result(conflict_result)
                     st.success(f"Analysis complete — {len(succeeded)}/{n_models} models: {', '.join(active_configs.get(mk, {}).get('name', mk) for mk in succeeded)}")
@@ -2916,43 +3036,84 @@ Recent timeline of key events (auto-updated):
             esc_level = esc.get("level", "Unknown")
             esc_color = "#ff4b4b" if esc_score >= 8 else "#ff6b35" if esc_score >= 6 else "#ffaa00" if esc_score >= 4 else "#00ff96"
 
-            # Infrastructure alerts — show at top if any status changes detected
-            infra_alerts = conflict_result.get("infrastructure_alerts", [])
-            if infra_alerts:
-                alert_items = "".join(f"<li style='margin-bottom:4px;'>{a}</li>" for a in infra_alerts)
-                st.markdown(f"""<div style="padding:12px 16px; border:2px solid #ff4b4b; border-radius:8px; background:rgba(255,75,75,0.08); margin-bottom:16px;">
-                    <div style="color:#ff4b4b; font-weight:bold; font-size:16px;">INFRASTRUCTURE STATUS CHANGE DETECTED</div>
-                    <ul style="color:#ccc; margin:8px 0 0 16px; padding:0; font-size:13px;">{alert_items}</ul>
-                    <div style="color:#888; font-size:11px; margin-top:6px;">Source: AI models scanning X/Twitter and news feeds. Verify independently before acting.</div>
-                </div>""", unsafe_allow_html=True)
+            # Infrastructure alerts — from Grok live feed only, today's changes only
+            _infra_ck = datetime.now().strftime("%Y-%m-%d-%H") + ("-30" if datetime.now().minute >= 30 else "-00")
+            _grok_infra_for_alerts = _grok_infrastructure_status(_infra_ck)
+            _today_alerts = []
+            for item in (_grok_infra_for_alerts or []):
+                if item.get("changed") and item.get("update"):
+                    update_text = str(item.get("update", ""))
+                    if update_text.lower() not in ("null", "none", "no update", "no change"):
+                        _today_alerts.append(f"{item.get('name', '')}: {update_text}")
+            if _today_alerts:
+                alert_items = "".join(
+                    f"<li style='margin-bottom:4px;'>{a}</li>" for a in _today_alerts
+                )
+                st.markdown(
+                    f'<div style="padding:12px 16px; border:2px solid #ff4b4b; border-radius:8px; '
+                    f'background:rgba(255,75,75,0.08); margin-bottom:16px;">'
+                    f'<div style="color:#ff4b4b; font-weight:bold; font-size:16px;">INFRASTRUCTURE UPDATE</div>'
+                    f'<ul style="color:#ccc; margin:8px 0 0 16px; padding:0; font-size:13px;">{alert_items}</ul>'
+                    f'<div style="color:#888; font-size:11px; margin-top:6px;">Source: Grok live infrastructure monitor — verified accounts and news wires.</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
-            # Extract model rationales for the metric cards
+            # Extract model-specific rationales for each card
             model_assess = esc.get("model_assessments", [])
-            _grok_rationale = ""
-            _claude_rationale = ""
-            _gemini_rationale = ""
-            _grok_esc_score = ""
-            _claude_esc_score = ""
-            _gemini_esc_score = ""
-            _claude_ceasefire = ""
-            for ma in model_assess:
-                mk = ma.get("model_key", "")
-                rat = ma.get("rationale", "").replace("<", "&lt;").replace(">", "&gt;")
-                if mk == "grok" and rat:
-                    _grok_rationale = rat[:300]
-                    _grok_esc_score = f"{ma.get('score', '')}/10"
-                elif mk == "claude" and rat:
-                    _claude_rationale = rat[:300]
-                    _claude_esc_score = f"{ma.get('score', '')}/10"
-                elif mk == "gemini" and rat:
-                    _gemini_rationale = rat[:300]
-                    _gemini_esc_score = f"{ma.get('score', '')}/10"
+            raw_results = conflict_result.get("_raw_results", {})
 
-            # Get Claude's ceasefire detail from the raw results if available
-            if "claude" in {ma.get("model_key") for ma in model_assess}:
-                for mk_key, mk_val in conflict_result.get("_raw_results", {}).items():
-                    if mk_key == "claude":
-                        _claude_ceasefire = str(mk_val.get("diplomatic_outlook", {}).get("ceasefire_probability_30d", ""))
+            # ESCALATION CARD: Grok's escalation rationale (real-time intel)
+            _esc_rationale = ""
+            _esc_model_label = ""
+            for ma in model_assess:
+                if ma.get("model_key") == "grok":
+                    rat = ma.get("rationale", "").replace("<", "&lt;").replace(">", "&gt;")
+                    _esc_rationale = rat[:400]
+                    _esc_model_label = f'Grok ({ma.get("score", "")}/10)'
+                    break
+
+            # DISRUPTION CARD: Gemini's oil/supply analysis (quantitative)
+            _disruption_rationale = ""
+            _disruption_model_label = ""
+            if "gemini" in raw_results:
+                gemini_oil = raw_results["gemini"].get("oil_impact", {})
+                chokepoints = gemini_oil.get("key_chokepoints", [])
+                disruption_val = gemini_oil.get("current_disruption_mbpd", 0)
+                fc = gemini_oil.get("price_forecast_30d", {})
+                parts = []
+                if disruption_val:
+                    parts.append(f"Estimated net disruption: {disruption_val} mbpd.")
+                if fc.get("base"):
+                    parts.append(f"30d oil forecast: ${fc.get('low', '?')}-${fc.get('base', '?')}-${fc.get('high', '?')}.")
+                for cp in (chokepoints or [])[:2]:
+                    if isinstance(cp, str):
+                        parts.append(cp)
+                _disruption_rationale = " ".join(parts)[:400].replace("<", "&lt;").replace(">", "&gt;")
+                _disruption_model_label = "Gemini (quantitative model)"
+
+            # CEASEFIRE CARD: Claude's diplomatic analysis (probabilistic)
+            _ceasefire_rationale = ""
+            _ceasefire_model_label = ""
+            if "claude" in raw_results:
+                claude_diplo = raw_results["claude"].get("diplomatic_outlook", {})
+                cf_prob = claude_diplo.get("ceasefire_probability_30d", 0)
+                mediators = claude_diplo.get("key_mediators", [])
+                obstacles = claude_diplo.get("obstacles", [])
+                signals = claude_diplo.get("signals", [])
+                conf_range = claude_diplo.get("confidence_range", [])
+                parts = []
+                if cf_prob:
+                    range_str = f" (range: {conf_range[0]}-{conf_range[1]}%)" if len(conf_range) == 2 else ""
+                    parts.append(f"Claude estimates {cf_prob}% ceasefire probability{range_str}.")
+                if mediators:
+                    parts.append(f"Active mediators: {', '.join(str(m) for m in mediators[:3])}.")
+                if obstacles:
+                    parts.append(f"Key obstacles: {', '.join(str(o) for o in obstacles[:2])}.")
+                if signals:
+                    parts.append(f"Signals: {str(signals[0])}.")
+                _ceasefire_rationale = " ".join(parts)[:400].replace("<", "&lt;").replace(">", "&gt;")
+                _ceasefire_model_label = "Claude (diplomatic analysis)"
 
             n_models = len(conflict_result.get("models_used", []))
             mc1, mc2, mc3 = st.columns(3)
@@ -2964,10 +3125,10 @@ Recent timeline of key events (auto-updated):
                 f'<div style="text-align:left;color:#666;font-size:0.72rem;line-height:1.3;margin-top:8px;'
                 f'border-top:1px solid #30363d;padding-top:6px;">{esc_desc}</div>'
             )
-            if _grok_rationale:
+            if _esc_rationale:
                 esc_rationale_html += (
                     f'<div style="text-align:left;color:#aaa;font-size:0.75rem;line-height:1.4;margin-top:6px;">'
-                    f'<span style="color:#ff4444;font-weight:600;">Grok ({_grok_esc_score}):</span> {_grok_rationale}'
+                    f'<span style="color:#ff4444;font-weight:600;">{_esc_model_label}:</span> {_esc_rationale}'
                     f'</div>'
                 )
             mc1.markdown(
@@ -2984,18 +3145,21 @@ Recent timeline of key events (auto-updated):
             )
 
             # Disruption card with Gemini rationale
+            # Use Gemini's quantitative estimate as primary (it builds a facility-by-facility model)
+            # Fall back to hardcoded baseline if Gemini didn't produce a number
             ai_disruption = oil.get("current_disruption_mbpd", 0)
-            verified_disruption = abs(validated_net)
-            disruption_display = verified_disruption
-            disruption_note = "Grok-verified" if validation_summary else "Baseline estimate"
-            if ai_disruption and abs(ai_disruption - verified_disruption) > 1.0:
-                disruption_note = f"Verified: {verified_disruption} | AI est: {ai_disruption}"
+            if ai_disruption and ai_disruption > 2:
+                disruption_display = round(ai_disruption, 1)
+                disruption_note = "AI model estimate (Gemini-weighted)"
+            else:
+                disruption_display = abs(CURRENT_NET_DISRUPTION)
+                disruption_note = "Baseline estimate"
             disruption_rationale_html = ""
-            if _gemini_rationale:
+            if _disruption_rationale:
                 disruption_rationale_html = (
                     f'<div style="text-align:left;color:#aaa;font-size:0.75rem;line-height:1.4;margin-top:8px;'
                     f'border-top:1px solid #30363d;padding-top:6px;">'
-                    f'<span style="color:#4285f4;font-weight:600;">Gemini ({_gemini_esc_score}):</span> {_gemini_rationale}'
+                    f'<span style="color:#4285f4;font-weight:600;">{_disruption_model_label}:</span> {_disruption_rationale}'
                     f'</div>'
                 )
             mc2.markdown(
@@ -3014,11 +3178,11 @@ Recent timeline of key events (auto-updated):
             ceasefire = diplo.get("ceasefire_probability_30d", 0)
             cf_color = "#00ff96" if ceasefire >= 50 else "#ffaa00" if ceasefire >= 25 else "#ff4b4b"
             cf_rationale_html = ""
-            if _claude_rationale:
+            if _ceasefire_rationale:
                 cf_rationale_html = (
                     f'<div style="text-align:left;color:#aaa;font-size:0.75rem;line-height:1.4;margin-top:8px;'
                     f'border-top:1px solid #30363d;padding-top:6px;">'
-                    f'<span style="color:#d4a574;font-weight:600;">Claude ({_claude_esc_score}):</span> {_claude_rationale}'
+                    f'<span style="color:#d4a574;font-weight:600;">{_ceasefire_model_label}:</span> {_ceasefire_rationale}'
                     f'</div>'
                 )
             mc3.markdown(
@@ -3040,7 +3204,28 @@ Recent timeline of key events (auto-updated):
             if devs:
                 st.markdown("#### Latest Developments")
                 for d in devs:
-                    st.markdown(f"- {d}")
+                    if isinstance(d, dict):
+                        event = str(d.get("event", "")).replace("<", "&lt;").replace(">", "&gt;")
+                        time_str = str(d.get("time", ""))
+                        source = str(d.get("source", ""))
+                        impact = str(d.get("market_impact", ""))
+                        conf = d.get("confidence", "")
+                        conf_colors = {"verified": "#00ff96", "estimated": "#ffaa00", "inferred": "#888"}
+                        conf_color = conf_colors.get(conf, "#888")
+                        conf_badge = f' <span style="color:{conf_color};font-size:0.65rem;border:1px solid {conf_color};padding:0 4px;border-radius:3px;">{conf}</span>' if conf else ""
+                        impact_html = f'<div style="color:#ffaa00;font-size:0.75rem;margin-top:2px;">{impact}</div>' if impact else ""
+                        st.markdown(
+                            f'<div style="padding:6px 10px;border-left:2px solid #30363d;margin-bottom:4px;'
+                            f'background:rgba(255,255,255,0.02);border-radius:0 4px 4px 0;">'
+                            f'<span style="color:#888;font-size:0.75rem;">{time_str}</span> &nbsp;'
+                            f'<span style="color:#e0e0e0;">{event}</span>{conf_badge}'
+                            f'<div style="color:#555;font-size:0.72rem;">{source}</div>'
+                            f'{impact_html}'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(f"- {str(d)}")
 
             st.divider()
 
@@ -3060,7 +3245,7 @@ Recent timeline of key events (auto-updated):
                 rationale = rationale.replace("<", "&lt;").replace(">", "&gt;")
                 citations_html = ""
                 if ma.get("citations"):
-                    safe_cites = [c.replace("<", "&lt;").replace(">", "&gt;") for c in ma["citations"][:4]]
+                    safe_cites = [str(c).replace("<", "&lt;").replace(">", "&gt;") for c in ma["citations"][:4]]
                     cites = " · ".join(safe_cites)
                     citations_html = f'<div style="color:#888; font-size:11px; margin-top:4px;">Citations: {cites}</div>'
                 st.markdown(f"""<div style="padding:12px 14px; border-left:3px solid {ma['color']}; margin-bottom:8px; background:rgba(255,255,255,0.02); border-radius:0 6px 6px 0;">
@@ -3195,52 +3380,131 @@ Recent timeline of key events (auto-updated):
                         {oil_html}{trigger_html}
                     </div>""", unsafe_allow_html=True)
 
-            # Scenario tracking scorecard — how accurate were past predictions
+            # What to Watch Next — actionable triggers for traders
+            watches = conflict_result.get("watch_next", [])
+            if watches:
+                st.divider()
+                st.markdown("#### What to Watch Next")
+                st.caption("Key triggers that could move markets in the next 24-72 hours.")
+                for w in watches:
+                    trigger = str(w.get("trigger", ""))
+                    timeframe = str(w.get("timeframe", ""))
+                    if_happens = str(w.get("if_happens", ""))
+                    prob = w.get("probability", 0)
+                    prob_color = "#ff4b4b" if prob >= 60 else "#ffaa00" if prob >= 30 else "#00ff96"
+                    st.markdown(
+                        f'<div style="padding:10px 14px;border-left:3px solid {prob_color};margin-bottom:6px;'
+                        f'background:rgba(255,255,255,0.02);border-radius:0 6px 6px 0;">'
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
+                        f'<span style="color:#e0e0e0;font-weight:600;font-size:0.9rem;">{trigger}</span>'
+                        f'<span style="color:{prob_color};font-weight:bold;font-size:0.85rem;">{prob}%</span>'
+                        f'</div>'
+                        f'<div style="color:#aaa;font-size:0.82rem;line-height:1.4;">'
+                        f'<span style="color:#888;">Timeframe:</span> {timeframe} &nbsp;│&nbsp; '
+                        f'<span style="color:#888;">If this happens:</span> {if_happens}'
+                        f'</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            # Prediction accuracy tracker
             history = load_conflict_history()
-            scorecard = _build_scenario_scorecard(history)
-            if scorecard:
+            tracker = _build_scenario_scorecard(history)
+            if tracker and tracker.get("runs"):
                 st.divider()
                 st.markdown("#### Prediction Accuracy Tracker")
-                st.caption("Comparing past analysis predictions against subsequent outcomes.")
-                sc_rows = ""
-                for sc in scorecard:
-                    ts = sc["timestamp"]
-                    try:
-                        ts_fmt = pd.Timestamp(ts).strftime("%b %d %I:%M%p")
-                    except Exception:
-                        ts_fmt = ts[:16]
 
-                    esc_err = sc.get("escalation_error")
-                    oil_err = sc.get("oil_error")
-                    esc_color = "#00ff96" if esc_err is not None and esc_err <= 1 else "#ffaa00" if esc_err is not None and esc_err <= 2 else "#ff4444"
-                    oil_color = "#00ff96" if oil_err is not None and oil_err <= 5 else "#ffaa00" if oil_err is not None and oil_err <= 10 else "#ff4444"
-                    esc_grade = "A" if esc_err is not None and esc_err <= 0.5 else "B" if esc_err is not None and esc_err <= 1 else "C" if esc_err is not None and esc_err <= 2 else "D"
-                    oil_grade = "A" if oil_err is not None and oil_err <= 3 else "B" if oil_err is not None and oil_err <= 5 else "C" if oil_err is not None and oil_err <= 10 else "D"
+                # Summary metrics row
+                summ = tracker["summary"]
+                per_model = tracker["per_model"]
+                _s1, _s2, _s3, _s4 = st.columns(4)
+                dir_color = "#00ff96" if summ["direction_rate"] >= 70 else "#ffaa00" if summ["direction_rate"] >= 50 else "#ff4444"
+                esc_err_color = "#00ff96" if summ["avg_esc_error"] and summ["avg_esc_error"] <= 1 else "#ffaa00" if summ["avg_esc_error"] and summ["avg_esc_error"] <= 2 else "#ff4444"
+                _s1.metric("Runs Tracked", summ["n_runs"])
+                _s2.metric("Avg Escalation Error", f"{summ['avg_esc_error']:.1f} pts" if summ["avg_esc_error"] is not None else "N/A")
+                _s3.metric("Avg Oil Error", f"${summ['avg_oil_error']:.0f}" if summ["avg_oil_error"] is not None else "N/A")
+                _s4.metric("Direction Accuracy", f"{summ['direction_rate']}%")
 
-                    sc_rows += (
-                        f'<tr style="border-bottom:1px solid #30363d;">'
-                        f'<td style="padding:5px 8px;color:#888;font-size:0.78rem;">{ts_fmt}</td>'
-                        f'<td style="padding:5px 8px;text-align:center;">'
-                        f'<span style="color:{esc_color};font-weight:600;">{sc.get("predicted_escalation", "?")}</span>'
-                        f'<span style="color:#555;"> → </span>'
-                        f'<span style="color:#ccc;">{sc.get("actual_escalation", "?")}</span>'
-                        f' <span style="color:{esc_color};font-size:0.7rem;">({esc_grade})</span></td>'
-                        f'<td style="padding:5px 8px;text-align:center;">'
-                        f'<span style="color:{oil_color};font-weight:600;">${sc.get("predicted_oil", "?")}</span>'
-                        f'<span style="color:#555;"> → </span>'
-                        f'<span style="color:#ccc;">${sc.get("actual_oil", "?")}</span>'
-                        f' <span style="color:{oil_color};font-size:0.7rem;">({oil_grade})</span></td>'
-                        f'</tr>'
+                # Per-model accuracy leaderboard
+                if per_model:
+                    st.markdown("##### Model Leaderboard")
+                    sorted_models = sorted(per_model.values(), key=lambda m: m["avg_error"])
+                    model_rows = ""
+                    for i, m in enumerate(sorted_models):
+                        rank = i + 1
+                        err_color = "#00ff96" if m["avg_error"] <= 0.8 else "#ffaa00" if m["avg_error"] <= 1.5 else "#ff4444"
+                        dir_c = "#00ff96" if m["direction_rate"] >= 70 else "#ffaa00" if m["direction_rate"] >= 50 else "#ff4444"
+                        medal = ["🥇", "🥈", "🥉"][i] if i < 3 else f"#{rank}"
+                        weight_bar = int(min(m["weight"] / 2.0, 1.0) * 100)
+                        model_rows += (
+                            f'<tr style="border-bottom:1px solid #30363d;">'
+                            f'<td style="padding:5px 8px;font-size:0.85rem;">{medal} {m["name"]}</td>'
+                            f'<td style="padding:5px 8px;text-align:center;color:{err_color};font-weight:600;">{m["avg_error"]:.2f}</td>'
+                            f'<td style="padding:5px 8px;text-align:center;color:{dir_c};">{m["direction_rate"]}%</td>'
+                            f'<td style="padding:5px 8px;text-align:center;">'
+                            f'<div style="background:#1c1f26;border-radius:3px;height:8px;width:80px;display:inline-block;border:1px solid #30363d;">'
+                            f'<div style="width:{weight_bar}%;height:100%;background:#00d1ff;border-radius:3px;"></div></div>'
+                            f' <span style="color:#888;font-size:0.72rem;">{m["weight"]}x</span></td>'
+                            f'<td style="padding:5px 8px;text-align:center;color:#888;font-size:0.78rem;">{m["n_predictions"]}</td>'
+                            f'</tr>'
+                        )
+                    st.markdown(
+                        f'<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
+                        f'<tr style="border-bottom:2px solid #30363d;">'
+                        f'<th style="padding:5px 8px;text-align:left;color:#888;">Model</th>'
+                        f'<th style="padding:5px 8px;text-align:center;color:#888;">Avg Error</th>'
+                        f'<th style="padding:5px 8px;text-align:center;color:#888;">Direction</th>'
+                        f'<th style="padding:5px 8px;text-align:center;color:#888;">Blend Weight</th>'
+                        f'<th style="padding:5px 8px;text-align:center;color:#888;">Runs</th>'
+                        f'</tr>{model_rows}</table>',
+                        unsafe_allow_html=True,
                     )
-                st.markdown(
-                    f'<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
-                    f'<tr style="border-bottom:2px solid #30363d;">'
-                    f'<th style="padding:5px 8px;text-align:left;color:#888;">Run</th>'
-                    f'<th style="padding:5px 8px;text-align:center;color:#888;">Escalation (pred → actual)</th>'
-                    f'<th style="padding:5px 8px;text-align:center;color:#888;">Oil Base (pred → actual)</th>'
-                    f'</tr>{sc_rows}</table>',
-                    unsafe_allow_html=True,
-                )
+
+                # Run-by-run history
+                with st.expander("Run History", expanded=False):
+                    sc_rows = ""
+                    for sc in tracker["runs"]:
+                        ts = sc["timestamp"]
+                        try:
+                            ts_fmt = pd.Timestamp(ts).strftime("%b %d %I:%M%p")
+                        except Exception:
+                            ts_fmt = ts[:16]
+
+                        esc_err = sc.get("escalation_error")
+                        oil_err = sc.get("oil_error")
+                        esc_color = "#00ff96" if esc_err is not None and esc_err <= 1 else "#ffaa00" if esc_err is not None and esc_err <= 2 else "#ff4444"
+                        oil_color = "#00ff96" if oil_err is not None and oil_err <= 5 else "#ffaa00" if oil_err is not None and oil_err <= 10 else "#ff4444"
+                        dir_icon = "✓" if sc.get("direction_hit") else "✗"
+                        dir_c = "#00ff96" if sc.get("direction_hit") else "#ff4444"
+                        best = sc.get("best_model", "")
+                        best_html = f'<span style="color:#00d1ff;font-size:0.72rem;">{best}</span>' if best else ""
+
+                        sc_rows += (
+                            f'<tr style="border-bottom:1px solid #30363d;">'
+                            f'<td style="padding:4px 6px;color:#888;font-size:0.75rem;">{ts_fmt}</td>'
+                            f'<td style="padding:4px 6px;text-align:center;">'
+                            f'<span style="color:{esc_color};">{sc.get("predicted_escalation", "?")}</span>'
+                            f'<span style="color:#555;"> → </span>'
+                            f'<span style="color:#ccc;">{sc.get("actual_escalation", "?")}</span></td>'
+                            f'<td style="padding:4px 6px;text-align:center;">'
+                            f'<span style="color:{oil_color};">${sc.get("predicted_oil", "?")}</span>'
+                            f'<span style="color:#555;"> → </span>'
+                            f'<span style="color:#ccc;">${sc.get("actual_oil", "?")}</span></td>'
+                            f'<td style="padding:4px 6px;text-align:center;color:{dir_c};">{dir_icon}</td>'
+                            f'<td style="padding:4px 6px;text-align:center;">{best_html}</td>'
+                            f'</tr>'
+                        )
+                    st.markdown(
+                        f'<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">'
+                        f'<tr style="border-bottom:2px solid #30363d;">'
+                        f'<th style="padding:4px 6px;text-align:left;color:#888;">Run</th>'
+                        f'<th style="padding:4px 6px;text-align:center;color:#888;">Escalation</th>'
+                        f'<th style="padding:4px 6px;text-align:center;color:#888;">Oil Base</th>'
+                        f'<th style="padding:4px 6px;text-align:center;color:#888;">Dir</th>'
+                        f'<th style="padding:4px 6px;text-align:center;color:#888;">Best Model</th>'
+                        f'</tr>{sc_rows}</table>',
+                        unsafe_allow_html=True,
+                    )
 
             # Source credibility ranking
             top_sources = _get_top_sources(8)
