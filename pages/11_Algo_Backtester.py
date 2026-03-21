@@ -133,11 +133,36 @@ def run_strategy(df, strat_name, p1=None, p2=None):
     elif strat_name == "13. ATR Trailing Stop":
         p1, p2 = p1 or 14, p2 or 2.0
         atr = calculate_atr(df, int(p1))
-        trailing_stop_long = c.cummax() - atr * p2
-        trailing_stop_short = c.cummin() + atr * p2
-        df.loc[c > trailing_stop_short, "Signal"] = 1
-        df.loc[c < trailing_stop_long, "Signal"] = -1
-        df["Position"] = df["Signal"].ffill().fillna(0)
+        # Proper trailing stop: track high/low from trade entry, reset on flip
+        position = np.zeros(len(c))
+        trade_high = c.iloc[0]
+        trade_low = c.iloc[0]
+        for i in range(1, len(c)):
+            price = c.iloc[i]
+            atr_val = atr.iloc[i] if pd.notna(atr.iloc[i]) else 0
+            if position[i - 1] >= 0:  # Long or flat — track for long stop
+                trade_high = max(trade_high, price)
+                stop_long = trade_high - atr_val * p2
+                if price < stop_long and position[i - 1] == 1:
+                    position[i] = -1
+                    trade_low = price  # Reset for short tracking
+                    trade_high = price
+                elif price > (trade_low + atr_val * p2) or position[i - 1] == 0:
+                    position[i] = 1
+                    trade_high = max(trade_high, price)
+                else:
+                    position[i] = position[i - 1]
+            if position[i - 1] < 0:  # Short — track for short stop
+                trade_low = min(trade_low, price)
+                stop_short = trade_low + atr_val * p2
+                if price > stop_short:
+                    position[i] = 1
+                    trade_high = price  # Reset for long tracking
+                    trade_low = price
+                else:
+                    position[i] = -1
+                    trade_low = min(trade_low, price)
+        df["Position"] = position
 
     return df["Position"]
 
@@ -251,6 +276,9 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
 
                     pos = run_strategy(df_base, strategy, p1, p2)
                     strat_ret = pos.shift(1) * df_base["Returns"]
+                    # Deduct transaction costs (reversals = 2 legs)
+                    trade_legs = pos.diff().abs().clip(upper=2)
+                    strat_ret = strat_ret - (trade_legs * total_cost_pct)
 
                     temp_eval = pd.DataFrame({"ret": strat_ret}).dropna().tail(lookback)
                     cum_ret = np.exp(temp_eval["ret"].cumsum()).iloc[-1] if not temp_eval.empty else -np.inf
@@ -277,8 +305,11 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
         df["Strat_Returns"] = df["Position"].shift(1) * df["Returns"]
 
         # Apply transaction costs on position changes
-        df["Trades"] = (df["Position"] != df["Position"].shift(1)).astype(int)
-        df["Strat_Returns"] = df["Strat_Returns"] - (df["Trades"] * total_cost_pct)
+        # A reversal (long→short or short→long) is 2 trades (close + open)
+        pos_diff = df["Position"].diff().abs()
+        df["Trades"] = (pos_diff > 0).astype(int)
+        df["Trade_Legs"] = pos_diff.clip(upper=2)  # 0→1=1 leg, 1→-1=2 legs, 1→0=1 leg
+        df["Strat_Returns"] = df["Strat_Returns"] - (df["Trade_Legs"] * total_cost_pct)
 
         df = df.dropna().tail(lookback)
 
@@ -319,7 +350,7 @@ sortino_denom = df["Strat_Returns"][df["Strat_Returns"] < 0].std() * np.sqrt(252
 strat_sortino = (df["Strat_Returns"].mean() * 252) / sortino_denom if sortino_denom != 0 else 0
 
 calmar = strat_cagr / abs(max_dd_strat) if max_dd_strat != 0 else 0
-total_trades = df["Trades"].sum()
+total_trades = int(df["Trade_Legs"].sum())
 
 st.subheader(f"{st.session_state.bt_strat} vs Buy & Hold — {st.session_state.bt_ticker}")
 
@@ -585,17 +616,19 @@ with tab5:
 
     # QQ-style: strategy vs normal
     st.subheader("Tail Risk Analysis")
-    strat_rets_sorted = np.sort(df["Strat_Returns"].dropna().values)
-    n = len(strat_rets_sorted)
+    from scipy.stats import norm as _norm
+    strat_rets = df["Strat_Returns"].dropna()
+    mu, sigma = strat_rets.mean(), strat_rets.std()
     percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
     tail_data = []
     for p in percentiles:
-        idx = int(n * p / 100)
-        idx = min(idx, n - 1)
+        actual = np.percentile(strat_rets.values, p)
+        expected = _norm.ppf(p / 100, loc=mu, scale=sigma)
         tail_data.append({
             "Percentile": f"{p}%",
-            "Strategy": f"{strat_rets_sorted[idx] * 100:.3f}%",
-            "Normal": f"{np.percentile(np.random.normal(df['Strat_Returns'].mean(), df['Strat_Returns'].std(), 10000), p) * 100:.3f}%",
+            "Strategy": f"{actual * 100:.3f}%",
+            "Normal": f"{expected * 100:.3f}%",
+            "Excess": f"{(actual - expected) * 100:+.3f}%",
         })
     st.dataframe(pd.DataFrame(tail_data), use_container_width=True, hide_index=True)
 
