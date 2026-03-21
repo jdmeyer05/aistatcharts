@@ -671,7 +671,8 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
             st.metric("Price", f"${price:.2f}")
         with h3:
             if grok_result and grok_result.get("success"):
-                rec = grok_result.get("recommendation", "Hold")
+                from html import escape as _esc
+                rec = _esc(str(grok_result.get("recommendation", "Hold")))
                 rec_colors = {"Strong Buy": "#00ff96", "Buy": "#00cc66", "Hold": "#ffaa00",
                              "Sell": "#ff6644", "Strong Sell": "#ff4444"}
                 st.markdown(f'<div style="background:{rec_colors.get(rec, "#888")};color:#000;'

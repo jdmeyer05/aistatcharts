@@ -1740,7 +1740,8 @@ to produce different strategy styles.
 
             if grok_strat and grok_strat.get("success"):
                 # Grade badge
-                grade = grok_strat.get("grade", "?")
+                from html import escape as _esc
+                grade = _esc(str(grok_strat.get("grade", "?")))
                 grade_colors = {"A": "#00ff96", "B": "#00cc66", "C": "#ffaa00", "D": "#ff6644", "F": "#ff4444"}
                 g_color = grade_colors.get(grade[0] if grade else "?", "#888")
                 st.markdown(f'<div style="display:inline-block;background:{g_color};color:#000;'

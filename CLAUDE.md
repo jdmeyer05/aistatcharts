@@ -133,6 +133,25 @@ Run: `python webhook_server.py` (separate from Streamlit)
 - `user_tokens` — email, balance, updated_at
 - `payment_failures` — email, invoice_id, failed_at, resolved
 
+### Supabase SQL Functions
+- `increment_tokens(p_email TEXT, p_amount INT)` — atomic token balance increment (used by webhook server)
+
+---
+
+## Security Model
+
+**Critical constraint:** Streamlit on Cloud Run shares one process across all users. The Supabase Python client caches auth sessions in a module-level global (`_supabase_client`). This means `supabase.auth.get_session()` returns the **last** user who authenticated on the server, not the current visitor.
+
+### Rules for auth code:
+1. **NEVER use `supabase.auth.get_session()`** to identify users — it returns the wrong user in multi-user deployments
+2. **ALWAYS recover sessions from the per-browser `sb_refresh` cookie** via `supabase.auth.refresh_session(token)`
+3. **NEVER call `supabase.auth.sign_out()`** — it affects the shared server session; instead just clear cookies + session state
+4. **ALWAYS re-authenticate via cookie before `supabase.auth.update_user()`** — otherwise you may modify another user's account
+5. **ALWAYS sanitize tokens** before interpolating into JavaScript (use `_sanitize_token()` in `src/auth.py`)
+6. **ALWAYS escape AI model output** with `html.escape()` before rendering in `unsafe_allow_html=True` contexts
+7. **Webhook signature verification is required** — `STRIPE_WEBHOOK_SECRET` must be set in production; unsigned payloads are rejected
+8. **Token operations must be atomic** — use `increment_tokens` RPC to avoid race conditions in concurrent webhook handlers
+
 ---
 
 ## Iran Conflict Intelligence (Page 19) — Deep Dive

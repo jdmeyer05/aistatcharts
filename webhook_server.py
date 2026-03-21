@@ -149,18 +149,24 @@ def _update_user_tier(email, tier, stripe_customer_id=None, price_id=None):
 
 
 def _add_user_tokens(email, amount):
-    """Add tokens to a user's balance in Supabase."""
+    """Add tokens to a user's balance in Supabase (atomic to avoid race conditions)."""
     supabase = get_supabase()
     if not supabase:
         logger.warning("Supabase not configured — cannot add tokens")
         return
 
     try:
-        # Get current balance
+        # Try atomic RPC first (requires: create function increment_tokens(p_email text, p_amount int))
+        try:
+            supabase.rpc("increment_tokens", {"p_email": email, "p_amount": amount}).execute()
+            logger.info(f"Added {amount} tokens for {email} (atomic)")
+            return
+        except Exception:
+            pass
+
+        # Fallback: read-then-write (less safe under concurrency)
         result = supabase.table("user_tokens").select("balance").eq("email", email).execute()
         current = result.data[0]["balance"] if result.data else 0
-
-        # Upsert new balance
         supabase.table("user_tokens").upsert({
             "email": email,
             "balance": current + amount,
@@ -195,17 +201,15 @@ def stripe_webhook():
     payload = request.get_data(as_text=True)
     sig_header = request.headers.get("Stripe-Signature")
 
-    # Verify webhook signature
-    if WEBHOOK_SECRET:
-        try:
-            event = stripe.Webhook.construct_event(payload, sig_header, WEBHOOK_SECRET)
-        except stripe.error.SignatureVerificationError:
-            logger.error("Invalid webhook signature")
-            return jsonify({"error": "Invalid signature"}), 400
-    else:
-        # No secret configured — parse directly (dev only)
-        event = json.loads(payload)
-        logger.warning("No STRIPE_WEBHOOK_SECRET — skipping signature verification")
+    # Verify webhook signature (required — reject if secret not configured)
+    if not WEBHOOK_SECRET:
+        logger.error("STRIPE_WEBHOOK_SECRET not configured — rejecting webhook")
+        return jsonify({"error": "Webhook secret not configured"}), 500
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError:
+        logger.error("Invalid webhook signature")
+        return jsonify({"error": "Invalid signature"}), 400
 
     event_type = event.get("type", "")
     data = event.get("data", {}).get("object", {})

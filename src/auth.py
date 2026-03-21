@@ -112,11 +112,18 @@ def init_supabase() -> Client:
     return _supabase_client
 
 
+def _sanitize_token(token: str) -> str:
+    """Strip characters that could break cookie value or enable JS injection."""
+    import re
+    return re.sub(r'[^A-Za-z0-9_\-.]', '', token)
+
+
 def set_auth_cookie(refresh_token: str):
     """Store Supabase refresh token in a browser cookie (30-day persistence)."""
     import streamlit.components.v1 as components
+    safe_token = _sanitize_token(refresh_token)
     components.html(
-        f'<script>document.cookie="sb_refresh={refresh_token};path=/;max-age={30*24*3600};SameSite=Strict;Secure";</script>',
+        f'<script>document.cookie="sb_refresh={safe_token};path=/;max-age={30*24*3600};SameSite=Strict;Secure";</script>',
         height=0,
     )
 
@@ -124,8 +131,9 @@ def set_auth_cookie(refresh_token: str):
 def set_auth_cookie_session(refresh_token: str):
     """Store Supabase refresh token in a session cookie (expires when browser closes)."""
     import streamlit.components.v1 as components
+    safe_token = _sanitize_token(refresh_token)
     components.html(
-        f'<script>document.cookie="sb_refresh={refresh_token};path=/;SameSite=Strict;Secure";</script>',
+        f'<script>document.cookie="sb_refresh={safe_token};path=/;SameSite=Strict;Secure";</script>',
         height=0,
     )
 
@@ -150,17 +158,9 @@ def check_session_timeout():
     if 50 <= elapsed_min < 60:
         st.toast("Session expires soon — save your work. The page will re-authenticate automatically.", icon="⏰")
     elif elapsed_min >= 60:
-        # Try silent re-auth via refresh token
+        # Try silent re-auth via browser cookie (per-user)
         supabase = init_supabase()
         if supabase:
-            try:
-                session = supabase.auth.get_session()
-                if session:
-                    st.session_state["_auth_timestamp"] = datetime.now()
-                    return
-            except Exception:
-                pass
-            # Try cookie fallback
             try:
                 refresh_token = st.context.cookies.get("sb_refresh")
                 if refresh_token:
@@ -191,18 +191,7 @@ def check_auth():
         check_session_timeout()
         return
 
-    # 2. Recover from Supabase session (persists across refreshes via cached client)
-    try:
-        session = supabase.auth.get_session()
-        if session:
-            st.session_state['authenticated'] = True
-            st.session_state['user_email'] = session.user.email
-            st.session_state['_auth_timestamp'] = datetime.now()
-            return
-    except Exception as e:
-        logger.debug(f"Session recovery failed: {e}")
-
-    # 3. Recover from browser cookie (mobile wake-up / server restart)
+    # 2. Recover from browser cookie (per-user, not shared across sessions)
     try:
         refresh_token = st.context.cookies.get("sb_refresh")
         if refresh_token:

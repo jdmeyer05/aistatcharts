@@ -98,6 +98,39 @@ Opens at **http://localhost:8501** (or next available port).
 | **Polymarket** | Prediction market odds | Public API |
 | **StockTwits** | Social feed (1M+ follower filter) | Public API |
 
+## Security
+
+### Auth Isolation (Multi-User)
+Streamlit on Cloud Run shares a single server process across all users. The Supabase Python client stores auth sessions in-memory on the server, meaning `supabase.auth.get_session()` returns whichever user authenticated last -- not the current visitor.
+
+**Mitigations:**
+- **Cookie-only auth recovery** -- sessions are recovered exclusively via per-browser `sb_refresh` cookies, never from the shared server-side session
+- **Password change re-auth** -- `update_user()` re-authenticates via the user's own cookie before updating
+- **No shared sign_out** -- logout clears the browser cookie and session state only, without calling `sign_out()` on the shared client
+- **Cookie sanitization** -- refresh tokens are stripped of non-alphanumeric characters before injection into JavaScript
+- **XSRF protection enabled** -- Streamlit's built-in cross-site request forgery protection is on in production
+
+### Webhook Security
+- Stripe webhook signature verification is **required** -- requests are rejected if `STRIPE_WEBHOOK_SECRET` is not configured
+- Token purchases use atomic Supabase RPC (`increment_tokens`) to prevent race conditions
+
+### XSS Hardening
+- AI model output rendered in `unsafe_allow_html` contexts is escaped via `html.escape()` to prevent injection
+
+### Supabase SQL Functions
+The following function must exist in Supabase for atomic token operations:
+```sql
+CREATE OR REPLACE FUNCTION increment_tokens(p_email TEXT, p_amount INT)
+RETURNS VOID AS $$
+BEGIN
+  INSERT INTO user_tokens (email, balance, updated_at)
+  VALUES (p_email, p_amount, NOW())
+  ON CONFLICT (email)
+  DO UPDATE SET balance = user_tokens.balance + p_amount, updated_at = NOW();
+END;
+$$ LANGUAGE plpgsql;
+```
+
 ## Tech Stack
 
 - **Frontend:** Streamlit

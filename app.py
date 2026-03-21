@@ -36,17 +36,7 @@ if supabase is None:
 if st.session_state['authenticated']:
     st.switch_page("pages/01_Summary.py")
 
-# Check if Supabase client still has a valid session (survives refresh)
-try:
-    session = supabase.auth.get_session()
-    if session:
-        st.session_state['authenticated'] = True
-        st.session_state['user_email'] = session.user.email
-        st.switch_page("pages/01_Summary.py")
-except Exception:
-    pass
-
-# Recover from browser cookie (mobile wake-up / server restart)
+# Recover from browser cookie (per-user, not shared across sessions)
 try:
     refresh_token = st.context.cookies.get("sb_refresh")
     if refresh_token:

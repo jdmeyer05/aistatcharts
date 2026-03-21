@@ -851,16 +851,20 @@ with error_boundary("Account"):
                 if st.form_submit_button("Update"):
                     if supabase:
                         try:
-                            supabase.auth.update_user({"password": new_pw})
-                            st.success("Password updated.")
+                            # Re-authenticate with cookie to ensure we update the correct user
+                            refresh_token = st.context.cookies.get("sb_refresh")
+                            if refresh_token:
+                                supabase.auth.refresh_session(refresh_token)
+                                supabase.auth.update_user({"password": new_pw})
+                                st.success("Password updated.")
+                            else:
+                                st.error("Session expired. Please log out and log in again.")
                         except Exception as e:
                             st.error(f"Failed: {e}")
                     else:
                         st.info("Not available in local dev mode.")
     with act2:
         if st.button("Log Out", type="secondary", use_container_width=True):
-            if supabase:
-                supabase.auth.sign_out()
             from src.auth import clear_auth_cookie
             clear_auth_cookie()
             for key in list(st.session_state.keys()):
