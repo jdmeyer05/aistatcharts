@@ -28,8 +28,9 @@ def _get_polygon_key():
 # Map common yfinance symbols to Polygon format
 _POLYGON_SYMBOL_MAP = {
     # Indices & volatility
-    "^GSPC": "SPX", "^VIX": "VIX", "^OVX": "OVX", "^GVZ": "GVZ",
-    "^DJI": "DJI", "^IXIC": "COMP", "DX-Y.NYB": "DXY",
+    "^GSPC": "I:SPX", "^VIX": "I:VIX", "^OVX": "I:OVX", "^GVZ": "I:GVZ",
+    "^DJI": "I:DJI", "^IXIC": "I:COMP", "DX-Y.NYB": "I:DXY",
+    "^TNX": "I:TNX", "^TYX": "I:TYX",
     # Index futures (Polygon uses bare symbols for continuous contracts)
     "ES=F": "ES", "NQ=F": "NQ", "YM=F": "YM", "RTY=F": "RTY",
     # Energy futures
@@ -149,7 +150,7 @@ def polygon_batch_snapshot(symbols: list) -> dict:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def polygon_history(symbol: str, days: int) -> pd.DataFrame:
-    """Fetch daily OHLC history from Polygon. Returns DataFrame with Close column."""
+    """Fetch daily OHLC history from Polygon, falling back to FRED for futures/indices/rates."""
     api_key = _get_polygon_key()
     if not api_key:
         return pd.DataFrame()
@@ -163,7 +164,7 @@ def polygon_history(symbol: str, days: int) -> pd.DataFrame:
         )
         r.raise_for_status()
         data = r.json()
-        if "results" in data:
+        if "results" in data and data["results"]:
             df = pd.DataFrame(data["results"])
             df["Date"] = pd.to_datetime(df["t"], unit="ms")
             df.set_index("Date", inplace=True)
@@ -173,6 +174,11 @@ def polygon_history(symbol: str, days: int) -> pd.DataFrame:
             return df[[v for v in available.values()]]
     except Exception as e:
         logger.warning(f"Polygon history failed for {sym}: {e}")
+
+    # FRED fallback for tickers Polygon can't serve (futures, indices, rates)
+    fred_series = _FRED_FALLBACK_MAP.get(symbol)
+    if fred_series:
+        return _fred_history(fred_series, days)
     return pd.DataFrame()
 
 # --- HELPER FUNCTIONS ---
@@ -513,6 +519,10 @@ def fetch_analyst_recommendations(symbol: str) -> pd.DataFrame:
 _FRED_FALLBACK_MAP = {
     "^VIX": "VIXCLS",
     "^OVX": "OVXCLS",
+    "^TNX": "DGS10",
+    "^TYX": "DGS30",
+    "CL=F": "DCOILWTICO",
+    "NG=F": "DHHNGSP",
     "GC=F": "GOLDPMGBD228NLBM",
     "SI=F": "SLVPRUSD",
     "DX-Y.NYB": "DTWEXBGS",
@@ -557,6 +567,36 @@ def _fred_latest(series_id: str) -> dict | None:
     except Exception as e:
         logger.warning(f"FRED fetch failed for {series_id}: {e}")
     return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fred_history(series_id: str, days: int) -> pd.DataFrame:
+    """Fetch daily history from FRED. Returns DataFrame with Close column (same shape as polygon_history)."""
+    key = _get_fred_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        end = date.today()
+        start = end - timedelta(days=days)
+        r = requests.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={
+                "series_id": series_id, "api_key": key, "file_type": "json",
+                "observation_start": start.isoformat(), "observation_end": end.isoformat(),
+                "sort_order": "asc",
+            },
+            timeout=15,
+        )
+        obs = r.json().get("observations", [])
+        rows = [{"Date": o["date"], "Close": float(o["value"])} for o in obs if o.get("value", ".") != "."]
+        if rows:
+            df = pd.DataFrame(rows)
+            df["Date"] = pd.to_datetime(df["Date"])
+            df.set_index("Date", inplace=True)
+            return df
+    except Exception as e:
+        logger.warning(f"FRED history failed for {series_id}: {e}")
+    return pd.DataFrame()
 
 
 def polygon_snapshot_with_fallback(symbol: str) -> dict | None:
