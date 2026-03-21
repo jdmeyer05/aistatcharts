@@ -5,7 +5,8 @@ import plotly.graph_objects as go
 import requests
 import io
 import logging
-from datetime import date
+import calendar
+from datetime import date, timedelta
 from src.layout import setup_page, error_boundary, fun_loader
 
 logger = logging.getLogger(__name__)
@@ -18,19 +19,48 @@ st.markdown("Planned generation additions by fuel type from ERCOT's Interconnect
 # File URL pattern
 ERCOT_FILE_BASE = "https://www.ercot.com/files/docs"
 
-# Build URLs for recent months (date_path, label)
-MONTHS = [
-    ("2026/03/05", "February_2026"),
-    ("2026/02/05", "January_2026"),
-    ("2025/11/06", "October_2025"),
-    ("2025/10/08", "September_2025"),
-    ("2025/09/09", "August_2025"),
-    ("2025/08/08", "July_2025"),
-    ("2025/07/09", "June_2025"),
-    ("2025/06/06", "May_2025"),
-    ("2025/05/09", "April_2025"),
-    ("2025/04/04", "March_2025"),
-]
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def discover_ercot_months(lookback: int = 12) -> list:
+    """Auto-discover available ERCOT capacity reports by probing URLs.
+
+    ERCOT publishes around the 3rd-10th of each month.
+    The report month is the month *before* the publication date.
+    Returns list of (date_path, month_label) tuples, newest first.
+    """
+    today = date.today()
+    found = []
+
+    for months_ago in range(0, lookback + 1):
+        # Publication month (we probe this month's files)
+        pub_date = today.replace(day=1) - timedelta(days=30 * months_ago)
+        pub_year = pub_date.year
+        pub_month = pub_date.month
+
+        # Report covers the month before publication
+        if pub_month == 1:
+            report_month, report_year = 12, pub_year - 1
+        else:
+            report_month, report_year = pub_month - 1, pub_year
+
+        month_label = f"{calendar.month_name[report_month]}_{report_year}"
+
+        # Try publication days 3-10
+        for day in range(3, 11):
+            date_path = f"{pub_year}/{pub_month:02d}/{day:02d}"
+            url = f"{ERCOT_FILE_BASE}/{date_path}/Capacity-Changes-by-Fuel-Type-Charts_{month_label}.xlsx"
+            try:
+                r = requests.head(url, timeout=5, allow_redirects=True)
+                if r.status_code == 200:
+                    found.append((date_path, month_label))
+                    break
+            except Exception:
+                continue
+
+    return found
+
+
+MONTHS = discover_ercot_months()
 
 COL_MAP = {8: "INR", 9: "project_name", 10: "county", 11: "projected_cod",
            12: "ia_signed", 13: "fuel", 14: "technology", 15: "capacity_mw",
