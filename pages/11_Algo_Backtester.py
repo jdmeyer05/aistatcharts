@@ -301,10 +301,14 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
 
             progress_bar.empty()
 
+            params_str = f"{name_p1} = `{p1_final}`"
             if p2_final is not None and name_p2 is not None:
-                opt_msg = f"**Optimal Parameters:** {name_p1} = `{p1_final}` | {name_p2} = `{p2_final}`"
-            else:
-                opt_msg = f"**Optimal Parameters:** {name_p1} = `{p1_final}`"
+                params_str += f" | {name_p2} = `{p2_final}`"
+            opt_msg = (
+                f"**Optimal Parameters:** {params_str} | In-sample Sharpe: `{best_sharpe:.2f}` — "
+                f"optimized across {total_iterations} parameter combinations. "
+                f"These are in-sample results; use the Walk-Forward tab to validate out-of-sample."
+            )
 
             st.session_state.opt_msg = opt_msg
     else:
@@ -616,14 +620,38 @@ with tab3:
             sig2.metric("p-value", f"{p_value:.3f}")
             sig3.metric("Significance", "Yes (p < 0.05)" if p_value < 0.05 else "No (p >= 0.05)")
 
+            median_random = np.median(boot_sharpes)
+            pct_rank = (1 - p_value) * 100
+
             if p_value < 0.01:
-                st.success(f"Highly significant (p = {p_value:.3f}). Less than 1% chance this Sharpe is due to luck.")
+                st.success(
+                    f"**Statistically significant at the 1% level (p = {p_value:.3f}).** "
+                    f"Your strategy's Sharpe ({actual_sharpe:.2f}) ranks in the top {pct_rank:.0f}% of "
+                    f"{n_boot} random permutations (median random Sharpe: {median_random:.2f}). "
+                    f"This edge is very unlikely to be explained by chance alone."
+                )
             elif p_value < 0.05:
-                st.success(f"Significant (p = {p_value:.3f}). Less than 5% chance this is random.")
+                st.success(
+                    f"**Statistically significant at the 5% level (p = {p_value:.3f}).** "
+                    f"Your Sharpe ({actual_sharpe:.2f}) beats {pct_rank:.0f}% of random permutations "
+                    f"(median random: {median_random:.2f}). The result is unlikely due to luck, "
+                    f"but consider walk-forward validation to confirm the edge persists out-of-sample."
+                )
             elif p_value < 0.10:
-                st.warning(f"Marginally significant (p = {p_value:.3f}). Results could be noise.")
+                st.warning(
+                    f"**Marginally significant (p = {p_value:.3f}).** "
+                    f"Your Sharpe ({actual_sharpe:.2f}) beats {pct_rank:.0f}% of random permutations "
+                    f"(median random: {median_random:.2f}). This falls between the 5% and 10% significance "
+                    f"thresholds — the result could be a real edge or noise. "
+                    f"Run walk-forward validation before acting on this."
+                )
             else:
-                st.error(f"Not significant (p = {p_value:.3f}). Cannot distinguish from random trading.")
+                st.error(
+                    f"**Not statistically significant (p = {p_value:.3f}).** "
+                    f"Your Sharpe ({actual_sharpe:.2f}) only beats {pct_rank:.0f}% of random permutations "
+                    f"(median random: {median_random:.2f}). A random strategy achieves similar or better "
+                    f"performance — this result should not be used for trading decisions."
+                )
 
             fig_boot = go.Figure()
             fig_boot.add_trace(go.Histogram(x=boot_sharpes, nbinsx=50, marker_color="#444", name="Random"))
@@ -925,12 +953,33 @@ with tab7:
                 wm5.metric("Folds Beating B&H", f"{folds_winning}/{len(fold_results)}")
 
                 # Verdict
+                win_pct = folds_winning / len(fold_results) * 100 if fold_results else 0
+                alpha_total = (total_oos_ret - total_hold_ret) * 100
+                hold_cagr_oos = (df_oos_all["Cum_Hold_OOS"].iloc[-1] / 100) ** (1 / oos_years) - 1 if oos_years > 0 else 0
+
                 if oos_sharpe > 0.5 and folds_winning > len(fold_results) * 0.5:
-                    st.success(f"Walk-forward results are encouraging — positive OOS alpha in {folds_winning}/{len(fold_results)} folds with Sharpe {oos_sharpe:.2f}.")
+                    st.success(
+                        f"**Walk-forward validates this strategy.** Out-of-sample Sharpe of {oos_sharpe:.2f} with "
+                        f"{folds_winning}/{len(fold_results)} folds ({win_pct:.0f}%) generating positive alpha vs buy & hold. "
+                        f"OOS CAGR {oos_cagr*100:.1f}% vs B&H {hold_cagr_oos*100:.1f}% ({alpha_total:+.1f}% cumulative alpha). "
+                        f"This suggests the edge is not purely from in-sample optimization."
+                    )
                 elif oos_sharpe > 0:
-                    st.warning(f"Marginal OOS performance — some alpha but inconsistent across folds ({folds_winning}/{len(fold_results)} positive).")
+                    st.warning(
+                        f"**Inconclusive — strategy shows some OOS alpha but is inconsistent.** "
+                        f"Only {folds_winning}/{len(fold_results)} folds ({win_pct:.0f}%) beat buy & hold. "
+                        f"OOS Sharpe {oos_sharpe:.2f} is positive but below the 0.5 threshold for confidence. "
+                        f"Cumulative alpha: {alpha_total:+.1f}%. Consider testing with more data (more folds) "
+                        f"or different parameter windows before relying on this strategy."
+                    )
                 else:
-                    st.error(f"Strategy does not survive walk-forward validation — OOS Sharpe {oos_sharpe:.2f}. In-sample results are likely overfit.")
+                    st.error(
+                        f"**Strategy fails walk-forward validation.** OOS Sharpe {oos_sharpe:.2f} is negative — "
+                        f"the strategy lost money relative to risk out-of-sample. "
+                        f"Only {folds_winning}/{len(fold_results)} folds ({win_pct:.0f}%) beat buy & hold. "
+                        f"Cumulative alpha: {alpha_total:+.1f}%. The in-sample results are likely overfit to historical patterns "
+                        f"that did not persist forward. Do not rely on the Equity Curve tab results for this strategy."
+                    )
 
                 # OOS equity curve
                 st.subheader("Out-of-Sample Equity Curve")
