@@ -352,50 +352,9 @@ def render_header(current_page: str):
                         del st.session_state[key]
                     st.switch_page("app.py")
 
-    # ── Recently visited pages (quick-access row) ──
-    _track_recent_page(current_page)
-    _render_recent_pages(current_page)
-
     # ── Market ticker strip ──
     # Auto-refresh every 5 min during market hours via st.fragment
     _render_ticker_strip(ticker_data, now)
-
-
-def _track_recent_page(page_key: str):
-    """Track recently visited pages in session state (max 5, no duplicates)."""
-    if "recent_pages" not in st.session_state:
-        st.session_state["recent_pages"] = []
-    recent = st.session_state["recent_pages"]
-    # Remove if already present, then prepend
-    recent = [p for p in recent if p != page_key]
-    recent.insert(0, page_key)
-    st.session_state["recent_pages"] = recent[:8]  # keep last 8
-
-
-def _render_recent_pages(current_page: str):
-    """Render a compact row of recently visited pages for quick navigation."""
-    recent = st.session_state.get("recent_pages", [])
-    # Show pages other than the current one, up to 5
-    others = [p for p in recent if p != current_page][:5]
-    if not others:
-        return
-
-    links = []
-    for key in others:
-        title, icon = PAGE_CONFIG.get(key, (key, "📊"))
-        short = title.split(" | ")[0]
-        path = f"pages/{key}.py"
-        links.append((key, f"{icon} {short}", path))
-
-    rc = st.columns(len(links) + 1)
-    with rc[0]:
-        st.markdown(
-            f'<div style="font-size:10px;color:{COLORS["text_muted"]};padding-top:6px;">Recent:</div>',
-            unsafe_allow_html=True,
-        )
-    for i, (key, label, path) in enumerate(links):
-        with rc[i + 1]:
-            st.page_link(path, label=label)
 
 
 @st.fragment(run_every=300)
