@@ -2,12 +2,238 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from scipy.stats import norm as _norm
+from itertools import combinations
 from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 setup_page("11_Algo_Backtester")
 
 st.title("🏗️ Algo Backtester & Optimizer")
 st.markdown("Test trading strategies, optimize parameters, and analyze performance with institutional-grade analytics.")
+
+
+# ═══════════════════════════════════════════════
+# DE PRADO METHODS
+# ═══════════════════════════════════════════════
+
+def deflated_sharpe_ratio(observed_sr: float, sr_std: float, n_trials: int, n_obs: int,
+                          skew: float = 0, kurtosis: float = 3) -> float:
+    """Deflated Sharpe Ratio (López de Prado, 2014).
+    Adjusts the observed Sharpe for multiple testing bias.
+    Returns the probability that the observed SR is significant after accounting
+    for the number of trials (parameter combinations) tested.
+    """
+    if n_trials <= 1 or sr_std <= 0 or n_obs <= 1:
+        return 1.0
+    # Expected max SR under null (Euler-Mascheroni approximation)
+    euler = 0.5772156649
+    e_max_sr = sr_std * ((1 - euler) * _norm.ppf(1 - 1 / n_trials) + euler * _norm.ppf(1 - 1 / (n_trials * np.e)))
+    # SR standard error with skew/kurtosis correction
+    sr_se = np.sqrt((1 - skew * observed_sr + (kurtosis - 1) / 4 * observed_sr ** 2) / (n_obs - 1))
+    if sr_se <= 0:
+        return 1.0
+    # Probability that observed SR is significant
+    z = (observed_sr - e_max_sr) / sr_se
+    return float(_norm.cdf(z))
+
+
+def probability_of_backtest_overfitting(returns_df: pd.DataFrame, strategy_func, strategy_name: str,
+                                        n_groups: int = 8, cost_pct: float = 0, borrow_daily: float = 0) -> dict:
+    """Combinatorial Purged Cross-Validation PBO (López de Prado, 2018).
+    Partitions data into n_groups, tests C(n, n/2) train/test splits.
+    Returns PBO (probability best IS underperforms OOS) and logit distribution.
+    """
+    n = len(returns_df)
+    group_size = n // n_groups
+    if group_size < 50 or n_groups < 4:
+        return {"pbo": None, "msg": "Not enough data for PBO analysis"}
+
+    # Create group indices
+    groups = list(range(n_groups))
+    half = n_groups // 2
+
+    # Get all C(n_groups, half) combinations for training sets
+    train_combos = list(combinations(groups, half))
+    if len(train_combos) > 100:
+        # Cap at 100 random combinations for performance
+        rng = np.random.default_rng(42)
+        indices = rng.choice(len(train_combos), 100, replace=False)
+        train_combos = [train_combos[i] for i in indices]
+
+    grid_p1, grid_p2, _, _ = get_optimization_grid(strategy_name)
+    grid_p1_list, grid_p2_list = list(grid_p1), list(grid_p2)
+
+    logits = []
+
+    for train_groups in train_combos:
+        test_groups = tuple(g for g in groups if g not in train_groups)
+
+        # Build train/test indices
+        train_idx = np.concatenate([np.arange(g * group_size, (g + 1) * group_size) for g in train_groups])
+        test_idx = np.concatenate([np.arange(g * group_size, (g + 1) * group_size) for g in test_groups])
+
+        df_train = returns_df.iloc[train_idx].sort_index()
+        df_test = returns_df.iloc[test_idx].sort_index()
+
+        if len(df_train) < 50 or len(df_test) < 50:
+            continue
+
+        # Find best strategy on IS (training)
+        best_sharpe_is = -np.inf
+        best_params = (None, None)
+        all_is_sharpes = {}
+
+        for p1_v in grid_p1_list:
+            for p2_v in grid_p2_list:
+                pos = run_strategy(df_train, strategy_name, p1_v, p2_v)
+                ret = pos.shift(1) * df_train["Returns"]
+                ret = ret - pos.diff().abs().clip(upper=2) * cost_pct
+                ret = ret - (pos.shift(1) == -1).astype(float) * borrow_daily
+                clean = ret.dropna()
+                if len(clean) > 10 and clean.std() > 0:
+                    s = (clean.mean() / clean.std()) * np.sqrt(252)
+                else:
+                    s = -np.inf
+                all_is_sharpes[(p1_v, p2_v)] = s
+                if s > best_sharpe_is:
+                    best_sharpe_is = s
+                    best_params = (p1_v, p2_v)
+
+        # Evaluate all strategies on OOS (testing)
+        all_oos_sharpes = {}
+        for (p1_v, p2_v) in all_is_sharpes:
+            pos = run_strategy(df_test, strategy_name, p1_v, p2_v)
+            ret = pos.shift(1) * df_test["Returns"]
+            ret = ret - pos.diff().abs().clip(upper=2) * cost_pct
+            ret = ret - (pos.shift(1) == -1).astype(float) * borrow_daily
+            clean = ret.dropna()
+            if len(clean) > 10 and clean.std() > 0:
+                all_oos_sharpes[(p1_v, p2_v)] = (clean.mean() / clean.std()) * np.sqrt(252)
+            else:
+                all_oos_sharpes[(p1_v, p2_v)] = -np.inf
+
+        # Rank: what's the OOS rank of the best IS strategy?
+        best_oos = all_oos_sharpes.get(best_params, -np.inf)
+        oos_values = sorted(all_oos_sharpes.values(), reverse=True)
+        n_better = sum(1 for v in oos_values if v > best_oos)
+        rank_pct = n_better / max(len(oos_values), 1)  # 0 = best OOS, 1 = worst OOS
+
+        # Logit: log(rank / (1 - rank)), capped
+        rank_pct = np.clip(rank_pct, 0.01, 0.99)
+        logits.append(np.log(rank_pct / (1 - rank_pct)))
+
+    if not logits:
+        return {"pbo": None, "msg": "Could not compute PBO — not enough valid splits"}
+
+    # PBO = fraction of logits > 0 (IS best underperforms OOS median)
+    pbo = np.mean([l > 0 for l in logits])
+    return {"pbo": pbo, "logits": logits, "n_splits": len(logits)}
+
+
+def apply_triple_barrier(df: pd.DataFrame, position: pd.Series, pt_mult: float = 2.0,
+                         sl_mult: float = 1.0, max_hold: int = 20, atr_period: int = 14) -> pd.Series:
+    """Triple Barrier Method (López de Prado).
+    Applies profit-taking, stop-loss, and time-expiry barriers to trade execution.
+    Returns modified position series with barrier-based exits.
+    """
+    c = df["Close"].values
+    high = df["High"].values if "High" in df.columns else c
+    low = df["Low"].values if "Low" in df.columns else c
+
+    # ATR for barrier sizing
+    tr = np.maximum(high - low, np.maximum(np.abs(high - np.roll(c, 1)), np.abs(low - np.roll(c, 1))))
+    atr = pd.Series(tr).rolling(atr_period).mean().values
+
+    result = np.zeros(len(c))
+    in_trade = False
+    entry_price = 0
+    direction = 0
+    bars_held = 0
+
+    for i in range(1, len(c)):
+        signal = position.iloc[i] if i < len(position) else 0
+
+        if in_trade:
+            bars_held += 1
+            atr_val = atr[i] if not np.isnan(atr[i]) else 0
+
+            # Check barriers
+            if direction == 1:  # Long
+                pt_hit = c[i] >= entry_price + atr_val * pt_mult
+                sl_hit = c[i] <= entry_price - atr_val * sl_mult
+            else:  # Short
+                pt_hit = c[i] <= entry_price - atr_val * pt_mult
+                sl_hit = c[i] >= entry_price + atr_val * sl_mult
+
+            time_hit = bars_held >= max_hold
+
+            if pt_hit or sl_hit or time_hit:
+                result[i] = 0  # Exit
+                in_trade = False
+            else:
+                result[i] = direction  # Hold
+        else:
+            # New signal
+            if signal != 0:
+                in_trade = True
+                direction = 1 if signal > 0 else -1
+                entry_price = c[i]
+                bars_held = 0
+                result[i] = direction
+            else:
+                result[i] = 0
+
+    return pd.Series(result, index=df.index)
+
+
+def apply_bet_sizing(position: pd.Series, signal_strength: pd.Series) -> pd.Series:
+    """Meta-Labeling / Bet Sizing (López de Prado).
+    Scales position size by signal confidence (0-1) instead of always ±1.
+    signal_strength should be 0-1 where 1 = max confidence.
+    """
+    return position * signal_strength.clip(0, 1)
+
+
+def compute_signal_strength(df: pd.DataFrame, strat_name: str, p1=None, p2=None) -> pd.Series:
+    """Compute a 0-1 confidence score based on how far the signal is from its threshold."""
+    c = df["Close"]
+    strength = pd.Series(0.5, index=df.index)
+
+    if "SMA" in strat_name or "Cross" in strat_name or "EMA" in strat_name or "Momentum" in strat_name:
+        p1_v = p1 or 10
+        p2_v = p2 or 21
+        if "EMA" in strat_name:
+            fast = c.ewm(span=int(p1_v), adjust=False).mean()
+            slow = c.ewm(span=int(p2_v), adjust=False).mean()
+        else:
+            fast = c.rolling(int(p1_v)).mean()
+            slow = c.rolling(int(p2_v)).mean()
+        spread = (fast - slow) / slow
+        strength = spread.abs().clip(0, 0.05) / 0.05  # Normalize: 5% spread = max confidence
+
+    elif "RSI" in strat_name:
+        p1_v = p1 or 14
+        rsi = calculate_rsi(c, p1_v)
+        # Distance from 50 (neutral), normalized
+        strength = ((rsi - 50).abs() / 50).clip(0, 1)
+
+    elif "Bollinger" in strat_name or "Z-Score" in strat_name:
+        p1_v = p1 or 20
+        p2_v = p2 or 2.0
+        z = (c - c.rolling(int(p1_v)).mean()) / c.rolling(int(p1_v)).std()
+        strength = (z.abs() / (p2_v * 2)).clip(0, 1)  # At 2x threshold = max confidence
+
+    elif "MACD" in strat_name:
+        p1_v, p2_v = p1 or 12, p2 or 26
+        ema_fast = c.ewm(span=int(p1_v), adjust=False).mean()
+        ema_slow = c.ewm(span=int(p2_v), adjust=False).mean()
+        macd = ema_fast - ema_slow
+        signal = macd.ewm(span=9, adjust=False).mean()
+        hist = (macd - signal).abs()
+        strength = (hist / hist.rolling(50).max()).clip(0, 1)
+
+    return strength.fillna(0.5)
+
 
 # --- STRATEGY ENGINE ---
 def calculate_rsi(data, periods=14):
@@ -241,9 +467,26 @@ run_test = _b1.button("Run Standard", use_container_width=True)
 run_opt = _b2.button("Optimize", type="primary", use_container_width=True)
 run_compare = _b3.button("Compare All", use_container_width=True)
 
-with st.expander("Advanced Costs"):
-    borrow_rate = st.slider("Short Borrow Rate (% annualized)", 0.0, 10.0, 1.5, step=0.5,
-                            help="Annual cost of borrowing shares for short positions. Typical: 0.5-3% for liquid stocks, 5-10% for hard-to-borrow.")
+with st.expander("Advanced Settings"):
+    adv1, adv2 = st.columns(2)
+    with adv1:
+        borrow_rate = st.slider("Short Borrow Rate (% ann.)", 0.0, 10.0, 1.5, step=0.5,
+                                help="Annual cost of borrowing shares for short positions.")
+        use_bet_sizing = st.checkbox("Enable Bet Sizing (Meta-Labeling)",
+                                     help="Scale position size by signal confidence instead of always ±1.")
+    with adv2:
+        use_triple_barrier = st.checkbox("Enable Triple Barrier Exits",
+                                         help="Apply profit-taking, stop-loss, and time-expiry barriers (López de Prado).")
+        if use_triple_barrier:
+            tb1, tb2, tb3 = st.columns(3)
+            with tb1:
+                tb_pt = st.number_input("Take Profit (ATR mult)", value=2.0, step=0.5, min_value=0.5)
+            with tb2:
+                tb_sl = st.number_input("Stop Loss (ATR mult)", value=1.0, step=0.5, min_value=0.5)
+            with tb3:
+                tb_hold = st.number_input("Max Hold (days)", value=20, step=5, min_value=5)
+        else:
+            tb_pt, tb_sl, tb_hold = 2.0, 1.0, 20
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)
@@ -267,6 +510,7 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
         with fun_loader("compute"):
             grid_p1, grid_p2, name_p1, name_p2 = get_optimization_grid(strategy)
             best_sharpe = -np.inf
+            all_tested_sharpes = []
 
             progress_bar = st.progress(0)
             total_iterations = len(list(grid_p1)) * len(list(grid_p2))
@@ -295,11 +539,16 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
                     else:
                         sharpe = -np.inf
 
+                    all_tested_sharpes.append(sharpe)
                     if sharpe > best_sharpe:
                         best_sharpe = sharpe
                         p1_final, p2_final = p1, p2
 
             progress_bar.empty()
+            # Store for DSR calculation
+            valid_sharpes = [s for s in all_tested_sharpes if s > -np.inf]
+            st.session_state.opt_n_trials = total_iterations
+            st.session_state.opt_all_sharpes = valid_sharpes
 
             params_str = f"{name_p1} = `{p1_final}`"
             if p2_final is not None and name_p2 is not None:
@@ -317,7 +566,20 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
     # Run final backtest
     with fun_loader("compute"):
         df = df_base.copy()
-        df["Position"] = run_strategy(df, strategy, p1_final, p2_final)
+        raw_position = run_strategy(df, strategy, p1_final, p2_final)
+
+        # Apply Triple Barrier exits if enabled
+        if use_triple_barrier:
+            raw_position = apply_triple_barrier(df, raw_position, pt_mult=tb_pt, sl_mult=tb_sl, max_hold=int(tb_hold))
+
+        # Apply Bet Sizing if enabled
+        if use_bet_sizing:
+            sig_strength = compute_signal_strength(df, strategy, p1_final, p2_final)
+            df["Position"] = apply_bet_sizing(raw_position, sig_strength)
+            df["Signal_Strength"] = sig_strength
+        else:
+            df["Position"] = raw_position
+
         df["Strat_Returns"] = df["Position"].shift(1) * df["Returns"]
 
         # Apply transaction costs on position changes
@@ -437,6 +699,41 @@ with tab1:
     c3.metric("Sharpe Ratio", f"{strat_sharpe:.2f}", f"B&H: {hold_sharpe:.2f}")
     c4.metric("Max Drawdown", f"{max_dd_strat * 100:.1f}%", f"B&H: {max_dd_hold * 100:.1f}%", delta_color="inverse")
     c5.metric("Total Trades", f"{total_trades:,.0f}", f"Cost: {total_cost_pct * 10000:.0f} bps/trade")
+
+    # Deflated Sharpe Ratio (if optimizer was used)
+    n_trials = st.session_state.get("opt_n_trials", 1)
+    if n_trials > 1:
+        all_sharpes = st.session_state.get("opt_all_sharpes", [])
+        sr_std = np.std(all_sharpes) if all_sharpes else 1.0
+        skewness = float(df["Strat_Returns"].skew())
+        kurt = float(df["Strat_Returns"].kurtosis()) + 3  # scipy kurtosis is excess
+        dsr_prob = deflated_sharpe_ratio(strat_sharpe, sr_std, n_trials, days, skewness, kurt)
+
+        dsr1, dsr2, dsr3 = st.columns(3)
+        dsr1.metric("Deflated Sharpe (DSR)", f"{dsr_prob:.1%}",
+                     help="Probability the Sharpe is significant after adjusting for multiple testing")
+        dsr2.metric("Trials Tested", f"{n_trials}")
+        dsr3.metric("Expected Max Random Sharpe",
+                     f"{sr_std * ((1-0.5772)*_norm.ppf(1-1/n_trials) + 0.5772*_norm.ppf(1-1/(n_trials*np.e))):.2f}" if sr_std > 0 else "N/A")
+
+        if dsr_prob > 0.95:
+            st.success(
+                f"**Deflated Sharpe: {dsr_prob:.1%} confidence.** After adjusting for {n_trials} parameter "
+                f"combinations tested, there is a {dsr_prob:.1%} probability this Sharpe ({strat_sharpe:.2f}) "
+                f"is genuinely skillful rather than the best of many random tries."
+            )
+        elif dsr_prob > 0.50:
+            st.warning(
+                f"**Deflated Sharpe: {dsr_prob:.1%} confidence.** Adjusting for {n_trials} trials, "
+                f"the observed Sharpe ({strat_sharpe:.2f}) has moderate evidence of being real. "
+                f"A DSR > 95% would indicate strong significance."
+            )
+        else:
+            st.error(
+                f"**Deflated Sharpe: {dsr_prob:.1%} confidence.** After adjusting for {n_trials} trials, "
+                f"this Sharpe ({strat_sharpe:.2f}) is likely explained by optimization luck. "
+                f"The expected best random Sharpe from {n_trials} tries exceeds the observed value."
+            )
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -662,6 +959,68 @@ with tab3:
                 xaxis_title="Sharpe Ratio", yaxis_title="Count",
             )
             st.plotly_chart(fig_boot, use_container_width=True)
+
+        # Probability of Backtest Overfitting (PBO)
+        if st.session_state.get("opt_n_trials", 1) > 1:
+            st.divider()
+            st.subheader("Probability of Backtest Overfitting (PBO)")
+            st.markdown(
+                "López de Prado's CPCV method: partitions data into groups, tests all train/test "
+                "splits, and measures how often the best in-sample strategy underperforms out-of-sample. "
+                "PBO > 50% = likely overfit."
+            )
+            if st.button("Run PBO Analysis", key="pbo_btn"):
+                with st.spinner("Running combinatorial cross-validation (this may take a minute)..."):
+                    pbo_result = probability_of_backtest_overfitting(
+                        df, strategy_func=run_strategy, strategy_name=st.session_state.bt_strat,
+                        n_groups=8, cost_pct=total_cost_pct, borrow_daily=daily_borrow_cost,
+                    )
+
+                if pbo_result.get("pbo") is not None:
+                    pbo_val = pbo_result["pbo"]
+                    logits = pbo_result["logits"]
+
+                    pb1, pb2, pb3 = st.columns(3)
+                    pb1.metric("PBO", f"{pbo_val:.1%}")
+                    pb2.metric("CPCV Splits Tested", f"{pbo_result['n_splits']}")
+                    pb3.metric("Overfit?", "Yes" if pbo_val > 0.5 else "No")
+
+                    if pbo_val < 0.25:
+                        st.success(
+                            f"**PBO = {pbo_val:.1%} — Low overfitting risk.** In {pbo_result['n_splits']} CPCV splits, "
+                            f"the best in-sample parameters ranked well out-of-sample {(1-pbo_val)*100:.0f}% of the time. "
+                            f"This strategy has strong evidence of a persistent, real edge."
+                        )
+                    elif pbo_val < 0.50:
+                        st.warning(
+                            f"**PBO = {pbo_val:.1%} — Moderate overfitting risk.** The best IS parameters "
+                            f"underperformed OOS in {pbo_val*100:.0f}% of splits. The edge may be partially real "
+                            f"but is not fully robust across all data partitions."
+                        )
+                    else:
+                        st.error(
+                            f"**PBO = {pbo_val:.1%} — High overfitting risk.** In the majority of CPCV splits, "
+                            f"the best in-sample strategy performed below median out-of-sample. "
+                            f"The optimization is fitting to noise, not signal. Do not trade this."
+                        )
+
+                    # Logit distribution
+                    fig_pbo = go.Figure()
+                    fig_pbo.add_trace(go.Histogram(
+                        x=logits, nbinsx=30,
+                        marker_color=["#ff4b4b" if l > 0 else "#00ff96" for l in sorted(logits)],
+                    ))
+                    fig_pbo.add_vline(x=0, line_color="white", line_width=2,
+                                     annotation_text="Overfit threshold")
+                    fig_pbo.update_layout(
+                        template="plotly_dark", height=250, margin=dict(t=30, b=0, l=0, r=0),
+                        xaxis_title="Logit (negative = IS best ranks well OOS)", yaxis_title="Count",
+                    )
+                    st.plotly_chart(fig_pbo, use_container_width=True)
+                    st.caption("Each bar is one CPCV split. Bars left of 0 = IS winner also performed well OOS. Right of 0 = overfit.")
+                else:
+                    st.warning(pbo_result.get("msg", "PBO analysis could not be completed."))
+
     else:
         st.info("No completed trades in this period.")
 
@@ -810,19 +1169,35 @@ with tab6:
     st.plotly_chart(fig_pos, use_container_width=True)
     st.caption("🟢 Green = Long | 🔴 Red = Short | No shading = Flat")
 
-    # Position timeline
-    st.subheader("Position Timeline")
+    # Position timeline (shows bet size if meta-labeling enabled)
+    st.subheader("Position Timeline" + (" (Bet-Sized)" if use_bet_sizing else ""))
     fig_pos_bar = go.Figure()
     held_pos = df["Position"].shift(1).fillna(0)
-    pos_colors = ["#00ff96" if v == 1 else "#ff4b4b" if v == -1 else "#333" for v in held_pos]
+    pos_colors = ["#00ff96" if v > 0 else "#ff4b4b" if v < 0 else "#333" for v in held_pos]
     fig_pos_bar.add_trace(go.Bar(
         x=df.index, y=held_pos, marker_color=pos_colors,
     ))
     fig_pos_bar.update_layout(
         template="plotly_dark", height=150, margin=dict(t=0, b=0, l=0, r=0),
-        yaxis=dict(tickvals=[-1, 0, 1], ticktext=["Short", "Flat", "Long"]),
+        yaxis_title="Position Size" if use_bet_sizing else None,
     )
+    if not use_bet_sizing:
+        fig_pos_bar.update_layout(yaxis=dict(tickvals=[-1, 0, 1], ticktext=["Short", "Flat", "Long"]))
     st.plotly_chart(fig_pos_bar, use_container_width=True)
+
+    if use_bet_sizing and "Signal_Strength" in df.columns:
+        st.subheader("Signal Confidence")
+        fig_conf = go.Figure()
+        fig_conf.add_trace(go.Scatter(
+            x=df.index, y=df["Signal_Strength"].shift(1).fillna(0), mode="lines",
+            line=dict(color="#ffaa00", width=1.5), fill="tozeroy", fillcolor="rgba(255,170,0,0.1)",
+        ))
+        fig_conf.update_layout(
+            template="plotly_dark", height=120, margin=dict(t=0, b=0, l=0, r=0),
+            yaxis=dict(range=[0, 1], title="Confidence"), hovermode="x unified",
+        )
+        st.plotly_chart(fig_conf, use_container_width=True)
+        st.caption("Signal confidence scales position size: 0 = no position, 1 = full position (±1).")
 
 
 # ---- Walk-forward engine (reusable) ----
