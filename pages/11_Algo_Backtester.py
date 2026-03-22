@@ -236,13 +236,19 @@ with _c4:
     commission_bps = st.number_input("Commission (bps)", value=5, step=1)
 with _c5:
     slippage_bps = st.number_input("Slippage (bps)", value=5, step=1)
-_b1, _b2, _ = st.columns([1, 1, 4])
+_b1, _b2, _b3, _ = st.columns([1, 1, 1, 3])
 run_test = _b1.button("Run Standard", use_container_width=True)
 run_opt = _b2.button("Optimize", type="primary", use_container_width=True)
+run_compare = _b3.button("Compare All", use_container_width=True)
+
+with st.expander("Advanced Costs"):
+    borrow_rate = st.slider("Short Borrow Rate (% annualized)", 0.0, 10.0, 1.5, step=0.5,
+                            help="Annual cost of borrowing shares for short positions. Typical: 0.5-3% for liquid stocks, 5-10% for hard-to-borrow.")
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)
 total_cost_pct = (commission_bps + slippage_bps) / 10000  # Convert bps to decimal
+daily_borrow_cost = borrow_rate / 100 / 252  # Annualized → daily
 
 # --- EXECUTION ---
 if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.get("bt_ticker") != ticker:
@@ -260,7 +266,7 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
     if run_opt:
         with fun_loader("compute"):
             grid_p1, grid_p2, name_p1, name_p2 = get_optimization_grid(strategy)
-            best_ret = -np.inf
+            best_sharpe = -np.inf
 
             progress_bar = st.progress(0)
             total_iterations = len(list(grid_p1)) * len(list(grid_p2))
@@ -279,12 +285,18 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
                     # Deduct transaction costs (reversals = 2 legs)
                     trade_legs = pos.diff().abs().clip(upper=2)
                     strat_ret = strat_ret - (trade_legs * total_cost_pct)
+                    # Deduct short borrow cost
+                    strat_ret = strat_ret - (pos.shift(1) == -1).astype(float) * daily_borrow_cost
 
-                    temp_eval = pd.DataFrame({"ret": strat_ret}).dropna().tail(lookback)
-                    cum_ret = np.exp(temp_eval["ret"].cumsum()).iloc[-1] if not temp_eval.empty else -np.inf
+                    temp_eval = strat_ret.dropna().tail(lookback)
+                    # Optimize for Sharpe ratio (risk-adjusted) instead of raw return
+                    if len(temp_eval) > 20 and temp_eval.std() > 0:
+                        sharpe = (temp_eval.mean() / temp_eval.std()) * np.sqrt(252)
+                    else:
+                        sharpe = -np.inf
 
-                    if cum_ret > best_ret:
-                        best_ret = cum_ret
+                    if sharpe > best_sharpe:
+                        best_sharpe = sharpe
                         p1_final, p2_final = p1, p2
 
             progress_bar.empty()
@@ -311,6 +323,9 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
         df["Trade_Legs"] = pos_diff.clip(upper=2)  # 0→1=1 leg, 1→-1=2 legs, 1→0=1 leg
         df["Strat_Returns"] = df["Strat_Returns"] - (df["Trade_Legs"] * total_cost_pct)
 
+        # Apply short borrow cost (daily, only when short)
+        df["Strat_Returns"] = df["Strat_Returns"] - (df["Position"].shift(1) == -1).astype(float) * daily_borrow_cost
+
         df = df.dropna().tail(lookback)
 
         df["Cum_Hold"] = np.exp(df["Returns"].cumsum()) * 100
@@ -319,6 +334,46 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
         st.session_state.bt_data = df
         st.session_state.bt_ticker = ticker
         st.session_state.bt_strat = strategy
+
+# --- STRATEGY COMPARISON ---
+if run_compare:
+    df_cmp_base = fetch_massive_data(ticker, lookback + 250)
+    if df_cmp_base is not None and not df_cmp_base.empty:
+        df_cmp_base["Returns"] = np.log(df_cmp_base["Close"] / df_cmp_base["Close"].shift(1))
+        cmp_results = []
+
+        with fun_loader("compute"):
+            for strat_name in STRATEGIES:
+                pos = run_strategy(df_cmp_base, strat_name)
+                ret = pos.shift(1) * df_cmp_base["Returns"]
+                legs = pos.diff().abs().clip(upper=2)
+                ret = ret - (legs * total_cost_pct)
+                ret = ret - (pos.shift(1) == -1).astype(float) * daily_borrow_cost
+                ret = ret.dropna().tail(lookback)
+
+                if len(ret) < 20 or ret.std() == 0:
+                    continue
+
+                cum = np.exp(ret.cumsum())
+                total_ret = (cum.iloc[-1] - 1) * 100
+                yrs = len(ret) / 252
+                cagr = (cum.iloc[-1] ** (1 / yrs) - 1) * 100 if yrs > 0 else 0
+                sharpe = (ret.mean() / ret.std()) * np.sqrt(252)
+                max_dd = ((cum / cum.cummax()) - 1).min() * 100
+                n_trades = int(legs.tail(lookback).sum())
+                short_pct = (pos.tail(lookback) == -1).sum() / len(ret) * 100
+
+                cmp_results.append({
+                    "Strategy": strat_name,
+                    "Return": total_ret,
+                    "CAGR": cagr,
+                    "Sharpe": sharpe,
+                    "Max DD": max_dd,
+                    "Trades": n_trades,
+                    "Short %": short_pct,
+                })
+
+        st.session_state.cmp_results = cmp_results
 
 # --- RENDER ---
 if "bt_data" not in st.session_state:
@@ -358,7 +413,7 @@ if st.session_state.get("opt_msg"):
     st.success(st.session_state.opt_msg)
 
 # --- TABS ---
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Equity Curve",
     "Drawdown & Risk",
     "Trade Log & Stats",
@@ -366,6 +421,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Return Distribution",
     "Position Chart",
     "Walk-Forward",
+    "Strategy Comparison",
 ])
 
 
@@ -526,6 +582,58 @@ with tab3:
         display_trades["P&L %"] = display_trades["P&L %"].apply(lambda x: f"{x:+.2f}%")
         display_trades["Duration"] = display_trades["Duration"].apply(lambda x: f"{x}d")
         st.dataframe(display_trades, use_container_width=True, hide_index=True)
+
+        # CSV download
+        csv_data = df_trades.to_csv(index=False)
+        st.download_button("Download Trade Log (CSV)", csv_data, f"trades_{ticker}_{strategy.split('.')[0].strip()}.csv",
+                          "text/csv", use_container_width=True)
+
+        # Bootstrap significance test
+        st.divider()
+        st.subheader("Statistical Significance")
+        st.markdown("Bootstrap test: shuffles daily returns 1,000 times to estimate the probability "
+                    "of achieving this Sharpe ratio by random chance.")
+
+        n_boot = 1000
+        actual_sharpe = strat_sharpe
+        boot_sharpes = []
+        daily_rets = df["Returns"].dropna().values
+        rng = np.random.default_rng(42)
+        for _ in range(n_boot):
+            shuffled = rng.permutation(daily_rets)
+            pos_boot = run_strategy(
+                pd.DataFrame({"Close": np.exp(np.cumsum(shuffled)) * 100}),
+                st.session_state.bt_strat,
+            )
+            boot_ret = pos_boot.shift(1).values[1:] * shuffled[1:]
+            if len(boot_ret) > 0 and np.std(boot_ret) > 0:
+                boot_sharpes.append((np.mean(boot_ret) / np.std(boot_ret)) * np.sqrt(252))
+
+        if boot_sharpes:
+            p_value = np.mean([s >= actual_sharpe for s in boot_sharpes])
+            sig1, sig2, sig3 = st.columns(3)
+            sig1.metric("Strategy Sharpe", f"{actual_sharpe:.2f}")
+            sig2.metric("p-value", f"{p_value:.3f}")
+            sig3.metric("Significance", "Yes (p < 0.05)" if p_value < 0.05 else "No (p >= 0.05)")
+
+            if p_value < 0.01:
+                st.success(f"Highly significant (p = {p_value:.3f}). Less than 1% chance this Sharpe is due to luck.")
+            elif p_value < 0.05:
+                st.success(f"Significant (p = {p_value:.3f}). Less than 5% chance this is random.")
+            elif p_value < 0.10:
+                st.warning(f"Marginally significant (p = {p_value:.3f}). Results could be noise.")
+            else:
+                st.error(f"Not significant (p = {p_value:.3f}). Cannot distinguish from random trading.")
+
+            fig_boot = go.Figure()
+            fig_boot.add_trace(go.Histogram(x=boot_sharpes, nbinsx=50, marker_color="#444", name="Random"))
+            fig_boot.add_vline(x=actual_sharpe, line_color="#00d1ff", line_width=3,
+                              annotation_text=f"Your strategy: {actual_sharpe:.2f}")
+            fig_boot.update_layout(
+                template="plotly_dark", height=250, margin=dict(t=30, b=0, l=0, r=0),
+                xaxis_title="Sharpe Ratio", yaxis_title="Count",
+            )
+            st.plotly_chart(fig_boot, use_container_width=True)
     else:
         st.info("No completed trades in this period.")
 
@@ -856,3 +964,65 @@ with tab7:
                     df_folds[["Fold", "Period", "Params"]],
                     use_container_width=True, hide_index=True,
                 )
+
+
+# ---- TAB 8: Strategy Comparison ----
+with tab8:
+    st.subheader("Strategy Comparison")
+    st.markdown("Run all 13 strategies with default parameters on the same data. Click **Compare All** above to populate.")
+
+    cmp_results = st.session_state.get("cmp_results")
+
+    if not cmp_results:
+        st.info("Click **Compare All** in the controls bar to run all strategies.")
+    else:
+        df_cmp = pd.DataFrame(cmp_results).sort_values("Sharpe", ascending=False)
+
+        # Ranked table
+        df_display = df_cmp.copy()
+        df_display.insert(0, "Rank", range(1, len(df_display) + 1))
+        df_display["Return"] = df_display["Return"].apply(lambda x: f"{x:+.1f}%")
+        df_display["CAGR"] = df_display["CAGR"].apply(lambda x: f"{x:+.1f}%")
+        df_display["Sharpe"] = df_display["Sharpe"].apply(lambda x: f"{x:.2f}")
+        df_display["Max DD"] = df_display["Max DD"].apply(lambda x: f"{x:.1f}%")
+        df_display["Trades"] = df_display["Trades"].astype(int)
+        df_display["Short %"] = df_display["Short %"].apply(lambda x: f"{x:.0f}%")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+        # Sharpe comparison chart
+        st.subheader("Sharpe Ratio Comparison")
+        df_chart = pd.DataFrame(cmp_results).sort_values("Sharpe", ascending=True)
+        short_names = [s.split(". ", 1)[1] if ". " in s else s for s in df_chart["Strategy"]]
+        bar_colors = ["#00ff96" if s > 0.5 else "#ffaa00" if s > 0 else "#ff4b4b" for s in df_chart["Sharpe"]]
+
+        fig_cmp = go.Figure()
+        fig_cmp.add_trace(go.Bar(
+            y=short_names, x=df_chart["Sharpe"], orientation="h",
+            marker_color=bar_colors,
+            text=[f"{s:.2f}" for s in df_chart["Sharpe"]], textposition="outside",
+        ))
+        fig_cmp.add_vline(x=hold_sharpe, line_dash="dot", line_color="white",
+                         annotation_text=f"Buy & Hold: {hold_sharpe:.2f}")
+        fig_cmp.update_layout(
+            template="plotly_dark", height=max(400, len(df_chart) * 35),
+            margin=dict(t=10, b=0, l=200, r=60),
+            xaxis_title="Sharpe Ratio",
+        )
+        st.plotly_chart(fig_cmp, use_container_width=True)
+
+        # Risk-return scatter
+        st.subheader("Risk vs Return")
+        df_scatter = pd.DataFrame(cmp_results)
+        fig_rr = go.Figure()
+        fig_rr.add_trace(go.Scatter(
+            x=df_scatter["Max DD"].abs(), y=df_scatter["CAGR"],
+            mode="markers+text", text=[s.split(". ")[0] for s in df_scatter["Strategy"]],
+            textposition="top center", textfont=dict(size=10, color="#aaa"),
+            marker=dict(size=12, color=df_scatter["Sharpe"], colorscale="Viridis",
+                       showscale=True, colorbar=dict(title="Sharpe")),
+        ))
+        fig_rr.update_layout(
+            template="plotly_dark", height=400, margin=dict(t=10, b=0, l=0, r=0),
+            xaxis_title="Max Drawdown (%, absolute)", yaxis_title="CAGR (%)",
+        )
+        st.plotly_chart(fig_rr, use_container_width=True)
