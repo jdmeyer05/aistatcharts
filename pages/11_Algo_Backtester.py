@@ -825,28 +825,101 @@ with tab6:
     st.plotly_chart(fig_pos_bar, use_container_width=True)
 
 
+# ---- Walk-forward engine (reusable) ----
+def _run_walk_forward(df_wf_base, strat_name, train_d, test_d, cost_pct, borrow_daily):
+    """Run one walk-forward pass. Returns (oos_segments, fold_results, grid names)."""
+    grid_p1, grid_p2, name_p1, name_p2 = get_optimization_grid(strat_name)
+    grid_p1_list, grid_p2_list = list(grid_p1), list(grid_p2)
+
+    oos_segments, fold_results = [], []
+    total_len = len(df_wf_base)
+    start_idx, fold_num = 0, 0
+
+    while start_idx + train_d + test_d <= total_len:
+        fold_num += 1
+        train_end = start_idx + train_d
+        test_end = train_end + test_d
+        df_train = df_wf_base.iloc[start_idx:train_end]
+
+        best_sharpe, best_p1, best_p2 = -np.inf, None, None
+        for p1_v in grid_p1_list:
+            for p2_v in grid_p2_list:
+                if p2_v is not None and isinstance(p2_v, int) and p1_v >= p2_v and (
+                    "Crossover" in strat_name or "Cross" in strat_name or "MACD" in strat_name or "Dual" in strat_name
+                ):
+                    continue
+                pos = run_strategy(df_train, strat_name, p1_v, p2_v)
+                ret = pos.shift(1) * df_train["Returns"]
+                ret = ret - pos.diff().abs().clip(upper=2) * cost_pct
+                ret = ret - (pos.shift(1) == -1).astype(float) * borrow_daily
+                clean = ret.dropna()
+                if len(clean) > 20 and clean.std() > 0:
+                    s = (clean.mean() / clean.std()) * np.sqrt(252)
+                else:
+                    s = -np.inf
+                if s > best_sharpe:
+                    best_sharpe = s
+                    best_p1, best_p2 = p1_v, p2_v
+
+        warmup = min(250, len(df_train))
+        df_test_full = df_wf_base.iloc[train_end - warmup:test_end].copy()
+        df_test_full["Position"] = run_strategy(df_test_full, strat_name, best_p1, best_p2)
+        df_test_full["Strat_Returns"] = df_test_full["Position"].shift(1) * df_test_full["Returns"]
+        df_test_full["Strat_Returns"] -= df_test_full["Position"].diff().abs().clip(upper=2) * cost_pct
+        df_test_full["Strat_Returns"] -= (df_test_full["Position"].shift(1) == -1).astype(float) * borrow_daily
+        df_oos = df_test_full.iloc[warmup:]
+        oos_segments.append(df_oos)
+
+        oos_cum = np.exp(df_oos["Strat_Returns"].dropna().cumsum()).iloc[-1] if not df_oos["Strat_Returns"].dropna().empty else 1.0
+        hold_cum = np.exp(df_oos["Returns"].dropna().cumsum()).iloc[-1] if not df_oos["Returns"].dropna().empty else 1.0
+
+        fold_results.append({
+            "Fold": fold_num,
+            "Period": f"{df_oos.index[0].strftime('%Y-%m-%d')} → {df_oos.index[-1].strftime('%Y-%m-%d')}",
+            "Params": f"{name_p1}={best_p1}" + (f", {name_p2}={best_p2}" if best_p2 is not None and name_p2 else ""),
+            "Strategy": f"{(oos_cum - 1) * 100:+.2f}%",
+            "Buy & Hold": f"{(hold_cum - 1) * 100:+.2f}%",
+            "Alpha": f"{(oos_cum - hold_cum) * 100:+.2f}%",
+            "Trades": int(df_oos["Position"].diff().abs().clip(upper=2).sum()),
+        })
+        start_idx += test_d
+
+    return oos_segments, fold_results
+
+
+def _summarize_wf(oos_segments, fold_results):
+    """Compute summary stats from walk-forward results."""
+    if not oos_segments:
+        return None
+    df_all = pd.concat(oos_segments)
+    df_all["Cum_Strat"] = np.exp(df_all["Strat_Returns"].cumsum()) * 100
+    df_all["Cum_Hold"] = np.exp(df_all["Returns"].cumsum()) * 100
+    total_ret = (df_all["Cum_Strat"].iloc[-1] / 100) - 1
+    hold_ret = (df_all["Cum_Hold"].iloc[-1] / 100) - 1
+    yrs = len(df_all) / 252
+    cagr = (df_all["Cum_Strat"].iloc[-1] / 100) ** (1 / yrs) - 1 if yrs > 0 else 0
+    sharpe = (df_all["Strat_Returns"].mean() / df_all["Strat_Returns"].std()) * np.sqrt(252) if df_all["Strat_Returns"].std() > 0 else 0
+    max_dd = ((df_all["Cum_Strat"] / df_all["Cum_Strat"].cummax()) - 1).min()
+    folds_win = sum(1 for f in fold_results if float(f["Alpha"].replace("%", "").replace("+", "")) > 0)
+    return {
+        "df": df_all, "total_ret": total_ret, "hold_ret": hold_ret, "cagr": cagr,
+        "sharpe": sharpe, "max_dd": max_dd, "folds_win": folds_win, "folds_total": len(fold_results),
+    }
+
+
 # ---- TAB 7: Walk-Forward Validation ----
 with tab7:
     st.subheader("Walk-Forward Validation")
     st.markdown(
-        "Splits history into rolling train/test windows. Parameters are optimized on each "
-        "training window and tested on the **unseen** subsequent period. The equity curve below "
-        "is stitched from out-of-sample segments only — what you'd have actually earned."
+        "Runs walk-forward optimization across **all 9 combinations** of training and testing windows. "
+        "Parameters are optimized on each training window and tested on the unseen next period. "
+        "Results show which window sizes produce consistent out-of-sample alpha."
     )
 
-    wf1, wf2 = st.columns(2)
-    with wf1:
-        train_days = st.selectbox("Training Window (days)", [252, 504, 756], index=1)
-    with wf2:
-        test_days = st.selectbox("Testing Window (days)", [63, 126, 252], index=1)
+    TRAIN_OPTIONS = [252, 504, 756]
+    TEST_OPTIONS = [63, 126, 252]
 
-    expected_folds = max(0, (lookback - train_days) // test_days)
-    if expected_folds < 6:
-        days_needed = train_days + (6 * test_days)
-        st.caption(f"Expected folds: **{expected_folds}** with current data. Increase historical data to **{days_needed}+ days** for 6+ folds.")
-
-    if st.button("Run Walk-Forward", type="primary", use_container_width=True):
-        # Need the full base data — re-fetch with extra warmup
+    if st.button("Run Walk-Forward (All Windows)", type="primary", use_container_width=True):
         df_wf_base = fetch_massive_data(ticker, lookback + 250)
         if df_wf_base is None or df_wf_base.empty:
             st.error("Failed to load data.")
@@ -854,171 +927,132 @@ with tab7:
             df_wf_base["Returns"] = np.log(df_wf_base["Close"] / df_wf_base["Close"].shift(1))
             df_wf_base = df_wf_base.dropna()
 
-            grid_p1, grid_p2, name_p1, name_p2 = get_optimization_grid(strategy)
-            # Convert to lists for re-use across folds
-            grid_p1_list = list(grid_p1)
-            grid_p2_list = list(grid_p2)
-
-            # Walk-forward loop
-            oos_segments = []
-            fold_results = []
-            total_len = len(df_wf_base)
-            start_idx = 0
-            fold_num = 0
-
+            all_wf_results = {}
             progress = st.progress(0)
+            combos = [(t, te) for t in TRAIN_OPTIONS for te in TEST_OPTIONS]
 
-            while start_idx + train_days + test_days <= total_len:
-                fold_num += 1
-                train_end = start_idx + train_days
-                test_end = train_end + test_days
-
-                df_train = df_wf_base.iloc[start_idx:train_end]
-                df_test = df_wf_base.iloc[train_end:test_end]
-
-                # Optimize on training window
-                best_ret = -np.inf
-                best_p1, best_p2 = None, None
-
-                for p1_v in grid_p1_list:
-                    for p2_v in grid_p2_list:
-                        if p2_v is not None and isinstance(p2_v, int) and p1_v >= p2_v and (
-                            "Crossover" in strategy or "Cross" in strategy or "MACD" in strategy or "Dual" in strategy
-                        ):
-                            continue
-                        pos = run_strategy(df_train, strategy, p1_v, p2_v)
-                        ret = pos.shift(1) * df_train["Returns"]
-                        legs = pos.diff().abs().clip(upper=2)
-                        ret = ret - (legs * total_cost_pct)
-                        cum = np.exp(ret.dropna().cumsum())
-                        final = cum.iloc[-1] if not cum.empty else -np.inf
-                        if final > best_ret:
-                            best_ret = final
-                            best_p1, best_p2 = p1_v, p2_v
-
-                # Test on out-of-sample window with optimized params
-                # Include some train data at the end for indicator warmup
-                warmup = min(250, len(df_train))
-                df_test_full = df_wf_base.iloc[train_end - warmup:test_end].copy()
-                df_test_full["Position"] = run_strategy(df_test_full, strategy, best_p1, best_p2)
-                df_test_full["Strat_Returns"] = df_test_full["Position"].shift(1) * df_test_full["Returns"]
-                trade_legs = df_test_full["Position"].diff().abs().clip(upper=2)
-                df_test_full["Strat_Returns"] = df_test_full["Strat_Returns"] - (trade_legs * total_cost_pct)
-                # Keep only the actual test period (trim warmup)
-                df_oos = df_test_full.iloc[warmup:]
-
-                oos_segments.append(df_oos)
-
-                oos_cum = np.exp(df_oos["Strat_Returns"].dropna().cumsum()).iloc[-1] if not df_oos["Strat_Returns"].dropna().empty else 1.0
-                hold_cum = np.exp(df_oos["Returns"].dropna().cumsum()).iloc[-1] if not df_oos["Returns"].dropna().empty else 1.0
-                n_trades = int(df_oos["Position"].diff().abs().clip(upper=2).sum())
-
-                fold_results.append({
-                    "Fold": fold_num,
-                    "Period": f"{df_oos.index[0].strftime('%Y-%m-%d')} → {df_oos.index[-1].strftime('%Y-%m-%d')}",
-                    "Params": f"{name_p1}={best_p1}" + (f", {name_p2}={best_p2}" if best_p2 is not None and name_p2 else ""),
-                    "Strategy": f"{(oos_cum - 1) * 100:+.2f}%",
-                    "Buy & Hold": f"{(hold_cum - 1) * 100:+.2f}%",
-                    "Alpha": f"{(oos_cum - hold_cum) * 100:+.2f}%",
-                    "Trades": n_trades,
-                })
-
-                progress.progress(min((start_idx + train_days + test_days) / total_len, 1.0))
-                start_idx += test_days  # Slide forward by test window
+            for idx, (tr, te) in enumerate(combos):
+                progress.progress((idx + 1) / len(combos))
+                segs, folds = _run_walk_forward(df_wf_base, strategy, tr, te, total_cost_pct, daily_borrow_cost)
+                summary = _summarize_wf(segs, folds)
+                if summary:
+                    all_wf_results[(tr, te)] = {"summary": summary, "segments": segs, "folds": folds}
 
             progress.empty()
+            st.session_state.wf_all = all_wf_results
 
-            if not oos_segments:
-                st.warning("Not enough data for walk-forward with these window sizes. Increase historical data or reduce window sizes.")
-            else:
-                # Stitch OOS equity curve
-                df_oos_all = pd.concat(oos_segments)
-                df_oos_all["Cum_Strat_OOS"] = np.exp(df_oos_all["Strat_Returns"].cumsum()) * 100
-                df_oos_all["Cum_Hold_OOS"] = np.exp(df_oos_all["Returns"].cumsum()) * 100
+    wf_all = st.session_state.get("wf_all")
 
-                # Summary metrics
-                total_oos_ret = (df_oos_all["Cum_Strat_OOS"].iloc[-1] / 100) - 1
-                total_hold_ret = (df_oos_all["Cum_Hold_OOS"].iloc[-1] / 100) - 1
-                oos_years = len(df_oos_all) / 252
-                oos_cagr = (df_oos_all["Cum_Strat_OOS"].iloc[-1] / 100) ** (1 / oos_years) - 1 if oos_years > 0 else 0
-                oos_sharpe = (df_oos_all["Strat_Returns"].mean() / df_oos_all["Strat_Returns"].std()) * np.sqrt(252) if df_oos_all["Strat_Returns"].std() != 0 else 0
-                oos_max_dd = ((df_oos_all["Cum_Strat_OOS"] / df_oos_all["Cum_Strat_OOS"].cummax()) - 1).min()
-                folds_winning = sum(1 for f in fold_results if float(f["Alpha"].replace("%", "").replace("+", "")) > 0)
+    if not wf_all:
+        st.info("Click **Run Walk-Forward** to test all 9 train/test window combinations.")
+    else:
+        # ── Summary grid (heatmap) ──
+        st.subheader("OOS Sharpe by Window Size")
+        sharpe_grid = []
+        for tr in TRAIN_OPTIONS:
+            row = []
+            for te in TEST_OPTIONS:
+                r = wf_all.get((tr, te))
+                row.append(r["summary"]["sharpe"] if r else np.nan)
+            sharpe_grid.append(row)
 
-                wm1, wm2, wm3, wm4, wm5 = st.columns(5)
-                wm1.metric("OOS Return", f"{total_oos_ret * 100:.2f}%", f"{(total_oos_ret - total_hold_ret) * 100:+.2f}% vs B&H")
-                wm2.metric("OOS CAGR", f"{oos_cagr * 100:.2f}%")
-                wm3.metric("OOS Sharpe", f"{oos_sharpe:.2f}")
-                wm4.metric("OOS Max DD", f"{oos_max_dd * 100:.1f}%")
-                wm5.metric("Folds Beating B&H", f"{folds_winning}/{len(fold_results)}")
+        fig_heat = go.Figure(data=go.Heatmap(
+            z=sharpe_grid,
+            x=[f"{te}d test" for te in TEST_OPTIONS],
+            y=[f"{tr}d train" for tr in TRAIN_OPTIONS],
+            text=[[f"{v:.2f}" if not np.isnan(v) else "N/A" for v in row] for row in sharpe_grid],
+            texttemplate="%{text}", textfont=dict(size=14),
+            colorscale=[[0, "#cc0000"], [0.4, "#661111"], [0.5, "#1a1a2e"], [0.6, "#116633"], [1, "#00cc66"]],
+            zmid=0, showscale=True, xgap=3, ygap=3,
+            colorbar=dict(title="Sharpe"),
+        ))
+        fig_heat.update_layout(
+            template="plotly_dark", height=250, margin=dict(t=10, b=0, l=0, r=0),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
 
-                # Verdict
-                win_pct = folds_winning / len(fold_results) * 100 if fold_results else 0
-                alpha_total = (total_oos_ret - total_hold_ret) * 100
-                hold_cagr_oos = (df_oos_all["Cum_Hold_OOS"].iloc[-1] / 100) ** (1 / oos_years) - 1 if oos_years > 0 else 0
+        # ── Ranked table of all combos ──
+        st.subheader("All Window Combinations Ranked")
+        combo_rows = []
+        for (tr, te), data in sorted(wf_all.items(), key=lambda x: x[1]["summary"]["sharpe"], reverse=True):
+            s = data["summary"]
+            combo_rows.append({
+                "Train": f"{tr}d",
+                "Test": f"{te}d",
+                "Folds": s["folds_total"],
+                "OOS Sharpe": f"{s['sharpe']:.2f}",
+                "OOS CAGR": f"{s['cagr']*100:+.1f}%",
+                "Alpha": f"{(s['total_ret'] - s['hold_ret'])*100:+.1f}%",
+                "Max DD": f"{s['max_dd']*100:.1f}%",
+                "Folds Winning": f"{s['folds_win']}/{s['folds_total']}",
+            })
+        st.dataframe(pd.DataFrame(combo_rows), use_container_width=True, hide_index=True)
 
-                if oos_sharpe > 0.5 and folds_winning > len(fold_results) * 0.5:
-                    st.success(
-                        f"**Walk-forward validates this strategy.** Out-of-sample Sharpe of {oos_sharpe:.2f} with "
-                        f"{folds_winning}/{len(fold_results)} folds ({win_pct:.0f}%) generating positive alpha vs buy & hold. "
-                        f"OOS CAGR {oos_cagr*100:.1f}% vs B&H {hold_cagr_oos*100:.1f}% ({alpha_total:+.1f}% cumulative alpha). "
-                        f"This suggests the edge is not purely from in-sample optimization."
-                    )
-                elif oos_sharpe > 0:
-                    st.warning(
-                        f"**Inconclusive — strategy shows some OOS alpha but is inconsistent.** "
-                        f"Only {folds_winning}/{len(fold_results)} folds ({win_pct:.0f}%) beat buy & hold. "
-                        f"OOS Sharpe {oos_sharpe:.2f} is positive but below the 0.5 threshold for confidence. "
-                        f"Cumulative alpha: {alpha_total:+.1f}%. Consider testing with more data (more folds) "
-                        f"or different parameter windows before relying on this strategy."
-                    )
-                else:
-                    st.error(
-                        f"**Strategy fails walk-forward validation.** OOS Sharpe {oos_sharpe:.2f} is negative — "
-                        f"the strategy lost money relative to risk out-of-sample. "
-                        f"Only {folds_winning}/{len(fold_results)} folds ({win_pct:.0f}%) beat buy & hold. "
-                        f"Cumulative alpha: {alpha_total:+.1f}%. The in-sample results are likely overfit to historical patterns "
-                        f"that did not persist forward. Do not rely on the Equity Curve tab results for this strategy."
-                    )
+        # ── Aggregate verdict ──
+        sharpes = [d["summary"]["sharpe"] for d in wf_all.values()]
+        avg_sharpe = np.mean(sharpes)
+        positive_combos = sum(1 for s in sharpes if s > 0)
+        strong_combos = sum(1 for s in sharpes if s > 0.5)
+        total_combos = len(sharpes)
 
-                # OOS equity curve
-                st.subheader("Out-of-Sample Equity Curve")
-                fig_wf = go.Figure()
-                fig_wf.add_trace(go.Scatter(
-                    x=df_oos_all.index, y=df_oos_all["Cum_Hold_OOS"], mode="lines",
-                    name="Buy & Hold", line=dict(color="white", width=2, dash="dot"),
-                ))
-                fig_wf.add_trace(go.Scatter(
-                    x=df_oos_all.index, y=df_oos_all["Cum_Strat_OOS"], mode="lines",
-                    name="Strategy (OOS)", line=dict(color="#00d1ff", width=3),
-                ))
+        st.divider()
+        if strong_combos >= total_combos * 0.5:
+            st.success(
+                f"**Robust across window sizes.** {strong_combos}/{total_combos} combinations produce OOS Sharpe > 0.5 "
+                f"(avg: {avg_sharpe:.2f}). The strategy's edge is not sensitive to the choice of training/testing window, "
+                f"which is a strong indicator of a real, persistent pattern rather than overfitting."
+            )
+        elif positive_combos >= total_combos * 0.5:
+            st.warning(
+                f"**Partially robust.** {positive_combos}/{total_combos} combinations show positive OOS Sharpe "
+                f"(avg: {avg_sharpe:.2f}), but only {strong_combos} exceed the 0.5 confidence threshold. "
+                f"The strategy may have a weak edge that is sensitive to window size — use the heatmap above "
+                f"to identify which configurations work best and test with more data."
+            )
+        else:
+            st.error(
+                f"**Not robust.** Only {positive_combos}/{total_combos} combinations produce positive OOS Sharpe "
+                f"(avg: {avg_sharpe:.2f}). The in-sample results do not generalize across different walk-forward "
+                f"configurations. This strategy should not be relied upon for trading."
+            )
 
-                # Shade fold boundaries
-                for seg in oos_segments:
-                    fig_wf.add_vline(x=seg.index[0], line_dash="dot", line_color="rgba(255,255,255,0.15)")
+        # ── Best combo detail ──
+        best_key = max(wf_all.keys(), key=lambda k: wf_all[k]["summary"]["sharpe"])
+        best = wf_all[best_key]
+        st.divider()
+        st.subheader(f"Best Configuration: {best_key[0]}d train / {best_key[1]}d test")
 
-                fig_wf.update_layout(
-                    template="plotly_dark", height=450, margin=dict(t=10, b=0, l=0, r=0),
-                    yaxis_title="Portfolio Value ($100 Base)", hovermode="x unified",
-                )
-                st.plotly_chart(fig_wf, use_container_width=True)
-                st.caption("Dotted vertical lines mark fold boundaries. Each segment uses parameters optimized on prior data only.")
+        s = best["summary"]
+        bm1, bm2, bm3, bm4, bm5 = st.columns(5)
+        bm1.metric("OOS Return", f"{s['total_ret']*100:.2f}%", f"{(s['total_ret']-s['hold_ret'])*100:+.2f}% vs B&H")
+        bm2.metric("OOS CAGR", f"{s['cagr']*100:.2f}%")
+        bm3.metric("OOS Sharpe", f"{s['sharpe']:.2f}")
+        bm4.metric("OOS Max DD", f"{s['max_dd']*100:.1f}%")
+        bm5.metric("Folds Beating B&H", f"{s['folds_win']}/{s['folds_total']}")
 
-                # Fold detail table
-                st.subheader("Fold-by-Fold Results")
-                df_folds = pd.DataFrame(fold_results)
-                st.dataframe(df_folds, use_container_width=True, hide_index=True)
+        # Best combo equity curve
+        df_best = s["df"]
+        fig_best = go.Figure()
+        fig_best.add_trace(go.Scatter(
+            x=df_best.index, y=df_best["Cum_Hold"], mode="lines",
+            name="Buy & Hold", line=dict(color="white", width=2, dash="dot"),
+        ))
+        fig_best.add_trace(go.Scatter(
+            x=df_best.index, y=df_best["Cum_Strat"], mode="lines",
+            name="Strategy (OOS)", line=dict(color="#00d1ff", width=3),
+        ))
+        for seg in best["segments"]:
+            fig_best.add_vline(x=seg.index[0], line_dash="dot", line_color="rgba(255,255,255,0.15)")
+        fig_best.update_layout(
+            template="plotly_dark", height=450, margin=dict(t=10, b=0, l=0, r=0),
+            yaxis_title="Portfolio Value ($100 Base)", hovermode="x unified",
+        )
+        st.plotly_chart(fig_best, use_container_width=True)
 
-                # Parameter stability
-                st.subheader("Parameter Stability Across Folds")
-                st.markdown(
-                    "If optimal parameters vary wildly between folds, the strategy is likely "
-                    "fitting to noise rather than capturing a real pattern."
-                )
-                st.dataframe(
-                    df_folds[["Fold", "Period", "Params"]],
-                    use_container_width=True, hide_index=True,
-                )
+        # Fold detail for best combo
+        st.subheader("Fold-by-Fold (Best Configuration)")
+        df_folds = pd.DataFrame(best["folds"])
+        st.dataframe(df_folds, use_container_width=True, hide_index=True)
 
 
 # ---- TAB 8: Strategy Comparison ----
