@@ -812,6 +812,11 @@ with tab7:
     with wf2:
         test_days = st.selectbox("Testing Window (days)", [63, 126, 252], index=1)
 
+    expected_folds = max(0, (lookback - train_days) // test_days)
+    if expected_folds < 6:
+        days_needed = train_days + (6 * test_days)
+        st.caption(f"Expected folds: **{expected_folds}** with current data. Increase historical data to **{days_needed}+ days** for 6+ folds.")
+
     if st.button("Run Walk-Forward", type="primary", use_container_width=True):
         # Need the full base data — re-fetch with extra warmup
         df_wf_base = fetch_massive_data(ticker, lookback + 250)
