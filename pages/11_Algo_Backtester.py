@@ -38,13 +38,17 @@ def deflated_sharpe_ratio(observed_sr: float, sr_std: float, n_trials: int, n_ob
 
 
 def probability_of_backtest_overfitting(returns_df: pd.DataFrame, strategy_func, strategy_name: str,
-                                        n_groups: int = 8, cost_pct: float = 0, borrow_daily: float = 0) -> dict:
+                                        n_groups: int = 8, cost_pct: float = 0, borrow_daily: float = 0,
+                                        purge_length: int = 5, embargo_pct: float = 0.01) -> dict:
     """Combinatorial Purged Cross-Validation PBO (López de Prado, 2018).
     Partitions data into n_groups, tests C(n, n/2) train/test splits.
+    Purges observations near train/test boundaries and adds embargo period
+    to prevent information leakage through autocorrelation.
     Returns PBO (probability best IS underperforms OOS) and logit distribution.
     """
     n = len(returns_df)
     group_size = n // n_groups
+    embargo_size = max(1, int(n * embargo_pct))
     if group_size < 50 or n_groups < 4:
         return {"pbo": None, "msg": "Not enough data for PBO analysis"}
 
@@ -55,7 +59,6 @@ def probability_of_backtest_overfitting(returns_df: pd.DataFrame, strategy_func,
     # Get all C(n_groups, half) combinations for training sets
     train_combos = list(combinations(groups, half))
     if len(train_combos) > 100:
-        # Cap at 100 random combinations for performance
         rng = np.random.default_rng(42)
         indices = rng.choice(len(train_combos), 100, replace=False)
         train_combos = [train_combos[i] for i in indices]
@@ -68,9 +71,32 @@ def probability_of_backtest_overfitting(returns_df: pd.DataFrame, strategy_func,
     for train_groups in train_combos:
         test_groups = tuple(g for g in groups if g not in train_groups)
 
-        # Build train/test indices
-        train_idx = np.concatenate([np.arange(g * group_size, (g + 1) * group_size) for g in train_groups])
-        test_idx = np.concatenate([np.arange(g * group_size, (g + 1) * group_size) for g in test_groups])
+        # Build raw train/test indices
+        train_idx_raw = np.concatenate([np.arange(g * group_size, (g + 1) * group_size) for g in train_groups])
+        test_idx_raw = np.concatenate([np.arange(g * group_size, (g + 1) * group_size) for g in test_groups])
+
+        # Purge: remove train observations within purge_length of any test boundary
+        test_boundaries = set()
+        for g in test_groups:
+            test_boundaries.add(g * group_size)  # Start of test group
+            test_boundaries.add((g + 1) * group_size - 1)  # End of test group
+        purge_set = set()
+        for b in test_boundaries:
+            for offset in range(-purge_length, purge_length + 1):
+                purge_set.add(b + offset)
+        train_idx = np.array([i for i in train_idx_raw if i not in purge_set])
+
+        # Embargo: remove test observations immediately after train groups
+        embargo_set = set()
+        for g in train_groups:
+            train_end = (g + 1) * group_size
+            for offset in range(embargo_size):
+                embargo_set.add(train_end + offset)
+        test_idx = np.array([i for i in test_idx_raw if i not in embargo_set])
+
+        # Bounds check
+        train_idx = train_idx[(train_idx >= 0) & (train_idx < n)]
+        test_idx = test_idx[(test_idx >= 0) & (test_idx < n)]
 
         df_train = returns_df.iloc[train_idx].sort_index()
         df_test = returns_df.iloc[test_idx].sort_index()
@@ -233,6 +259,45 @@ def compute_signal_strength(df: pd.DataFrame, strat_name: str, p1=None, p2=None)
         strength = (hist / hist.rolling(50).max()).clip(0, 1)
 
     return strength.fillna(0.5)
+
+
+def fracdiff(series: pd.Series, d: float, threshold: float = 1e-5) -> pd.Series:
+    """Fixed-window fractional differentiation (López de Prado, ch. 5).
+    Applies fractional differencing of order d to the series.
+    d=0 is original series, d=1 is first difference, d=0.3-0.7 is the sweet spot.
+    """
+    weights = [1.0]
+    k = 1
+    while True:
+        w = -weights[-1] * (d - k + 1) / k
+        if abs(w) < threshold:
+            break
+        weights.append(w)
+        k += 1
+    weights = np.array(weights[::-1])
+    width = len(weights)
+    result = pd.Series(index=series.index, dtype=float)
+    for i in range(width - 1, len(series)):
+        result.iloc[i] = np.dot(weights, series.iloc[i - width + 1:i + 1].values)
+    return result
+
+
+def find_min_d(series: pd.Series, max_d: float = 1.0, step: float = 0.05, p_threshold: float = 0.05) -> float:
+    """Find minimum d that makes the series stationary (ADF test p-value < threshold).
+    This is the minimum information loss needed for stationarity.
+    """
+    from statsmodels.tsa.stattools import adfuller
+    for d in np.arange(0, max_d + step, step):
+        fd = fracdiff(series, d).dropna()
+        if len(fd) < 50:
+            continue
+        try:
+            adf_pval = adfuller(fd, maxlag=1, regression="c")[1]
+            if adf_pval < p_threshold:
+                return round(d, 2)
+        except Exception:
+            continue
+    return 1.0
 
 
 # --- STRATEGY ENGINE ---
@@ -475,6 +540,8 @@ with st.expander("Advanced Settings"):
         use_bet_sizing = st.checkbox("Enable Bet Sizing (Meta-Labeling)",
                                      help="Scale position size by signal confidence instead of always ±1.")
     with adv2:
+        use_fracdiff = st.checkbox("Fractional Differentiation",
+                                    help="Preserve long memory while achieving stationarity (López de Prado, ch. 5). Auto-finds minimum d.")
         use_triple_barrier = st.checkbox("Enable Triple Barrier Exits",
                                          help="Apply profit-taking, stop-loss, and time-expiry barriers (López de Prado).")
         if use_triple_barrier:
@@ -502,6 +569,17 @@ if run_test or run_opt or "bt_data" not in st.session_state or st.session_state.
         st.stop()
 
     df_base["Returns"] = np.log(df_base["Close"] / df_base["Close"].shift(1))
+
+    # Fractional differentiation preprocessing
+    fracdiff_d = None
+    if use_fracdiff:
+        with st.spinner("Finding minimum d for stationarity..."):
+            fracdiff_d = find_min_d(df_base["Close"])
+            df_base["Close_orig"] = df_base["Close"].copy()
+            df_base["Close"] = fracdiff(df_base["Close"], fracdiff_d)
+            df_base = df_base.dropna(subset=["Close"])
+            st.info(f"Fractional differentiation applied: d = {fracdiff_d} (minimum for ADF stationarity at p < 0.05). "
+                    f"Original price memory preserved — d=0 would be raw prices, d=1 would be standard returns.")
 
     p1_final, p2_final = None, None
     opt_msg = ""
@@ -679,7 +757,7 @@ if st.session_state.get("opt_msg"):
     st.success(st.session_state.opt_msg)
 
 # --- TABS ---
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Equity Curve",
     "Drawdown & Risk",
     "Trade Log & Stats",
@@ -687,6 +765,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Return Distribution",
     "Position Chart",
     "Walk-Forward",
+    "Regime Analysis",
     "Strategy Comparison",
 ])
 
@@ -889,24 +968,41 @@ with tab3:
         st.download_button("Download Trade Log (CSV)", csv_data, f"trades_{ticker}_{strategy.split('.')[0].strip()}.csv",
                           "text/csv", use_container_width=True)
 
-        # Bootstrap significance test
+        # Sequential bootstrap significance test (de Prado)
         st.divider()
-        st.subheader("Statistical Significance")
-        st.markdown("Bootstrap test: shuffles daily returns 1,000 times to estimate the probability "
-                    "of achieving this Sharpe ratio by random chance.")
+        st.subheader("Statistical Significance (Sequential Bootstrap)")
+        st.markdown(
+            "López de Prado's sequential bootstrap: respects the serial dependence structure "
+            "in financial returns rather than assuming IID. Generates 1,000 resampled paths "
+            "using block bootstrap (preserving local autocorrelation), then runs the strategy "
+            "on each to estimate the probability of achieving this Sharpe by chance."
+        )
 
         n_boot = 1000
         actual_sharpe = strat_sharpe
         boot_sharpes = []
         daily_rets = df["Returns"].dropna().values
+        n_rets = len(daily_rets)
         rng = np.random.default_rng(42)
+
+        # Block size: sqrt(n) is standard for dependent data (Politis & Romano)
+        block_size = max(5, int(np.sqrt(n_rets)))
+
         for _ in range(n_boot):
-            shuffled = rng.permutation(daily_rets)
+            # Block bootstrap: sample contiguous blocks to preserve autocorrelation
+            sampled = np.empty(n_rets)
+            idx = 0
+            while idx < n_rets:
+                start = rng.integers(0, n_rets - block_size + 1)
+                block_len = min(block_size, n_rets - idx)
+                sampled[idx:idx + block_len] = daily_rets[start:start + block_len]
+                idx += block_len
+
             pos_boot = run_strategy(
-                pd.DataFrame({"Close": np.exp(np.cumsum(shuffled)) * 100}),
+                pd.DataFrame({"Close": np.exp(np.cumsum(sampled)) * 100}),
                 st.session_state.bt_strat,
             )
-            boot_ret = pos_boot.shift(1).values[1:] * shuffled[1:]
+            boot_ret = pos_boot.shift(1).values[1:] * sampled[1:]
             if len(boot_ret) > 0 and np.std(boot_ret) > 0:
                 boot_sharpes.append((np.mean(boot_ret) / np.std(boot_ret)) * np.sqrt(252))
 
@@ -1430,8 +1526,155 @@ with tab7:
         st.dataframe(df_folds, use_container_width=True, hide_index=True)
 
 
-# ---- TAB 8: Strategy Comparison ----
+# ---- TAB 8: Regime Analysis ----
 with tab8:
+    st.subheader("Regime-Conditioned Performance")
+    st.markdown(
+        "Strategy performance broken down by market regime. Shows *when* the strategy works "
+        "and when to sit out — critical for real deployment (López de Prado, ch. 3)."
+    )
+
+    # Compute regimes
+    _close = df["Close"]
+    _vol_20 = df["Returns"].rolling(20).std() * np.sqrt(252)
+    _sma_200 = _close.rolling(min(200, len(_close) // 3)).mean()
+
+    # Volatility regime (terciles)
+    vol_terciles = pd.qcut(_vol_20.dropna(), 3, labels=["Low Vol", "Med Vol", "High Vol"])
+    df["Vol_Regime"] = vol_terciles.reindex(df.index)
+
+    # Trend regime
+    df["Trend_Regime"] = np.where(_close > _sma_200 * 1.02, "Bull",
+                          np.where(_close < _sma_200 * 0.98, "Bear", "Sideways"))
+
+    # ── Volatility Regime Breakdown ──
+    st.subheader("Performance by Volatility Regime")
+    vol_regimes = ["Low Vol", "Med Vol", "High Vol"]
+    vol_stats = []
+    for regime in vol_regimes:
+        mask = df["Vol_Regime"] == regime
+        r = df.loc[mask, "Strat_Returns"]
+        h = df.loc[mask, "Returns"]
+        if len(r) > 20 and r.std() > 0:
+            sharpe = (r.mean() / r.std()) * np.sqrt(252)
+            alpha = (r.mean() - h.mean()) * 252 * 100
+            cum = (np.exp(r.sum()) - 1) * 100
+            dd = ((np.exp(r.cumsum()) / np.exp(r.cumsum()).cummax()) - 1).min() * 100
+        else:
+            sharpe, alpha, cum, dd = 0, 0, 0, 0
+        vol_stats.append({
+            "Regime": regime, "Days": int(mask.sum()),
+            "Sharpe": sharpe, "Ann. Alpha": f"{alpha:+.1f}%",
+            "Total Return": f"{cum:+.1f}%", "Max DD": f"{dd:.1f}%",
+        })
+
+    vc = st.columns(3)
+    for i, vs in enumerate(vol_stats):
+        color = "#00ff96" if vs["Sharpe"] > 0.5 else "#ffaa00" if vs["Sharpe"] > 0 else "#ff4b4b"
+        vc[i].metric(vs["Regime"], f"Sharpe: {vs['Sharpe']:.2f}", f"{vs['Days']} days")
+
+    st.dataframe(pd.DataFrame(vol_stats), use_container_width=True, hide_index=True)
+
+    # Vol regime bar chart
+    fig_vol = go.Figure()
+    vol_sharpes = [vs["Sharpe"] for vs in vol_stats]
+    vol_colors = ["#00ff96" if s > 0.5 else "#ffaa00" if s > 0 else "#ff4b4b" for s in vol_sharpes]
+    fig_vol.add_trace(go.Bar(x=vol_regimes, y=vol_sharpes, marker_color=vol_colors,
+                              text=[f"{s:.2f}" for s in vol_sharpes], textposition="outside"))
+    fig_vol.add_hline(y=0, line_color="white", line_width=1)
+    fig_vol.update_layout(template="plotly_dark", height=300, margin=dict(t=10, b=0, l=0, r=0),
+                          yaxis_title="Sharpe Ratio")
+    st.plotly_chart(fig_vol, use_container_width=True)
+
+    # ── Trend Regime Breakdown ──
+    st.subheader("Performance by Trend Regime")
+    trend_regimes = ["Bull", "Sideways", "Bear"]
+    trend_stats = []
+    for regime in trend_regimes:
+        mask = df["Trend_Regime"] == regime
+        r = df.loc[mask, "Strat_Returns"]
+        h = df.loc[mask, "Returns"]
+        if len(r) > 20 and r.std() > 0:
+            sharpe = (r.mean() / r.std()) * np.sqrt(252)
+            alpha = (r.mean() - h.mean()) * 252 * 100
+            cum = (np.exp(r.sum()) - 1) * 100
+            dd = ((np.exp(r.cumsum()) / np.exp(r.cumsum()).cummax()) - 1).min() * 100
+        else:
+            sharpe, alpha, cum, dd = 0, 0, 0, 0
+        trend_stats.append({
+            "Regime": regime, "Days": int(mask.sum()),
+            "Sharpe": sharpe, "Ann. Alpha": f"{alpha:+.1f}%",
+            "Total Return": f"{cum:+.1f}%", "Max DD": f"{dd:.1f}%",
+        })
+
+    tc = st.columns(3)
+    for i, ts in enumerate(trend_stats):
+        tc[i].metric(ts["Regime"], f"Sharpe: {ts['Sharpe']:.2f}", f"{ts['Days']} days")
+
+    st.dataframe(pd.DataFrame(trend_stats), use_container_width=True, hide_index=True)
+
+    # Trend regime bar chart
+    fig_trend = go.Figure()
+    trend_sharpes = [ts["Sharpe"] for ts in trend_stats]
+    trend_colors_bar = ["#00ff96" if s > 0.5 else "#ffaa00" if s > 0 else "#ff4b4b" for s in trend_sharpes]
+    fig_trend.add_trace(go.Bar(x=trend_regimes, y=trend_sharpes, marker_color=trend_colors_bar,
+                                text=[f"{s:.2f}" for s in trend_sharpes], textposition="outside"))
+    fig_trend.add_hline(y=0, line_color="white", line_width=1)
+    fig_trend.update_layout(template="plotly_dark", height=300, margin=dict(t=10, b=0, l=0, r=0),
+                            yaxis_title="Sharpe Ratio")
+    st.plotly_chart(fig_trend, use_container_width=True)
+
+    # ── Regime Timeline ──
+    st.subheader("Regime Timeline")
+    fig_regime = go.Figure()
+    fig_regime.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines", name="Price",
+                                     line=dict(color="white", width=1.5)))
+    regime_color_map = {"Bull": "rgba(0,255,150,0.12)", "Bear": "rgba(255,75,75,0.12)", "Sideways": "rgba(255,255,255,0.04)"}
+    prev_regime = None
+    reg_start = df.index[0]
+    for i in range(len(df)):
+        curr = df["Trend_Regime"].iloc[i]
+        if curr != prev_regime and prev_regime is not None:
+            fig_regime.add_vrect(x0=reg_start, x1=df.index[i], fillcolor=regime_color_map.get(prev_regime, "rgba(0,0,0,0)"),
+                                  line_width=0)
+            reg_start = df.index[i]
+        prev_regime = curr
+    fig_regime.add_vrect(x0=reg_start, x1=df.index[-1], fillcolor=regime_color_map.get(prev_regime, "rgba(0,0,0,0)"),
+                          line_width=0)
+    fig_regime.update_layout(template="plotly_dark", height=350, margin=dict(t=10, b=0, l=0, r=0),
+                              yaxis_title="Price ($)", hovermode="x unified")
+    st.plotly_chart(fig_regime, use_container_width=True)
+    st.caption("Green = Bull (price > SMA+2%) | Red = Bear (price < SMA-2%) | Gray = Sideways")
+
+    # ── Regime Verdict ──
+    best_vol = max(vol_stats, key=lambda x: x["Sharpe"])
+    worst_vol = min(vol_stats, key=lambda x: x["Sharpe"])
+    best_trend = max(trend_stats, key=lambda x: x["Sharpe"])
+    worst_trend = min(trend_stats, key=lambda x: x["Sharpe"])
+
+    st.divider()
+    if best_vol["Sharpe"] > 0.5 and best_trend["Sharpe"] > 0.5:
+        st.success(
+            f"**Best conditions:** {best_vol['Regime']} (Sharpe {best_vol['Sharpe']:.2f}) + "
+            f"{best_trend['Regime']} (Sharpe {best_trend['Sharpe']:.2f}). "
+            f"**Worst conditions:** {worst_vol['Regime']} (Sharpe {worst_vol['Sharpe']:.2f}) + "
+            f"{worst_trend['Regime']} (Sharpe {worst_trend['Sharpe']:.2f}). "
+            f"Consider deploying this strategy only during favorable regimes and switching to "
+            f"cash or a different strategy during {worst_vol['Regime']}/{worst_trend['Regime']} periods."
+        )
+    else:
+        st.warning(
+            f"**Best conditions:** {best_vol['Regime']} (Sharpe {best_vol['Sharpe']:.2f}) + "
+            f"{best_trend['Regime']} (Sharpe {best_trend['Sharpe']:.2f}). "
+            f"**Worst conditions:** {worst_vol['Regime']} (Sharpe {worst_vol['Sharpe']:.2f}) + "
+            f"{worst_trend['Regime']} (Sharpe {worst_trend['Sharpe']:.2f}). "
+            f"No regime combination produces a strong Sharpe (> 0.5). The strategy may lack a "
+            f"consistent edge in any market environment."
+        )
+
+
+# ---- TAB 9: Strategy Comparison ----
+with tab9:
     st.subheader("Strategy Comparison")
     st.markdown("Run all 13 strategies with default parameters on the same data. Click **Compare All** above to populate.")
 
