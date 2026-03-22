@@ -63,15 +63,15 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 01 | `Summary.py` | Dashboard: 12 candlestick charts (indices, commodities, rates), Grok macro pulse, AI alerts, portfolio snapshot, account management |
 | 02 | `Scenario_Analysis.py` | **Flagship** — 7-tab macro scenario engine (see deep dive below) |
 | 03 | `Stock_Analysis.py` | 3-model AI stock scorecard (Grok + Gemini + Claude), EDGAR insider scoring, 8-K events, XBRL financial ratios |
-| 04 | `RL_Trading.py` | Dueling DQN ensemble with prioritized replay, 31 features, 10-tab analysis including walk-forward, bootstrap significance, Monte Carlo robustness, Grok AI assessment |
+| 04 | `RL_Trading.py` | Dueling DQN ensemble with prioritized replay, 31 features, 10-tab analysis including walk-forward, bootstrap significance, Monte Carlo robustness, feature redundancy detection, Grok AI assessment |
 | 05 | `Historical_Analysis.py` | Multi-year price history, seasonal decomposition, volatility, drawdown |
 | 06 | `Options_Analysis.py` | IV skew, open interest walls, Greek exposures |
 | 07 | `Options_Flow.py` | Unusual activity scanner, put/call ratios, GEX |
 | 08 | `Options_Lab.py` | Vol surface, earnings analyzer, multi-leg strategy modeler |
 | 09 | `ML_Stock_Predictor.py` | 30-day Random Forest forecast |
 | 10 | `Tech_Screener.py` | EMA, RSI, MACD, Bollinger Bands |
-| 11 | `Algo_Backtester.py` | 13 strategies, vectorized backtest |
-| 12 | `Monte_Carlo.py` | GBM stochastic simulation |
+| 11 | `Algo_Backtester.py` | 13 strategies, 9 tabs: equity curve, drawdown, trade log (DSR + PBO + bootstrap), monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. De Prado: Deflated Sharpe, PBO (purged CPCV), Triple Barrier, bet sizing, fracdiff, sequential bootstrap |
+| 12 | `Monte_Carlo.py` | Student-t, empirical block bootstrap, and GBM simulation with fat-tail warnings |
 | 13 | `Power_Risk_VaR.py` | Portfolio VaR/CVaR |
 | 14 | `Oil_Fundamentals.py` | EIA crude data |
 | 15 | `NatGas_Fundamentals.py` | EIA storage & supply |

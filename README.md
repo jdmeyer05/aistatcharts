@@ -46,12 +46,14 @@ Opens at **http://localhost:8501** (or next available port).
 | **Summary** | Landing dashboard: stat bar, market grid, relative performance chart, AI intelligence cards, watchlist |
 | **Scenario Analysis** | 6-tab macro engine: Grok AI regime analysis, FRED data, portfolio impact modeling, stress tests |
 | **Stock Analysis** | 3-model AI consensus scorecard + SEC EDGAR insider scoring, 8-K events, XBRL financial ratios |
-| **RL Trading** | Dueling DQN ensemble with 31 features, walk-forward validation, Monte Carlo robustness |
+| **RL Trading** | Dueling DQN ensemble with 31 features, walk-forward validation, Monte Carlo robustness, feature redundancy detection |
 | **Iran Conflict** | 3-model AI war analysis, Grok live infrastructure monitoring, trending tweets, conflict timeline, GDELT/ACLED |
 | **Fed & Macro Drivers** | 4-tab page: signal matrix, driver trend charts, FOMC dot plot, SEP, Polymarket |
 | **Smart Money** | 13F institutional holdings, congressional trades, activist investors (13D), 8-K event search |
 | **Economic Calendar** | Today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
-| **+ 13 more** | Historical analysis, options (3 pages), ML predictor, screener, backtester, Monte Carlo, VaR, oil, natgas, ERCOT (2), futures |
+| **Algo Backtester** | 13 strategies, 9-tab analysis: equity curve, drawdown, trade log, monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. López de Prado methods: Deflated Sharpe, PBO (CPCV), Triple Barrier exits, bet sizing, fractional differentiation, sequential bootstrap. |
+| **Monte Carlo** | Student-t (fat tails), empirical block bootstrap, and GBM simulation. Warns when normal assumptions don't fit. |
+| **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
 
@@ -97,6 +99,27 @@ Opens at **http://localhost:8501** (or next available port).
 | **EIA** | Oil/gas prices and storage | Public domain |
 | **Polymarket** | Prediction market odds | Public API |
 | **StockTwits** | Social feed (1M+ follower filter) | Public API |
+
+## Quantitative Methods (López de Prado Framework)
+
+The backtester and simulation pages implement institutional-grade statistical rigor from *Advances in Financial Machine Learning*:
+
+| Method | Page | What It Does |
+|--------|------|-------------|
+| **Deflated Sharpe Ratio** | Algo Backtester | Adjusts observed Sharpe for multiple testing bias (number of parameter combos tried) |
+| **Probability of Backtest Overfitting (PBO)** | Algo Backtester | CPCV with purging + embargo -- measures probability best IS strategy underperforms OOS |
+| **Walk-Forward (9 combos)** | Algo Backtester | Tests all 3x3 train/test window combinations, Sharpe heatmap, aggregate robustness verdict |
+| **Triple Barrier Method** | Algo Backtester | Profit-taking, stop-loss, time-expiry exits (ATR-based) replace indefinite holds |
+| **Meta-Labeling / Bet Sizing** | Algo Backtester | Scales position size by signal confidence (0-1) instead of binary ±1 |
+| **Fractional Differentiation** | Algo Backtester | Preserves long memory while achieving stationarity (auto-finds minimum d via ADF) |
+| **Sequential Bootstrap** | Algo Backtester | Block bootstrap preserving serial dependence -- honest p-values for autocorrelated returns |
+| **Regime Analysis** | Algo Backtester | Performance bucketed by volatility (low/med/high) and trend (bull/bear/sideways) regime |
+| **Student-t Simulation** | Monte Carlo | Fat-tailed distribution fitted to historical returns -- captures crash/rally risk GBM misses |
+| **Empirical Block Bootstrap** | Monte Carlo | Samples contiguous blocks from actual return history -- preserves autocorrelation and distribution |
+| **Feature Redundancy Detection** | RL Trading | Flags correlated feature pairs (|r| > 0.8) that inflate overfitting risk |
+| **Merton Jump-Diffusion** | Options Lab | Poisson jump process for OTM pricing where standard BS understates tail risk |
+
+**Global disclaimer** on all pages with trading signals: backtested results don't guarantee future returns, not financial advice.
 
 ## Security
 
