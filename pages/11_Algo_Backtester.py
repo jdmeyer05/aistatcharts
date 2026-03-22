@@ -754,8 +754,8 @@ with tab6:
         line=dict(color="white", width=2),
     ))
 
-    # Color regions for long/short/flat
-    pos = df["Position"]
+    # Color regions for long/short/flat (shifted to match actual held position in equity curve)
+    pos = df["Position"].shift(1).fillna(0)
     i = 0
     while i < len(df) - 1:
         curr_pos = pos.iloc[i]
@@ -785,9 +785,10 @@ with tab6:
     # Position timeline
     st.subheader("Position Timeline")
     fig_pos_bar = go.Figure()
-    pos_colors = ["#00ff96" if v == 1 else "#ff4b4b" if v == -1 else "#333" for v in df["Position"]]
+    held_pos = df["Position"].shift(1).fillna(0)
+    pos_colors = ["#00ff96" if v == 1 else "#ff4b4b" if v == -1 else "#333" for v in held_pos]
     fig_pos_bar.add_trace(go.Bar(
-        x=df.index, y=df["Position"], marker_color=pos_colors,
+        x=df.index, y=held_pos, marker_color=pos_colors,
     ))
     fig_pos_bar.update_layout(
         template="plotly_dark", height=150, margin=dict(t=0, b=0, l=0, r=0),
