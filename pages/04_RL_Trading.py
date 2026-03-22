@@ -1840,6 +1840,36 @@ to produce different strategy styles.
                                  margin=dict(t=10, b=0, l=120, r=0), xaxis_title="Relative Importance")
             st.plotly_chart(fig_imp, use_container_width=True)
 
+            # Feature redundancy check (de Prado: correlated features inflate overfitting)
+            if len(sorted_imp) > 5:
+                top_features = [k for k, _ in sorted_imp[:15]]
+                # Get the feature matrix for correlation
+                try:
+                    feat_matrix = pd.DataFrame(
+                        sample_states[:, :len(base_feature_names)],
+                        columns=base_feature_names,
+                    )
+                    corr = feat_matrix[top_features].corr().abs()
+                    # Find pairs with correlation > 0.8
+                    redundant = []
+                    for ii in range(len(top_features)):
+                        for jj in range(ii + 1, len(top_features)):
+                            if corr.iloc[ii, jj] > 0.8:
+                                redundant.append((top_features[ii], top_features[jj], corr.iloc[ii, jj]))
+                    if redundant:
+                        st.warning(
+                            f"**Feature Redundancy Detected:** {len(redundant)} highly correlated pairs "
+                            f"(|r| > 0.8). Correlated features inflate the effective feature count and "
+                            f"increase overfitting risk. Consider dropping one from each pair."
+                        )
+                        red_df = pd.DataFrame(redundant, columns=["Feature A", "Feature B", "Correlation"])
+                        red_df["Correlation"] = red_df["Correlation"].apply(lambda x: f"{x:.2f}")
+                        st.dataframe(red_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.success("**No redundant features detected** — all top features have |r| < 0.8.")
+                except Exception:
+                    pass
+
             # Action patterns
             actions_arr = np.array(test_bt["actions"])
             buy_pct = np.isin(actions_arr, [1, 2, 3]).sum() / len(actions_arr) * 100

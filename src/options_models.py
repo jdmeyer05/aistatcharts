@@ -2,10 +2,17 @@
 
 Implements:
 - Black-Scholes (BS) for baseline pricing
-- Merton Jump-Diffusion (MJD) for tail-risk-adjusted pricing
+- Merton Jump-Diffusion (MJD) for tail-risk-adjusted pricing (Merton, 1976)
 - BS-MJD blend that weights MJD more heavily for OTM options
 
 Used when market data (IV, price, Greeks) is missing or zero.
+
+Verified against:
+- BS: Hull, Options Futures & Other Derivatives, ch. 15
+- MJD: Merton (1976) "Option pricing when underlying stock returns are discontinuous"
+- Greeks: BS analytical, MJD via finite difference (dS=0.1%, dsig=0.1%, dT=1/365)
+- Vega convention: per 1% IV change (divide by 100)
+- Time convention: calendar days / 365 (market standard for options)
 """
 
 import numpy as np

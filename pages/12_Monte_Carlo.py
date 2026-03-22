@@ -7,7 +7,7 @@ from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loa
 setup_page("12_Monte_Carlo")
 
 st.title("🎯 Monte Carlo Simulator")
-st.markdown("Forecast terminal price distributions using Geometric Brownian Motion (GBM).")
+st.markdown("Forecast terminal price distributions using multiple simulation methods.")
 
 # --- Controls ---
 _c1, _c2, _c3, _c4, _c5 = st.columns([2, 2, 2, 2, 1])
@@ -22,6 +22,10 @@ with _c4:
 with _c5:
     st.markdown("<br>", unsafe_allow_html=True)
     run_sim = st.button("Run Simulation", type="primary", use_container_width=True)
+
+sim_method = st.radio("Simulation Method", ["GBM (Normal)", "Student-t (Fat Tails)", "Empirical Bootstrap"],
+                      horizontal=True, index=1,
+                      help="GBM assumes normal returns. Student-t captures fat tails. Empirical bootstrap uses actual historical return distribution.")
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)
@@ -42,20 +46,38 @@ if run_sim or 'mc_data' not in st.session_state or st.session_state.get('mc_tick
         mu = df['Returns'].mean()
         sigma = df['Returns'].std()
         
-        # --- 2. VECTORIZED GBM ENGINE ---
+        # --- 2. SIMULATION ENGINE ---
         with fun_loader("compute"):
-            # Calculate the drift component
-            drift = mu - (0.5 * sigma**2)
-            
-            # Generate the random shock matrix (sim_days x sim_count)
             rng = np.random.default_rng(42)
-            Z = rng.normal(0, 1, (sim_days, sim_count))
-            
-            # Combine drift and shocks into daily return multipliers
-            daily_returns_sim = np.exp(drift + sigma * Z)
-            
-            # Vectorized cumulative product to instantly calculate all 1000 paths
-            # np.vstack adds the starting price S0 to the top of every path
+            historical_rets = df['Returns'].dropna().values
+
+            if sim_method == "GBM (Normal)":
+                drift = mu - (0.5 * sigma**2)
+                Z = rng.normal(0, 1, (sim_days, sim_count))
+                daily_returns_sim = np.exp(drift + sigma * Z)
+
+            elif sim_method == "Student-t (Fat Tails)":
+                from scipy.stats import t as t_dist
+                # Fit Student-t to historical returns
+                params = t_dist.fit(historical_rets)
+                df_t, loc_t, scale_t = params
+                # Generate t-distributed shocks
+                t_shocks = t_dist.rvs(df_t, loc=loc_t, scale=scale_t, size=(sim_days, sim_count), random_state=rng)
+                daily_returns_sim = np.exp(t_shocks)
+
+            elif sim_method == "Empirical Bootstrap":
+                # Block bootstrap (preserve autocorrelation)
+                block_size = max(5, int(np.sqrt(len(historical_rets))))
+                daily_log_rets = np.zeros((sim_days, sim_count))
+                for col in range(sim_count):
+                    idx = 0
+                    while idx < sim_days:
+                        start = rng.integers(0, len(historical_rets) - block_size + 1)
+                        block_len = min(block_size, sim_days - idx)
+                        daily_log_rets[idx:idx + block_len, col] = historical_rets[start:start + block_len]
+                        idx += block_len
+                daily_returns_sim = np.exp(daily_log_rets)
+
             price_paths = np.vstack([np.ones(sim_count), np.cumprod(daily_returns_sim, axis=0)]) * S0
             
             # Save results to session state
@@ -149,3 +171,20 @@ if 'mc_paths' in st.session_state:
             bargap=0.05
         )
         st.plotly_chart(fig_hist, use_container_width=True)
+
+    # Distribution quality metrics
+    st.divider()
+    from scipy.stats import kurtosis as _kurt, skew as _skew
+    hist_rets = st.session_state.mc_history.pct_change().dropna()
+    dm1, dm2, dm3, dm4 = st.columns(4)
+    dm1.metric("Historical Skewness", f"{_skew(hist_rets):.2f}", help="Negative = left tail (crash risk)")
+    dm2.metric("Historical Kurtosis", f"{_kurt(hist_rets) + 3:.2f}", help="Normal = 3. Higher = fatter tails")
+    dm3.metric("Simulation Method", sim_method.split(" (")[0])
+    dm4.metric("VaR (5%)", f"${pct_5:,.2f}", f"{(pct_5/S0-1)*100:+.1f}%")
+
+    if sim_method == "GBM (Normal)" and _kurt(hist_rets) + 3 > 4:
+        st.warning(
+            f"**Historical kurtosis is {_kurt(hist_rets)+3:.1f} (normal = 3).** GBM assumes normal returns "
+            f"and will understate tail risk. Switch to **Student-t** or **Empirical Bootstrap** for "
+            f"more realistic crash/rally scenarios."
+        )

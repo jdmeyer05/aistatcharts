@@ -118,6 +118,23 @@ def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collap
         render_upgrade_prompt(page_title)
         st.stop()
 
+    # Disclaimer on pages with actionable trading signals
+    _SIGNAL_PAGES = {
+        "02_Scenario_Analysis", "03_Stock_Analysis", "04_RL_Trading",
+        "09_ML_Stock_Predictor", "11_Algo_Backtester", "12_Monte_Carlo",
+        "13_Power_Risk_VaR",
+    }
+    if page_key in _SIGNAL_PAGES:
+        st.markdown(
+            f'<div style="background:rgba(255,170,0,0.06);border:1px solid rgba(255,170,0,0.2);'
+            f'border-radius:6px;padding:6px 12px;font-size:0.72rem;color:#888;margin-bottom:8px;">'
+            f'Past performance and backtested results do not guarantee future returns. '
+            f'AI outputs are probabilistic estimates, not financial advice. '
+            f'All strategies are subject to model risk, overfitting, and market regime changes. '
+            f'Consult a qualified advisor before making investment decisions.</div>',
+            unsafe_allow_html=True,
+        )
+
 
 def _build_usage_badge() -> str:
     """Build an HTML badge showing AI usage / tokens remaining."""
