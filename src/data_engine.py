@@ -2,10 +2,9 @@ import os
 import logging
 import pandas as pd
 import numpy as np
-from scipy.stats import norm
 import requests
 from datetime import date, timedelta
-from supabase import create_client, Client
+from supabase import create_client
 import streamlit as st
 
 logger = logging.getLogger(__name__)
@@ -369,7 +368,7 @@ def polygon_ticker_details(symbol: str) -> dict:
     return {}
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def polygon_intraday(symbol: str, interval_min: int = 5, bars: int = 100) -> pd.DataFrame:
     """Fetch intraday bars from Polygon. Returns DataFrame with Close, Open, High, Low, Volume."""
     api_key = _get_polygon_key()

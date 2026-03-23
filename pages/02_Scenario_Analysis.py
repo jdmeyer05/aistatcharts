@@ -9,7 +9,6 @@ import os
 import logging
 import json
 from datetime import datetime, timedelta
-from openai import OpenAI
 from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.chatbot import run_sidebar_chatbot
 from src.auth import check_auth
@@ -203,6 +202,7 @@ def build_polymarket_summary(pm_data: list) -> str:
 
 def _call_grok_api(api_key: str, current_data_json: str, regime_names_json: str, ticker_list: list = None) -> dict:
     """Call Grok API with FRED data + live X/Twitter sentiment to get regime probabilities."""
+    from openai import OpenAI
     client = OpenAI(base_url="https://api.x.ai/v1", api_key=api_key)
 
     system_prompt = """You are a senior macroeconomic strategist at a top-tier investment bank.

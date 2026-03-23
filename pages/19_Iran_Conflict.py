@@ -10,8 +10,12 @@ import logging
 import time
 import concurrent.futures
 from datetime import date, datetime, timedelta
-from openai import OpenAI
 from src.data_engine import fetch_massive_data
+
+
+def _get_openai_client(**kwargs):
+    from openai import OpenAI
+    return OpenAI(**kwargs)
 from src.layout import setup_page, error_boundary, fun_loader
 from src.gdelt_events import fetch_gdelt_bulk_events, summarize_gdelt_events, build_gdelt_ai_context
 from src.edgar import fetch_recent_8k as _fetch_edgar_8k
@@ -323,7 +327,7 @@ CRITICAL: This data is displayed to paying customers as VERIFIED intelligence.
 - Your net_disruption_mbpd must reflect YOUR verified numbers, not the baseline's."""
 
     try:
-        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
         _search_tool = {"type": "function", "function": {"name": "web_search", "description": "Search the web and X/Twitter for real-time information"}}
         try:
             response = client.chat.completions.create(
@@ -1281,7 +1285,7 @@ Produce your complete analysis. JSON only."""
             client_kwargs = {"api_key": api_key}
             if config["base_url"]:
                 client_kwargs["base_url"] = config["base_url"]
-            client = OpenAI(**client_kwargs)
+            client = _get_openai_client(**client_kwargs)
 
             call_kwargs = dict(
                 model=config["model"],
@@ -1620,7 +1624,7 @@ Return ONLY a JSON array of NEW events (empty array if nothing major happened):
 Only include CONFIRMED events from credible sources. Do NOT fabricate."""
 
     try:
-        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
         response = client.chat.completions.create(
             model="grok-4-1-fast-reasoning",
             messages=[
@@ -1752,7 +1756,7 @@ STYLE:
 - Cite sources inline (per @handle, per Reuters, etc.)"""
 
     try:
-        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
         _search_tool = {"type": "function", "function": {"name": "web_search", "description": "Search the web and X/Twitter for real-time information"}}
         _sys = ("You are a war correspondent and intelligence analyst covering the 2026 Iran War. "
                 "Write like you're filing a live dispatch — direct, specific, urgent. "
@@ -1812,7 +1816,7 @@ Be specific: include times, sources, and numbers. If nothing significant happene
 Return plain text, not JSON."""
 
     try:
-        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
         response = client.chat.completions.create(
             model="grok-4-1-fast-reasoning",
             messages=[
@@ -2195,7 +2199,7 @@ RULES:
 - Add new impacted facilities if found."""
 
     try:
-        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
         _infra_sys = (
             "You are a real-time energy infrastructure monitor with live X/Twitter access. "
             "You MUST search for and report the current status of each facility. "
@@ -2264,7 +2268,7 @@ def _fetch_live_tweets() -> list:
         return []
 
     try:
-        client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
+        client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
         _search_tool = {"type": "function", "function": {"name": "web_search", "description": "Search the web and X/Twitter for real-time information"}}
         try:
             response = client.chat.completions.create(

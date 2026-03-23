@@ -9,7 +9,6 @@ from src.edgar import calculate_financial_ratios, get_ratio_history, fetch_recen
 import os
 import logging
 import json
-from openai import OpenAI
 from datetime import datetime, timedelta
 import re
 from src.layout import setup_page, card_header, error_boundary, get_active_ticker, set_active_ticker, fun_loader
@@ -409,6 +408,7 @@ Produce your complete analysis for {ticker}. JSON only."""
             raw = response.content[0].text
         else:
             # OpenAI-compatible APIs (OpenAI, Grok, Gemini)
+            from openai import OpenAI
             client_kwargs = {"api_key": api_key}
             if config["base_url"]:
                 client_kwargs["base_url"] = config["base_url"]

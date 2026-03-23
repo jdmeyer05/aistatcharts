@@ -13,11 +13,10 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **22 pages** of quantitative analysis tools
+- **23 pages** of quantitative analysis tools
 - **3 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus
-- **Landing page dashboard** -- stat bar, relative performance chart, AI intelligence cards, watchlist
-- **Top nav header** -- logo, dropdown navigation, market status, tier/usage badge, Settings popover
-- **Scrolling ticker tape** -- Polygon market prices + Grok X/Twitter feed + Polymarket odds + StockTwits backfill
+- **Landing page dashboard** -- market heatmap (5 lists, drills into ETF holdings), AI intelligence cards, watchlist
+- **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
 - **Fun loader** -- animated spinner with quips, progress bar, milestone status, countdown ETA
 - **Session persistence** -- cookie-based auth recovery, auto-reload on stale mobile connections
 - **Tier-based analyst chat** -- Gemini 2.5 Flash (all tiers) in inline expander
@@ -32,7 +31,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 | | Free | Pro ($12/mo) | Premium ($29/mo) | Platinum ($79/mo) |
 |---|---|---|---|---|
-| **Pages** | 17 | All 22 | All 22 | All 22 |
+| **Pages** | 18 | All 23 | All 23 | All 23 |
 | **AI Analyses/day** | 0 | 5 | 20 | 50 |
 | **AI Models** | None | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 3 | 3 + Claude Opus upgrade |
 | **RL Trading** | No | No | Yes | Yes |
@@ -43,7 +42,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 | Page | Description |
 |------|-------------|
-| **Summary** | Landing dashboard: stat bar, market grid, relative performance chart, AI intelligence cards, watchlist |
+| **Summary** | Landing dashboard: market heatmap (Sectors/Indices/Fixed Income/Commodities/Mega Caps with stock-level drill-in), AI intelligence cards, watchlist |
 | **Scenario Analysis** | 6-tab macro engine: Grok AI regime analysis, FRED data, portfolio impact modeling, stress tests |
 | **Stock Analysis** | 3-model AI consensus scorecard + SEC EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | **RL Trading** | Dueling DQN ensemble with 31 features, walk-forward validation, Monte Carlo robustness, feature redundancy detection |
@@ -53,6 +52,7 @@ Opens at **http://localhost:8501** (or next available port).
 | **Economic Calendar** | Today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
 | **Algo Backtester** | 13 strategies, 9-tab analysis: equity curve, drawdown, trade log, monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. López de Prado methods: Deflated Sharpe, PBO (CPCV), Triple Barrier exits, bet sizing, fractional differentiation, sequential bootstrap. |
 | **Monte Carlo** | Student-t (fat tails), empirical block bootstrap, and GBM simulation. Warns when normal assumptions don't fit. |
+| **Power Analytics** | Duck curve, implied heat rates, spark spreads, generation stack merit order (ERCOT + EIA data) |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
@@ -75,7 +75,6 @@ Opens at **http://localhost:8501** (or next available port).
 | Situation Briefing | Grok 4 fast | 15 min | 4-hour war correspondent dispatch (above tabs) |
 | Breaking News Brief | Grok 4 fast | 15 min | 6-hour summary fed to all models as context |
 | Timeline Auto-Update | Grok 4 fast | 1 hr | New conflict events appended |
-| Ticker Scroll Posts | Grok 4 fast | 10 min | Institutional news only (CNBC, Bloomberg, Reuters, etc.) |
 
 ### Data Enrichment (fed into AI models)
 
@@ -177,9 +176,8 @@ static/
   logo.png                Platform logo (base64-encoded into header)
 src/
   auth.py                 Auth, tiers, tokens, Stripe, session timeout, cookies
-  layout.py               setup_page(), header, nav, ticker strip, social feed, cache warming
+  layout.py               setup_page(), header, nav, Settings popover, footer
   styles.py               Global CSS, 5-layer background, responsive breakpoints, Plotly defaults
-  ticker_tape.py          Polygon batch snapshots for market ticker
   chatbot.py              Tier-based analyst chat (Gemini 2.5 Flash, inline expander)
   edgar.py                SEC EDGAR: 13F, insider scoring, 8-K, XBRL ratios, 13D activist
   gdelt_events.py         GDELT bulk event download & processing
@@ -195,8 +193,8 @@ pages/
   02_Scenario_Analysis.py Macro scenario engine (6 tabs)
   03_Stock_Analysis.py    AI stock analysis + EDGAR insider/8-K/XBRL
   04_RL_Trading.py        Reinforcement learning trading
-  05-21                   Analysis tools, options, energy, macro, futures, Fed
-  22_Smart_Money.py       13F holdings, congressional trades, activist investors, 8-K search
+  05-22                   Analysis tools, options, energy, macro, futures, Fed, smart money
+  23_Power_Analytics.py   Duck curve, heat rates, spark spreads, stack analysis
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)
 .streamlit/

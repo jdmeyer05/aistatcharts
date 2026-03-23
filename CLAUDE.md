@@ -46,9 +46,8 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | File | Purpose |
 |------|---------|
 | `auth.py` | Supabase auth, session recovery, **subscription tier system** (free/pro/premium/platinum), page gating, AI quota enforcement, Stripe integration |
-| `layout.py` | `setup_page()` universal page setup, header bar with logo (base64), nav dropdowns, Settings popover (scroll feed toggle + logout), ticker strip, cache warming, error boundaries |
+| `layout.py` | `setup_page()` universal page setup, header bar with logo (base64), nav dropdowns, Settings popover (account/usage/market status/logout), error boundaries, footer |
 | `styles.py` | Centralized color system, global CSS injection, 5-layer background, Plotly `uirevision` defaults, sidebar fully hidden |
-| `ticker_tape.py` | Polygon batch snapshots for 10 market tickers, paired with Grok X/Twitter posts |
 | `edgar.py` | SEC EDGAR: CIK lookup, XBRL financials/ratios, 13F holdings parser, insider scoring (0-100), 8-K events, 13D activist, congressional trades |
 | `gdelt_events.py` | GDELT bulk event download & processing, conflict event filtering, parquet cache |
 | `chatbot.py` | Tier-based analyst chat (Gemini 2.5 Flash), inline expander with form input |
@@ -56,11 +55,11 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `eia_helpers.py` | EIA API v2 wrapper for energy timeseries |
 | `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
 
-### pages/ — 22 App Pages
+### pages/ — 23 App Pages
 
 | # | File | What It Does |
 |---|------|-------------|
-| 01 | `Summary.py` | Dashboard: 12 candlestick charts (indices, commodities, rates), Grok macro pulse, AI alerts, portfolio snapshot, account management |
+| 01 | `Summary.py` | Dashboard: market heatmap (5 lists with stock-level drill-in), AI intelligence cards, watchlist, account |
 | 02 | `Scenario_Analysis.py` | **Flagship** — 7-tab macro scenario engine (see deep dive below) |
 | 03 | `Stock_Analysis.py` | 3-model AI stock scorecard (Grok + Gemini + Claude), EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | 04 | `RL_Trading.py` | Dueling DQN ensemble with prioritized replay, 31 features, 10-tab analysis including walk-forward, bootstrap significance, Monte Carlo robustness, feature redundancy detection, Grok AI assessment |
@@ -82,6 +81,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 20 | `Futures.py` | Multi-asset futures snapshot |
 | 21 | `Fed_Macro_Drivers.py` | Fed policy dashboard (4 tabs) |
 | 22 | `Smart_Money.py` | 13F institutional holdings, congressional trades, activist investors, 8-K events |
+| 23 | `Power_Analytics.py` | Duck curve, implied heat rates, spark spreads, generation stack merit order (ERCOT + EIA) |
 
 ---
 

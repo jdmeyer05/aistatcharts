@@ -362,9 +362,15 @@ def inject_global_css():
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 6px 0;
+        padding: 6px 0 10px 0;
         flex-wrap: wrap;
         gap: 6px;
+    }}
+
+    /* Tighten gap between nav row and page title */
+    h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {{
+        margin-top: 0 !important;
+        padding-top: 0 !important;
     }}
     .site-header-brand {{
         display: flex;
@@ -585,6 +591,8 @@ def inject_global_css():
     # Disable Plotly scrollZoom globally via JS (prevents mobile scroll hijack)
     st.markdown("""<script>
 (function() {
+    if (window._plotlyScrollGuard) return;
+    window._plotlyScrollGuard = true;
     var obs = new MutationObserver(function() {
         var plots = document.querySelectorAll('.js-plotly-plot');
         plots.forEach(function(p) {

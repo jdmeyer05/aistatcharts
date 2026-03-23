@@ -11,24 +11,23 @@ st.markdown("Live macroeconomic supply data directly from the Energy Information
 
 # --- FETCH ALL DATA ---
 with fun_loader("data"):
-    # Commercial crude inventories — 6 years for 5-year avg
-    df_inv = fetch_eia_data("PET.WCESTUS1.W", tail_rows=520)
-    # US field production
-    df_prod = fetch_eia_data("PET.WCRFPUS2.W", tail_rows=260)
-    # Cushing, OK storage
-    df_cushing = fetch_eia_data("PET.WCRSTUS1.W", tail_rows=260)
-    # Refinery utilization
-    df_refinery = fetch_eia_data("PET.WPULEUS3.W", tail_rows=260)
-    # Imports & Exports
-    df_imports = fetch_eia_data("PET.WCEIMUS2.W", tail_rows=260)
-    df_exports = fetch_eia_data("PET.WCREXUS2.W", tail_rows=260)
-    # WTI spot price
-    df_wti = fetch_eia_data("PET.RWTC.W", tail_rows=260)
-    # Gasoline & Distillate inventories
-    df_gasoline = fetch_eia_data("PET.WGTSTUS1.W", tail_rows=260)
-    df_distillate = fetch_eia_data("PET.WDISTUS1.W", tail_rows=260)
-    # Product supplied (consumption proxy) for days of supply
-    df_supplied = fetch_eia_data("PET.WRPUPUS2.W", tail_rows=260)
+    from concurrent.futures import ThreadPoolExecutor
+    _eia_series = [
+        ("PET.WCESTUS1.W", 520),   # Commercial crude inventories
+        ("PET.WCRFPUS2.W", 260),   # US field production
+        ("PET.WCRSTUS1.W", 260),   # Cushing, OK storage
+        ("PET.WPULEUS3.W", 260),   # Refinery utilization
+        ("PET.WCEIMUS2.W", 260),   # Imports
+        ("PET.WCREXUS2.W", 260),   # Exports
+        ("PET.RWTC.W", 260),       # WTI spot price
+        ("PET.WGTSTUS1.W", 260),   # Gasoline inventories
+        ("PET.WDISTUS1.W", 260),   # Distillate inventories
+        ("PET.WRPUPUS2.W", 260),   # Product supplied
+    ]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        _eia_results = list(pool.map(lambda args: fetch_eia_data(*args), _eia_series))
+    df_inv, df_prod, df_cushing, df_refinery, df_imports, df_exports, \
+        df_wti, df_gasoline, df_distillate, df_supplied = _eia_results
 
 # --- DASHBOARD RENDER ---
 if df_inv is not None and not df_inv.empty:

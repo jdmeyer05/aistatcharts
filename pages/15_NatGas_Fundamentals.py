@@ -11,23 +11,29 @@ st.markdown("Live weekly Working Gas in Underground Storage data from the Energy
 
 # --- FETCH ALL DATA ---
 with fun_loader("data"):
-    # Lower 48 working gas — fetch 6 years for 5-year average calc
-    df_storage = fetch_eia_data("NG.NW2_EPG0_SWO_R48_BCF.W", tail_rows=520)
-
-    # Regional storage
+    from concurrent.futures import ThreadPoolExecutor
+    _ng_series = [
+        ("NG.NW2_EPG0_SWO_R48_BCF.W", 520),  # Lower 48 working gas
+        ("NG.NW2_EPG0_SWO_R31_BCF.W", 260),  # East
+        ("NG.NW2_EPG0_SWO_R32_BCF.W", 260),  # Midwest
+        ("NG.NW2_EPG0_SWO_R33_BCF.W", 260),  # Mountain
+        ("NG.NW2_EPG0_SWO_R34_BCF.W", 260),  # Pacific
+        ("NG.NW2_EPG0_SWO_R35_BCF.W", 260),  # South Central
+        ("NG.RNGWHHD.W", 260),                 # Henry Hub
+        ("NG.N9140US2.M", 60),                 # Monthly consumption
+    ]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        _ng_results = list(pool.map(lambda args: fetch_eia_data(*args), _ng_series))
+    df_storage = _ng_results[0]
     regions = {
-        'East': fetch_eia_data("NG.NW2_EPG0_SWO_R31_BCF.W", tail_rows=260),
-        'Midwest': fetch_eia_data("NG.NW2_EPG0_SWO_R32_BCF.W", tail_rows=260),
-        'Mountain': fetch_eia_data("NG.NW2_EPG0_SWO_R33_BCF.W", tail_rows=260),
-        'Pacific': fetch_eia_data("NG.NW2_EPG0_SWO_R34_BCF.W", tail_rows=260),
-        'South Central': fetch_eia_data("NG.NW2_EPG0_SWO_R35_BCF.W", tail_rows=260),
+        'East': _ng_results[1],
+        'Midwest': _ng_results[2],
+        'Mountain': _ng_results[3],
+        'Pacific': _ng_results[4],
+        'South Central': _ng_results[5],
     }
-
-    # Henry Hub weekly spot price
-    df_hh = fetch_eia_data("NG.RNGWHHD.W", tail_rows=260)
-
-    # Monthly consumption for days of supply
-    df_consumption = fetch_eia_data("NG.N9140US2.M", tail_rows=60)
+    df_hh = _ng_results[6]
+    df_consumption = _ng_results[7]
 
 # --- DASHBOARD RENDER ---
 if df_storage is not None and not df_storage.empty:

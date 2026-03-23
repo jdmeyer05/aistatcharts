@@ -1,15 +1,13 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
-from src.data_engine import polygon_snapshot, polygon_history, polygon_intraday
-from plotly.subplots import make_subplots
+from src.data_engine import polygon_history, polygon_intraday
 import json
 import os
 import logging
 from datetime import datetime, date
 from src.auth import init_supabase, get_user_tier, get_tier_config, TIERS
-from src.layout import setup_page, error_boundary, render_skeleton_cards, fun_loader
+from src.layout import setup_page, error_boundary, fun_loader
 from src.styles import COLORS
 
 setup_page("01_Summary")
@@ -78,11 +76,7 @@ def fetch_market_data(ticker: str) -> dict:
         return None
 
 
-MARKET_TICKERS = [
-    ("SPY", "S&P 500"), ("QQQ", "Nasdaq 100"), ("DIA", "Dow Jones"), ("IWM", "Russell 2000"),
-    ("CL=F", "Crude Oil"), ("NG=F", "Natural Gas"), ("GC=F", "Gold"), ("BTC-USD", "Bitcoin"),
-    ("^TNX", "10Y Yield"), ("^TYX", "30Y Yield"), ("DX-Y.NYB", "Dollar Index"), ("^VIX", "VIX"),
-]
+MARKET_TICKERS = [("^VIX", "VIX")]
 
 
 def _fmt_price(ticker, price):
@@ -96,29 +90,6 @@ def _fmt_price(ticker, price):
         return f"${price:.2f}"
 
 
-def _mini_chart(data, height=70):
-    """Render a tiny area chart for a market card."""
-    above = data["day_chg"] >= 0
-    line_color = "#00ff96" if above else "#ff4444"
-    fill_color = "rgba(0,255,150,0.15)" if above else "rgba(255,68,68,0.15)"
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=data["dates"], y=data["close"], mode="lines",
-        line=dict(color=line_color, width=1.5),
-        fill="tozeroy", fillcolor=fill_color,
-        hovertemplate="%{y:.2f}<extra></extra>", showlegend=False,
-    ))
-    y_min, y_max = float(data["close"].min()), float(data["close"].max())
-    y_pad = (y_max - y_min) * 0.1 if y_max > y_min else 1
-    fig.update_layout(
-        template="plotly_dark", height=height,
-        margin=dict(l=0, r=0, t=0, b=0),
-        xaxis=dict(visible=False), yaxis=dict(visible=False, range=[y_min - y_pad, y_max + y_pad]),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False,
-    )
-    return fig
-
-
 # ═══════════════════════════════════════════════
 # PREFETCH ALL DATA
 # ═══════════════════════════════════════════════
@@ -130,9 +101,13 @@ with error_boundary("Data Prefetch"):
         '<div style="color:#888;font-size:0.8rem;margin-top:10px;">Loading market data...</div>'
         '</div>', unsafe_allow_html=True,
     )
+    from concurrent.futures import ThreadPoolExecutor
     _market_cache = {}
-    for _t, _ in MARKET_TICKERS:
-        _market_cache[_t] = fetch_market_data(_t)
+    _tickers_to_fetch = [t for t, _ in MARKET_TICKERS]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        _results = list(pool.map(fetch_market_data, _tickers_to_fetch))
+    for (_t, _), _r in zip(MARKET_TICKERS, _results):
+        _market_cache[_t] = _r
     _prefetch_slot.empty()
 
     # Load AI history
@@ -157,196 +132,317 @@ with error_boundary("Data Prefetch"):
         pass
 
 
-# ═══════════════════════════════════════════════
-# ROW 1: DAILY BRIEFING
-# ═══════════════════════════════════════════════
-with error_boundary("Daily Briefing"):
-    spy_d = _market_cache.get("SPY")
-    qqq_d = _market_cache.get("QQQ")
-    oil_d = _market_cache.get("CL=F")
-    vix_d = _market_cache.get("^VIX")
-    btc_d = _market_cache.get("BTC-USD")
-    gold_d = _market_cache.get("GC=F")
-
-    def _stat_card(label, value, sub, color="#e0e0e0", border_color=None):
-        bc = border_color or COLORS["card_border"]
-        return (
-            f'<div style="flex:1 1 100px;min-width:90px;text-align:center;padding:8px 6px;'
-            f'border:1px solid {bc};border-radius:6px;background:rgba(255,255,255,0.02);">'
-            f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{label}</div>'
-            f'<div style="font-size:1.1rem;font-weight:700;color:{color};margin:2px 0;">{value}</div>'
-            f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{sub}</div>'
-            f'</div>'
-        )
-
-    cards = []
-    if spy_d:
-        c = COLORS["success"] if spy_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if spy_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("S&amp;P 500", f'{spy_d["price"]:,.0f}', f'{arrow} {abs(spy_d["day_chg"]):.1f}%', c))
-    if qqq_d:
-        c = COLORS["success"] if qqq_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if qqq_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("Nasdaq", f'{qqq_d["price"]:.2f}', f'{arrow} {abs(qqq_d["day_chg"]):.1f}%', c))
-    if vix_d:
-        vp = vix_d["price"]
-        vc = COLORS["danger"] if vp > 25 else COLORS["warning"] if vp > 18 else COLORS["success"]
-        vl = "extreme" if vp > 30 else "elevated" if vp > 20 else "calm" if vp < 14 else ""
-        cards.append(_stat_card("VIX", f'{vp:.1f}', vl, vc, vc))
-    if oil_d:
-        c = COLORS["success"] if oil_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if oil_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("Crude", f'${oil_d["price"]:.2f}', f'{arrow} {abs(oil_d["day_chg"]):.1f}%', c))
-    if gold_d:
-        c = COLORS["success"] if gold_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if gold_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("Gold", f'${gold_d["price"]:,.0f}', f'{arrow} {abs(gold_d["day_chg"]):.1f}%', c))
-    if btc_d:
-        c = COLORS["success"] if btc_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if btc_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("BTC", f'${btc_d["price"]:,.0f}', f'{arrow} {abs(btc_d["day_chg"]):.1f}%', c))
-    # Row 2: IWM, DIA, NatGas, 10Y, 30Y, DXY
-    iwm_d = _market_cache.get("IWM")
-    if iwm_d:
-        c = COLORS["success"] if iwm_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if iwm_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("Russell", f'${iwm_d["price"]:.2f}', f'{arrow} {abs(iwm_d["day_chg"]):.1f}%', c))
-    dia_d = _market_cache.get("DIA")
-    if dia_d:
-        c = COLORS["success"] if dia_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if dia_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("Dow", f'${dia_d["price"]:.2f}', f'{arrow} {abs(dia_d["day_chg"]):.1f}%', c))
-    ng_d = _market_cache.get("NG=F")
-    if ng_d:
-        c = COLORS["success"] if ng_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if ng_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("NatGas", f'${ng_d["price"]:.2f}', f'{arrow} {abs(ng_d["day_chg"]):.1f}%', c))
-    tnx_d = _market_cache.get("^TNX")
-    if tnx_d:
-        # Yields rising = red for equities, falling = green
-        c = COLORS["danger"] if tnx_d["day_chg"] > 0 else COLORS["success"]
-        arrow = "▲" if tnx_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("10Y Yield", f'{tnx_d["price"]:.2f}%', f'{arrow} {abs(tnx_d["day_chg"]):.1f}%', c))
-    tyx_d = _market_cache.get("^TYX")
-    if tyx_d:
-        c = COLORS["danger"] if tyx_d["day_chg"] > 0 else COLORS["success"]
-        arrow = "▲" if tyx_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("30Y Yield", f'{tyx_d["price"]:.2f}%', f'{arrow} {abs(tyx_d["day_chg"]):.1f}%', c))
-    dxy_d = _market_cache.get("DX-Y.NYB")
-    if dxy_d:
-        c = COLORS["success"] if dxy_d["day_chg"] >= 0 else COLORS["danger"]
-        arrow = "▲" if dxy_d["day_chg"] >= 0 else "▼"
-        cards.append(_stat_card("Dollar", f'{dxy_d["price"]:.2f}', f'{arrow} {abs(dxy_d["day_chg"]):.1f}%', c))
-    if grok_data:
-        regimes = grok_data.get("regimes", [])
-        if regimes:
-            top = max(regimes, key=lambda r: r.get("probability", 0))
-            regime_colors = {
-                "Stagflation": "#ff4444", "Recession": "#ff8c00", "Soft Landing": "#00cc66",
-                "Financial Crisis": "#ff0066", "Re-Acceleration": "#00d1ff", "Goldilocks": "#aa66ff",
-            }
-            rc = regime_colors.get(top["name"], COLORS["accent"])
-            cards.append(_stat_card("Regime", top["name"], f'{top["probability"]}%', rc, rc))
-    if conflict_data:
-        esc = conflict_data.get("blended", {}).get("escalation_risk", {})
-        esc_score = esc.get("score", 0)
-        if esc_score > 0:
-            ec = COLORS["danger"] if esc_score >= 7 else COLORS["warning"] if esc_score >= 5 else COLORS["success"]
-            cards.append(_stat_card("Iran", f'{esc_score}/10', esc.get("level", ""), ec, ec))
-
-    if cards:
-        st.markdown(
-            f'<div style="display:flex;flex-wrap:wrap;gap:6px;">{"".join(cards)}</div>',
-            unsafe_allow_html=True,
-        )
-
 
 # ═══════════════════════════════════════════════
-# ROW 2: MARKET DASHBOARD (compact 4x3 grid)
+# ROW 1: RELATIVE PERFORMANCE — CARDS + CHART
 # ═══════════════════════════════════════════════
-with error_boundary("Market Dashboard"):
-    st.markdown("##### Markets")
-    for row_start in range(0, len(MARKET_TICKERS), 4):
-        row_tickers = MARKET_TICKERS[row_start:row_start + 4]
-        cols = st.columns(4)
-        for col, (ticker, name) in zip(cols, row_tickers):
-            with col:
-                data = _market_cache.get(ticker)
-                if data:
-                    chg_color = COLORS["success"] if data["day_chg"] >= 0 else COLORS["danger"]
-                    arrow = "▲" if data["day_chg"] >= 0 else "▼"
-                    st.markdown(
-                        f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};">{name}</div>'
-                        f'<span style="font-size:1.15rem;font-weight:700;">{_fmt_price(ticker, data["price"])}</span> '
-                        f'<span style="color:{chg_color};font-size:0.8rem;">{arrow}{abs(data["day_chg"]):.1f}%</span>',
-                        unsafe_allow_html=True,
-                    )
-                    st.plotly_chart(_mini_chart(data, 70), use_container_width=True, config={"displayModeBar": False})
-                else:
-                    st.markdown(f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};">{name}</div>', unsafe_allow_html=True)
-                    st.caption("—")
+PERF_LISTS = {
+    "Sectors": [
+        ("XLK", "Technology", "#00e5ff"),
+        ("XLF", "Financials", "#00ff87"),
+        ("XLE", "Energy", "#ff3333"),
+        ("XLV", "Healthcare", "#bf6fff"),
+        ("XLY", "Consumer Disc.", "#ffbb00"),
+        ("XLP", "Cons. Staples", "#ff5ecf"),
+        ("XLI", "Industrials", "#a0e515"),
+        ("XLB", "Materials", "#00e0d0"),
+        ("XLU", "Utilities", "#ffe100"),
+        ("XLRE", "Real Estate", "#ff2277"),
+        ("XLC", "Comms", "#33dd55"),
+    ],
+    "Equity Indices": [
+        ("SPY", "S&P 500", "#00e5ff"),
+        ("QQQ", "Nasdaq 100", "#00ff87"),
+        ("DIA", "Dow 30", "#ffbb00"),
+        ("IWM", "Russell 2000", "#ff5ecf"),
+        ("MDY", "S&P 400 Mid", "#a0e515"),
+        ("EFA", "Developed Intl", "#bf6fff"),
+        ("EEM", "Emerging Mkts", "#ff2277"),
+        ("VGK", "Europe", "#00e0d0"),
+        ("EWJ", "Japan", "#ffe100"),
+        ("FXI", "China", "#ff3333"),
+    ],
+    "Fixed Income": [
+        ("AGG", "US Agg Bond", "#00e5ff"),
+        ("TLT", "20Y Treasury", "#bf6fff"),
+        ("IEF", "7-10Y Treasury", "#8888ff"),
+        ("SHY", "1-3Y Treasury", "#00e0d0"),
+        ("TIP", "TIPS", "#a0e515"),
+        ("LQD", "IG Corporate", "#00ccff"),
+        ("VCIT", "Interm. Corp", "#33bbee"),
+        ("HYG", "High Yield", "#ffbb00"),
+        ("JNK", "Junk Bonds", "#ff8800"),
+        ("EMB", "EM Bonds", "#ff2277"),
+    ],
+    "Commodities": [
+        ("GLD", "Gold", "#ffe100"),
+        ("SLV", "Silver", "#ccddee"),
+        ("USO", "Crude Oil", "#ff3333"),
+        ("UNG", "Natural Gas", "#ff8800"),
+        ("CPER", "Copper", "#ff2277"),
+        ("WEAT", "Wheat", "#a0e515"),
+        ("DBA", "Agriculture", "#00ff87"),
+        ("URA", "Uranium", "#bf6fff"),
+    ],
+    "Mega Caps": [
+        ("AAPL", "Apple", "#cccccc"),
+        ("MSFT", "Microsoft", "#00e5ff"),
+        ("NVDA", "Nvidia", "#00ff87"),
+        ("AMZN", "Amazon", "#ff8800"),
+        ("GOOGL", "Google", "#ff3333"),
+        ("META", "Meta", "#5588ff"),
+        ("TSLA", "Tesla", "#ff2277"),
+        ("BRK.B", "Berkshire", "#bf6fff"),
+        ("JPM", "JPMorgan", "#00e0d0"),
+        ("V", "Visa", "#ffe100"),
+    ],
+}
 
 
-# ═══════════════════════════════════════════════
-# ROW 2.5: RELATIVE PERFORMANCE CHART
-# ═══════════════════════════════════════════════
-SECTOR_SPYDERS = [
-    ("XLK", "Technology", "#00d1ff"),
-    ("XLF", "Financials", "#00ff96"),
-    ("XLE", "Energy", "#ff4444"),
-    ("XLV", "Healthcare", "#ad7fff"),
-    ("XLY", "Consumer Disc.", "#ffaa00"),
-    ("XLP", "Consumer Staples", "#ff69b4"),
-    ("XLI", "Industrials", "#8bc34a"),
-    ("XLB", "Materials", "#00bcd4"),
-    ("XLU", "Utilities", "#ffd700"),
-    ("XLRE", "Real Estate", "#e91e63"),
-    ("XLC", "Communications", "#4caf50"),
-]
 
-ASSET_CLASS_CONFIG = [
-    # Equity
-    ("SPY", "S&P 500", "#00d1ff"), ("QQQ", "Nasdaq", "#00ff96"),
-    # Govt Debt
-    ("TLT", "20Y Treasury", "#ad7fff"), ("IEF", "7-10Y Treasury", "#9575cd"),
-    # Corp Debt
-    ("LQD", "IG Corporate", "#4dd0e1"), ("VCIT", "Intermediate Corp", "#26c6da"),
-    # Junk Debt
-    ("HYG", "High Yield", "#ff9800"), ("JNK", "Junk Bonds", "#ffb74d"),
-    # Emerging Markets
-    ("EEM", "EM Equity", "#e91e63"), ("EMB", "EM Bonds", "#f06292"),
-    # Commodities
-    ("DBC", "Commodities (DBC)", "#ff4444"), ("GSG", "Broad Commodity", "#ff6659"),
-    # Crypto
-    ("BTC-USD", "Bitcoin", "#ff9900"), ("ETH-USD", "Ethereum", "#627eea"),
-]
+# Top holdings per group — (ticker, weight) — weight ~ relative market cap
+TREEMAP_HOLDINGS = {
+    "Sectors": {
+        "Technology": [
+            ("AAPL", 40), ("MSFT", 38), ("NVDA", 35), ("AVGO", 10), ("ADBE", 6),
+            ("CRM", 6), ("AMD", 5), ("ORCL", 5), ("CSCO", 5), ("ACN", 5),
+        ],
+        "Financials": [
+            ("JPM", 15), ("BAC", 8), ("WFC", 6), ("GS", 5), ("MS", 4),
+            ("BLK", 4), ("SCHW", 3), ("AXP", 3), ("C", 3), ("PGR", 3),
+        ],
+        "Energy": [
+            ("XOM", 14), ("CVX", 10), ("COP", 5), ("SLB", 3), ("EOG", 3),
+            ("MPC", 3), ("PSX", 2), ("OXY", 2), ("VLO", 2), ("WMB", 2),
+        ],
+        "Healthcare": [
+            ("LLY", 18), ("UNH", 14), ("JNJ", 10), ("MRK", 8), ("ABBV", 8),
+            ("ABT", 6), ("TMO", 5), ("PFE", 4), ("AMGN", 4), ("ISRG", 4),
+        ],
+        "Consumer Disc.": [
+            ("AMZN", 25), ("TSLA", 12), ("HD", 8), ("MCD", 5), ("NKE", 4),
+            ("LOW", 4), ("SBUX", 3), ("TJX", 3), ("BKNG", 3), ("CMG", 2),
+        ],
+        "Cons. Staples": [
+            ("PG", 10), ("COST", 8), ("WMT", 8), ("KO", 7), ("PEP", 6),
+            ("PM", 4), ("CL", 3), ("MO", 2), ("MDLZ", 3), ("KHC", 2),
+        ],
+        "Industrials": [
+            ("GE", 6), ("CAT", 5), ("RTX", 5), ("HON", 5), ("UNP", 5),
+            ("BA", 4), ("DE", 4), ("LMT", 4), ("UPS", 3), ("MMM", 2),
+        ],
+        "Materials": [
+            ("LIN", 6), ("APD", 3), ("SHW", 3), ("ECL", 2), ("FCX", 3),
+            ("NEM", 2), ("NUE", 2), ("DOW", 2),
+        ],
+        "Utilities": [
+            ("NEE", 5), ("SO", 3), ("DUK", 3), ("D", 2), ("AEP", 2),
+            ("SRE", 2), ("EXC", 2), ("ED", 2),
+        ],
+        "Real Estate": [
+            ("PLD", 4), ("AMT", 3), ("EQIX", 3), ("SPG", 2), ("CCI", 2),
+            ("O", 2), ("PSA", 2), ("WELL", 2),
+        ],
+        "Comms": [
+            ("META", 16), ("GOOGL", 20), ("NFLX", 6), ("DIS", 4), ("CMCSA", 4),
+            ("T", 3), ("VZ", 3), ("TMUS", 4),
+        ],
+    },
+    "Equity Indices": {
+        "S&P 500": [
+            ("AAPL", 7), ("MSFT", 7), ("NVDA", 6), ("AMZN", 4), ("META", 3),
+            ("GOOGL", 3), ("BRK.B", 2), ("LLY", 2), ("AVGO", 2), ("JPM", 2),
+        ],
+        "Nasdaq 100": [
+            ("AAPL", 9), ("MSFT", 8), ("NVDA", 7), ("AMZN", 5), ("META", 4),
+            ("AVGO", 4), ("GOOGL", 4), ("TSLA", 3), ("COST", 3), ("NFLX", 2),
+        ],
+        "Dow 30": [
+            ("UNH", 8), ("GS", 7), ("MSFT", 6), ("HD", 6), ("CAT", 5),
+            ("AMGN", 5), ("MCD", 4), ("V", 4), ("CRM", 4), ("TRV", 3),
+        ],
+        "Russell 2000": [
+            ("SMCI", 2), ("MSTR", 2), ("INSM", 1), ("FN", 1), ("ANF", 1),
+            ("CORT", 1), ("FTDR", 1), ("PCVX", 1), ("SPR", 1), ("DUOL", 1),
+        ],
+        "Developed Intl": [
+            ("NOVO-B", 3), ("ASML", 3), ("AZN", 2), ("SAP", 2), ("SHEL", 2),
+            ("NESN", 2), ("TTE", 2), ("ROG", 2), ("ULVR", 2), ("LVMH", 2),
+        ],
+        "Emerging Mkts": [
+            ("TSM", 8), ("BABA", 4), ("TCEHY", 3), ("RELIANCE", 2), ("PDD", 2),
+            ("INFY", 2), ("VALE", 2), ("ITUB", 1), ("NU", 1), ("JD", 1),
+        ],
+    },
+    "Fixed Income": {
+        "US Agg Bond": [("AGG", 30)],
+        "20Y Treasury": [("TLT", 20)],
+        "7-10Y Treasury": [("IEF", 15)],
+        "1-3Y Treasury": [("SHY", 12)],
+        "TIPS": [("TIP", 10)],
+        "IG Corporate": [("LQD", 18)],
+        "Interm. Corp": [("VCIT", 12)],
+        "High Yield": [("HYG", 15)],
+        "Junk Bonds": [("JNK", 10)],
+        "EM Bonds": [("EMB", 10)],
+    },
+    "Commodities": {
+        "Gold": [("GLD", 30)],
+        "Silver": [("SLV", 12)],
+        "Crude Oil": [("USO", 15)],
+        "Natural Gas": [("UNG", 8)],
+        "Copper": [("CPER", 6)],
+        "Wheat": [("WEAT", 5)],
+        "Agriculture": [("DBA", 6)],
+        "Uranium": [("URA", 8)],
+    },
+    "Mega Caps": {
+        "Tech": [
+            ("AAPL", 35), ("MSFT", 32), ("NVDA", 30), ("AVGO", 10),
+        ],
+        "Internet": [
+            ("AMZN", 22), ("GOOGL", 20), ("META", 16), ("NFLX", 6),
+        ],
+        "Finance": [
+            ("BRK.B", 10), ("JPM", 8), ("V", 7), ("MA", 6),
+        ],
+        "Other": [
+            ("TSLA", 12), ("LLY", 10), ("UNH", 9), ("WMT", 6),
+        ],
+    },
+}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _fetch_relative_data(tickers_key: str, period: str = "1mo"):
-    """Fetch daily data for relative performance. Filters to weekdays only."""
-    days_map = {"1d": 5, "5d": 10, "1mo": 35, "3mo": 95, "6mo": 185, "1y": 370}
-    days = days_map.get(period, 35)
+def _fetch_treemap_returns(tickers_key: str, period: str) -> dict:
+    """Fetch period returns + metadata for treemap. Returns {ticker: {pct, price, day_chg, volume}}."""
+    if period == "ytd":
+        days = (date.today() - date(date.today().year, 1, 1)).days + 5
+    else:
+        days_map = {"1mo": 35, "3mo": 95, "6mo": 185, "1y": 370}
+        days = days_map.get(period, 35)
     tickers = tickers_key.split(",")
-    result = {}
-    for sym in tickers:
+
+    def _get_return(sym):
         try:
             hist = polygon_history(sym, days)
             if not hist.empty and len(hist) >= 2:
-                hist = hist[hist.index.weekday < 5]
-                if len(hist) >= 2:
-                    result[sym] = hist[["Close"]].copy()
+                first = float(hist["Close"].iloc[0])
+                last = float(hist["Close"].iloc[-1])
+                if first > 0:
+                    pct = ((last / first) - 1) * 100
+                    prev = float(hist["Close"].iloc[-2])
+                    day_chg = ((last / prev) - 1) * 100 if prev > 0 else 0
+                    vol = int(hist["Volume"].iloc[-1]) if "Volume" in hist.columns else 0
+                    return sym, {"pct": pct, "price": last, "day_chg": day_chg, "volume": vol}
         except Exception:
             pass
-    return result
+        return sym, None
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        results = list(pool.map(_get_return, tickers))
+    return {sym: data for sym, data in results if data is not None}
+
+
+def _render_treemap(list_name: str, period: str, period_label: str):
+    """Render a Finviz-style treemap heatmap for the selected list."""
+    holdings = TREEMAP_HOLDINGS.get(list_name)
+    if not holdings:
+        return
+
+    # Collect all unique tickers
+    all_tickers = set()
+    for group_stocks in holdings.values():
+        for ticker, _ in group_stocks:
+            all_tickers.add(ticker)
+
+    tickers_key = ",".join(sorted(all_tickers))
+    returns = _fetch_treemap_returns(tickers_key, period)
+
+    if not returns:
+        return
+
+    # Group stocks with their return data
+    group_data = {}
+    for group_name, stocks in holdings.items():
+        group_total = 0
+        group_rets = []
+        children = []
+        for ticker, weight in stocks:
+            data = returns.get(ticker)
+            if data is None:
+                continue
+            children.append((ticker, weight, data))
+            group_total += weight
+            group_rets.append(data["pct"])
+        if children:
+            group_data[group_name] = {
+                "total": group_total,
+                "avg_ret": sum(group_rets) / len(group_rets),
+                "children": children,
+            }
+
+    if not group_data:
+        return
+
+    # Render HTML cards grouped by sector/category
+    all_html = []
+    for group_name, gd in group_data.items():
+        avg = gd["avg_ret"]
+        avg_color = "#00ff96" if avg >= 0 else "#ff4444"
+        avg_arrow = "▲" if avg >= 0 else "▼"
+
+        # Group header
+        all_html.append(
+            f'<div style="font-size:0.62rem;color:#888;text-transform:uppercase;letter-spacing:0.5px;'
+            f'margin:8px 0 3px 2px;display:flex;justify-content:space-between;">'
+            f'<span>{group_name}</span>'
+            f'<span style="color:{avg_color};">{avg_arrow}{abs(avg):.1f}%</span></div>'
+        )
+
+        # Stock cards
+        n = len(gd["children"])
+        cols = min(n, 10)
+        cells = []
+        for ticker, weight, data in gd["children"]:
+            pct = data["pct"]
+            price = data["price"]
+            day_chg = data["day_chg"]
+            if pct >= 0:
+                bg = f"rgba(0,{min(int(abs(pct) * 20 + 30), 140)},0,0.3)"
+                txt = "#00ff96"
+            else:
+                bg = f"rgba({min(int(abs(pct) * 20 + 30), 140)},0,0,0.3)"
+                txt = "#ff4444"
+            arrow = "▲" if pct >= 0 else "▼"
+            d_arrow = "▲" if day_chg >= 0 else "▼"
+            d_color = "#00ff96" if day_chg >= 0 else "#ff4444"
+            p_str = f"${price:,.0f}" if price >= 1000 else f"${price:.2f}" if price >= 1 else f"${price:.4f}"
+            cells.append(
+                f'<div style="text-align:center;padding:5px 3px;background:{bg};border-radius:4px;'
+                f'border-left:2px solid {txt};" title="{ticker} | {p_str} | Day: {d_arrow}{abs(day_chg):.2f}%">'
+                f'<div style="font-size:0.6rem;color:#ccc;font-weight:700;">{ticker}</div>'
+                f'<div style="font-size:0.82rem;font-weight:800;color:{txt};">{arrow}{abs(pct):.1f}%</div>'
+                f'<div style="font-size:0.5rem;color:#777;">{p_str}</div>'
+                f'</div>'
+            )
+        all_html.append(
+            f'<div style="display:grid;grid-template-columns:repeat({cols},1fr);gap:3px;">{"".join(cells)}</div>'
+        )
+
+    st.markdown(
+        f'<div style="margin-top:4px;">{"".join(all_html)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 with error_boundary("Relative Performance"):
     rp_c1, rp_c2, rp_c3 = st.columns([3, 1, 1])
     with rp_c1:
-        st.markdown("##### Relative Performance")
+        st.markdown("##### Market Heatmap")
     with rp_c2:
-        rel_mode = st.selectbox("Mode", ["Assets", "Sectors"],
+        rel_mode = st.selectbox("List", list(PERF_LISTS.keys()),
                                 key="rel_perf_mode", label_visibility="collapsed")
     with rp_c3:
         rel_period_label = st.selectbox("Period", ["1M", "3M", "YTD", "1Y"],
@@ -354,99 +450,7 @@ with error_boundary("Relative Performance"):
     period_map = {"1M": "1mo", "3M": "3mo", "YTD": "ytd", "1Y": "1y"}
     rel_period = period_map[rel_period_label]
 
-    if rel_mode == "Sectors":
-        chart_tickers = [(t, n, c) for t, n, c in SECTOR_SPYDERS]
-    else:
-        chart_tickers = [(t, n, c) for t, n, c in ASSET_CLASS_CONFIG]
-
-    tickers_key = ",".join(t for t, _, _ in chart_tickers)
-    rel_data = _fetch_relative_data(tickers_key, rel_period)
-
-    # Calculate all returns and rank them
-    perf_list = []
-    for ticker, name, color in chart_tickers:
-        if ticker in rel_data and len(rel_data[ticker]) >= 2:
-            close = rel_data[ticker]["Close"]
-            base = float(close.iloc[0])
-            if base > 0:
-                pct = ((close / base) - 1) * 100
-                last_pct = float(pct.iloc[-1])
-                perf_list.append({
-                    "ticker": ticker, "name": name, "color": color,
-                    "close": close, "pct": pct, "last_pct": last_pct,
-                })
-
-    # Sort by performance
-    perf_list.sort(key=lambda x: x["last_pct"], reverse=True)
-
-    fig_rel = go.Figure()
-
-    # Add gradient fill for #1 (best) and last (worst)
-    if len(perf_list) >= 2:
-        best = perf_list[0]
-        worst = perf_list[-1]
-
-        # Best performer — subtle green fill
-        fig_rel.add_trace(go.Scatter(
-            x=best["close"].index, y=best["pct"],
-            mode="lines", name=best["name"], showlegend=False,
-            line=dict(color=best["color"], width=0),
-            fill="tozeroy", fillcolor=f"rgba({int(best['color'][1:3],16)},{int(best['color'][3:5],16)},{int(best['color'][5:7],16)},0.08)",
-            hoverinfo="skip",
-        ))
-        # Worst performer — subtle red fill
-        fig_rel.add_trace(go.Scatter(
-            x=worst["close"].index, y=worst["pct"],
-            mode="lines", name=worst["name"], showlegend=False,
-            line=dict(color=worst["color"], width=0),
-            fill="tozeroy", fillcolor=f"rgba({int(worst['color'][1:3],16)},{int(worst['color'][3:5],16)},{int(worst['color'][5:7],16)},0.08)",
-            hoverinfo="skip",
-        ))
-
-    # Draw all lines
-    for i, p in enumerate(perf_list):
-        is_top = (i == 0)
-        is_bottom = (i == len(perf_list) - 1)
-        line_width = 3 if is_top or is_bottom else 1.5
-        opacity = 1.0 if is_top or is_bottom else 0.7
-
-        fig_rel.add_trace(go.Scatter(
-            x=p["close"].index, y=p["pct"],
-            mode="lines", name=p["name"], showlegend=False,
-            line=dict(color=p["color"], width=line_width),
-            opacity=opacity,
-            hovertemplate=f"{p['name']}: %{{y:.1f}}%<extra></extra>",
-        ))
-
-    fig_rel.add_hline(y=0, line_color="rgba(255,255,255,0.12)", line_width=1, line_dash="dash")
-
-    fig_rel.update_layout(
-        template="plotly_dark", height=350,
-        margin=dict(t=5, b=5, l=2, r=0),
-        yaxis=dict(title="", ticksuffix="%", gridcolor="rgba(255,255,255,0.04)",
-                   zeroline=False, automargin=True),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", automargin=True,
-                   tickformat="%b %d"),
-        hovermode="x unified",
-        showlegend=False,
-    )
-    st.plotly_chart(fig_rel, use_container_width=True, config={"displayModeBar": False, "responsive": True})
-
-    # HTML legend — wraps cleanly at any width
-    legend_items = []
-    for p in perf_list:
-        pct_c = COLORS["success"] if p["last_pct"] >= 0 else COLORS["danger"]
-        legend_items.append(
-            f'<span style="display:inline-flex;align-items:center;margin:2px 6px;white-space:nowrap;font-size:0.75rem;">'
-            f'<span style="width:10px;height:3px;background:{p["color"]};border-radius:1px;margin-right:4px;flex-shrink:0;"></span>'
-            f'<span style="color:{p["color"]};">{p["name"]}</span>'
-            f'<span style="color:{pct_c};margin-left:3px;">{p["last_pct"]:+.1f}%</span>'
-            f'</span>'
-        )
-    st.markdown(
-        f'<div style="display:flex;flex-wrap:wrap;justify-content:center;gap:0;">{"".join(legend_items)}</div>',
-        unsafe_allow_html=True,
-    )
+    _render_treemap(rel_mode, rel_period, rel_period_label)
 
 
 # ═══════════════════════════════════════════════
