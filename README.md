@@ -47,7 +47,7 @@ Opens at **http://localhost:8501** (or next available port).
 | **Scenario Analysis** | 6-tab macro engine: Grok AI regime analysis, FRED data, portfolio impact modeling, stress tests |
 | **Stock Analysis** | 3-model AI consensus scorecard + SEC EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | **RL Trading** | Dueling DQN ensemble with 31 features, walk-forward validation, Monte Carlo robustness, feature redundancy detection |
-| **Iran Conflict** | 3-model AI war analysis, Grok live infrastructure monitoring, trending tweets, conflict timeline, GDELT/ACLED |
+| **Iran Conflict** | 3-model AI war analysis (search-grounded), live situation briefing, Grok infrastructure monitoring, trending tweets, conflict timeline with ultimatum countdown |
 | **Fed & Macro Drivers** | 4-tab page: signal matrix, driver trend charts, FOMC dot plot, SEP, Polymarket |
 | **Smart Money** | 13F institutional holdings, congressional trades, activist investors (13D), 8-K event search |
 | **Economic Calendar** | Today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
@@ -61,30 +61,30 @@ Opens at **http://localhost:8501** (or next available port).
 
 | Model | ID | Role |
 |-------|-----|------|
-| **Grok 4** | `grok-4.20-0309-reasoning` | Real-time visual OSINT: war maps, satellite imagery, X/Twitter breaking news, narrative shifts |
-| **Gemini 3.1 Pro** | `gemini-3.1-pro-preview` | Quantitative engine: facility-by-facility supply model, oil price math, economic impact |
-| **Claude Sonnet** | `claude-sonnet-4-6` | Bayesian reasoning: scenario trees, ceasefire decomposition, red-teaming, confidence intervals |
+| **Grok 4** | `grok-4.20-0309-reasoning` | Real-time visual OSINT with **live web search** enabled: war maps, satellite imagery, X/Twitter breaking news, narrative shifts |
+| **Gemini 3.1 Pro** | `gemini-3.1-pro-preview` | Quantitative engine with **Google Search grounding**: facility-by-facility supply model, oil price math, economic impact |
+| **Claude Sonnet** | `claude-sonnet-4-6` | Bayesian reasoning (no search — analyzes provided data only): scenario trees, ceasefire decomposition, red-teaming, confidence intervals |
 | **Claude Opus** *(Platinum)* | `claude-opus-4-6` | Upgraded Claude with deeper reasoning |
 
 ### Independent Grok Calls (auto-refresh, no button needed)
 
 | Function | Model | Refresh | Purpose |
 |----------|-------|---------|---------|
-| Infrastructure Status | Grok 4 reasoning | 30 min | Facility status from 30+ verified X accounts |
-| Live Tweets | Grok 4 fast | 10 min | Breaking news feed |
-| Breaking News Brief | Grok 4 fast | 15 min | 6-hour summary fed to all models |
+| Infrastructure Status | Grok 4 reasoning | 30 min | Facility status from 30+ verified X accounts (own tab) |
+| Live Tweets | Grok 4 fast | 10 min | Breaking news feed (verified sources only) |
+| Situation Briefing | Grok 4 fast | 15 min | 4-hour war correspondent dispatch (above tabs) |
+| Breaking News Brief | Grok 4 fast | 15 min | 6-hour summary fed to all models as context |
 | Timeline Auto-Update | Grok 4 fast | 1 hr | New conflict events appended |
-| Ticker Scroll Posts | Grok 4 fast | 10 min | Market intelligence for scroll bar |
+| Ticker Scroll Posts | Grok 4 fast | 10 min | Institutional news only (CNBC, Bloomberg, Reuters, etc.) |
 
 ### Data Enrichment (fed into AI models)
 
 - Polymarket prediction odds (ceasefire, oil, escalation contracts)
 - Oil futures term structure (backwardation/contango signal)
 - LNG/natgas prices (TTF, Henry Hub)
-- Brent, VIX, Gold, DXY live prices
+- Brent, WTI, VIX, Gold, DXY, Henry Hub live prices (Polygon + yfinance fallback with sanity bounds)
 - SEC EDGAR 8-K defense sector filings
-- Source credibility scoring (tracks which X accounts are most accurate)
-- Historical accuracy weights (models that predicted better get more influence)
+- Post-processing layer: replaces hallucinated prices with real API data, clamps disruption/escalation to sane bounds
 
 ## Data Sources
 
@@ -98,7 +98,9 @@ Opens at **http://localhost:8501** (or next available port).
 | **FRED** | 24 economic indicators | Public domain |
 | **EIA** | Oil/gas prices and storage | Public domain |
 | **Polymarket** | Prediction market odds | Public API |
-| **StockTwits** | Social feed (1M+ follower filter) | Public API |
+| **StockTwits** | Social feed (official accounts only) | Public API |
+| **MarineTraffic** | Vessel tracking / AIS data (via Grok X search) | X/Twitter |
+| **yfinance** | Fallback price data when Polygon returns stale/bad data | Free |
 
 ## Quantitative Methods (López de Prado Framework)
 
@@ -162,7 +164,7 @@ $$ LANGUAGE plpgsql;
 - **Data viz:** Plotly (uirevision for stable charts)
 - **ML:** scikit-learn, scipy (RL: pure numpy DQN)
 - **AI:** Anthropic SDK, Google GenAI SDK, OpenAI SDK (for Grok x.ai)
-- **Market Data:** Polygon API (no yfinance dependency)
+- **Market Data:** Polygon API + yfinance fallback (sanity-bounded)
 - **OSINT:** SEC EDGAR, GDELT, ACLED
 
 ## Project Structure

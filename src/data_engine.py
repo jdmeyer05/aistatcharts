@@ -137,7 +137,26 @@ def polygon_batch_snapshot(symbols: list) -> dict:
     except Exception as e:
         logger.warning(f"Polygon batch snapshot failed: {e}")
 
-    # Fill any missing symbols with individual calls + FRED fallback
+    # Sanity check batch results — reject implausible prices or zero-change (stale)
+    for sym in list(results.keys()):
+        price = results[sym].get("price", 0)
+        change = results[sym].get("change", 0)
+        bounds = _PRICE_SANITY_BOUNDS.get(sym)
+        if bounds:
+            low, high = bounds
+            if not (low <= price <= high):
+                logger.warning(
+                    f"Polygon batch returned {sym}={price} — outside sanity bounds "
+                    f"[{low}, {high}]. Will re-fetch via fallback."
+                )
+                del results[sym]
+                continue
+        # Zero change on a futures/index contract usually means stale weekend data
+        if change == 0 and sym in _PRICE_SANITY_BOUNDS:
+            logger.info(f"Polygon batch {sym}={price} has 0% change — likely stale, will re-fetch.")
+            del results[sym]
+
+    # Fill any missing or rejected symbols with individual calls + yfinance/FRED fallback
     for sym in symbols:
         if sym not in results:
             snap = polygon_snapshot_with_fallback(sym)
@@ -599,12 +618,67 @@ def _fred_history(series_id: str, days: int) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _yfinance_snapshot(symbol: str) -> dict | None:
+    """Get latest price via yfinance as a reliable fallback."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(symbol)
+        info = t.fast_info
+        price = info.get("lastPrice") or info.get("last_price", 0)
+        prev = info.get("previousClose") or info.get("previous_close", 0)
+        if price and price > 0:
+            return {"price": round(price, 4), "prev_close": round(prev, 4)}
+    except Exception as e:
+        logger.warning(f"yfinance snapshot failed for {symbol}: {e}")
+    return None
+
+
+# Sanity bounds for known symbols — if Polygon returns outside these, the data is bad
+_PRICE_SANITY_BOUNDS = {
+    "BZ=F": (40, 250),       # Brent crude: $40-250/bbl
+    "CL=F": (30, 250),       # WTI crude: $30-250/bbl
+    "NG=F": (1, 15),         # Henry Hub: $1-15/mmbtu
+    "GC=F": (1500, 10000),   # Gold: $1500-10000/oz
+    "DX-Y.NYB": (80, 115),   # DXY: 80-115
+    "^VIX": (9, 90),         # VIX: 9-90
+    "SI=F": (15, 100),       # Silver: $15-100/oz
+}
+
+
 def polygon_snapshot_with_fallback(symbol: str) -> dict | None:
-    """Try Polygon first, fall back to FRED for futures/indices that Polygon doesn't cover."""
+    """Try Polygon first, validate with sanity bounds, fall back to yfinance then FRED."""
     snap = polygon_snapshot(symbol)
+
+    # Sanity check: reject implausible prices or stale data (price == prev_close exactly)
+    if snap and snap.get("price"):
+        bounds = _PRICE_SANITY_BOUNDS.get(symbol)
+        if bounds:
+            low, high = bounds
+            price = snap["price"]
+            prev = snap.get("prev_close", 0)
+            if not (low <= price <= high):
+                logger.warning(
+                    f"Polygon returned {symbol}={price} — outside sanity bounds "
+                    f"[{low}, {high}]. Falling back to yfinance."
+                )
+                snap = None  # Force fallback
+            elif price == prev and prev > 0:
+                # price == prev_close exactly often means stale/weekend data
+                logger.info(f"Polygon {symbol}={price} looks stale (price==prev_close). Trying yfinance.")
+                yf_snap = _yfinance_snapshot(symbol)
+                if yf_snap and yf_snap.get("price"):
+                    return yf_snap
+                # If yfinance also fails, keep Polygon data
+
     if snap and snap.get("price"):
         return snap
-    # Try FRED fallback
+
+    # yfinance fallback — reliable for futures, indices, forex
+    yf_snap = _yfinance_snapshot(symbol)
+    if yf_snap:
+        return yf_snap
+
+    # FRED fallback for macro series
     fred_series = _FRED_FALLBACK_MAP.get(symbol)
     if fred_series:
         return _fred_latest(fred_series)

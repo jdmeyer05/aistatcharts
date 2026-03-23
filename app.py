@@ -102,10 +102,13 @@ with tab2:
         new_password = st.text_input("Password", type="password", help="Must be at least 6 characters.")
 
         st.divider()
-        st.markdown("##### User Agreement")
         st.markdown(
-            '<div style="max-height:200px;overflow-y:auto;padding:10px;border:1px solid #30363d;'
-            'border-radius:6px;font-size:0.78rem;color:#aaa;background:#0e1117;">'
+            '<div style="border:2px solid #f0b429;border-radius:8px;padding:14px;margin-bottom:8px;'
+            'background:rgba(240,180,41,0.07);">'
+            '<div style="font-size:0.95rem;font-weight:700;color:#f0b429;margin-bottom:8px;">'
+            '⚠️ User Agreement — Please Read</div>'
+            '<div style="max-height:180px;overflow-y:auto;padding:10px;border:1px solid #30363d;'
+            'border-radius:6px;font-size:0.78rem;color:#ccc;background:#0e1117;">'
             '<p><strong>AI Statcharts — Terms of Use (Summary)</strong></p>'
             '<p>This platform provides AI-generated analysis for <strong>informational and educational purposes only</strong>. '
             'It is <strong>not financial advice</strong>. All AI model outputs (scores, recommendations, price targets, '
@@ -120,10 +123,10 @@ with tab2:
             '<p>To the maximum extent permitted by law, the creators shall not be liable for any losses '
             'resulting from use of this platform.</p>'
             '<p><em>Full agreement: USER_AGREEMENT.md in the project repository.</em></p>'
-            '</div>',
+            '</div></div>',
             unsafe_allow_html=True,
         )
-        accept_terms = st.checkbox("I have read and agree to the User Agreement and Terms of Use",
+        accept_terms = st.checkbox("✅ I have read and agree to the User Agreement and Terms of Use",
                                    value=False)
 
         submit_register = st.form_submit_button("Register", type="primary", use_container_width=True)

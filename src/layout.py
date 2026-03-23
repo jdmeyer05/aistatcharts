@@ -581,11 +581,22 @@ _PROFANITY_RE = _re.compile(
 )
 
 
+def _strip_urls(text: str) -> str:
+    """Remove URLs from post text and collapse whitespace."""
+    cleaned = _re.sub(r'https?://\S+', '', text)
+    cleaned = _re.sub(r'www\.\S+', '', cleaned)
+    cleaned = _re.sub(r'\S+\.(com|org|net|io|co|me|info|xyz)\S*', '', cleaned)
+    return _re.sub(r'  +', ' ', cleaned).strip()
+
+
 def _is_clean_post(body: str) -> bool:
-    """Filter out low-quality social posts: hashtag spam, ticker-only, profanity, all-caps."""
+    """Filter out low-quality social posts: hashtag spam, ticker-only, profanity, all-caps, URLs."""
     if not body or len(body.strip()) < 20:
         return False
-    text = body.strip()
+    text = _strip_urls(body.strip())
+    # After stripping URLs, must still have meaningful content
+    if len(text) < 15:
+        return False
     # Hashtag spam: >40% hashtags
     hashtag_chars = sum(len(w) for w in text.split() if w.startswith("#"))
     if len(text) > 0 and hashtag_chars > len(text) * 0.4:
@@ -721,27 +732,37 @@ def _get_grok_ticker_posts() -> list:
     today = __import__("datetime").datetime.now().strftime("%B %d, %Y")
     prompt = f"""TODAY: {today}. Search X (formerly Twitter) RIGHT NOW for high-impact market posts from the last 3 hours.
 
-PRIORITY ACCOUNTS (trusted — search these first):
-  Energy & Markets: @JavierBlas, @amaboraz, @EnergyIntel, @OilSheppard, @QatarEnergy, @HFI_Research
-  OSINT & Military: @sentdefender, @TheStudyofWar, @CriticalThreats, @AuroraIntel, @IntelSky, @Conflict_Radar
-  Journalists: @IranIntl_En, @MiddleEastEye, @Shayan86, @BarakRavid, @AndrewMills1, @RezaSayahNews
-  Official: @Khamenei_ir, @araghchi, @IsraeliPM, @IDF, @IsraelWarRoom, @CENTCOM
-  Gulf: @badralbusaidi, @ONA_eng, @MofaQatar_EN, @MBA_AlThani_, @modgovae, @AnwarGargash
-  Finance: @zerohedge, @cryptorand, @clement_molin
+ONLY USE VERIFIED NEWS & OFFICIAL SOURCES. Do NOT include random traders, influencers, or anonymous accounts.
 
-For any other accounts, require 250K+ followers.
+APPROVED SOURCES (ONLY pull posts from these categories):
+  Major News: @CNBC, @Reuters, @Bloomberg, @business, @WSJ, @FT, @AP, @BBCBusiness, @MarketWatch,
+    @YahooFinance, @SquawkCNBC, @ReutersBiz, @FirstSquawk, @DeItaone, @LiveSquawk
+  Wire Services: @AFP, @AP_Politics, @ReutersWorld
+  Energy News: @JavierBlas (Bloomberg), @EnergyIntel, @OilSheppard, @SPGlobalPlatts, @ArgusMedia,
+    @IabordeJavier, @AmenaAlgerian, @SheDrills, @Frank_Stones
+  Shipping/AIS: @MarineTraffic (vessel tracking, Hormuz transit data)
+  Central Banks & Gov: @federalreserve, @ecabordelern, @ABORDELERN, @WhiteHouse, @USTreasury, @iabordelern
+  Officials (Middle East): @Khamenei_ir, @araghchi, @IsraeliPM, @IDF, @CENTCOM, @IsraelWarRoom,
+    @MofaQatar_EN, @modgovae, @AnwarGargash, @QatarEnergy, @BinsaeedRashid
+  Analysts (named, institutional): @LizAnnSonders (Schwab), @RobinBrooksIIF (IIF), @NickTimiraos (WSJ/Fed),
+    @EdConwaySky, @carlabordelern
 
-QUALITY RULES — every post you return MUST meet ALL of these:
+DO NOT USE: anonymous accounts, crypto influencers, meme accounts, StockTwits-style traders,
+  accounts with < 500K followers (unless they are a named journalist at a major outlet or government official).
+
+QUALITY RULES — every post MUST meet ALL:
 1. It must be a REAL post you found on X right now — do NOT fabricate posts or cite future dates.
 2. It must contain specific, actionable information: a data point, price level, event, or breaking news.
-3. REJECT: vague sentiment ("markets looking rough"), memes, jokes, self-promotion, engagement bait,
-   generic commentary ("big day ahead"), questions without data, or reposts without added insight.
-4. ACCEPT: earnings data, price targets, facility status changes, military updates, diplomatic signals,
-   unusual options/futures activity, official statements, analyst calls with specific numbers.
+3. REJECT: vague sentiment, memes, jokes, self-promotion, engagement bait, generic commentary,
+   questions without data, reposts without added insight, promotional content.
+4. ACCEPT: earnings data, price targets, economic data releases, facility status, military updates,
+   diplomatic signals, Fed/central bank signals, official statements, analyst calls with numbers.
 5. The body must be the ACTUAL text from the post (paraphrased to max 200 chars if needed).
-6. Assign the most relevant ticker symbol (SPY/QQQ/OIL/GLD/VIX/BTC/TLT/DXY or specific stock).
+6. NEVER include URLs, links, or website addresses in the body. Strip them out completely.
+7. NEVER include hashtag spam. Keep max 1 relevant hashtag.
+8. Assign the most relevant ticker symbol (SPY/QQQ/OIL/GLD/VIX/BTC/TLT/DXY or specific stock).
 
-Return ONLY a JSON array of 6-10 posts that pass ALL quality rules:
+Return ONLY a JSON array of 6-10 posts from APPROVED SOURCES:
 [{{"handle": "@user", "symbol": "TICKER", "body": "actual post content max 200 chars", "sentiment": "Bullish/Bearish/Neutral"}}]
 
 If fewer than 6 posts pass the quality bar, return fewer. Quality over quantity."""
@@ -749,16 +770,32 @@ If fewer than 6 posts pass the quality bar, return fewer. Quality over quantity.
     try:
         from openai import OpenAI
         client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
-        response = client.chat.completions.create(
-            model="grok-4-1-fast-reasoning",
-            messages=[
-                {"role": "system", "content": "You are a market intelligence scanner with real-time X (formerly Twitter) access. Search for REAL posts that are currently live on X. Only return posts you actually found — never fabricate. Every post must contain specific, actionable market intelligence. Return JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=1500,
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
+        _sys_msg = "You are an institutional market intelligence scanner with real-time X (formerly Twitter) access. ONLY return posts from verified news outlets (CNBC, Bloomberg, Reuters, WSJ, FT, AP), official government/central bank accounts, and named journalists at major publications. NEVER include random traders, influencers, or anonymous accounts. Search for REAL posts that are currently live on X — never fabricate. Return JSON only."
+        _search_tool = {"type": "function", "function": {"name": "web_search", "description": "Search the web and X/Twitter for real-time information"}}
+        try:
+            response = client.chat.completions.create(
+                model="grok-4-1-fast-reasoning",
+                messages=[
+                    {"role": "system", "content": _sys_msg},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=1500,
+                temperature=0.1,
+                response_format={"type": "json_object"},
+                tools=[_search_tool],
+                tool_choice="auto",
+            )
+        except Exception:
+            response = client.chat.completions.create(
+                model="grok-4-1-fast-reasoning",
+                messages=[
+                    {"role": "system", "content": _sys_msg},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=1500,
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
         raw = response.choices[0].message.content
         if not raw:
             return []
@@ -780,9 +817,35 @@ def _get_social_feed(_symbols_key: str = "") -> list:
     """Fetch posts from Grok X/Twitter feed + StockTwits, filtered for quality.
     _symbols_key is a comma-joined string used as cache key (hashable)."""
 
-    # Primary: Grok-sourced posts from verified X accounts
+    # Primary: Grok-sourced posts from verified news & official accounts only
     grok_posts = _get_grok_ticker_posts()
     posts = []
+
+    # Approved handles — verified news, officials, named institutional analysts
+    _APPROVED_HANDLES = {
+        # Major news outlets
+        "cnbc", "reuters", "bloomberg", "business", "wsj", "ft", "ap", "bbcbusiness",
+        "marketwatch", "yahoofinance", "squawkcnbc", "reutersbiz", "firstsquawk",
+        "deltone", "deItaone", "livesquawk", "afp", "ap_politics", "reutersworld",
+        "barabordelern", "cnbcnow", "bloombergtv", "bloombergmarkets",
+        # Energy / commodity news
+        "javierblas", "energyintel", "oilsheppard", "spglobalplatts", "argusmedia",
+        "marinetraffic", "hfi_research", "amaboraz", "qatarenergy",
+        "shedrills", "frank_stones", "jessecoheninv",
+        # Central banks / government
+        "federalreserve", "whitehouse", "ustreasury",
+        # Officials (Middle East)
+        "khamenei_ir", "araghchi", "israelipm", "idf", "centcom", "israelwarroom",
+        "mofaqatar_en", "modgovae", "anwargargash", "binsaeedrashid",
+        # Named institutional analysts / journalists
+        "lizannsonders", "robinbrooksiif", "nicktimiraos", "edconwaysky",
+        "nicktimirasow", "carlabordelern",
+        # OSINT (verified, institutional-grade)
+        "sentdefender", "thestudyofwar", "criticalthreats", "auroraintel",
+        "iranintl_en", "middleeasteye", "barakravid", "faytuks", "faytuksnetwork",
+        "inside_il_intel", "breaking911",
+    }
+
     # Reject phrases that indicate fabricated/generic posts
     _reject_phrases = [
         "markets looking", "big day", "stay tuned", "what do you think",
@@ -793,6 +856,14 @@ def _get_social_feed(_symbols_key: str = "") -> list:
         body = p.get("body", "").replace("\n", " ").strip()
         handle = p.get("handle", "")
         if not body or len(body) < 20 or not handle:
+            continue
+        # Only allow approved handles
+        clean_handle = handle.lstrip("@").lower()
+        if clean_handle not in _APPROVED_HANDLES:
+            continue
+        # Strip URLs — users don't need links in a scrolling ticker
+        body = _strip_urls(body)
+        if len(body) < 20:
             continue
         # Reject generic/vague posts
         body_lower = body.lower()
@@ -813,7 +884,7 @@ def _get_social_feed(_symbols_key: str = "") -> list:
             "source": "x",
             })
 
-    # Secondary: StockTwits backfill for tickers not covered by Grok
+    # Secondary: StockTwits backfill — ONLY official/verified accounts (skip retail traders)
     grok_symbols = {p["symbol"].upper() for p in posts}
     symbols = _symbols_key.split(",") if _symbols_key else _DEFAULT_SOCIAL_SYMBOLS
     try:
@@ -840,11 +911,13 @@ def _get_social_feed(_symbols_key: str = "") -> list:
                     user = m.get("user", {})
                     followers = user.get("followers", 0)
                     is_official = user.get("official", False)
-                    if not is_official and followers < _MIN_FOLLOWERS:
+                    # Only allow official StockTwits accounts — skip retail traders
+                    if not is_official:
                         continue
                     body = m.get("body", "").replace("\n", " ").strip()
                     if not _is_clean_post(body):
                         continue
+                    body = _strip_urls(body)
                     body = _clean_tweet_tickers(body, clean_sym)
                     if len(body) < 15 or len(body) > 200:
                         continue
