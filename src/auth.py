@@ -177,6 +177,11 @@ def check_session_timeout():
 def check_auth():
     """Auth firewall — recovers session from Supabase client on refresh.
     Falls back to browser cookie refresh token for mobile session recovery."""
+    # OPEN BETA: Allow all visitors without login — remove this block when ready to require auth
+    st.session_state['authenticated'] = True
+    st.session_state.setdefault('user_email', "guest@open-beta")
+    return
+
     from datetime import datetime
     supabase = init_supabase()
 

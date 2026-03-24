@@ -74,19 +74,18 @@ def fetch_henry_hub() -> float | None:
 
 @st.cache_data(ttl=300)
 def fetch_ercot_spp() -> float | None:
-    """Fetch latest ERCOT Hub Average Settlement Point Price."""
+    """Fetch latest ERCOT Hub Average Settlement Point Price from systemWidePrices endpoint."""
     try:
-        r = requests.get(f"{ERCOT_BASE}/real-time-spp.json", timeout=15)
+        r = requests.get(f"{ERCOT_BASE}/systemWidePrices.json", timeout=15)
         r.raise_for_status()
         data = r.json()
-        records = data.get("data", [])
+        records = data.get("rtSppData", [])
         if records:
-            df = pd.DataFrame(records)
-            # Look for HB_HUBAVG or system-wide average
-            hub_rows = df[df["settlementPoint"].str.contains("HB_HUBAVG|HB_HOUSTON|HB_NORTH", case=False, na=False)]
-            if not hub_rows.empty:
-                return float(hub_rows["price"].iloc[-1])
-            return float(df["price"].mean())
+            # Records are 15-min intervals; take the most recent hbHubAvg
+            latest = records[-1]
+            hub_avg = latest.get("hbHubAvg")
+            if hub_avg is not None:
+                return float(hub_avg)
     except Exception as e:
         logger.error(f"ERCOT SPP fetch failed: {e}")
     return None

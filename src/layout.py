@@ -249,7 +249,8 @@ def render_header(current_page: str):
 
             # ── Account ──
             st.markdown(f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Account</div>', unsafe_allow_html=True)
-            if email and email != "local-dev@preview":
+            _is_guest = not email or email in ("local-dev@preview", "guest@open-beta")
+            if not _is_guest:
                 st.markdown(
                     f'<div style="font-size:0.82rem;color:{COLORS["text_primary"]};">{email}</div>'
                     f'<div style="font-size:0.75rem;margin-top:2px;">'
@@ -257,7 +258,12 @@ def render_header(current_page: str):
                     unsafe_allow_html=True,
                 )
             else:
-                st.caption("Local development mode")
+                st.markdown(
+                    f'<div style="font-size:0.82rem;color:{COLORS["text_primary"]};">Guest</div>'
+                    f'<div style="font-size:0.75rem;margin-top:2px;color:{COLORS["text_muted"]};">'
+                    f'Open Beta — all features unlocked</div>',
+                    unsafe_allow_html=True,
+                )
 
             # ── AI Usage ──
             summary = get_usage_summary()
@@ -326,11 +332,19 @@ def render_header(current_page: str):
 
             # ── Actions ──
             st.divider()
-            if st.button("Log Out", key="header_logout", use_container_width=True):
-                clear_auth_cookie()
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.switch_page("app.py")
+            if _is_guest:
+                st.markdown(
+                    f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-bottom:6px;">'
+                    f'Create an account to save preferences and track usage.</div>',
+                    unsafe_allow_html=True,
+                )
+                st.page_link("pages/99_Login.py", label="Log In / Register", icon="🔒", use_container_width=True)
+            else:
+                if st.button("Log Out", key="header_logout", use_container_width=True):
+                    clear_auth_cookie()
+                    for key in list(st.session_state.keys()):
+                        del st.session_state[key]
+                    st.switch_page("pages/01_Summary.py")
 
 
 
