@@ -18,19 +18,19 @@ Opens at **http://localhost:8501** (or next available port).
 - **Landing page dashboard** -- market heatmap (5 lists, drills into ETF holdings), AI intelligence cards, watchlist
 - **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
 - **Fun loader** -- animated spinner with quips, progress bar, milestone status, countdown ETA
+- **Open Beta** -- no login required, all features unlocked, optional account creation via Settings > Log In
 - **Session persistence** -- cookie-based auth recovery, auto-reload on stale mobile connections
 - **Tier-based analyst chat** -- Gemini 2.5 Flash (all tiers) in inline expander
-- **Open Beta** -- all features and pages unlocked for all users (monetization disabled)
 - **Subscription tiers** -- Free, Pro ($12), Premium ($29), Platinum ($79) *(currently disabled — open beta)*
 - **Token system** -- buy analysis tokens ($8/50, $25/200, $50/500) *(currently disabled — open beta)*
-- **Supabase auth** -- login, registration, "remember me", session timeout warning
-- **Stripe integration** -- subscription billing with lookup_key tier mapping
+- **Supabase auth** -- login, registration, "remember me", session timeout warning *(optional during open beta)*
+- **Stripe integration** -- subscription billing with lookup_key tier mapping *(disabled during open beta)*
 - **Mobile-optimized** -- 44px touch targets, responsive breakpoints, pull-to-refresh, auto-reload
 - **No sidebar** -- all controls inline via columns/expanders, sidebar fully hidden via config
 
 ## Subscription Tiers (Currently Disabled — Open Beta)
 
-> **All users currently have full Platinum-level access.** Tier restrictions, payment UI, and token purchases are disabled while the platform is in open beta. Search `OPEN BETA` in `src/auth.py` to find the early-return lines to remove when ready to monetize.
+> **All users currently have full Platinum-level access without login.** Auth, tier restrictions, payment UI, and token purchases are disabled while the platform is in open beta. To re-enable: search `OPEN BETA` in `src/auth.py` and `app.py` to find the early-return lines to remove, then restore the original `app.py` login flow from git history.
 
 | | Free | Pro ($12/mo) | Premium ($29/mo) | Platinum ($79/mo) |
 |---|---|---|---|---|
@@ -172,7 +172,7 @@ $$ LANGUAGE plpgsql;
 ## Project Structure
 
 ```
-app.py                    Entry point (login + user agreement)
+app.py                    Entry point (redirects to Summary; login disabled for open beta)
 webhook_server.py         Stripe webhook handler (Flask, port 5000)
 Dockerfile                Cloud Run deployment (4 CPU, 4GB recommended)
 static/
@@ -198,6 +198,7 @@ pages/
   04_RL_Trading.py        Reinforcement learning trading
   05-22                   Analysis tools, options, energy, macro, futures, Fed, smart money
   23_Power_Analytics.py   Duck curve, heat rates, spark spreads, stack analysis
+  99_Login.py             Standalone login/register page (accessible via Settings popover)
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)
 .streamlit/
