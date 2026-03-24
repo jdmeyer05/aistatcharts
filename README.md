@@ -20,14 +20,17 @@ Opens at **http://localhost:8501** (or next available port).
 - **Fun loader** -- animated spinner with quips, progress bar, milestone status, countdown ETA
 - **Session persistence** -- cookie-based auth recovery, auto-reload on stale mobile connections
 - **Tier-based analyst chat** -- Gemini 2.5 Flash (all tiers) in inline expander
-- **Token system** -- buy analysis tokens ($8/50, $25/200, $50/500) when daily limit is reached
-- **Subscription tiers** -- Free, Pro ($12), Premium ($29), Platinum ($79)
+- **Open Beta** -- all features and pages unlocked for all users (monetization disabled)
+- **Subscription tiers** -- Free, Pro ($12), Premium ($29), Platinum ($79) *(currently disabled — open beta)*
+- **Token system** -- buy analysis tokens ($8/50, $25/200, $50/500) *(currently disabled — open beta)*
 - **Supabase auth** -- login, registration, "remember me", session timeout warning
 - **Stripe integration** -- subscription billing with lookup_key tier mapping
 - **Mobile-optimized** -- 44px touch targets, responsive breakpoints, pull-to-refresh, auto-reload
 - **No sidebar** -- all controls inline via columns/expanders, sidebar fully hidden via config
 
-## Subscription Tiers
+## Subscription Tiers (Currently Disabled — Open Beta)
+
+> **All users currently have full Platinum-level access.** Tier restrictions, payment UI, and token purchases are disabled while the platform is in open beta. Search `OPEN BETA` in `src/auth.py` to find the early-return lines to remove when ready to monetize.
 
 | | Free | Pro ($12/mo) | Premium ($29/mo) | Platinum ($79/mo) |
 |---|---|---|---|---|

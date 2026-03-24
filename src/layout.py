@@ -285,7 +285,7 @@ def render_header(current_page: str):
             elif tier == "free":
                 st.markdown(
                     f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-top:6px;">'
-                    f'Upgrade to Pro for AI analyses</div>',
+                    f'Open Beta — all features unlocked</div>',
                     unsafe_allow_html=True,
                 )
 

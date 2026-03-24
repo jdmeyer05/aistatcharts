@@ -302,6 +302,9 @@ def verify_subscription(email: str, user_id: str) -> str:
 def get_user_tier() -> str:
     """Get the current user's subscription tier.
     Priority: admin list → session cache → Supabase (set by webhook) → Stripe API → free."""
+    # OPEN BETA: All users get full access — remove this line when ready to monetize
+    return "platinum"
+
     email = st.session_state.get("user_email", "")
 
     # Admin override
@@ -381,6 +384,8 @@ def get_token_balance() -> int:
 
 def check_ai_quota() -> bool:
     """Check if user has AI analysis quota remaining (daily allowance OR tokens)."""
+    # OPEN BETA: Unlimited AI analyses — remove this line when ready to monetize
+    return True
     tier = get_user_tier()
     config = TIERS.get(tier, TIERS["free"])
     limit = config["daily_ai_analyses"]
@@ -480,6 +485,8 @@ def get_allowed_models() -> list:
 
 def render_upgrade_prompt(feature_name: str = "this feature"):
     """Render a styled upgrade prompt when a user hits a tier gate."""
+    # OPEN BETA: No upgrade prompts — remove this line when ready to monetize
+    return
     tier = get_user_tier()
 
     st.markdown(
@@ -496,6 +503,8 @@ def render_upgrade_prompt(feature_name: str = "this feature"):
 
 def render_pricing_cards(current_tier: str = "free"):
     """Render subscription plan cards with Stripe checkout links."""
+    # OPEN BETA: No pricing cards — remove this line when ready to monetize
+    return
     plans = [
         {"key": "pro", "name": "Pro", "price": "$12", "period": "/mo",
          "features": ["All 20 pages", "5 AI analyses/day", "3 AI models", "Unlimited chat (Gemini)"],
@@ -529,6 +538,8 @@ def render_pricing_cards(current_tier: str = "free"):
 
 def render_quota_exceeded():
     """Show when a user has used all daily analyses and has no tokens."""
+    # OPEN BETA: No quota limits — remove this line when ready to monetize
+    return
     summary = get_usage_summary()
     st.markdown(
         f'<div style="background:rgba(255,170,0,0.08);border:1px solid #ffaa00;'
@@ -545,6 +556,8 @@ def render_quota_exceeded():
 
 def render_token_purchase():
     """Render the token purchase UI with Stripe links."""
+    # OPEN BETA: No token purchases — remove this line when ready to monetize
+    return
     st.markdown("#### Buy Analysis Tokens")
     st.caption("Tokens let you run AI analyses beyond your daily included allowance. They never expire.")
 
