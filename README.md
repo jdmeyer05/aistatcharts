@@ -55,7 +55,7 @@ Opens at **http://localhost:8501** (or next available port).
 | **Economic Calendar** | Today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
 | **Algo Backtester** | 13 strategies, 9-tab analysis: equity curve, drawdown, trade log, monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. López de Prado methods: Deflated Sharpe, PBO (CPCV), Triple Barrier exits, bet sizing, fractional differentiation, sequential bootstrap. |
 | **Monte Carlo** | Student-t (fat tails), empirical block bootstrap, and GBM simulation. Warns when normal assumptions don't fit. |
-| **Power Analytics** | Duck curve, implied heat rates, spark spreads, generation stack merit order (ERCOT + EIA data) |
+| **Power Analytics** | Institutional-grade ERCOT power market analysis: duck curve (historical overlay, flexibility metrics, over-gen risk, storage arbitrage, forecast vs actual, multi-ISO comparison), implied heat rates (hourly curve, System Lambda, heat rate vs load scatter, duration curve), spark spreads (VOM-adjusted margins, hourly profitability, DAM vs RT, System Lambda vs fuel cost, duration curve), generation stack (gas fleet disaggregation, inframarginal rent, fuel mix area chart, belly vs peak, reserve margin). Data: ERCOT Public API (NP6-345, NP4-737, NP4-732, NP6-905, NP4-190, NP6-322, NP4-523), EIA Hourly Grid Monitor, yfinance NG/CL futures, ERCOT dashboard real-time. |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
@@ -98,7 +98,9 @@ Opens at **http://localhost:8501** (or next available port).
 | **GDELT** | Media intensity, tone, bulk conflict events | Open data |
 | **ACLED** | Armed conflict events (11 ME countries) | Academic/commercial |
 | **FRED** | 24 economic indicators | Public domain |
-| **EIA** | Oil/gas prices and storage | Public domain |
+| **EIA** | Oil/gas prices, storage, Hourly Grid Monitor (rto/fuel-type-data, region-data) | Public domain |
+| **ERCOT Public API** | Actual load, wind/solar gen+forecast, RT/DAM SPP, System Lambda, ancillary services | Free (subscription key) |
+| **ERCOT Dashboard** | Real-time fuel mix (5-min), supply/demand, system-wide prices | Public |
 | **Polymarket** | Prediction market odds | Public API |
 | **StockTwits** | Social feed (official accounts only) | Public API |
 | **MarineTraffic** | Vessel tracking / AIS data (via Grok X search) | X/Twitter |

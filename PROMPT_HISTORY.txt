@@ -1,9 +1,26 @@
 AI STATCHARTS — PROMPT HISTORY
 ================================
-Last updated: March 20, 2026
+Last updated: March 25, 2026
 
 This file documents all AI prompts used in the platform, their purpose,
 and the evolution of key changes. Organized by feature.
+
+
+================================================================================
+0. POWER ANALYTICS — No AI Prompts (Quantitative Only)
+================================================================================
+File: pages/23_Power_Analytics.py
+Note: This page uses no AI models. All analysis is computed from live market data:
+  - ERCOT Public API (actual load, wind/solar, RT/DAM prices, System Lambda)
+  - ERCOT Dashboard API (real-time fuel mix, supply/demand)
+  - EIA Hourly Grid Monitor (historical generation by fuel type)
+  - EIA API v2 (Henry Hub gas prices — daily and weekly)
+  - yfinance (NG=F natural gas futures, CL=F crude oil)
+
+The page performs quantitative calculations: implied heat rates, spark spreads,
+merit order dispatch, flexibility metrics, over-generation risk, storage
+arbitrage, and inframarginal rent. No LLM inference is involved.
+
 
 
 ================================================================================

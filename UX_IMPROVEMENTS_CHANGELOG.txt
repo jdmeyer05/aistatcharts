@@ -1,5 +1,81 @@
 AI STATCHARTS — UX IMPROVEMENTS CHANGELOG
 ==========================================
+
+
+================================================================================
+March 24-25, 2026 — POWER ANALYTICS OVERHAUL
+================================================================================
+Scope: Complete rewrite of pages/23_Power_Analytics.py + new src/ercot_api.py
+Files changed: pages/23_Power_Analytics.py, src/ercot_api.py, .streamlit/secrets.toml
+
+ERCOT PUBLIC API INTEGRATION (src/ercot_api.py — new file):
+  - Azure B2C OAuth token management with auto-refresh (1hr tokens)
+  - Actual system load by weather zone (NP6-345-CD) — replaces generation proxy
+  - Wind generation actual + forecast + capacity (NP4-732-CD)
+  - Solar generation actual + forecast + capacity (NP4-737-CD)
+  - Real-time settlement point prices by hub/zone (NP6-905-CD)
+  - Day-ahead settlement point prices (NP4-190-CD)
+  - SCED System Lambda — actual 5-min marginal clearing price (NP6-322-CD)
+  - DAM System Lambda — day-ahead marginal price (NP4-523-CD)
+  - Historical load (30-day) for trend analysis
+
+DUCK CURVE TAB — 7 new analytical features:
+  1. Historical overlay: 7-day and 30-day avg net load from ERCOT API actual demand
+  2. Renewable penetration %: wind+solar as % of total generation over the day
+  3. Flexibility metrics: ramp range, 3-hr directional ramp, ramp-to-peak ratio, severity grade
+  4. Over-generation risk: margin above derived min gen constraint, hours at risk
+  5. Storage arbitrage + price overlay: RT price on secondary y-axis, arb value with 85% RT efficiency
+  6. Day-ahead forecast vs actual: load forecast error (MAE, MAPE, bias)
+  7. Multi-ISO comparison: ERCOT/CAISO/MISO/PJM/SPP/NYISO via EIA Hourly Grid Monitor
+  8. Wind & solar forecast vs actual: ERCOT API hourly gen + STPPF/STWPF forecast + capacity (HSL)
+  9. DAM vs RT price spread: hourly overlay with spread bars
+  10. Zonal hub prices: Houston/North/South/West congestion indicator
+
+HEAT RATE TAB — 6 new analytical features:
+  1. Hourly implied heat rate curve: RT and DAM by hour with CCGT/peaker reference bands
+  2. System Lambda: ERCOT's actual 5-min marginal price overlaid with DAM Lambda
+  3. Heat rate vs net load scatter: dispatch curve slope with trend line
+  4. Heat rate duration curve: % of intervals at each efficiency level
+  5. Gas price trend: 30-day chart with yfinance futures + EIA daily overlay
+  6. Gas price priority: yfinance NG=F (real-time) > EIA daily > EIA weekly
+
+SPARK SPREAD TAB — 7 new analytical features:
+  1. VOM-adjusted margins: fuel cost + variable O&M for true profitability (EIA AEO/NREL ATB)
+  2. Hourly spark spread curve: CCGT and CT net margin by hour
+  3. Profitability hours: count + avg margin for each plant type
+  4. DAM vs RT spark spread: expected vs realized CCGT profitability
+  5. System Lambda vs fuel cost: ERCOT clearing price vs plant SRMC lines
+  6. Spark spread duration curve: profit distribution sorted best-to-worst
+  7. Proper fuel prices: nuclear=uranium ($0.65/MMBtu), coal=PRB/lignite ($1.50), gas=live futures
+
+STACK ANALYSIS TAB — 6 new analytical features:
+  1. Gas fleet disaggregation: CCGT (65%) / Steam (11%) / CT (24%) per ERCOT CDR 2024
+  2. Inframarginal rent: $/hr gross margin by fuel type
+  3. Fuel mix area chart: stacked 24-hour generation by fuel with demand overlay
+  4. Belly vs peak comparison: side-by-side donut charts with swing table
+  5. Reserve margin: actual MW with ERCOT EEA thresholds (3,000 MW EEA1, 1,750 MW EEA2)
+  6. Supply curve fix: renewables use current output (not installed), storage excluded when charging
+
+DATA ACCURACY FIXES:
+  - Net load filtered to single day (was cross-day inflated)
+  - Storage charging included in total_gen for correct demand approximation
+  - Duck severity thresholds calibrated to ERCOT seasonal norms (not arbitrary)
+  - All arbitrary values replaced with sourced/derived values
+  - Gas price staleness warnings when EIA data >5 days old
+  - Consistent gas price across all tabs (yfinance > EIA daily > weekly)
+  - DAM SPP fetched for today (was returning tomorrow's)
+  - Supply curve uses current generation for renewables (not installed capacity)
+
+YFINANCE INTEGRATION:
+  - NG=F front-month natural gas futures (real-time, 15-min delay)
+  - CL=F WTI crude oil futures
+  - Top metrics row: NG futures, WTI crude, ERCOT Hub Avg
+  - Eliminates EIA gas price staleness (was 8+ days behind)
+
+
+================================================================================
+March 19, 2026 — UX IMPROVEMENTS
+================================================================================
 Date: March 19, 2026
 Scope: 21 features across 25+ files, all 20 pages impacted
 
