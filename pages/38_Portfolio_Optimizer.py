@@ -38,6 +38,7 @@ PLOTLY_NOBAR = {"displayModeBar": False}
 
 METHOD_COLORS = {
     "Tangency (Max Sharpe)": "#00d1ff",
+    "Robust Max Sharpe": "#00e0d0",
     "Min Variance": "#00ff88",
     "Risk Parity": "#ffaa00",
     "Max Diversification": "#ff00ff",
@@ -168,14 +169,48 @@ def _portfolio_metrics(returns: pd.Series, name: str) -> dict:
 
 
 # ═══════════════════════════════════════════════
+# PRESET UNIVERSES
+# ═══════════════════════════════════════════════
+
+PRESETS = {
+    "Custom": "",
+    "Multi-Asset (Default)": "SPY,TLT,GLD,EFA,IWM,USO,HYG,VNQ",
+    "Sector ETFs": "XLE,XLF,XLK,XLV,XLI,XLC,XLY,XLP,XLU,XLB,XLRE",
+    "Energy Sector": "XOM,CVX,COP,EOG,SLB,MPC,OXY,PSX,VLO,DVN",
+    "Financials Sector": "JPM,BAC,WFC,GS,MS,BLK,SCHW,C,AXP,MMC",
+    "Technology Sector": "AAPL,MSFT,NVDA,AVGO,CRM,ORCL,AMD,ADBE,ACN,CSCO",
+    "Healthcare Sector": "UNH,LLY,JNJ,ABBV,MRK,TMO,ABT,AMGN,DHR,PFE",
+    "Industrials Sector": "GE,CAT,UNP,HON,RTX,DE,LMT,BA,ETN,ADP",
+    "Communication Sector": "META,GOOGL,NFLX,T,CMCSA,VZ,DIS,TMUS,EA,CHTR",
+    "Consumer Disc Sector": "AMZN,TSLA,HD,MCD,NKE,LOW,BKNG,SBUX,TJX,CMG",
+    "Consumer Staples Sector": "PG,COST,WMT,KO,PEP,PM,MDLZ,MO,CL,STZ",
+    "Utilities Sector": "NEE,SO,DUK,CEG,SRE,AEP,D,EXC,XEL,PEG",
+    "Materials Sector": "LIN,SHW,APD,ECL,FCX,NUE,NEM,VMC,MLM,DOW",
+    "Real Estate Sector": "PLD,AMT,EQIX,SPG,PSA,O,WELL,DLR,VICI,CCI",
+    "Mega Caps": "AAPL,MSFT,NVDA,AMZN,GOOGL,META,TSLA,BRK-B,JPM,V",
+    "Global Macro": "SPY,EFA,EEM,TLT,IEF,GLD,USO,UNG,DBA,UUP",
+    "60/40 Classic": "SPY,TLT",
+    "All-Weather": "SPY,TLT,GLD,DBA,IEF",
+}
+
+
+# ═══════════════════════════════════════════════
 # CONTROLS
 # ═══════════════════════════════════════════════
 
+pc1, pc2 = st.columns([1, 3])
+with pc1:
+    preset = st.selectbox("Preset", list(PRESETS.keys()), index=1, key="po_preset",
+                          on_change=lambda: st.session_state.update(
+                              po_tickers=PRESETS.get(st.session_state.po_preset, "")))
+
+# Initialize ticker input from preset if not yet set
+if "po_tickers" not in st.session_state:
+    st.session_state["po_tickers"] = PRESETS.get(preset, "SPY,TLT,GLD,EFA,IWM")
+
 c1, c2, c3 = st.columns([3, 1, 1])
 with c1:
-    raw_tickers = st.text_input("Portfolio assets (comma-separated)",
-                                value="SPY,TLT,GLD,EFA,IWM,USO,HYG,VNQ",
-                                key="po_tickers")
+    raw_tickers = st.text_input("Portfolio assets (comma-separated)", key="po_tickers")
 with c2:
     po_lookback = st.selectbox("Estimation Window", ["1Y", "2Y", "3Y", "5Y"],
                                 index=1, key="po_lookback")
@@ -199,6 +234,10 @@ lookback_map = {"1Y": "1y", "2Y": "2y", "3Y": "3y", "5Y": "5y"}
 with st.spinner(f"Loading {len(ticker_list)} assets..."):
     prices = fetch_price_history(ticker_list, period=lookback_map[po_lookback])
 
+# Strip timezone from price index for compatibility
+if not prices.empty and prices.index.tz is not None:
+    prices.index = prices.index.tz_localize(None)
+
 if prices.empty or len(prices.columns) < 3:
     st.error("Insufficient price data. Try different tickers or a shorter lookback.")
     st.stop()
@@ -206,14 +245,128 @@ if prices.empty or len(prices.columns) < 3:
 returns = prices.pct_change().dropna()
 tickers = returns.columns.tolist()
 n_assets = len(tickers)
-mu = returns.mean().values
 cov = returns.cov().values
-ann_mu = mu * 252
 ann_cov = cov * 252
+
+# Date context
+data_start = returns.index[0].strftime("%Y-%m-%d")
+data_end = returns.index[-1].strftime("%Y-%m-%d")
+n_trading_days = len(returns)
+n_years = n_trading_days / 252
+
+# ═══════════════════════════════════════════════
+# RETURN ESTIMATION METHOD
+# ═══════════════════════════════════════════════
+
+RETURN_METHODS = {
+    "Sample Mean": "Raw historical average. Simple but extremely noisy — standard error ≈ vol/√T.",
+    "Shrinkage (Ledoit-Wolf)": "Shrinks sample means toward the grand mean. More stable, less extreme.",
+    "CAPM Implied": "Returns implied by each asset's beta to SPY × the equity risk premium.",
+    "BL Equilibrium": "Black-Litterman equilibrium — reverse-optimized from equal-weight market portfolio.",
+}
+
+ret_method = st.radio("Return estimation method", list(RETURN_METHODS.keys()),
+                      index=1, horizontal=True, key="po_ret_method",
+                      help="How expected returns are estimated. This only affects Tangency and the Efficient Frontier — "
+                           "Min Var, Risk Parity, Max Div, and HRP use only the covariance matrix.")
+
+with st.expander(f"About: {ret_method}"):
+    st.caption(RETURN_METHODS[ret_method])
+    if ret_method == "Sample Mean":
+        st.warning("De Prado (AFML Ch. 10): raw sample means are dominated by estimation error. "
+                   "The tangency portfolio is effectively a maximizer of estimation error, not expected return. "
+                   "Use shrinkage or BL equilibrium for more stable results.")
+    elif ret_method == "Shrinkage (Ledoit-Wolf)":
+        st.info("Shrinks each asset's mean return toward the cross-sectional average. "
+                "Shrinkage intensity is proportional to estimation uncertainty. "
+                "This dramatically stabilizes the tangency portfolio.")
+    elif ret_method == "CAPM Implied":
+        st.info("Uses each asset's beta to SPY (or the first asset if SPY not present) times an assumed "
+                "equity risk premium of 6%. Assets with higher beta get higher expected returns.")
+    elif ret_method == "BL Equilibrium":
+        st.info("Reverse-optimizes: given the current covariance and equal-weight portfolio, "
+                "what expected returns would make a rational investor hold those weights? "
+                "This is the starting point for Black-Litterman before views are applied.")
+
+# Compute expected returns based on selected method
+raw_mu = returns.mean().values  # always compute for reference
+
+if ret_method == "Sample Mean":
+    mu = raw_mu
+
+elif ret_method == "Shrinkage (Ledoit-Wolf)":
+    # Bayes-Stein shrinkage toward global minimum variance portfolio return
+    # More robust than shrinking toward grand mean — preserves relative ordering
+    n_obs = len(returns)
+    grand_mean = raw_mu.mean()
+
+    # Shrinkage intensity based on Jorion (1986) / Ledoit-Wolf
+    # alpha = (n_assets + 2) / ((n_assets + 2) + n_obs * d^2)
+    # where d^2 = (mu - grand_mean)' * Sigma_inv * (mu - grand_mean)
+    try:
+        cov_inv = np.linalg.inv(cov)
+        diff = raw_mu - grand_mean
+        d_sq = diff @ cov_inv @ diff
+        alpha = (n_assets + 2) / ((n_assets + 2) + n_obs * d_sq) if d_sq > 0 else 0.5
+        alpha = np.clip(alpha, 0.05, 0.95)  # bound to prevent full collapse or no shrinkage
+    except np.linalg.LinAlgError:
+        alpha = 0.5  # fallback
+
+    mu = (1 - alpha) * raw_mu + alpha * grand_mean
+
+elif ret_method == "CAPM Implied":
+    # Use first asset or SPY as market proxy
+    market_col = "SPY" if "SPY" in tickers else tickers[0]
+    market_ret = returns[market_col].values
+    market_var = np.var(market_ret)
+    erp = 0.06 / 252  # 6% annual equity risk premium, daily
+    betas = np.array([np.cov(returns[t].values, market_ret)[0, 1] / market_var
+                      if market_var > 0 else 1.0 for t in tickers])
+    mu = betas * erp
+
+elif ret_method == "BL Equilibrium":
+    # Reverse optimization: pi = delta * Sigma * w_mkt
+    # Use market-cap weights if available, else equal-weight
+    delta = 2.5
+    try:
+        from src.market_data import fetch_energy_valuation_data
+        val = fetch_energy_valuation_data(tickers)
+        if not val.empty and "market_cap" in val.columns:
+            mcaps = val.set_index("ticker")["market_cap"].reindex(tickers).fillna(0)
+            if mcaps.sum() > 0:
+                w_mkt = (mcaps / mcaps.sum()).values
+            else:
+                w_mkt = np.full(n_assets, 1 / n_assets)
+        else:
+            w_mkt = np.full(n_assets, 1 / n_assets)
+    except Exception:
+        w_mkt = np.full(n_assets, 1 / n_assets)
+    mu = delta * cov @ w_mkt
+
+ann_mu = mu * 252
+ret_ci = returns.std().values * 1.96 / np.sqrt(len(returns)) * 252 * 100  # 95% CI on annualized mean
 
 # ═══════════════════════════════════════════════
 # COMPUTE ALL ALLOCATIONS
 # ═══════════════════════════════════════════════
+
+def _robust_max_sharpe(mu: np.ndarray, cov: np.ndarray, uncertainty: np.ndarray) -> np.ndarray:
+    """Robust optimization: maximize worst-case Sharpe within confidence set.
+    Uses mu - kappa * uncertainty as the pessimistic return estimate."""
+    n = len(mu)
+    w0 = np.full(n, 1 / n)
+    kappa = 1.0  # 1 std dev penalty
+    mu_robust = mu - kappa * uncertainty  # worst-case returns
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+    bounds = [(0, 1)] * n
+
+    def neg_robust_sharpe(w):
+        ret = w @ mu_robust
+        vol = np.sqrt(w @ cov @ w)
+        return -(ret) / vol if vol > 1e-12 else 1e10
+
+    result = minimize(neg_robust_sharpe, w0, method="SLSQP", bounds=bounds, constraints=constraints)
+    return result.x if result.success else w0
 
 with st.spinner("Computing optimal portfolios..."):
     w_tangency = _tangency_portfolio(mu, cov)
@@ -222,9 +375,13 @@ with st.spinner("Computing optimal portfolios..."):
     w_maxdiv = _max_diversification(cov)
     w_hrp = hrp_allocate(returns).reindex(tickers).fillna(0).values
     w_equal = np.full(n_assets, 1 / n_assets)
+    # Robust: use SE of mean as uncertainty
+    mu_se = returns.std().values / np.sqrt(len(returns))
+    w_robust = _robust_max_sharpe(mu, cov, mu_se)
 
 allocations = {
     "Tangency (Max Sharpe)": w_tangency,
+    "Robust Max Sharpe": w_robust,
     "Min Variance": w_minvar,
     "Risk Parity": w_riskparity,
     "Max Diversification": w_maxdiv,
@@ -232,14 +389,19 @@ allocations = {
     "Equal Weight": w_equal,
 }
 
-# Header metrics for tangency portfolio
+# Header metrics
 t_ret = w_tangency @ ann_mu * 100
 t_vol = np.sqrt(w_tangency @ ann_cov @ w_tangency) * 100
 t_sharpe = t_ret / t_vol if t_vol > 0 else 0
+
+st.caption(f"Estimation period: **{data_start}** to **{data_end}** ({n_trading_days} trading days, {n_years:.1f} years). "
+           f"All returns and volatilities are **annualized** (×252 daily → annual). "
+           f"Forecast horizon: **1 year forward** from today, assuming stationary risk/return.")
+
 hm1, hm2, hm3, hm4 = st.columns(4)
 hm1.metric("Assets", n_assets)
-hm2.metric("Max Sharpe Return", f"{t_ret:.1f}%")
-hm3.metric("Max Sharpe Vol", f"{t_vol:.1f}%")
+hm2.metric("Max Sharpe Return (1Y)", f"{t_ret:.1f}%")
+hm3.metric("Max Sharpe Vol (1Y)", f"{t_vol:.1f}%")
 hm4.metric("Max Sharpe Ratio", f"{t_sharpe:.2f}")
 
 
@@ -270,9 +432,12 @@ with tab_frontier, error_boundary("Efficient Frontier"):
             "it has the highest Sharpe ratio.\n\n"
             "**Individual assets** (circles) typically sit below the frontier — diversification creates portfolios "
             "that outperform any single asset on a risk-adjusted basis.\n\n"
+            f"**Return estimation:** Currently using **{ret_method}**. Change this above the tabs.\n\n"
             "**Limitations:** Mean-variance is sensitive to estimation errors in expected returns. "
             "Small changes in inputs can produce wildly different optimal portfolios. "
-            "Use the Risk Parity or HRP tabs for more stable alternatives."
+            "The tangency portfolio is effectively a *maximizer of estimation error* (de Prado, AFML Ch. 10). "
+            "Use shrinkage or BL equilibrium for more stable tangency weights, or prefer "
+            "covariance-only methods (Min Var, Risk Parity, HRP) which don't use return estimates at all."
         )
 
     frontier = _efficient_frontier(mu, cov, n_points=60)
@@ -311,9 +476,9 @@ with tab_frontier, error_boundary("Efficient Frontier"):
         ))
 
     fig_ef.update_layout(template="plotly_dark", height=500,
-                          title="Efficient Frontier with Optimal Portfolios",
-                          xaxis_title="Annualized Volatility (%)",
-                          yaxis_title="Annualized Return (%)",
+                          title=f"Efficient Frontier — 1Y Forward (estimated from {n_years:.1f}Y of data)",
+                          xaxis_title="Annualized Volatility (%, 1Y)",
+                          yaxis_title="Expected Return (%, 1Y forward)",
                           legend=dict(orientation="h", y=-0.15),
                           margin=dict(l=0, r=0, t=40, b=0))
     st.plotly_chart(fig_ef, use_container_width=True, config=PLOTLY_NOBAR)
@@ -325,32 +490,273 @@ with tab_frontier, error_boundary("Efficient Frontier"):
         p_vol = np.sqrt(w @ ann_cov @ w) * 100
         p_sharpe = p_ret / p_vol if p_vol > 0 else 0
         frontier_data.append({
-            "Method": method, "Exp. Return": f"{p_ret:.1f}%",
-            "Exp. Vol": f"{p_vol:.1f}%", "Sharpe": f"{p_sharpe:.2f}",
+            "Method": method, "Exp. Return (1Y)": f"{p_ret:.1f}%",
+            "Exp. Vol (1Y)": f"{p_vol:.1f}%", "Sharpe": f"{p_sharpe:.2f}",
             "Max Weight": f"{w.max() * 100:.0f}%",
             "Active Positions": f"{(w > 0.01).sum()}/{n_assets}",
         })
     st.dataframe(pd.DataFrame(frontier_data), use_container_width=True, hide_index=True)
+
+    # Return estimates section
+    st.markdown("---")
+    st.subheader("Estimated Expected Returns (1-Year Forward)")
+    st.caption(f"Method: **{ret_method}** · Estimated from **{data_start}** to **{data_end}** ({n_years:.1f}Y of data) · "
+               f"Annualized to a **1-year forward** horizon. "
+               "These drive the Tangency portfolio and frontier curve. "
+               "Min Var, Risk Parity, Max Div, and HRP ignore return estimates entirely (covariance only).")
+
+    # Visual: bar chart comparing estimated returns with error bars
+    ann_ret_est = mu * 252 * 100
+    ann_ret_raw = raw_mu * 252 * 100
+    sorted_idx = np.argsort(ann_ret_est)
+
+    fig_ret = go.Figure()
+
+    # Sample mean (background reference)
+    if ret_method != "Sample Mean":
+        fig_ret.add_trace(go.Bar(
+            y=[tickers[i] for i in sorted_idx],
+            x=[ann_ret_raw[i] for i in sorted_idx],
+            orientation="h", name="Sample Mean",
+            marker_color="rgba(85,85,85,0.4)",
+            text=[f"{ann_ret_raw[i]:.1f}%" for i in sorted_idx],
+            textposition="inside", textfont=dict(size=9, color="#888"),
+        ))
+
+    # Estimated return with CI error bars
+    fig_ret.add_trace(go.Bar(
+        y=[tickers[i] for i in sorted_idx],
+        x=[ann_ret_est[i] for i in sorted_idx],
+        orientation="h", name=ret_method,
+        marker_color=["#00d1ff" if v >= 0 else "#ff4444" for v in ann_ret_est[sorted_idx]],
+        error_x=dict(type="data", array=[ret_ci[i] for i in sorted_idx],
+                     color="#ffaa00", thickness=1.5, width=4),
+        text=[f"{ann_ret_est[i]:.1f}%" for i in sorted_idx],
+        textposition="outside",
+    ))
+
+    fig_ret.add_vline(x=0, line_dash="dash", line_color="#333")
+    fig_ret.update_layout(
+        template="plotly_dark", height=max(300, n_assets * 35),
+        title=f"1-Year Expected Returns — {ret_method} (with 95% CI)",
+        xaxis_title="Annualized Return (%, 1Y forward)",
+        barmode="overlay",
+        legend=dict(orientation="h", y=-0.12),
+        margin=dict(l=0, r=60, t=40, b=0),
+    )
+    st.plotly_chart(fig_ret, use_container_width=True, config=PLOTLY_NOBAR)
+
+    # Metrics row
+    avg_ci = ret_ci.mean()
+    rm1, rm2, rm3, rm4 = st.columns(4)
+    rm1.metric("Highest", f"{ann_ret_est.max():.1f}% ({tickers[np.argmax(ann_ret_est)]})")
+    rm2.metric("Lowest", f"{ann_ret_est.min():.1f}% ({tickers[np.argmin(ann_ret_est)]})")
+    rm3.metric("Spread", f"{ann_ret_est.max() - ann_ret_est.min():.1f}%",
+               help="Wider spread = frontier has more room to optimize. Narrow = all assets look similar.")
+    rm4.metric("Avg 95% CI", f"±{avg_ci:.1f}%",
+               help="How uncertain the estimates are. ±10%+ means the ranking could easily be wrong.")
+
+    if ret_method != "Sample Mean":
+        deviation = np.abs(mu - raw_mu).mean() * 252 * 100
+        st.caption(f"Shrinkage moved returns by **{deviation:.1f}%** on average from raw sample means. "
+                   f"Shrinkage intensity: **{alpha:.0%}**." if ret_method == "Shrinkage (Ledoit-Wolf)"
+                   else f"Returns differ from sample means by **{deviation:.1f}%** on average.")
+
+    if avg_ci > ann_ret_est.max() - ann_ret_est.min():
+        st.warning("The confidence intervals are **wider than the return spread** — "
+                   "the optimizer can't reliably distinguish between assets. "
+                   "Covariance-only methods (Min Var, Risk Parity, HRP) are more appropriate here.")
+
+    # Detail table
+    with st.expander("Return Estimates Table"):
+        ret_display = pd.DataFrame({
+            "Asset": tickers,
+            f"{ret_method}": [f"{v:.1f}%" for v in ann_ret_est],
+            "Sample Mean": [f"{v:.1f}%" for v in ann_ret_raw],
+            "95% CI": [f"±{ci:.1f}%" for ci in ret_ci],
+            "Ann. Vol": [f"{returns[t].std() * np.sqrt(252) * 100:.1f}%" for t in tickers],
+            "Sharpe (est)": [f"{ann_ret_est[i] / (returns[tickers[i]].std() * np.sqrt(252) * 100):.2f}"
+                            if returns[tickers[i]].std() > 0 else "N/A" for i in range(n_assets)],
+        })
+        st.dataframe(ret_display, use_container_width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════
 # TAB 2: OPTIMAL WEIGHTS
 # ═══════════════════════════════════════════════
 with tab_weights, error_boundary("Optimal Weights"):
-    st.subheader("Weight Comparison")
+    st.subheader("Optimal Weights")
 
     with st.expander("How to read this tab", expanded=False):
         st.markdown(
-            "Compares portfolio weights across all optimization methods.\n\n"
-            "**Tangency** tends to concentrate in high-Sharpe assets — unstable, high turnover. "
-            "**Min Variance** concentrates in low-vol assets (bonds, utilities). "
-            "**Risk Parity** spreads risk evenly — overweights low-vol, underweights high-vol. "
-            "**Max Diversification** maximizes the diversification ratio — favors uncorrelated assets. "
-            "**HRP** uses hierarchical clustering — stable, no matrix inversion needed.\n\n"
-            "Watch for **concentration**: if any method puts >40% in one asset, it's fragile."
+            "Each method answers a different question:\n\n"
+            "| Method | Question It Answers | Typical Result |\n"
+            "|--------|--------------------|-----------------|\n"
+            "| **Tangency** | What maximizes return per unit of risk? | Concentrated in high-Sharpe assets |\n"
+            "| **Min Variance** | What minimizes total portfolio volatility? | Heavy in bonds/low-vol assets |\n"
+            "| **Risk Parity** | What gives each asset equal risk contribution? | Overweights low-vol, underweights high-vol |\n"
+            "| **Max Diversification** | What maximizes diversification benefit? | Favors uncorrelated assets |\n"
+            "| **HRP** | What's stable and doesn't need matrix inversion? | Most balanced, lowest turnover |\n"
+            "| **Equal Weight** | Baseline — no optimization | 1/N for all assets |\n\n"
+            "**Red flags:** Any method with >40% in one asset is fragile. "
+            "Methods that agree on an asset's weight are more reliable than methods that disagree."
         )
 
-    # Grouped bar chart
+    # ── Method selector for detailed view ──
+    selected_method = st.selectbox("Focus on method", list(allocations.keys()), index=4, key="po_wt_method")
+    w_focus = allocations[selected_method]
+
+    # Donut chart + metrics for selected method
+    wf_c1, wf_c2 = st.columns([2, 1])
+    with wf_c1:
+        # Sort by weight descending for the donut
+        wf_sorted = pd.Series(w_focus, index=tickers).sort_values(ascending=False)
+        wf_nonzero = wf_sorted[wf_sorted > 0.005]
+
+        fig_donut = go.Figure(data=go.Pie(
+            labels=wf_nonzero.index.tolist(),
+            values=wf_nonzero.values * 100,
+            hole=0.45,
+            textinfo="label+percent",
+            textfont=dict(size=11),
+            marker=dict(line=dict(color="#1a1a2e", width=2)),
+        ))
+        fig_donut.update_layout(template="plotly_dark", height=380,
+                                 title=f"{selected_method} — Weight Distribution",
+                                 margin=dict(l=0, r=0, t=40, b=0),
+                                 showlegend=False)
+        st.plotly_chart(fig_donut, use_container_width=True, config=PLOTLY_NOBAR)
+
+    with wf_c2:
+        p_ret = w_focus @ ann_mu * 100
+        p_vol = np.sqrt(w_focus @ ann_cov @ w_focus) * 100
+        p_sharpe = p_ret / p_vol if p_vol > 0 else 0
+        hhi = np.sum(w_focus ** 2)
+        eff_n = 1 / hhi if hhi > 0 else n_assets
+        vols = np.sqrt(np.diag(ann_cov))
+        div_ratio = (w_focus @ vols) / (p_vol / 100) if p_vol > 0 else 1
+
+        # Reliability grades
+        uses_returns = "Tangency" in selected_method
+        ret_grade = "C" if ret_method == "Sample Mean" else "B" if uses_returns else "—"
+        vol_grade = "B+" if n_years >= 2 else "B" if n_years >= 1 else "C"
+
+        st.metric("Expected Return (1Y)", f"{p_ret:.1f}%",
+                  help=f"Reliability: {ret_grade} — {'uses noisy return estimates' if uses_returns else 'not used by this method'}")
+        st.metric("Expected Vol (1Y)", f"{p_vol:.1f}%",
+                  help=f"Reliability: {vol_grade} — based on {n_years:.1f}Y of data")
+        st.metric("Sharpe Ratio", f"{p_sharpe:.2f}",
+                  help=f"Reliability: {'C — only as good as the return estimate' if uses_returns else 'B — vol-driven, more stable'}")
+        st.metric("Diversification Ratio", f"{div_ratio:.2f}",
+                  help="Reliability: A — pure covariance math")
+        st.metric("Effective Positions", f"{eff_n:.1f} / {n_assets}",
+                  help="Reliability: A — pure weight math")
+        st.metric("Largest Position", f"{wf_sorted.iloc[0]:.1%} ({wf_sorted.index[0]})")
+
+    # ── Realized vs Expected + Bootstrap Sharpe + Stress Test ──
+    st.markdown("---")
+    st.subheader("Reality Check")
+
+    real_c1, real_c2, real_c3 = st.columns(3)
+
+    # #4: Realized vs Expected (train on first 75%, measure on last 25%)
+    with real_c1:
+        st.markdown("**Realized vs Expected**")
+        split = int(len(returns) * 0.75)
+        oos_ret = returns.iloc[split:]
+        if len(oos_ret) > 20:
+            oos_port = (oos_ret.values @ w_focus)
+            realized_ann = np.mean(oos_port) * 252 * 100
+            realized_vol = np.std(oos_port) * np.sqrt(252) * 100
+            realized_sharpe = realized_ann / realized_vol if realized_vol > 0 else 0
+            st.metric("Expected Return", f"{p_ret:.1f}%")
+            st.metric("Realized Return (OOS)", f"{realized_ann:.1f}%",
+                      delta=f"{realized_ann - p_ret:+.1f}% gap")
+            st.metric("Realized Sharpe (OOS)", f"{realized_sharpe:.2f}",
+                      delta=f"{realized_sharpe - p_sharpe:+.2f} vs expected")
+            st.caption(f"OOS period: last {len(oos_ret)} days ({len(oos_ret)/252:.1f}Y)")
+        else:
+            st.caption("Not enough OOS data for realized comparison.")
+
+    # #3: Bootstrap CI on Sharpe
+    with real_c2:
+        st.markdown("**Sharpe Confidence Interval**")
+        port_daily = returns.values @ w_focus
+        rng_bs = np.random.default_rng(42)
+        boot_sharpes = []
+        for _ in range(1000):
+            idx = rng_bs.integers(0, len(port_daily), len(port_daily))
+            s = port_daily[idx]
+            if s.std() > 0:
+                boot_sharpes.append(s.mean() / s.std() * np.sqrt(252))
+        if boot_sharpes:
+            ci_lo = np.percentile(boot_sharpes, 5)
+            ci_hi = np.percentile(boot_sharpes, 95)
+            st.metric("Point Estimate", f"{p_sharpe:.2f}")
+            st.metric("90% CI", f"[{ci_lo:.2f}, {ci_hi:.2f}]")
+            significant = ci_lo > 0
+            st.metric("Statistically > 0?", "Yes" if significant else "No",
+                      delta="CI excludes zero" if significant else "CI includes zero",
+                      delta_color="normal" if significant else "inverse")
+
+    # #5: Stress Testing
+    with real_c3:
+        st.markdown("**Stress Scenarios**")
+        stress_scenarios = {
+            "2008 GFC": {"SPY": -0.38, "TLT": 0.20, "GLD": 0.05, "EFA": -0.41, "IWM": -0.34,
+                         "USO": -0.54, "HYG": -0.25, "VNQ": -0.37},
+            "COVID 2020": {"SPY": -0.34, "TLT": 0.15, "GLD": 0.03, "EFA": -0.33, "IWM": -0.40,
+                           "USO": -0.60, "HYG": -0.20, "VNQ": -0.30},
+            "2022 Rate Shock": {"SPY": -0.19, "TLT": -0.31, "GLD": 0.00, "EFA": -0.17, "IWM": -0.21,
+                                "USO": 0.25, "HYG": -0.14, "VNQ": -0.26},
+        }
+        for scenario_name, shocks in stress_scenarios.items():
+            port_shock = sum(w_focus[i] * shocks.get(tickers[i], -0.15) for i in range(n_assets))
+            color = "#ff4444" if port_shock < -0.15 else "#ffaa00" if port_shock < 0 else "#00ff88"
+            st.markdown(f'<span style="color:{color};">{scenario_name}: **{port_shock*100:+.1f}%**</span>',
+                        unsafe_allow_html=True)
+        st.caption("Estimated portfolio loss under historical crisis drawdowns.")
+
+    # #6: Cost-aware metrics
+    st.markdown("---")
+    cost_c1, cost_c2 = st.columns(2)
+    with cost_c1:
+        st.markdown("**Transaction Cost Impact**")
+        # Estimate annual turnover vs equal-weight
+        turnover = np.sum(np.abs(w_focus - 1/n_assets)) * 2  # round-trip vs EW baseline
+        cost_bps = 10  # 10 bps per round trip (institutional)
+        annual_cost = turnover * cost_bps / 100
+        net_return = p_ret - annual_cost
+        st.metric("Est. Annual Turnover", f"{turnover*100:.0f}%",
+                  help="vs equal-weight baseline")
+        st.metric("Est. Cost @ 10bps", f"{annual_cost:.2f}%/yr")
+        st.metric("Net Expected Return", f"{net_return:.1f}%",
+                  delta=f"-{annual_cost:.2f}% cost drag")
+
+    with cost_c2:
+        # #1: Reliability scorecard
+        st.markdown("**Reliability Scorecard**")
+        reliability = [
+            ("Expected Return", ret_grade, "Depends on return estimation method"),
+            ("Expected Vol", vol_grade, f"Based on {n_years:.1f}Y sample"),
+            ("Sharpe Ratio", "C" if uses_returns else "B", "Return ÷ Vol — inherits return noise"),
+            ("Diversification Ratio", "A", "Pure covariance math"),
+            ("Effective Positions", "A", "Pure weight math"),
+            ("Weights", "B" if "HRP" in selected_method or "Risk Parity" in selected_method else "C",
+             "Covariance-only methods are more stable"),
+        ]
+        for metric_name, grade, note in reliability:
+            grade_color = {"A": "#00ff88", "B+": "#00d1ff", "B": "#00d1ff", "C": "#ffaa00", "D": "#ff4444", "—": "#555"}.get(grade, "#888")
+            st.markdown(f'<span style="color:{grade_color};font-weight:700;">{grade}</span> '
+                        f'{metric_name} <span style="color:#666;font-size:0.75rem;">— {note}</span>',
+                        unsafe_allow_html=True)
+
+    # ── Side-by-side comparison chart ──
+    st.markdown("---")
+    st.subheader("All Methods Compared")
+    st.caption("Grouped bar chart — each cluster is one asset, each bar is one method's weight. "
+               "Methods that agree on an asset's importance are more trustworthy than one-method outliers.")
+
     fig_w = go.Figure()
     for method, w in allocations.items():
         fig_w.add_trace(go.Bar(
@@ -364,24 +770,131 @@ with tab_weights, error_boundary("Optimal Weights"):
                          margin=dict(l=0, r=0, t=40, b=0))
     st.plotly_chart(fig_w, use_container_width=True, config=PLOTLY_NOBAR)
 
-    # Weight table
-    weight_df = pd.DataFrame({method: pd.Series(w, index=tickers) for method, w in allocations.items()})
-    display_w = weight_df.map(lambda v: f"{v * 100:.1f}%")
-    st.dataframe(display_w, use_container_width=True)
+    # ── Weight consensus ──
+    st.subheader("Weight Consensus")
+    st.caption("Shows the average weight and standard deviation across methods. "
+               "Low std = all methods agree. High std = controversial asset — the right weight depends on your objective.")
 
-    # Concentration metrics
+    weight_df = pd.DataFrame({method: pd.Series(w, index=tickers) for method, w in allocations.items()})
+    consensus = pd.DataFrame({
+        "Avg Weight": weight_df.mean(axis=1).apply(lambda v: f"{v*100:.1f}%"),
+        "Std Dev": weight_df.std(axis=1).apply(lambda v: f"{v*100:.1f}%"),
+        "Min": weight_df.min(axis=1).apply(lambda v: f"{v*100:.1f}%"),
+        "Max": weight_df.max(axis=1).apply(lambda v: f"{v*100:.1f}%"),
+        "Agreement": weight_df.std(axis=1).apply(
+            lambda v: "Strong" if v < 0.03 else "Moderate" if v < 0.08 else "Weak"),
+    })
+    st.dataframe(consensus, use_container_width=True)
+
+    # ── Full weight table ──
+    with st.expander("Full Weight Table (all methods)"):
+        display_w = weight_df.map(lambda v: f"{v * 100:.1f}%")
+        st.dataframe(display_w, use_container_width=True)
+
+    # ── Concentration comparison ──
     st.subheader("Concentration Analysis")
+    st.caption("HHI measures concentration (0 = perfectly spread, 1 = single asset). "
+               "Effective N shows how many truly independent positions you hold. "
+               "Higher Effective N = better diversified.")
+
     conc_data = []
     for method, w in allocations.items():
-        hhi = np.sum(w ** 2)  # Herfindahl-Hirschman Index
-        eff_n = 1 / hhi if hhi > 0 else n_assets  # effective number of assets
+        hhi_m = np.sum(w ** 2)
+        eff_n_m = 1 / hhi_m if hhi_m > 0 else n_assets
         conc_data.append({
-            "Method": method, "HHI": f"{hhi:.3f}",
-            "Effective N": f"{eff_n:.1f}",
-            "Max Weight": f"{w.max() * 100:.0f}%",
-            "Non-Zero": f"{(w > 0.01).sum()}",
+            "Method": method,
+            "HHI": f"{hhi_m:.3f}",
+            "Effective N": f"{eff_n_m:.1f}",
+            "Max Weight": f"{w.max() * 100:.0f}% ({tickers[np.argmax(w)]})",
+            "Positions > 1%": f"{(w > 0.01).sum()} / {n_assets}",
+            "Concentration": "Low" if hhi_m < 0.1 else "Medium" if hhi_m < 0.2 else "High",
         })
     st.dataframe(pd.DataFrame(conc_data), use_container_width=True, hide_index=True)
+
+    # ── Estimation Window Sensitivity ──
+    st.markdown("---")
+    st.subheader("Estimation Window Sensitivity")
+    st.caption("Do optimal weights change dramatically with different lookback periods? "
+               "Stable weights across windows = robust allocation. "
+               "Wildly different weights = sensitive to sample period (fragile).")
+
+    with st.spinner("Computing weights across estimation windows..."):
+        window_weights = {}
+        window_labels = {"1Y": "1y", "2Y": "2y", "3Y": "3y", "5Y": "5y"}
+        for wlabel, wperiod in window_labels.items():
+            try:
+                w_prices = fetch_price_history(ticker_list, period=wperiod)
+                if not w_prices.empty and w_prices.index.tz is not None:
+                    w_prices.index = w_prices.index.tz_localize(None)
+                if not w_prices.empty and len(w_prices.columns) >= 3:
+                    w_ret = w_prices.pct_change().dropna()
+                    w_tickers = [t for t in tickers if t in w_ret.columns]
+                    if len(w_tickers) >= 3:
+                        w_ret = w_ret[w_tickers]
+                        w_cov = w_ret.cov().values
+
+                        # Compute weights for the selected method
+                        if selected_method == "Tangency (Max Sharpe)":
+                            w_mu = w_ret.mean().values
+                            ww = _tangency_portfolio(w_mu, w_cov)
+                        elif selected_method == "Min Variance":
+                            ww = _min_variance(w_cov)
+                        elif selected_method == "Risk Parity":
+                            ww = _risk_parity(w_cov)
+                        elif selected_method == "Max Diversification":
+                            ww = _max_diversification(w_cov)
+                        elif selected_method == "HRP":
+                            ww = hrp_allocate(w_ret).reindex(w_tickers).fillna(0).values
+                        else:
+                            ww = np.full(len(w_tickers), 1 / len(w_tickers))
+
+                        window_weights[wlabel] = pd.Series(ww, index=w_tickers)
+            except Exception:
+                pass
+
+        if len(window_weights) >= 2:
+            # Bar chart comparing weights across windows
+            fig_ww = go.Figure()
+            ww_colors = {"1Y": "#00d1ff", "2Y": "#00ff88", "3Y": "#ffaa00", "5Y": "#ff6b6b"}
+            for wlabel, ww_series in window_weights.items():
+                fig_ww.add_trace(go.Bar(
+                    x=ww_series.index.tolist(), y=ww_series.values * 100,
+                    name=wlabel, marker_color=ww_colors.get(wlabel, "#888"),
+                ))
+            fig_ww.update_layout(template="plotly_dark", height=400, barmode="group",
+                                  title=f"{selected_method} Weights by Estimation Window",
+                                  yaxis_title="Weight (%)",
+                                  legend=dict(orientation="h", y=-0.12),
+                                  margin=dict(l=0, r=0, t=40, b=0))
+            st.plotly_chart(fig_ww, use_container_width=True, config=PLOTLY_NOBAR)
+
+            # Stability metrics
+            ww_df = pd.DataFrame(window_weights)
+            ww_std = ww_df.std(axis=1) * 100  # std of weight across windows per asset
+            avg_stability = ww_std.mean()
+
+            ws1, ws2, ws3 = st.columns(3)
+            ws1.metric("Avg Weight Std", f"{avg_stability:.1f}%",
+                       help="Average standard deviation of each asset's weight across windows. Lower = more stable.")
+            most_unstable = ww_std.idxmax()
+            ws2.metric("Most Unstable Asset", f"{most_unstable} (±{ww_std.max():.1f}%)")
+            most_stable = ww_std.idxmin()
+            ws3.metric("Most Stable Asset", f"{most_stable} (±{ww_std.min():.1f}%)")
+
+            if avg_stability < 3:
+                st.success("Weights are **very stable** across estimation windows — this allocation is robust.")
+            elif avg_stability < 8:
+                st.info("Weights show **moderate sensitivity** to the estimation window — reasonable for production use.")
+            else:
+                st.warning("Weights are **highly sensitive** to the estimation window — "
+                           "consider using a covariance-only method (Min Var, Risk Parity, HRP) for more stability.")
+
+            with st.expander("Weight Detail by Window"):
+                display_ww = ww_df.map(lambda v: f"{v*100:.1f}%" if pd.notna(v) else "N/A")
+                display_ww["Std"] = ww_std.apply(lambda v: f"±{v:.1f}%")
+                st.dataframe(display_ww, use_container_width=True)
+        else:
+            st.info("Need price data for at least 2 lookback periods to compare. Try adding more history.")
 
 
 # ═══════════════════════════════════════════════
@@ -401,12 +914,28 @@ with tab_backtest, error_boundary("Walk-Forward Backtest"):
             "often different from which looks best in-sample."
         )
 
+    n_total_days = len(returns)
+    # Auto-scale slider to available data — need at least 60 days OOS after the window
+    max_est = max(63, n_total_days - 60)
+    default_est = min(252, max_est)
+    min_est = min(63, max_est)
+
     rebal = st.radio("Rebalance", ["Monthly", "Quarterly"], horizontal=True, key="po_rebal")
-    est_window = st.slider("Estimation window (days)", 126, 504, 252, 63, key="po_est_window")
+    est_window = st.slider("Estimation window (days)", min_est, max_est, default_est, 21, key="po_est_window",
+                           help=f"You have {n_total_days} trading days. Window must leave room for OOS testing.")
 
     rebal_period = "ME" if rebal == "Monthly" else "QE"
-    rebal_dates = returns.resample(rebal_period).last().index
-    rebal_dates = [d for d in rebal_dates if returns.index.get_loc(d) >= est_window]
+    # Get the last actual trading day in each period (not synthetic month-end dates)
+    rebal_groups = returns.resample(rebal_period).last()
+    rebal_dates = []
+    for period_end in rebal_groups.index:
+        # Find the closest actual trading day at or before the period end
+        mask = returns.index <= period_end
+        if mask.any():
+            actual_date = returns.index[mask][-1]
+            loc = returns.index.get_loc(actual_date)
+            if loc >= est_window:
+                rebal_dates.append(actual_date)
 
     if len(rebal_dates) < 4:
         st.warning("Not enough data for walk-forward backtest with this window. Try a shorter estimation window.")
@@ -552,54 +1081,101 @@ with tab_views, error_boundary("Black-Litterman"):
 
     with st.expander("How to read this tab", expanded=False):
         st.markdown(
-            "Black-Litterman blends **market equilibrium returns** (implied by market cap weights) "
-            "with your **personal views** on specific assets.\n\n"
-            "**Without views**, BL produces the market portfolio (similar to cap-weighted). "
-            "**With views**, it tilts toward your beliefs — but tempered by your confidence level.\n\n"
-            "**How to use:**\n"
-            "1. Enter a view: e.g., 'SPY will return 12% annualized'\n"
-            "2. Set confidence (tau): lower = more deference to the market, higher = trust your view more\n"
-            "3. BL computes a new set of expected returns that blend market equilibrium with your view\n"
-            "4. The resulting portfolio tilts toward your view proportionally to your confidence\n\n"
-            "**This is how institutional asset allocators work** — they don't throw out market prices, "
-            "they blend their research with the market's collective wisdom."
+            "**The problem with Markowitz:** You need expected returns as input, but nobody can forecast returns reliably. "
+            "Small errors in return estimates → wildly different portfolios.\n\n"
+            "**Black-Litterman solves this** by starting from a neutral baseline (the *market equilibrium*) "
+            "and only deviating where you have a specific view. No view = market weights. Strong view = tilt toward it.\n\n"
+            "**Step 1 — Equilibrium:** The market's implied returns are reverse-engineered from what a rational investor "
+            "would need to hold the current market portfolio. These are your starting point.\n\n"
+            "**Step 2 — Your Views:** Express beliefs like 'I think SPY will return 15% annualized' or "
+            "'I think GLD will outperform TLT by 5%.' Each view has a confidence level.\n\n"
+            "**Step 3 — Blending:** BL combines equilibrium + views using Bayesian math. "
+            "High-confidence views shift returns more. Low-confidence views barely move them.\n\n"
+            "**Tau (τ)** controls overall confidence in your views vs the market. "
+            "τ = 0.05 (default) means the market is ~20x more trusted than your views. "
+            "τ = 0.25 means roughly equal trust.\n\n"
+            "**This is how BlackRock, Bridgewater, and pension funds actually build portfolios.**"
         )
 
-    # Market equilibrium returns (reverse optimization from equal-weight as proxy)
-    risk_aversion = st.slider("Risk aversion (delta)", 1.0, 5.0, 2.5, 0.5, key="po_bl_delta")
-    tau = st.slider("Confidence in views (tau)", 0.01, 0.5, 0.05, 0.01, key="po_bl_tau")
+    # ── Step 1: Market Equilibrium ──
+    st.markdown("### Step 1: Market Equilibrium")
+    st.caption("The market's implied expected returns — what a rational investor would need to hold the current portfolio. "
+               "These are your starting point before applying any views.")
+
+    bl_c1, bl_c2 = st.columns([1, 1])
+    with bl_c1:
+        risk_aversion = st.slider("Risk aversion (δ)", 1.0, 5.0, 2.5, 0.5, key="po_bl_delta",
+                                   help="Higher = more risk-averse investor. 2.5 is standard. "
+                                        "Controls the scale of equilibrium returns.")
+    with bl_c2:
+        tau = st.slider("View confidence (τ)", 0.01, 0.50, 0.05, 0.01, key="po_bl_tau",
+                        help="Lower = trust the market more. Higher = trust your views more. "
+                             "0.05 is standard (market is ~20x stronger). 0.25 = equal trust.")
 
     # Implied equilibrium returns
-    pi = risk_aversion * ann_cov @ w_equal  # equilibrium excess returns
+    pi = risk_aversion * ann_cov @ w_equal
 
-    st.caption("**Equilibrium expected returns** (implied from market):")
-    eq_df = pd.DataFrame({"Asset": tickers, "Equilibrium Return (ann.)": [f"{r*100:.1f}%" for r in pi]})
-    st.dataframe(eq_df, use_container_width=True, hide_index=True)
+    # Equilibrium chart
+    pi_sorted = pd.Series(pi * 100, index=tickers).sort_values()
+    fig_eq = go.Figure()
+    fig_eq.add_trace(go.Bar(
+        y=pi_sorted.index, x=pi_sorted.values, orientation="h",
+        marker_color=["#00d1ff" if v >= 0 else "#ff4444" for v in pi_sorted],
+        text=[f"{v:.1f}%" for v in pi_sorted], textposition="outside",
+    ))
+    fig_eq.add_vline(x=0, line_dash="dash", line_color="#333")
+    fig_eq.update_layout(template="plotly_dark", height=max(250, n_assets * 28),
+                          title="Implied Equilibrium Returns (Annualized %)",
+                          xaxis_title="Expected Return (%)",
+                          margin=dict(l=0, r=60, t=40, b=0))
+    st.plotly_chart(fig_eq, use_container_width=True, config=PLOTLY_NOBAR)
 
-    # User views
-    st.markdown("#### Your Views")
-    st.caption("Enter up to 3 absolute views (e.g., 'I think SPY will return 15% annualized').")
+    # ── Step 2: Your Views ──
+    st.markdown("---")
+    st.markdown("### Step 2: Your Views")
+    st.caption("Express up to 5 views on individual assets. Leave blank for no view — "
+               "the model defaults to equilibrium for assets without views.")
 
-    view_cols = st.columns(3)
+    n_view_slots = 5
     views_P = []
     views_Q = []
-    for i, vc in enumerate(view_cols):
-        with vc:
-            v_ticker = st.selectbox(f"View {i+1} Asset", ["(none)"] + tickers, key=f"po_bl_v{i}_t")
-            v_return = st.number_input(f"Expected Return (%)", value=0.0, step=1.0, key=f"po_bl_v{i}_r")
-            if v_ticker != "(none)" and v_return != 0:
+    views_conf = []
+
+    view_container = st.container()
+    with view_container:
+        for i in range(n_view_slots):
+            vc1, vc2, vc3 = st.columns([2, 2, 1])
+            with vc1:
+                v_ticker = st.selectbox(f"Asset", ["—"] + tickers,
+                                        key=f"po_bl_v{i}_t", label_visibility="collapsed" if i > 0 else "visible")
+            with vc2:
+                v_return = st.number_input(f"Ann. Return (%)", value=0.0, step=1.0,
+                                           key=f"po_bl_v{i}_r", label_visibility="collapsed" if i > 0 else "visible")
+            with vc3:
+                v_conf = st.selectbox(f"Confidence", ["Medium", "Low", "High"],
+                                      key=f"po_bl_v{i}_c", label_visibility="collapsed" if i > 0 else "visible")
+
+            if v_ticker != "—" and v_return != 0:
                 p_row = np.zeros(n_assets)
                 p_row[tickers.index(v_ticker)] = 1
                 views_P.append(p_row)
                 views_Q.append(v_return / 100)
+                conf_scale = {"Low": 3.0, "Medium": 1.0, "High": 0.3}
+                views_conf.append(conf_scale[v_conf])
 
     if views_P:
         P = np.array(views_P)
         Q = np.array(views_Q)
-        # Omega: uncertainty of views (proportional to variance of the view portfolio)
-        omega = np.diag(np.diag(tau * P @ ann_cov @ P.T))
 
-        # Black-Litterman posterior
+        # Omega: uncertainty of views — scaled by per-view confidence
+        base_omega = np.diag(np.diag(tau * P @ ann_cov @ P.T))
+        conf_scales = np.array(views_conf)
+        omega = base_omega * np.diag(conf_scales)
+
+        # ── Step 3: BL Posterior ──
+        st.markdown("---")
+        st.markdown("### Step 3: Blended Returns & Weights")
+
         try:
             inv_tau_cov = np.linalg.inv(tau * ann_cov)
             inv_omega = np.linalg.inv(omega)
@@ -612,35 +1188,125 @@ with tab_views, error_boundary("Black-Litterman"):
             bl_cov_post = ann_cov * tau
             w_bl = w_tangency
 
-        st.subheader("Black-Litterman Results")
+        # Return shift visualization
+        st.caption("How your views shifted the expected returns from equilibrium. "
+                    "Large shifts on viewed assets, small ripple effects on correlated assets.")
 
-        # Compare equilibrium vs posterior returns
-        bl_ret_df = pd.DataFrame({
-            "Asset": tickers,
-            "Equilibrium": [f"{r*100:.1f}%" for r in pi],
-            "BL Posterior": [f"{r*100:.1f}%" for r in bl_mu_post],
-            "Shift": [f"{(bl_mu_post[i]-pi[i])*100:+.1f}%" for i in range(n_assets)],
-        })
-        st.dataframe(bl_ret_df, use_container_width=True, hide_index=True)
+        shift = (bl_mu_post - pi) * 100
+        fig_shift = go.Figure()
+        fig_shift.add_trace(go.Bar(
+            x=tickers, y=pi * 100, name="Equilibrium",
+            marker_color="#555",
+        ))
+        fig_shift.add_trace(go.Bar(
+            x=tickers, y=bl_mu_post * 100, name="BL Posterior",
+            marker_color="#00d1ff",
+        ))
+        # Annotate shifts
+        for i_t, t in enumerate(tickers):
+            if abs(shift[i_t]) > 0.1:
+                fig_shift.add_annotation(
+                    x=t, y=max(pi[i_t], bl_mu_post[i_t]) * 100 + 0.5,
+                    text=f"{shift[i_t]:+.1f}%",
+                    showarrow=False, font=dict(size=9, color="#ffaa00"),
+                )
+        fig_shift.update_layout(template="plotly_dark", height=380, barmode="group",
+                                 title="Expected Returns: Equilibrium → BL Posterior",
+                                 yaxis_title="Ann. Return (%)",
+                                 legend=dict(orientation="h", y=-0.12),
+                                 margin=dict(l=0, r=0, t=40, b=0))
+        st.plotly_chart(fig_shift, use_container_width=True, config=PLOTLY_NOBAR)
 
-        # BL weights vs tangency
-        fig_bl = go.Figure()
-        fig_bl.add_trace(go.Bar(x=tickers, y=w_bl * 100, name="Black-Litterman",
-                                marker_color="#ff6b6b"))
-        fig_bl.add_trace(go.Bar(x=tickers, y=w_tangency * 100, name="Tangency (no views)",
-                                marker_color="#00d1ff"))
-        fig_bl.add_trace(go.Bar(x=tickers, y=w_equal * 100, name="Equal Weight",
-                                marker_color="#555"))
-        fig_bl.update_layout(template="plotly_dark", height=380, barmode="group",
-                              title="Black-Litterman Weights vs Tangency vs Equal",
-                              yaxis_title="Weight (%)",
-                              margin=dict(l=0, r=0, t=40, b=0))
-        st.plotly_chart(fig_bl, use_container_width=True, config=PLOTLY_NOBAR)
+        # ── Weight comparison ──
+        st.subheader("Portfolio Weights")
+        st.caption("How your views change the optimal allocation. BL tilts toward viewed assets "
+                    "while maintaining diversification — unlike Markowitz which can go all-in.")
 
-        # BL portfolio metrics (in-sample)
-        bl_ret_ts = returns @ w_bl
-        bl_metrics = _portfolio_metrics(bl_ret_ts, "Black-Litterman")
-        tang_metrics = _portfolio_metrics(returns @ w_tangency, "Tangency (no views)")
-        st.dataframe(pd.DataFrame([bl_metrics, tang_metrics]), use_container_width=True, hide_index=True)
+        wt_c1, wt_c2 = st.columns([3, 1])
+        with wt_c1:
+            fig_bl_w = go.Figure()
+            fig_bl_w.add_trace(go.Bar(x=tickers, y=w_bl * 100, name="Black-Litterman",
+                                      marker_color="#ff6b6b"))
+            fig_bl_w.add_trace(go.Bar(x=tickers, y=w_tangency * 100, name="Tangency (no views)",
+                                      marker_color="#00d1ff"))
+            fig_bl_w.add_trace(go.Bar(x=tickers, y=w_equal * 100, name="Equal Weight",
+                                      marker_color="#555"))
+            fig_bl_w.update_layout(template="plotly_dark", height=380, barmode="group",
+                                    yaxis_title="Weight (%)",
+                                    legend=dict(orientation="h", y=-0.12),
+                                    margin=dict(l=0, r=0, t=10, b=0))
+            st.plotly_chart(fig_bl_w, use_container_width=True, config=PLOTLY_NOBAR)
+
+        with wt_c2:
+            bl_ret_exp = w_bl @ ann_mu * 100
+            bl_vol_exp = np.sqrt(w_bl @ ann_cov @ w_bl) * 100
+            bl_sharpe = bl_ret_exp / bl_vol_exp if bl_vol_exp > 0 else 0
+            st.metric("BL Exp. Return", f"{bl_ret_exp:.1f}%")
+            st.metric("BL Exp. Vol", f"{bl_vol_exp:.1f}%")
+            st.metric("BL Sharpe", f"{bl_sharpe:.2f}")
+            st.metric("Positions > 1%", f"{(w_bl > 0.01).sum()} / {n_assets}")
+
+        # ── Backtest comparison ──
+        st.markdown("---")
+        st.subheader("Historical Performance Comparison")
+        st.caption("How would these allocations have performed over the lookback period? "
+                    "Note: BL weights are computed from current views — this is NOT a walk-forward test.")
+
+        bl_ret_ts = (returns.values @ w_bl)
+        tang_ret_ts = (returns.values @ w_tangency)
+        eq_ret_ts = (returns.values @ w_equal)
+
+        cum_bl = pd.Series((1 + bl_ret_ts).cumprod() * 100, index=returns.index)
+        cum_tang = pd.Series((1 + tang_ret_ts).cumprod() * 100, index=returns.index)
+        cum_eq = pd.Series((1 + eq_ret_ts).cumprod() * 100, index=returns.index)
+
+        fig_bt_bl = go.Figure()
+        fig_bt_bl.add_trace(go.Scatter(x=cum_bl.index, y=cum_bl, mode="lines",
+                                        name="Black-Litterman", line=dict(color="#ff6b6b", width=3)))
+        fig_bt_bl.add_trace(go.Scatter(x=cum_tang.index, y=cum_tang, mode="lines",
+                                        name="Tangency", line=dict(color="#00d1ff", width=1)))
+        fig_bt_bl.add_trace(go.Scatter(x=cum_eq.index, y=cum_eq, mode="lines",
+                                        name="Equal Weight", line=dict(color="#555", width=1)))
+        fig_bt_bl.add_hline(y=100, line_dash="dash", line_color="#333")
+        fig_bt_bl.update_layout(template="plotly_dark", height=350,
+                                 title="Cumulative Performance (base=100)",
+                                 yaxis_title="Portfolio Value",
+                                 legend=dict(orientation="h", y=-0.12),
+                                 margin=dict(l=0, r=0, t=40, b=0))
+        st.plotly_chart(fig_bt_bl, use_container_width=True, config=PLOTLY_NOBAR)
+
+        bl_metrics = _portfolio_metrics(pd.Series(bl_ret_ts, index=returns.index), "Black-Litterman")
+        tang_metrics = _portfolio_metrics(pd.Series(tang_ret_ts, index=returns.index), "Tangency (no views)")
+        eq_metrics = _portfolio_metrics(pd.Series(eq_ret_ts, index=returns.index), "Equal Weight")
+        st.dataframe(pd.DataFrame([bl_metrics, tang_metrics, eq_metrics]),
+                     use_container_width=True, hide_index=True)
+
+        # ── View impact summary ──
+        st.markdown("---")
+        st.subheader("View Impact Summary")
+        st.caption("How each view affected the portfolio.")
+        impact_data = []
+        for i_v in range(len(views_P)):
+            v_ticker_name = tickers[np.argmax(views_P[i_v])]
+            eq_weight = w_equal[np.argmax(views_P[i_v])] * 100
+            bl_weight = w_bl[np.argmax(views_P[i_v])] * 100
+            eq_ret = pi[np.argmax(views_P[i_v])] * 100
+            bl_ret_v = bl_mu_post[np.argmax(views_P[i_v])] * 100
+            conf_label = [k for k, v in {"Low": 3.0, "Medium": 1.0, "High": 0.3}.items()
+                          if v == views_conf[i_v]][0]
+            impact_data.append({
+                "Asset": v_ticker_name,
+                "Your View": f"{views_Q[i_v]*100:+.1f}%",
+                "Confidence": conf_label,
+                "Equilibrium": f"{eq_ret:.1f}%",
+                "BL Posterior": f"{bl_ret_v:.1f}%",
+                "Return Shift": f"{bl_ret_v - eq_ret:+.1f}%",
+                "Weight Shift": f"{bl_weight - eq_weight:+.1f}%",
+            })
+        st.dataframe(pd.DataFrame(impact_data), use_container_width=True, hide_index=True)
+
     else:
-        st.info("Enter at least one view above to compute the Black-Litterman posterior.")
+        st.markdown("---")
+        st.info("Enter at least one view above to see how Black-Litterman blends your beliefs with the market equilibrium. "
+                "Try setting View 1 to one of your assets with a return expectation — "
+                "for example, set SPY to 15% if you're bullish, or -5% if you're bearish.")

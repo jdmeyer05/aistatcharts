@@ -65,7 +65,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `options_models.py` | Black-Scholes, Merton Jump-Diffusion, BS-MJD blended pricing + Greeks |
 | `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
 
-### pages/ — 39 App Pages
+### pages/ — 40 App Pages
 
 | # | File | What It Does |
 |---|------|-------------|
@@ -99,6 +99,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 37 | `Factor_Decomposition.py` | Fama-French 5+Mom: factor returns, exposure betas, alpha attribution, rolling style drift, risk decomposition |
 | 38 | `Portfolio_Optimizer.py` | 6 methods: tangency, min-var, risk parity, max diversification, HRP, Black-Litterman. Walk-forward backtest. |
 | 39 | `Signal_Scanner.py` | Cross-sectional signals: momentum (12-1), mean reversion (RSI/BB/Z), value, carry, composite ranking |
+| 40 | `Power_Strategies.py` | Power trading: live charts (NG/CL/XLE/XLU + ERCOT system), spark spreads, heat rate, peak/off-peak, RT/DAM arb, curtailment, congestion, de Prado backtester, multi-strategy meta-analysis |
 
 ---
 

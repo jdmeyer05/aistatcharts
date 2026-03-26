@@ -13,7 +13,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **39 pages** of quantitative analysis tools (incl. 11 sector pages, 5 quant research pages)
+- **40 pages** of quantitative analysis tools (incl. 11 sector pages, 6 quant research pages, power trading strategies)
 - **3 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus
 - **Landing page dashboard** -- market heatmap (5 lists, drills into ETF holdings), AI intelligence cards, watchlist
 - **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
@@ -62,6 +62,7 @@ Opens at **http://localhost:8501** (or next available port).
 | **Factor Decomposition** | Fama-French 5-factor + momentum decomposition: factor returns, exposure betas, alpha attribution waterfall, rolling style drift detection, risk decomposition pie |
 | **Portfolio Optimizer** | 6 allocation methods head-to-head: mean-variance tangency, min variance, risk parity, max diversification, HRP, Black-Litterman with user views. Walk-forward OOS backtest. |
 | **Signal Scanner** | Cross-sectional momentum (12-1), mean reversion (RSI/BB/Z-score), value, carry, quality signals across configurable universes. Composite multi-factor ranking. Momentum L/S spread backtest. |
+| **Power Strategies** | Spark spreads, heat rate trades, peak/off-peak, RT vs DAM arb, renewable curtailment, congestion analysis. Live intraday charts. De Prado-style strategy backtester with walk-forward, sequential bootstrap, DSR. Multi-strategy meta-analysis with HRP/risk parity blending. |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
@@ -227,6 +228,7 @@ pages/
   37_Factor_Decomposition.py  Fama-French 5-factor + momentum decomposition
   38_Portfolio_Optimizer.py    6 allocation methods + Black-Litterman
   39_Signal_Scanner.py    Systematic signal scanner (momentum, mean reversion, composite)
+  40_Power_Strategies.py  Power trading strategies (9 tabs: charts, spark, heat rate, peak/off-peak, RT/DAM, curtailment, congestion, backtest, meta)
   99_Login.py             Standalone login/register page (accessible via Settings popover)
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)

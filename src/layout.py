@@ -67,6 +67,7 @@ PAGE_CONFIG = {
     "37_Factor_Decomposition": ("Factor Decomposition | AI Statcharts", "🧬"),
     "38_Portfolio_Optimizer": ("Portfolio Optimizer | AI Statcharts", "🎯"),
     "39_Signal_Scanner":     ("Signal Scanner | AI Statcharts", "📡"),
+    "40_Power_Strategies":   ("Power Strategies | AI Statcharts", "⚡"),
 }
 
 
@@ -252,6 +253,7 @@ def render_header(current_page: str):
             ("17_ERCOT_Capacity", "ERCOT Capacity", "pages/17_ERCOT_Capacity.py"),
             ("23_Power_Analytics", "Power Analytics", "pages/23_Power_Analytics.py"),
             ("20_Futures", "Futures", "pages/20_Futures.py"),
+            ("40_Power_Strategies", "Power Strategies", "pages/40_Power_Strategies.py"),
         ]),
         ("Macro", [
             ("18_Economic_Calendar", "Economic Calendar", "pages/18_Economic_Calendar.py"),

@@ -436,3 +436,57 @@ Mar 26, 2026 — Quant Research Pages + Integrations:
 
   DEPENDENCIES:
   - Added statsmodels, shap to requirements.txt
+
+Mar 26, 2026 (cont.) — Power Strategies, Portfolio Optimizer Upgrades, Factor Fix:
+
+  Page 40 — Power Trading Strategies (9 tabs, 1274 lines):
+  - Tab 0: Live Charts — 4 commodity candlestick charts (NG, CL, XLE, XLU) at 5m/15m/60m
+    with yfinance fallback. ERCOT system data: RT SPP hub prices, generation by fuel,
+    load vs capacity, reserve margin. Gas vs power intraday correlation.
+  - Tab 1: Spark Spread — adjustable HR + VOM, hourly profitability, multi-plant comparison
+  - Tab 2: Heat Rate Trade — implied HR time series, duration curve, breakeven reference lines
+  - Tab 3: Peak/Off-Peak — hourly price profile, peak vs off-peak metrics,
+    battery storage arbitrage calculator (configurable MW/duration/RTE)
+  - Tab 4: RT vs DAM Arb — ERCOT API-based RT vs DAM spread (with dashboard fallback),
+    virtual P&L, convergence bias detection, negative price alerts
+  - Tab 5: Renewable Curtailment — EIA hourly grid data, renewable share over time
+  - Tab 6: Congestion — hub price comparison, basis analysis, CRR value estimation
+  - Tab 7: Strategy Backtest — 5 power strategies (Spark MR, Gas Momentum, Vol Breakout,
+    Calendar Spread, Seasonal) with user multiselect. De Prado metrics: sequential bootstrap
+    p-value, Deflated Sharpe Ratio. Walk-forward 4-fold validation.
+  - Tab 8: Meta-Analysis — strategy correlation matrix, 4 combined portfolios (EW, IV,
+    Risk Parity, HRP), equity curves, drawdown comparison, rolling 63D Sharpe, regime
+    breakdown heatmap, strategy scorecard with keep/resize/drop recommendation.
+
+  Portfolio Optimizer (page 38) — Institutional Upgrade (8 improvements):
+  1. Reliability grades (A/B/C) on every metric with color-coded scorecard
+  2. Cap-weighted BL market portfolio using yfinance market caps (not equal-weight)
+  3. Bootstrap 90% CI on Sharpe ratio (1000 resamples, tests if CI excludes zero)
+  4. Realized vs Expected comparison (75/25 train/test split, shows gap)
+  5. Stress testing under 2008 GFC, COVID 2020, 2022 Rate Shock scenarios
+  6. Cost-aware metrics (estimated turnover, cost drag at 10bps, net return)
+  7. OOS Sharpe surfaced alongside in-sample as the honest number
+  8. Robust Max Sharpe (pessimistic returns: mu - kappa*SE, worst-case optimization)
+  - Added 4 return estimation methods: Sample Mean, Shrinkage (Jorion Bayes-Stein),
+    CAPM Implied, BL Equilibrium with radio selector + explainer
+  - Fixed Shrinkage formula (was alpha=1.0 collapsing all returns to grand mean)
+  - Expected returns chart with error bars and 95% CI
+  - Estimation Window Sensitivity: weights compared across 1Y/2Y/3Y/5Y lookbacks
+  - Walk-forward slider auto-scales to available data (min 63 days)
+  - Time stamps on all return estimates: "1-Year Forward" horizon, estimation period dates
+  - Preset dropdown for Portfolio Optimizer: 17 pre-built universes (all 11 sector pages +
+    multi-asset, mega caps, global macro, 60/40, all-weather)
+  - Black-Litterman tab rewritten: 5 view slots with confidence (Low/Medium/High),
+    return shift visualization, view impact summary table, equity curve backtest
+
+  Factor Decomposition (page 37):
+  - Fixed timezone mismatch between yfinance (tz-aware) and Ken French data (tz-naive)
+  - Added date context to error message when overlap is insufficient
+
+  Bug fixes across pages 35-39 (22 total):
+  - Fixed tangency portfolio vol=0, BL posterior singularity (critical)
+  - Fixed RSI inf, SADF CVs, ADF autolag, attribution div-by-zero
+  - Fixed Signal Scanner NaN handling throughout
+  - Fixed walk-forward rebalance date alignment
+  - Fixed Power Strategies boolean indexing crash, ERCOT peak hour definition,
+    $0 price handling, fuel type column name detection

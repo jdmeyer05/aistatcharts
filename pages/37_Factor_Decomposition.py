@@ -136,6 +136,10 @@ if prices.empty:
     st.error("Failed to load price data.")
     st.stop()
 
+# Strip timezone from price index (FF data is timezone-naive)
+if prices.index.tz is not None:
+    prices.index = prices.index.tz_localize(None)
+
 # Compute portfolio returns
 port_returns = prices.pct_change().dropna()
 if len(ticker_list) == 1:
@@ -150,7 +154,9 @@ rf_col = "RF" if "RF" in ff.columns else None
 common_idx = asset_returns.index.intersection(ff.index)
 
 if len(common_idx) < 60:
-    st.error(f"Only {len(common_idx)} overlapping days between price data and factor data. Need at least 60.")
+    ff_latest = ff.index[-1].strftime("%Y-%m-%d") if not ff.empty else "N/A"
+    st.error(f"Only {len(common_idx)} overlapping days between price data and factor data. Need at least 60. "
+             f"Ken French data last updated: {ff_latest}. If this is months behind, the data library may be lagging.")
     st.stop()
 
 Y = asset_returns.loc[common_idx]
