@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("34_RealEstate_Sector")
+
+REALESTATE_COMPANIES = {
+    "PLD":  "Prologis",
+    "AMT":  "American Tower",
+    "EQIX": "Equinix",
+    "SPG":  "Simon Property",
+    "PSA":  "Public Storage",
+    "O":    "Realty Income",
+    "WELL": "Welltower",
+    "DLR":  "Digital Realty",
+    "VICI": "VICI Properties",
+    "CCI":  "Crown Castle",
+}
+
+REALESTATE_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "PLD", "company": "Prologis", "rev_est_y": 8.5, "rev_growth": "+8%",
+         "eps_est_y": 3.50, "eps_est_ny": 3.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 130, "rating": "Buy", "fwd_pe": 35.0,
+         "outlook": "1.2B sqft logistics portfolio. Data center development pipeline $7B+. Same-store NOI growth 5-6%. Embedded rent mark-to-market 30%+. Supply-constrained markets."},
+        {"ticker": "AMT", "company": "American Tower", "rev_est_y": 11.0, "rev_growth": "+5%",
+         "eps_est_y": 5.00, "eps_est_ny": 5.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 230, "rating": "Hold", "fwd_pe": 40.0,
+         "outlook": "195K+ tower sites globally. 5G densification driving co-location. CoreSite data center business growing. India business stabilizing post-Vodafone. Dividend growth 10%."},
+        {"ticker": "EQIX", "company": "Equinix", "rev_est_y": 9.0, "rev_growth": "+10%",
+         "eps_est_y": 12.00, "eps_est_ny": 13.50, "capex_guidance": 3.5, "capex_note": "FY26 CapEx ~$3.5B (hyperscale + xScale)",
+         "production": None, "price_target": 950, "rating": "Buy", "fwd_pe": 72.0,
+         "outlook": "260+ data centers across 72 metros. AI/GPU cluster demand surging. xScale JV capacity growing. Interconnection revenue 25%+ of total. Pricing power in constrained markets."},
+        {"ticker": "SPG", "company": "Simon Property", "rev_est_y": 6.0, "rev_growth": "+3%",
+         "eps_est_y": 8.50, "eps_est_ny": 9.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 180, "rating": "Hold", "fwd_pe": 19.0,
+         "outlook": "Premium mall occupancy 96%+. Tenant sales per sqft at records. Mixed-use redevelopment adding value. International (Premium Outlets) expanding. Dividend yield ~5%."},
+        {"ticker": "PSA", "company": "Public Storage", "rev_est_y": 4.5, "rev_growth": "+2%",
+         "eps_est_y": 11.00, "eps_est_ny": 11.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 340, "rating": "Hold", "fwd_pe": 27.0,
+         "outlook": "3,300+ self-storage facilities. New development pipeline $2.5B. Existing customer rent increases driving NOI. Simply Self Storage acquisition integrated. Industry supply moderating."},
+        {"ticker": "O", "company": "Realty Income", "rev_est_y": 5.0, "rev_growth": "+6%",
+         "eps_est_y": 4.20, "eps_est_ny": 4.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 65, "rating": "Hold", "fwd_pe": 15.0,
+         "outlook": "15,400+ net lease properties. Monthly dividend REIT. Spirit Realty merger integrated. European expansion (UK, Spain, Italy). Data center net lease emerging. Occupancy 98%+."},
+        {"ticker": "WELL", "company": "Welltower", "rev_est_y": 8.0, "rev_growth": "+18%",
+         "eps_est_y": 4.50, "eps_est_ny": 5.20, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 155, "rating": "Buy", "fwd_pe": 32.0,
+         "outlook": "Senior housing occupancy recovery accelerating. RevPOR growth 8%+. Aging demographics tailwind for next decade. Active acquisition pipeline. Same-store NOI growth 10%+."},
+        {"ticker": "DLR", "company": "Digital Realty", "rev_est_y": 6.0, "rev_growth": "+12%",
+         "eps_est_y": 7.00, "eps_est_ny": 7.80, "capex_guidance": 3.0, "capex_note": "FY26 CapEx ~$3B (AI-ready capacity)",
+         "production": None, "price_target": 185, "rating": "Buy", "fwd_pe": 25.0,
+         "outlook": "300+ data centers globally. AI-ready power capacity in high demand. Record leasing $500M+/quarter. JV partnerships with Blackstone, GIC. Pricing power from constrained supply."},
+        {"ticker": "VICI", "company": "VICI Properties", "rev_est_y": 4.0, "rev_growth": "+5%",
+         "eps_est_y": 2.30, "eps_est_ny": 2.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 35, "rating": "Hold", "fwd_pe": 14.0,
+         "outlook": "54 gaming properties including Caesars Palace, MGM Grand. Triple-net leases with built-in CPI escalators. 100% rent collection. Experiential real estate (bowling, fitness) diversifying."},
+        {"ticker": "CCI", "company": "Crown Castle", "rev_est_y": 6.5, "rev_growth": "-2%",
+         "eps_est_y": 3.50, "eps_est_ny": 3.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 110, "rating": "Hold", "fwd_pe": 30.0,
+         "outlook": "40K+ US tower sites. Fiber and small cell segment under strategic review. Activist pressure driving portfolio simplification. Tower business stable with 3%+ escalators. Sprint churn headwind fading."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="34_RealEstate_Sector",
+    title="Real Estate Sector Analysis",
+    subtitle="Top 10 US REITs — industrial, data centers, towers, retail, storage, and healthcare.",
+    etf="XLRE",
+    companies=REALESTATE_COMPANIES,
+    subsectors={
+        "Data Centers & Towers": ["EQIX", "DLR", "AMT", "CCI"],
+        "Industrial & Logistics": ["PLD"],
+        "Retail & Net Lease": ["SPG", "O", "VICI"],
+        "Storage & Healthcare": ["PSA", "WELL"],
+    },
+    guidance_snapshot=REALESTATE_GUIDANCE,
+    macro_overlay={"fred_series": "DGS10", "label": "10Y Treasury Yield (%)"},
+    factor_proxies=["SPY", "XLRE", "TLT", "UUP"],
+    cot_commodities=None,
+))

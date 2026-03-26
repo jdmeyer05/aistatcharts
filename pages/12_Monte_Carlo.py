@@ -61,8 +61,10 @@ if run_sim or 'mc_data' not in st.session_state or st.session_state.get('mc_tick
                 # Fit Student-t to historical returns
                 params = t_dist.fit(historical_rets)
                 df_t, loc_t, scale_t = params
-                # Generate t-distributed shocks
-                t_shocks = t_dist.rvs(df_t, loc=loc_t, scale=scale_t, size=(sim_days, sim_count), random_state=rng)
+                # Generate t-distributed shocks centered on the GBM drift
+                # (loc from fit captures the mean; use GBM drift instead to avoid double-counting)
+                drift_t = mu - 0.5 * scale_t**2
+                t_shocks = t_dist.rvs(df_t, loc=drift_t, scale=scale_t, size=(sim_days, sim_count), random_state=rng)
                 daily_returns_sim = np.exp(t_shocks)
 
             elif sim_method == "Empirical Bootstrap":

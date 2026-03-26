@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import requests
-import os
 import logging
 from datetime import date, timedelta, datetime
 from src.layout import setup_page, error_boundary, fun_loader
@@ -17,14 +16,7 @@ st.title("Economic Calendar")
 st.markdown("Upcoming macro releases, earnings, Treasury auctions, yield curve, and inflation data.")
 
 
-def _get_key(name: str):
-    key = os.environ.get(name)
-    if not key:
-        try:
-            key = st.secrets[name]
-        except Exception:
-            pass
-    return key
+from src.api_keys import get_secret as _get_key
 
 
 # ============================
@@ -114,25 +106,11 @@ def fetch_fred_calendar(fred_key: str):
     return pd.DataFrame(events)
 
 
-@st.cache_data(ttl=3600)
+from src.market_data import fetch_fred_series as _fetch_fred_canonical
+
 def fetch_fred_series(fred_key: str, series_id: str, limit: int = 60):
-    try:
-        r = requests.get(
-            "https://api.stlouisfed.org/fred/series/observations",
-            params={
-                "series_id": series_id, "api_key": fred_key,
-                "file_type": "json", "sort_order": "desc", "limit": limit,
-            },
-            timeout=10,
-        )
-        obs = r.json().get("observations", [])
-        df = pd.DataFrame(obs)
-        df["date"] = pd.to_datetime(df["date"])
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        return df.dropna(subset=["value"]).sort_values("date")
-    except Exception as e:
-        logger.error(f"FRED series fetch failed for {series_id}: {e}")
-        return pd.DataFrame()
+    """Wrapper for backward compat — delegates to src.market_data."""
+    return _fetch_fred_canonical(series_id, periods=limit)
 
 
 @st.cache_data(ttl=3600)
@@ -146,7 +124,11 @@ def fetch_yield_curve(fred_key: str):
 
 
 @st.cache_data(ttl=3600)
-def fetch_earnings_calendar(finnhub_key: str, from_date: str, to_date: str):
+def fetch_earnings_calendar(finnhub_key: str = None, from_date: str = "", to_date: str = ""):
+    if not finnhub_key:
+        finnhub_key = _get_key("FINNHUB_API_KEY")
+    if not finnhub_key:
+        return pd.DataFrame()
     try:
         r = requests.get(
             "https://finnhub.io/api/v1/calendar/earnings",

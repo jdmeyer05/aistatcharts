@@ -48,14 +48,23 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `auth.py` | Supabase auth, session recovery, **subscription tier system** (free/pro/premium/platinum), page gating, AI quota enforcement, Stripe integration |
 | `layout.py` | `setup_page()` universal page setup, header bar with logo (base64), nav dropdowns, Settings popover (account/usage/market status/logout), error boundaries, footer |
 | `styles.py` | Centralized color system, global CSS injection, 5-layer background, Plotly `uirevision` defaults, sidebar fully hidden |
-| `edgar.py` | SEC EDGAR: CIK lookup, XBRL financials/ratios, 13F holdings parser, insider scoring (0-100), 8-K events, 13D activist, congressional trades |
+| `api_keys.py` | Centralized `get_secret(name)` — single source of truth for all API key retrieval |
+| `edgar.py` | SEC EDGAR: CIK lookup, XBRL financials/ratios (generic `fetch_sector_*` functions), 13F, insider scoring, 8-K, 13D |
+| `market_data.py` | Yahoo Finance, FRED, StockTwits sentiment, Polymarket odds, CFTC COT, commodity futures, oil term structure |
+| `sector_analysis.py` | Shared 8-tab sector template: `SectorConfig` dataclass + `render_sector_page()` for all 11 SPDR sectors |
+| `portfolio_models.py` | Factor betas (exp-weighted OLS), regime return estimation, stressed correlations, data/AI blend |
+| `data_engine.py` | Polygon API: snapshots, batch snapshots, grouped daily, history, options chains, insider txns |
+| `eia_helpers.py` | EIA API v2: energy supply data, Henry Hub (spot + daily), hourly grid monitor |
+| `ercot_api.py` | ERCOT Public API (Azure B2C auth) + dashboard API (unauthenticated) |
+| `json_repair.py` | 4-strategy JSON repair for malformed LLM output (sanitize, iterative fix, truncate, extract) |
+| `analysis_history.py` | AI analysis history persistence: load/save/staleness for JSON history files |
 | `gdelt_events.py` | GDELT bulk event download & processing, conflict event filtering, parquet cache |
 | `chatbot.py` | Tier-based analyst chat (Gemini 2.5 Flash), inline expander with form input |
-| `data_engine.py` | Polygon API: snapshots, batch snapshots, history, intraday, ticker details, financials, insider txns, analyst recs |
-| `eia_helpers.py` | EIA API v2 wrapper for energy timeseries |
+| `gov_data.py` | CFTC COT (multi-contract snapshots for AI context), Treasury yields/auctions, defense contracts |
+| `options_models.py` | Black-Scholes, Merton Jump-Diffusion, BS-MJD blended pricing + Greeks |
 | `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
 
-### pages/ — 23 App Pages
+### pages/ — 34 App Pages
 
 | # | File | What It Does |
 |---|------|-------------|
@@ -82,6 +91,8 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 21 | `Fed_Macro_Drivers.py` | Fed policy dashboard (4 tabs) |
 | 22 | `Smart_Money.py` | 13F institutional holdings, congressional trades, activist investors, 8-K events |
 | 23 | `Power_Analytics.py` | Duck curve, implied heat rates, spark spreads, generation stack merit order (ERCOT + EIA) |
+| 24 | `Energy_Sector.py` | Energy sector analysis (XLE) — 8-tab template via `sector_analysis.py` |
+| 25-34 | `*_Sector.py` | Financials, Tech, Healthcare, Industrials, Comms, ConsDisc, ConsStaples, Utilities, Materials, Real Estate |
 
 ---
 

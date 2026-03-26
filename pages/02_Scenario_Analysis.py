@@ -47,37 +47,16 @@ with _c5:
 # ─────────────────────────────────────────────
 # FRED HELPER
 # ─────────────────────────────────────────────
-def _get_key(name: str):
-    key = os.environ.get(name)
-    if not key:
-        try:
-            key = st.secrets[name]
-        except Exception:
-            pass
-    return key
+from src.api_keys import get_secret as _get_key
 
 fred_key = _get_key("FRED_API_KEY")
 grok_key = _get_key("GROK_API_KEY")
 
-@st.cache_data(ttl=3600)
+from src.market_data import fetch_fred_series as _fetch_fred_canonical
+
 def fetch_fred_series(fred_key: str, series_id: str, limit: int = 60):
-    try:
-        r = requests.get(
-            "https://api.stlouisfed.org/fred/series/observations",
-            params={
-                "series_id": series_id, "api_key": fred_key,
-                "file_type": "json", "sort_order": "desc", "limit": limit,
-            },
-            timeout=10,
-        )
-        obs = r.json().get("observations", [])
-        df = pd.DataFrame(obs)
-        df["date"] = pd.to_datetime(df["date"])
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        return df.dropna(subset=["value"]).sort_values("date")
-    except Exception as e:
-        logger.error(f"FRED series fetch failed for {series_id}: {e}")
-        return pd.DataFrame()
+    """Wrapper for backward compat — delegates to src.market_data."""
+    return _fetch_fred_canonical(series_id, periods=limit)
 
 GROK_HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "grok_regime_history.json")
 
@@ -86,44 +65,13 @@ GROK_HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sr
 # ─────────────────────────────────────────────
 STOCKTWITS_MACRO_SYMBOLS = ["SPY", "QQQ", "TLT", "USO", "GLD", "DIA", "IWM", "VIX"]
 
+from src.market_data import fetch_stocktwits_sentiment as _fetch_st_canonical
 
-@st.cache_data(ttl=1800, show_spinner=False)
+
 def fetch_stocktwits_sentiment(symbols: list = None) -> list:
-    """Fetch StockTwits sentiment for macro-relevant symbols using curl_cffi to bypass Cloudflare."""
     if symbols is None:
         symbols = STOCKTWITS_MACRO_SYMBOLS
-    try:
-        from curl_cffi import requests as cffi_requests
-    except ImportError:
-        logger.warning("curl_cffi not available, skipping StockTwits")
-        return []
-    results = []
-    for sym in symbols:
-        try:
-            r = cffi_requests.get(
-                f"https://api.stocktwits.com/api/2/streams/symbol/{sym}.json?limit=30",
-                impersonate="chrome",
-                timeout=10,
-            )
-            data = r.json()
-            msgs = data.get("messages", [])
-            bull = sum(1 for m in msgs if (m.get("entities", {}).get("sentiment") or {}).get("basic") == "Bullish")
-            bear = sum(1 for m in msgs if (m.get("entities", {}).get("sentiment") or {}).get("basic") == "Bearish")
-            total = len(msgs)
-            tagged = bull + bear
-            if tagged > 0:
-                bull_ratio = bull / tagged * 100
-                results.append({
-                    "symbol": sym,
-                    "messages": total,
-                    "bullish": bull,
-                    "bearish": bear,
-                    "bull_ratio": round(bull_ratio, 0),
-                    "signal": "Bullish" if bull_ratio > 60 else "Bearish" if bull_ratio < 40 else "Neutral",
-                })
-        except Exception as e:
-            logger.warning(f"StockTwits fetch failed for {sym}: {e}")
-    return results
+    return _fetch_st_canonical(symbols)
 
 
 def build_stocktwits_summary(st_data: list) -> str:
@@ -347,20 +295,17 @@ JSON only."""
     }
 
 
+from src.analysis_history import load_history as _load_history, get_latest as _get_latest_history
+
+
 def load_grok_history() -> list:
-    """Load the full history of Grok regime analyses from disk."""
-    try:
-        if os.path.exists(GROK_HISTORY_FILE):
-            with open(GROK_HISTORY_FILE, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load Grok history: {e}")
-    return []
+    return _load_history(GROK_HISTORY_FILE)
 
 
 def save_grok_result(result: dict) -> None:
     """Append a timestamped Grok result to the history file."""
     from datetime import datetime
+    from src.analysis_history import save_history
     history = load_grok_history()
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -370,27 +315,11 @@ def save_grok_result(result: dict) -> None:
         "asset_estimates": result.get("asset_estimates", {}),
     }
     history.append(entry)
-    try:
-        os.makedirs(os.path.dirname(GROK_HISTORY_FILE), exist_ok=True)
-        with open(GROK_HISTORY_FILE, "w") as f:
-            json.dump(history, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to save Grok history: {e}")
+    save_history(GROK_HISTORY_FILE, history)
 
 
 def get_latest_grok_result() -> tuple:
-    """Return (latest_entry, is_stale). Stale = older than 1 hour."""
-    from datetime import datetime, timedelta
-    history = load_grok_history()
-    if not history:
-        return None, True
-    latest = history[-1]
-    try:
-        ts = datetime.fromisoformat(latest["timestamp"])
-        is_stale = (datetime.now() - ts) > timedelta(hours=1)
-    except Exception:
-        is_stale = True
-    return latest, is_stale
+    return _get_latest_history(GROK_HISTORY_FILE, stale_hours=1.0)
 
 
 def build_history_context() -> str:
@@ -770,21 +699,6 @@ REGIME_FACTOR_MOVES = {
 # 6 base factors + 1 interaction term
 FACTOR_SERIES = ["VIXCLS", "DGS10", "BAMLH0A0HYM2", "T5YIE", "DTWEXBGS", "DCOILWTICO"]
 
-# Sector mapping for concentration risk detection
-SECTOR_MAP = {
-    "XLK": "Tech", "AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech", "AMZN": "Tech",
-    "META": "Tech", "NVDA": "Tech", "TSLA": "Tech", "QQQ": "Tech",
-    "XLF": "Financials", "JPM": "Financials", "BAC": "Financials", "GS": "Financials",
-    "XLE": "Energy", "XOM": "Energy", "CVX": "Energy", "OXY": "Energy", "USO": "Energy",
-    "XLV": "Healthcare", "JNJ": "Healthcare", "UNH": "Healthcare", "PFE": "Healthcare",
-    "XLU": "Utilities", "XLP": "Staples", "XLY": "Discretionary", "XLI": "Industrials",
-    "XLB": "Materials", "XLRE": "Real Estate",
-    "SPY": "Broad Equity", "IWM": "Broad Equity", "DIA": "Broad Equity",
-    "TLT": "Bonds", "IEF": "Bonds", "SHY": "Bonds", "AGG": "Bonds",
-    "GLD": "Gold", "SLV": "Silver", "GDX": "Gold Miners",
-}
-
-
 # ─────────────────────────────────────────────
 # ENHANCED FACTOR-BETA PORTFOLIO MODEL
 # ─────────────────────────────────────────────
@@ -808,268 +722,14 @@ def fetch_factor_data(fred_key: str, days: int) -> pd.DataFrame:
     return factor_changes
 
 
-def _exp_weights(n: int, halflife: int = 60) -> np.ndarray:
-    """Generate exponential decay weights. More recent observations get higher weight."""
-    lam = np.log(2) / halflife
-    w = np.exp(lam * np.arange(n))
-    return w / w.sum() * n  # normalize so weights sum to n (preserves OLS scale)
-
-
-def compute_factor_betas(daily_returns: pd.DataFrame, factor_changes: pd.DataFrame) -> dict:
-    """Exponentially-weighted OLS regression with interaction term and rolling stability check."""
-    common_idx = daily_returns.index.intersection(factor_changes.index)
-    if len(common_idx) < 30:
-        return {}
-
-    Y = daily_returns.loc[common_idx]
-    X = factor_changes.loc[common_idx]
-    factor_names = list(X.columns)
-
-    # Exponential weights (halflife=60 trading days ≈ 3 months)
-    n = len(common_idx)
-    exp_w = _exp_weights(n, halflife=60)
-    sqrt_w = np.sqrt(exp_w)
-
-    # Also compute stressed correlation matrix (VIX > 75th percentile periods)
-    vix_col = "VIXCLS" if "VIXCLS" in X.columns else None
-    stress_mask = np.zeros(n, dtype=bool)
-    if vix_col is not None:
-        # Use factor LEVELS, not changes, for stress identification
-        # Approximate: high absolute VIX change days as stress proxy
-        vix_changes = X[vix_col].values
-        stress_threshold = np.percentile(np.abs(vix_changes), 75)
-        stress_mask = np.abs(vix_changes) > stress_threshold
-
-    results = {}
-    for ticker in Y.columns:
-        y = Y[ticker].values
-        X_vals = X.values
-        mask = ~(np.isnan(y) | np.any(np.isnan(X_vals), axis=1))
-        if mask.sum() < 30:
-            continue
-
-        y_clean = y[mask]
-        X_clean = np.column_stack([np.ones(mask.sum()), X_vals[mask]])
-        w_clean = sqrt_w[mask]
-
-        try:
-            # Weighted least squares: multiply both sides by sqrt(weights)
-            Xw = X_clean * w_clean[:, None]
-            yw = y_clean * w_clean
-            coeffs, _, _, _ = np.linalg.lstsq(Xw, yw, rcond=None)
-            y_pred = X_clean @ coeffs
-            residuals = y_clean - y_pred
-            ss_res = np.sum(residuals ** 2)
-            ss_tot = np.sum((y_clean - np.mean(y_clean)) ** 2)
-            r2 = max(0, min(1, 1 - ss_res / ss_tot if ss_tot > 0 else 0))
-            residual_std = np.sqrt(ss_res / max(1, len(y_clean) - len(coeffs)))
-
-            betas = {name: coeffs[i + 1] for i, name in enumerate(factor_names)}
-
-            # Rolling beta stability: compare first-half vs second-half betas
-            mid = mask.sum() // 2
-            beta_stability = 1.0  # 1.0 = perfectly stable
-            if mid > 20:
-                try:
-                    c1, _, _, _ = np.linalg.lstsq(X_clean[:mid], y_clean[:mid], rcond=None)
-                    c2, _, _, _ = np.linalg.lstsq(X_clean[mid:], y_clean[mid:], rcond=None)
-                    # Correlation of beta vectors (excluding intercept)
-                    b1, b2 = c1[1:], c2[1:]
-                    if np.std(b1) > 0 and np.std(b2) > 0:
-                        beta_stability = float(np.corrcoef(b1, b2)[0, 1])
-                        beta_stability = max(0, beta_stability)
-                except Exception:
-                    pass
-
-            # Stressed residual std (for fat-tailed CI in crisis regimes)
-            stress_residuals = residuals[stress_mask[mask]] if stress_mask[mask].sum() > 5 else residuals
-            stressed_residual_std = np.std(stress_residuals) if len(stress_residuals) > 0 else residual_std
-
-            results[ticker] = {
-                "alpha": coeffs[0],
-                "betas": betas,
-                "r2": r2,
-                "residual_std": residual_std,
-                "stressed_residual_std": stressed_residual_std,
-                "beta_stability": round(beta_stability, 2),
-                "n_obs": int(mask.sum()),
-            }
-        except Exception:
-            continue
-
-    return results
-
-
-def estimate_regime_returns(factor_betas: dict, regime_factor_moves: dict,
-                            daily_returns: pd.DataFrame = None, factor_changes: pd.DataFrame = None,
-                            horizon_days: int = 252) -> dict:
-    """Estimate regime returns using factor betas + block bootstrap for CIs.
-    Uses stressed residual std for downside regimes (recession, crisis)."""
-    STRESS_REGIMES = {"Recession", "Financial Crisis", "Stagflation"}
-
-    # Block bootstrap: sample 20-day return blocks from regime-like periods
-    bootstrap_returns = {}
-    if daily_returns is not None and factor_changes is not None:
-        common_idx = daily_returns.index.intersection(factor_changes.index)
-        if len(common_idx) > 60:
-            Y = daily_returns.loc[common_idx]
-            X = factor_changes.loc[common_idx]
-            if "VIXCLS" in X.columns:
-                vix = X["VIXCLS"].values
-                # High stress periods: top quartile of VIX changes
-                high_stress = np.abs(vix) > np.percentile(np.abs(vix), 75)
-                # Low stress periods: bottom quartile
-                low_stress = np.abs(vix) < np.percentile(np.abs(vix), 25)
-                bootstrap_returns["stress"] = Y.loc[common_idx[high_stress]]
-                bootstrap_returns["calm"] = Y.loc[common_idx[low_stress]]
-
-    estimates = {}
-    for regime, fmoves in regime_factor_moves.items():
-        regime_est = {}
-        use_stressed = regime in STRESS_REGIMES
-
-        for ticker, info in factor_betas.items():
-            betas = info["betas"]
-            # Factor-model point estimate
-            point_est = sum(betas.get(f, 0) * fmoves.get(f, 0) * horizon_days
-                           for f in list(betas.keys()))
-            point_pct = point_est * 100
-
-            # CI: use stressed residual std for crisis regimes, normal for others
-            # Use Student-t with df=5 for fat tails instead of normal
-            from scipy.stats import t as t_dist
-            res_std = info["stressed_residual_std"] if use_stressed else info["residual_std"]
-            annual_std = res_std * np.sqrt(horizon_days) * 100
-            # t-distribution with df=5: 10th/90th percentiles are wider than normal
-            t_mult = t_dist.ppf(0.9, df=5)  # ≈ 1.476 vs normal 1.28
-            lo = point_pct - t_mult * annual_std
-            hi = point_pct + t_mult * annual_std
-
-            # Block bootstrap override if we have enough data
-            bs_key = "stress" if use_stressed else "calm"
-            if bs_key in bootstrap_returns and ticker in bootstrap_returns[bs_key].columns:
-                bs_data = bootstrap_returns[bs_key][ticker].dropna().values
-                if len(bs_data) > 40:
-                    # Sample 20-day blocks, accumulate to horizon
-                    block_size = 20
-                    n_sims = 500
-                    sim_returns = []
-                    rng = np.random.default_rng(42)
-                    for _ in range(n_sims):
-                        blocks = []
-                        total_days = 0
-                        while total_days < horizon_days:
-                            start = rng.integers(0, max(1, len(bs_data) - block_size))
-                            block = bs_data[start:start + block_size]
-                            blocks.extend(block)
-                            total_days += len(block)
-                        cum_ret = np.prod(1 + np.array(blocks[:horizon_days])) - 1
-                        sim_returns.append(cum_ret * 100)
-                    sim_returns = np.array(sim_returns)
-                    # Blend: 50% factor model, 50% bootstrap
-                    bs_point = np.median(sim_returns)
-                    point_pct = 0.5 * point_pct + 0.5 * bs_point
-                    lo = np.percentile(sim_returns, 10)
-                    hi = np.percentile(sim_returns, 90)
-
-            regime_est[ticker] = {
-                "point": round(point_pct, 1),
-                "lo": round(lo, 1),
-                "hi": round(hi, 1),
-                "r2": round(info["r2"], 3),
-                "beta_stability": info.get("beta_stability", 1.0),
-                "source": "data-driven",
-            }
-        estimates[regime] = regime_est
-    return estimates
-
-
-def compute_stressed_correlations(daily_returns: pd.DataFrame, factor_changes: pd.DataFrame) -> dict:
-    """Compute correlation matrices for normal and stressed periods."""
-    common_idx = daily_returns.index.intersection(factor_changes.index)
-    if len(common_idx) < 60 or "VIXCLS" not in factor_changes.columns:
-        return {"normal": None, "stressed": None}
-
-    Y = daily_returns.loc[common_idx]
-    vix = factor_changes.loc[common_idx, "VIXCLS"]
-    threshold = np.percentile(np.abs(vix), 75)
-
-    stress_mask = np.abs(vix) > threshold
-    normal_mask = ~stress_mask
-
-    corr_normal = Y[normal_mask].corr() if normal_mask.sum() > 20 else Y.corr()
-    corr_stressed = Y[stress_mask].corr() if stress_mask.sum() > 20 else Y.corr()
-
-    return {"normal": corr_normal, "stressed": corr_stressed}
-
-
-def detect_sector_concentration(tickers: list) -> dict:
-    """Flag sector concentration risk."""
-    sectors = {}
-    for t in tickers:
-        sec = SECTOR_MAP.get(t, "Unknown")
-        sectors[sec] = sectors.get(sec, [])
-        sectors[sec].append(t)
-
-    warnings = []
-    for sec, sec_tickers in sectors.items():
-        pct = len(sec_tickers) / len(tickers) * 100
-        if pct > 40 and len(sec_tickers) > 1:
-            warnings.append(f"**{sec}** concentration: {len(sec_tickers)}/{len(tickers)} tickers ({pct:.0f}%) — "
-                          f"{', '.join(sec_tickers)}")
-    return {"sectors": sectors, "warnings": warnings}
-
-
-def blend_estimates(data_estimates: dict, ai_estimates: dict, factor_betas: dict) -> dict:
-    """Blend data-driven and AI estimates. R²-adaptive + stability-adjusted weighting."""
-    blended = {}
-    for regime in data_estimates:
-        blended[regime] = {}
-        for ticker in data_estimates[regime]:
-            data_est = data_estimates[regime][ticker]
-            r2 = factor_betas.get(ticker, {}).get("r2", 0)
-            stability = factor_betas.get(ticker, {}).get("beta_stability", 1.0)
-
-            # Adaptive weights: R² and stability both increase data weight
-            # R² contribution: 0 to 0.3, Stability contribution: 0 to 0.2
-            w_data = 0.3 + 0.3 * r2 + 0.2 * stability  # ranges 0.3 to 0.8
-            w_data = min(0.8, max(0.3, w_data))
-            w_ai = 1 - w_data
-
-            ai_val = None
-            if ai_estimates and regime in ai_estimates and ticker in ai_estimates[regime]:
-                ai_val = ai_estimates[regime][ticker]
-                try:
-                    ai_val = float(ai_val)
-                except (ValueError, TypeError):
-                    ai_val = None
-
-            if ai_val is not None:
-                point = w_data * data_est["point"] + w_ai * ai_val
-                ai_uncertainty = abs(ai_val) * 0.25 + 5
-                sigma_data = (data_est["hi"] - data_est["lo"]) / 2.56
-                sigma_blend = np.sqrt(w_data**2 * sigma_data**2 + w_ai**2 * ai_uncertainty**2)
-                from scipy.stats import t as t_dist
-                t_mult = t_dist.ppf(0.9, df=5)
-                lo = point - t_mult * sigma_blend
-                hi = point + t_mult * sigma_blend
-                source = f"blended ({w_data:.0%} data / {w_ai:.0%} AI, R²={r2:.2f}, stability={stability:.2f})"
-            else:
-                point = data_est["point"]
-                lo = data_est["lo"]
-                hi = data_est["hi"]
-                source = f"data-driven (R²={r2:.2f}, stability={stability:.2f})"
-
-            blended[regime] = blended.get(regime, {})
-            blended[regime][ticker] = {
-                "point": round(point, 1),
-                "lo": round(lo, 1),
-                "hi": round(hi, 1),
-                "r2": r2,
-                "beta_stability": stability,
-                "source": source,
-            }
-    return blended
+from src.portfolio_models import (
+    compute_factor_betas,
+    estimate_regime_returns,
+    compute_stressed_correlations,
+    detect_sector_concentration,
+    blend_estimates,
+    SECTOR_MAP,
+)
 
 
 # ─────────────────────────────────────────────

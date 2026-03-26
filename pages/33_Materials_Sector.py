@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("33_Materials_Sector")
+
+MATERIALS_COMPANIES = {
+    "LIN": "Linde",
+    "SHW": "Sherwin-Williams",
+    "APD": "Air Products",
+    "ECL": "Ecolab",
+    "FCX": "Freeport-McMoRan",
+    "NUE": "Nucor",
+    "NEM": "Newmont",
+    "VMC": "Vulcan Materials",
+    "MLM": "Martin Marietta",
+    "DOW": "Dow Inc",
+}
+
+MATERIALS_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "LIN", "company": "Linde", "rev_est_y": 34.0, "rev_growth": "+4%",
+         "eps_est_y": 16.00, "eps_est_ny": 17.50, "capex_guidance": 4.0, "capex_note": "FY26 CapEx ~$4B",
+         "production": None, "price_target": 500, "rating": "Buy", "fwd_pe": 30.0,
+         "outlook": "Industrial gas volumes recovering. Clean hydrogen projects pipeline $7B+. Pricing power through take-or-pay contracts. Operating margin 27%+. Electronics/semiconductor growing."},
+        {"ticker": "SHW", "company": "Sherwin-Williams", "rev_est_y": 24.0, "rev_growth": "+3%",
+         "eps_est_y": 11.50, "eps_est_ny": 13.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 400, "rating": "Buy", "fwd_pe": 32.0,
+         "outlook": "Pro painter segment resilient. New store openings 80-100/year. Raw material costs easing. Housing repaint cycle approaching. Architectural coatings market leader."},
+        {"ticker": "APD", "company": "Air Products", "rev_est_y": 12.0, "rev_growth": "+3%",
+         "eps_est_y": 12.50, "eps_est_ny": 13.50, "capex_guidance": 5.0, "capex_note": "FY26 CapEx ~$5B (gasification + hydrogen)",
+         "production": None, "price_target": 330, "rating": "Hold", "fwd_pe": 24.0,
+         "outlook": "Blue/green hydrogen mega-projects in NEOM, Louisiana, and Alberta. CEO transition underway. Capital allocation pivot to core gases. Dividend aristocrat 42 consecutive years."},
+        {"ticker": "ECL", "company": "Ecolab", "rev_est_y": 16.0, "rev_growth": "+6%",
+         "eps_est_y": 7.50, "eps_est_ny": 8.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 280, "rating": "Buy", "fwd_pe": 35.0,
+         "outlook": "Water, hygiene, and infection prevention. Institutional segment recovering. Industrial segment stable. Pricing + productivity driving margin expansion. Data center water treatment opportunity."},
+        {"ticker": "FCX", "company": "Freeport-McMoRan", "rev_est_y": 26.0, "rev_growth": "+12%",
+         "eps_est_y": 2.50, "eps_est_ny": 3.00, "capex_guidance": 4.0, "capex_note": "FY26 CapEx ~$4B",
+         "production": "4.3B lbs Cu", "price_target": 55, "rating": "Buy", "fwd_pe": 18.0,
+         "outlook": "Copper demand from EVs, data centers, grid electrification. Grasberg underground ramp-up. Smelter in Indonesia operational. Gold production 1.8M oz. Leaching innovation unlocking value."},
+        {"ticker": "NUE", "company": "Nucor", "rev_est_y": 32.0, "rev_growth": "+5%",
+         "eps_est_y": 10.00, "eps_est_ny": 12.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 180, "rating": "Hold", "fwd_pe": 14.0,
+         "outlook": "Lowest-cost steel producer in US. Infrastructure spending driving demand. New plate mill in Brandenburg operational. Sheet steel prices stabilizing. Diversified product portfolio."},
+        {"ticker": "NEM", "company": "Newmont", "rev_est_y": 20.0, "rev_growth": "+15%",
+         "eps_est_y": 4.00, "eps_est_ny": 4.50, "capex_guidance": 3.0, "capex_note": "FY26 CapEx ~$3B",
+         "production": "6M oz Au", "price_target": 55, "rating": "Buy", "fwd_pe": 14.0,
+         "outlook": "World's largest gold miner. Gold prices at record highs. Newcrest integration delivering synergies. Non-core asset divestitures funding debt reduction. AISC $1,400/oz target."},
+        {"ticker": "VMC", "company": "Vulcan Materials", "rev_est_y": 8.5, "rev_growth": "+6%",
+         "eps_est_y": 10.50, "eps_est_ny": 12.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 295, "rating": "Buy", "fwd_pe": 28.0,
+         "outlook": "Aggregates pricing power mid-single digit. Infrastructure bill driving demand. Southern US exposure favorable. Operational efficiency improving. Cash gross profit per ton expanding."},
+        {"ticker": "MLM", "company": "Martin Marietta", "rev_est_y": 7.0, "rev_growth": "+5%",
+         "eps_est_y": 22.00, "eps_est_ny": 25.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 630, "rating": "Buy", "fwd_pe": 27.0,
+         "outlook": "Aggregates volume growth from infrastructure spending. Pricing discipline across markets. Strategic bolt-on acquisitions. Cement and downstream operations complementary."},
+        {"ticker": "DOW", "company": "Dow Inc", "rev_est_y": 44.0, "rev_growth": "+3%",
+         "eps_est_y": 2.50, "eps_est_ny": 3.20, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 42, "rating": "Hold", "fwd_pe": 16.0,
+         "outlook": "Plastics (polyethylene) prices normalizing. Path2Zero Fort Saskatchewan project progressing. Dividend yield ~5%. Cost reduction $1B+ program. Silicones and coatings stable."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="33_Materials_Sector",
+    title="Materials Sector Analysis",
+    subtitle="Top 10 US materials companies — chemicals, mining, metals, and construction materials.",
+    etf="XLB",
+    companies=MATERIALS_COMPANIES,
+    subsectors={
+        "Industrial Gases": ["LIN", "APD"],
+        "Specialty Chemicals": ["SHW", "ECL", "DOW"],
+        "Mining & Metals": ["FCX", "NUE", "NEM"],
+        "Construction Materials": ["VMC", "MLM"],
+    },
+    guidance_snapshot=MATERIALS_GUIDANCE,
+    macro_overlay={"fred_series": "PPIACO", "label": "PPI All Commodities (Index)"},
+    factor_proxies=["SPY", "XLB", "GLD", "UUP"],
+    cot_commodities=[("Gold", "gold")],
+))

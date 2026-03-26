@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
-import os
 import logging
 from scipy.stats import norm
 from datetime import date, timedelta
 from src.data_engine import format_massive_ticker, fetch_massive_data
+from src.api_keys import get_secret
 from src.layout import setup_page, fun_loader
 
 logger = logging.getLogger(__name__)
@@ -18,53 +17,22 @@ st.title("🧫 Options Lab")
 st.markdown("Volatility surface, earnings move analyzer, and multi-leg strategy modeler with time decay.")
 
 
-def _get_massive_key():
-    key = os.environ.get("MASSIVE_API_KEY")
-    if not key:
-        try:
-            key = st.secrets["MASSIVE_API_KEY"]
-        except Exception:
-            pass
-    return key
+_get_massive_key = lambda: get_secret("MASSIVE_API_KEY")
 
 
-def _polygon_paginate(url: str, api_key: str, max_pages: int = 20) -> list:
-    results = []
-    pages = 0
-    while url and pages < max_pages:
-        res = requests.get(url, timeout=30)
-        res.raise_for_status()
-        data = res.json()
-        results.extend(data.get("results", []))
-        next_url = data.get("next_url")
-        url = f"{next_url}&apiKey={api_key}" if next_url else None
-        pages += 1
-    return results
+from src.data_engine import fetch_options_chain as _fetch_chain_raw
 
-
-@st.cache_data(ttl=300)
-def fetch_chain_all_exps(symbol: str, api_key: str):
-    """Fetch options chain across ALL expirations for vol surface."""
-    url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?limit=250&apiKey={api_key}"
-    results = _polygon_paginate(url, api_key, max_pages=30)
-
-    rows = []
-    for r in results:
-        d = r.get("details", {})
-        g = r.get("greeks", {})
-        day = r.get("day", {})
-        rows.append({
-            "strike": d.get("strike_price", 0),
-            "type": d.get("contract_type", ""),
-            "expiration": d.get("expiration_date", ""),
-            "volume": day.get("volume", 0),
-            "open_interest": r.get("open_interest", 0),
-            "iv": r.get("implied_volatility", 0),
-            "delta": g.get("delta", 0),
-            "gamma": g.get("gamma", 0),
-            "close": day.get("close", 0),
-        })
-    return pd.DataFrame(rows)
+def fetch_chain_all_exps(symbol: str, api_key: str = None):
+    """Fetch options chain across ALL expirations — delegates to data_engine."""
+    df = _fetch_chain_raw(symbol, expiration=None, max_pages=30)
+    if not df.empty:
+        col_map = {
+            "strike_price": "strike", "contract_type": "type",
+            "expiration_date": "expiration", "implied_volatility": "iv",
+            "last_price": "close",
+        }
+        df = df.rename(columns=col_map)
+    return df
 
 
 def bs_price(S, K, T, r, sigma, opt_type="call"):

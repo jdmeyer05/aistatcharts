@@ -51,6 +51,17 @@ PAGE_CONFIG = {
     "21_Fed_Macro_Drivers":  ("Fed & Macro Drivers | AI Statcharts", "🏦"),
     "22_Smart_Money":        ("Smart Money | AI Statcharts", "🏛️"),
     "23_Power_Analytics":    ("Power Analytics | AI Statcharts", "⚡"),
+    "24_Energy_Sector":      ("Energy Sector | AI Statcharts", "🛢️"),
+    "25_Financials_Sector":  ("Financials Sector | AI Statcharts", "🏦"),
+    "26_Tech_Sector":        ("Tech Sector | AI Statcharts", "💻"),
+    "27_Healthcare_Sector":  ("Healthcare Sector | AI Statcharts", "💊"),
+    "28_Industrials_Sector": ("Industrials Sector | AI Statcharts", "🏗️"),
+    "29_Comms_Sector":       ("Comms Sector | AI Statcharts", "📡"),
+    "30_ConsDisc_Sector":    ("Consumer Disc Sector | AI Statcharts", "🛒"),
+    "31_ConsStaples_Sector": ("Consumer Staples Sector | AI Statcharts", "🧴"),
+    "32_Utilities_Sector":   ("Utilities Sector | AI Statcharts", "⚡"),
+    "33_Materials_Sector":   ("Materials Sector | AI Statcharts", "⛏️"),
+    "34_RealEstate_Sector":  ("Real Estate Sector | AI Statcharts", "🏠"),
 }
 
 
@@ -210,6 +221,19 @@ def render_header(current_page: str):
             ("11_Algo_Backtester", "Algo Backtester", "pages/11_Algo_Backtester.py"),
             ("12_Monte_Carlo", "Monte Carlo", "pages/12_Monte_Carlo.py"),
             ("13_Power_Risk_VaR", "Portfolio VaR", "pages/13_Power_Risk_VaR.py"),
+        ]),
+        ("Sectors", [
+            ("24_Energy_Sector", "Energy", "pages/24_Energy_Sector.py"),
+            ("25_Financials_Sector", "Financials", "pages/25_Financials_Sector.py"),
+            ("26_Tech_Sector", "Technology", "pages/26_Tech_Sector.py"),
+            ("27_Healthcare_Sector", "Healthcare", "pages/27_Healthcare_Sector.py"),
+            ("28_Industrials_Sector", "Industrials", "pages/28_Industrials_Sector.py"),
+            ("29_Comms_Sector", "Communication", "pages/29_Comms_Sector.py"),
+            ("30_ConsDisc_Sector", "Consumer Disc", "pages/30_ConsDisc_Sector.py"),
+            ("31_ConsStaples_Sector", "Consumer Staples", "pages/31_ConsStaples_Sector.py"),
+            ("32_Utilities_Sector", "Utilities", "pages/32_Utilities_Sector.py"),
+            ("33_Materials_Sector", "Materials", "pages/33_Materials_Sector.py"),
+            ("34_RealEstate_Sector", "Real Estate", "pages/34_RealEstate_Sector.py"),
         ]),
         ("Energy", [
             ("14_Oil_Fundamentals", "Oil", "pages/14_Oil_Fundamentals.py"),

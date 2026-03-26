@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("29_Comms_Sector")
+
+COMMS_COMPANIES = {
+    "META":  "Meta Platforms",
+    "GOOGL": "Alphabet",
+    "NFLX":  "Netflix",
+    "T":     "AT&T",
+    "CMCSA": "Comcast",
+    "VZ":    "Verizon",
+    "DIS":   "Walt Disney",
+    "TMUS":  "T-Mobile US",
+    "EA":    "Electronic Arts",
+    "CHTR":  "Charter Comms",
+}
+
+COMMS_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "META", "company": "Meta Platforms", "rev_est_y": 185.0, "rev_growth": "+18%",
+         "eps_est_y": 25.00, "eps_est_ny": 29.00, "capex_guidance": 65.0, "capex_note": "FY26 CapEx $60-70B (AI infrastructure)",
+         "production": None, "price_target": 700, "rating": "Buy", "fwd_pe": 24.0,
+         "outlook": "AI-driven ad targeting improving monetization. Reels engagement growing. WhatsApp business messaging scaling. Reality Labs losses narrowing. Llama open-source AI investment."},
+        {"ticker": "GOOGL", "company": "Alphabet", "rev_est_y": 380.0, "rev_growth": "+12%",
+         "eps_est_y": 9.50, "eps_est_ny": 11.00, "capex_guidance": 75.0, "capex_note": "FY26 CapEx ~$75B (AI/cloud infrastructure)",
+         "production": None, "price_target": 210, "rating": "Buy", "fwd_pe": 21.0,
+         "outlook": "Google Cloud >$40B run rate, profitable. Search AI Overviews increasing engagement. YouTube ad + subscription revenue >$50B. Waymo commercialization progressing."},
+        {"ticker": "NFLX", "company": "Netflix", "rev_est_y": 45.0, "rev_growth": "+14%",
+         "eps_est_y": 25.00, "eps_est_ny": 30.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 1050, "rating": "Buy", "fwd_pe": 38.0,
+         "outlook": "Ad tier 70M+ MAU. Live sports (WWE, NFL) driving engagement. Gaming investment building. Operating margin >28%. Password sharing crackdown boosted subs."},
+        {"ticker": "T", "company": "AT&T", "rev_est_y": 125.0, "rev_growth": "+2%",
+         "eps_est_y": 2.30, "eps_est_ny": 2.50, "capex_guidance": 22.0, "capex_note": "FY26 CapEx ~$22B (fiber + 5G)",
+         "production": None, "price_target": 28, "rating": "Hold", "fwd_pe": 10.0,
+         "outlook": "Fiber subscriber additions accelerating. 5G coverage 300M+ POPs. Free cash flow ~$18B. Debt reduction on track. Dividend yield ~5%."},
+        {"ticker": "CMCSA", "company": "Comcast", "rev_est_y": 122.0, "rev_growth": "+3%",
+         "eps_est_y": 4.50, "eps_est_ny": 4.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 48, "rating": "Hold", "fwd_pe": 10.0,
+         "outlook": "Broadband sub losses stabilizing. Peacock losses narrowing. Theme parks strong. Cable ARPU growth offsetting sub declines. SpinCo (cable networks) pending."},
+        {"ticker": "VZ", "company": "Verizon", "rev_est_y": 135.0, "rev_growth": "+1%",
+         "eps_est_y": 4.80, "eps_est_ny": 5.00, "capex_guidance": 18.0, "capex_note": "FY26 CapEx $17.5-18.5B",
+         "production": None, "price_target": 48, "rating": "Hold", "fwd_pe": 9.0,
+         "outlook": "Wireless service revenue growing 3%+. FWA (fixed wireless) gaining broadband share. Frontier acquisition expanding fiber footprint. Dividend yield >6%."},
+        {"ticker": "DIS", "company": "Walt Disney", "rev_est_y": 95.0, "rev_growth": "+5%",
+         "eps_est_y": 5.80, "eps_est_ny": 6.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 130, "rating": "Buy", "fwd_pe": 20.0,
+         "outlook": "Disney+ profitable. Parks & Experiences record revenue. ESPN direct-to-consumer launching. Content rationalization improving margins."},
+        {"ticker": "TMUS", "company": "T-Mobile US", "rev_est_y": 84.0, "rev_growth": "+6%",
+         "eps_est_y": 10.50, "eps_est_ny": 12.00, "capex_guidance": 10.0, "capex_note": "FY26 CapEx ~$9-10B",
+         "production": None, "price_target": 240, "rating": "Buy", "fwd_pe": 22.0,
+         "outlook": "Industry-leading postpaid net adds. 5G network coverage advantage. Merger synergies fully realized. Free cash flow >$18B. Aggressive buyback program."},
+        {"ticker": "EA", "company": "Electronic Arts", "rev_est_y": 8.0, "rev_growth": "+4%",
+         "eps_est_y": 7.50, "eps_est_ny": 8.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 160, "rating": "Hold", "fwd_pe": 20.0,
+         "outlook": "EA Sports FC franchise growing. Live services 75%+ of revenue. College Football 26 launch pending. Apex Legends stabilizing."},
+        {"ticker": "CHTR", "company": "Charter Comms", "rev_est_y": 56.0, "rev_growth": "+1%",
+         "eps_est_y": 35.00, "eps_est_ny": 40.00, "capex_guidance": 11.0, "capex_note": "FY26 CapEx ~$11B (network evolution)",
+         "production": None, "price_target": 420, "rating": "Hold", "fwd_pe": 11.0,
+         "outlook": "RDOF/network evolution buildout ongoing. Mobile line growth strong (8M+ lines). Broadband ARPU increasing. Video cord-cutting accelerating. CapEx peak in 2025-2026."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="29_Comms_Sector",
+    title="Communication Services Sector Analysis",
+    subtitle="Top 10 US communication companies — social/search, telecom, media, and gaming.",
+    etf="XLC",
+    companies=COMMS_COMPANIES,
+    subsectors={
+        "Social & Search": ["META", "GOOGL"],
+        "Streaming & Media": ["NFLX", "DIS"],
+        "Telecom": ["T", "VZ", "TMUS"],
+        "Cable & Gaming": ["CMCSA", "CHTR", "EA"],
+    },
+    guidance_snapshot=COMMS_GUIDANCE,
+    macro_overlay={"fred_series": "CPIAUCSL", "label": "CPI All Items (Index)"},
+    factor_proxies=["SPY", "QQQ", "TLT", "UUP"],
+    cot_commodities=None,
+))

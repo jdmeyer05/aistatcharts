@@ -15,13 +15,8 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 
 def _get_polygon_key():
-    key = os.environ.get("MASSIVE_API_KEY")
-    if not key:
-        try:
-            key = st.secrets["MASSIVE_API_KEY"]
-        except Exception:
-            pass
-    return key
+    from src.api_keys import get_secret
+    return get_secret("MASSIVE_API_KEY")
 
 
 # Map common yfinance symbols to Polygon format
@@ -248,24 +243,22 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
 
 # --- OPTIONS ENGINE ---
 def _get_massive_key():
-    api_key = os.environ.get("MASSIVE_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets["MASSIVE_API_KEY"]
-        except Exception:
-            pass
-    return api_key
+    from src.api_keys import get_secret
+    return get_secret("MASSIVE_API_KEY")
 
 
-def _polygon_paginate(url: str, api_key: str) -> list:
+def polygon_paginate(url: str, api_key: str, max_pages: int = 20) -> list:
+    """Paginate through Polygon API results. Public helper for options pages."""
     results = []
-    while url:
+    pages = 0
+    while url and pages < max_pages:
         res = requests.get(url, timeout=30)
         res.raise_for_status()
         data = res.json()
         results.extend(data.get('results', []))
         next_url = data.get('next_url')
         url = f"{next_url}&apiKey={api_key}" if next_url else None
+        pages += 1
     return results
 
 
@@ -276,7 +269,7 @@ def get_expiration_dates(symbol: str):
     if api_key:
         try:
             url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=1000&apiKey={api_key}"
-            contracts = _polygon_paginate(url, api_key)
+            contracts = polygon_paginate(url, api_key)
             exps = sorted(set(c['expiration_date'] for c in contracts))
             if exps:
                 return exps
@@ -287,13 +280,16 @@ def get_expiration_dates(symbol: str):
 
 
 @st.cache_data(ttl=3600, show_spinner="Fetching options chain from Massive...")
-def fetch_options_chain(symbol: str, expiration: str = None) -> pd.DataFrame:
-    """Fetches full options chain with Greeks from Massive (Polygon), yfinance fallback."""
+def fetch_options_chain(symbol: str, expiration: str = None, max_pages: int = 20) -> pd.DataFrame:
+    """Fetches full options chain with Greeks from Massive (Polygon), yfinance fallback.
+    Pass expiration=None to fetch across ALL expirations (for vol surfaces)."""
     api_key = _get_massive_key()
     if api_key:
         try:
-            url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?expiration_date={expiration}&limit=250&apiKey={api_key}"
-            results = _polygon_paginate(url, api_key)
+            url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?limit=250&apiKey={api_key}"
+            if expiration:
+                url += f"&expiration_date={expiration}"
+            results = polygon_paginate(url, api_key, max_pages=max_pages)
             if results:
                 rows = []
                 for r in results:
@@ -505,13 +501,8 @@ def fetch_insider_transactions(symbol: str, limit: int = 20) -> pd.DataFrame:
 @st.cache_data(ttl=43200, show_spinner=False)
 def fetch_analyst_recommendations(symbol: str) -> pd.DataFrame:
     """Fetch analyst recommendations from Finnhub (free tier, commercial use allowed)."""
-    import os
-    finnhub_key = os.environ.get("FINNHUB_API_KEY")
-    if not finnhub_key:
-        try:
-            finnhub_key = st.secrets.get("FINNHUB_API_KEY")
-        except Exception:
-            pass
+    from src.api_keys import get_secret
+    finnhub_key = get_secret("FINNHUB_API_KEY")
     if not finnhub_key:
         return pd.DataFrame()
 
@@ -553,13 +544,8 @@ _FRED_FALLBACK_MAP = {
 
 
 def _get_fred_key():
-    key = os.environ.get("FRED_API_KEY")
-    if not key:
-        try:
-            key = st.secrets["FRED_API_KEY"]
-        except Exception:
-            pass
-    return key
+    from src.api_keys import get_secret
+    return get_secret("FRED_API_KEY")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

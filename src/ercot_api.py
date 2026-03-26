@@ -289,6 +289,27 @@ def fetch_dam_lambda(date_from: str | None = None,
     return df
 
 
+# ─────────────────────────────────────────────
+# ERCOT DASHBOARD API (public, unauthenticated)
+# ─────────────────────────────────────────────
+
+_DASHBOARD_BASE = "https://www.ercot.com/api/1/services/read/dashboards"
+
+
+@st.cache_data(ttl=300)
+def fetch_dashboard(endpoint: str) -> dict | None:
+    """Fetch data from ERCOT's public dashboard API (no auth required).
+    Endpoints: fuel-mix, supply-demand, loadForecastVsActual, ancillary-services,
+    systemWidePrices, combinedWindAndSolar, etc."""
+    try:
+        r = requests.get(f"{_DASHBOARD_BASE}/{endpoint}.json", timeout=15)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.error(f"ERCOT dashboard fetch failed for {endpoint}: {e}")
+        return None
+
+
 @st.cache_data(ttl=3600)
 def fetch_load_history(days_back: int = 30) -> pd.DataFrame | None:
     """Fetch historical actual load for multi-day analysis."""

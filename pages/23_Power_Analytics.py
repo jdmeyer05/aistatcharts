@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
-import os
 import logging
 from datetime import datetime, timedelta
 from src.layout import setup_page, error_boundary, fun_loader
@@ -17,7 +15,7 @@ st.title("⚡ Power Analytics")
 st.markdown("Duck curve visualization, implied heat rates, spark spread analysis, and generation stack merit order.")
 
 # ── CONFIG ──
-ERCOT_BASE = "https://www.ercot.com/api/1/services/read/dashboards"
+from src.ercot_api import fetch_dashboard as fetch_ercot
 
 # Typical heat rates by fuel type (BTU/kWh)
 HEAT_RATES = {
@@ -41,167 +39,43 @@ FUEL_COLORS = {
 
 
 # ── DATA FETCHING ──
-@st.cache_data(ttl=300)
-def fetch_ercot(endpoint: str):
-    try:
-        r = requests.get(f"{ERCOT_BASE}/{endpoint}.json", timeout=15)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logger.error(f"ERCOT fetch failed for {endpoint}: {e}")
-        return None
+from src.eia_helpers import fetch_henry_hub_spot as fetch_henry_hub, fetch_henry_hub_daily, fetch_eia_hourly_grid
+from src.market_data import fetch_commodity_futures
 
 
-@st.cache_data(ttl=3600)
-def fetch_henry_hub() -> float | None:
-    """Fetch latest Henry Hub spot price from EIA API v2."""
-    api_key = os.environ.get("EIA_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets["EIA_API_KEY"]
-        except Exception:
-            return None
-    try:
-        url = f"https://api.eia.gov/v2/seriesid/NG.RNGWHHD.W?api_key={api_key}"
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()["response"]["data"]
-        if data:
-            df = pd.DataFrame(data).sort_values("period")
-            return float(df["value"].iloc[-1])
-    except Exception as e:
-        logger.error(f"EIA Henry Hub fetch failed: {e}")
-    return None
-
-
-@st.cache_data(ttl=900)
 def fetch_gas_futures() -> dict | None:
-    """Fetch natural gas front-month futures from Yahoo Finance (real-time)."""
-    try:
-        import yfinance as yf
-        ng = yf.Ticker("NG=F")
-        hist = ng.history(period="1mo")
-        if hist.empty:
-            return None
-        latest = float(hist["Close"].iloc[-1])
-        latest_date = hist.index[-1]
-        return {
-            "price": latest,
-            "date": latest_date,
-            "history": hist[["Close"]].rename(columns={"Close": "value"}),
-            "source": "Yahoo Finance (NG=F front-month)",
-        }
-    except Exception as e:
-        logger.error(f"yfinance gas futures fetch failed: {e}")
-        return None
+    """Fetch natural gas front-month futures."""
+    return fetch_commodity_futures("NG=F", period="1mo")
 
 
-@st.cache_data(ttl=900)
 def fetch_oil_futures() -> float | None:
-    """Fetch WTI crude oil front-month price from Yahoo Finance."""
-    try:
-        import yfinance as yf
-        cl = yf.Ticker("CL=F")
-        hist = cl.history(period="5d")
-        if hist.empty:
-            return None
-        return float(hist["Close"].iloc[-1])
-    except Exception:
-        return None
+    """Fetch WTI crude oil front-month price."""
+    result = fetch_commodity_futures("CL=F", period="5d")
+    return result["price"] if result else None
 
 
-@st.cache_data(ttl=3600)
-def fetch_henry_hub_daily(days_back: int = 30) -> pd.DataFrame | None:
-    """Fetch daily Henry Hub spot prices from EIA API v2."""
-    api_key = os.environ.get("EIA_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets["EIA_API_KEY"]
-        except Exception:
-            return None
-    try:
-        url = f"https://api.eia.gov/v2/seriesid/NG.RNGWHHD.D?api_key={api_key}"
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()["response"]["data"]
-        if data:
-            df = pd.DataFrame(data).sort_values("period")
-            df["period"] = pd.to_datetime(df["period"])
-            df["value"] = pd.to_numeric(df["value"], errors="coerce")
-            return df.tail(days_back)
-    except Exception as e:
-        logger.error(f"EIA daily Henry Hub fetch failed: {e}")
-    return None
-
-
-@st.cache_data(ttl=3600)
-def fetch_eia_hourly_grid(respondent: str = "ERCO", days_back: int = 31) -> pd.DataFrame | None:
-    """Fetch hourly generation by fuel type from EIA Hourly Electric Grid Monitor API v2."""
-    api_key = os.environ.get("EIA_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets["EIA_API_KEY"]
-        except Exception:
-            return None
-    try:
-        start_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT00")
-        url = (
-            f"https://api.eia.gov/v2/electricity/rto/fuel-type-data/data/"
-            f"?api_key={api_key}"
-            f"&frequency=hourly"
-            f"&data[0]=value"
-            f"&facets[respondent][]={respondent}"
-            f"&start={start_date}"
-            f"&sort[0][column]=period&sort[0][direction]=asc"
-            f"&length=5000"
-        )
-        r = requests.get(url, timeout=30)
-        r.raise_for_status()
-        data = r.json()["response"]["data"]
-        if not data:
-            return None
-        df = pd.DataFrame(data)
-        df["period"] = pd.to_datetime(df["period"])
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        return df
-    except Exception as e:
-        logger.error(f"EIA hourly grid fetch failed for {respondent}: {e}")
-        return None
-
-
-@st.cache_data(ttl=300)
 def fetch_ercot_spp() -> float | None:
-    """Fetch latest ERCOT Hub Average Settlement Point Price from systemWidePrices endpoint."""
-    try:
-        r = requests.get(f"{ERCOT_BASE}/systemWidePrices.json", timeout=15)
-        r.raise_for_status()
-        data = r.json()
+    """Fetch latest ERCOT Hub Average Settlement Point Price."""
+    data = fetch_ercot("systemWidePrices")
+    if data:
         records = data.get("rtSppData", [])
         if records:
-            latest = records[-1]
-            hub_avg = latest.get("hbHubAvg")
+            hub_avg = records[-1].get("hbHubAvg")
             if hub_avg is not None:
                 return float(hub_avg)
-    except Exception as e:
-        logger.error(f"ERCOT SPP fetch failed: {e}")
     return None
 
 
-@st.cache_data(ttl=300)
 def fetch_ercot_spp_timeseries() -> pd.DataFrame | None:
     """Fetch full ERCOT RT SPP timeseries (15-min intervals) for price overlay."""
-    try:
-        r = requests.get(f"{ERCOT_BASE}/systemWidePrices.json", timeout=15)
-        r.raise_for_status()
-        data = r.json()
+    data = fetch_ercot("systemWidePrices")
+    if data:
         records = data.get("rtSppData", [])
         if records:
             df = pd.DataFrame(records)
             df["timestamp"] = pd.to_datetime(df["timestamp"])
             df["hbHubAvg"] = pd.to_numeric(df["hbHubAvg"], errors="coerce")
             return df[["timestamp", "hbHubAvg"]].dropna().sort_values("timestamp")
-    except Exception as e:
-        logger.error(f"ERCOT SPP timeseries fetch failed: {e}")
     return None
 
 

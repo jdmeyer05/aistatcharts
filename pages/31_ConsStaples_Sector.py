@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("31_ConsStaples_Sector")
+
+STAPLES_COMPANIES = {
+    "PG":   "Procter & Gamble",
+    "COST": "Costco",
+    "WMT":  "Walmart",
+    "KO":   "Coca-Cola",
+    "PEP":  "PepsiCo",
+    "PM":   "Philip Morris",
+    "MDLZ": "Mondelez",
+    "MO":   "Altria Group",
+    "CL":   "Colgate-Palmolive",
+    "STZ":  "Constellation Brands",
+}
+
+STAPLES_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "PG", "company": "Procter & Gamble", "rev_est_y": 86.0, "rev_growth": "+3%",
+         "eps_est_y": 6.90, "eps_est_ny": 7.30, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 185, "rating": "Buy", "fwd_pe": 26.0,
+         "outlook": "Organic growth 4-5%. Pricing power intact across categories. Productivity savings $1.5B+. Innovation-led volume growth returning. SK-II China recovery slow."},
+        {"ticker": "COST", "company": "Costco", "rev_est_y": 270.0, "rev_growth": "+7%",
+         "eps_est_y": 17.50, "eps_est_ny": 19.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 1050, "rating": "Hold", "fwd_pe": 52.0,
+         "outlook": "Membership renewal rate 93%+. E-commerce growing 20%+. Kirkland brand driving private label. New warehouse openings 25+/year. Membership fee increase in effect."},
+        {"ticker": "WMT", "company": "Walmart", "rev_est_y": 680.0, "rev_growth": "+5%",
+         "eps_est_y": 2.70, "eps_est_ny": 3.00, "capex_guidance": 23.0, "capex_note": "FY27 CapEx ~$23B (automation + supply chain)",
+         "production": None, "price_target": 105, "rating": "Buy", "fwd_pe": 36.0,
+         "outlook": "Walmart+ membership growing. Advertising business $4B+. Automation in distribution. Grocery market share gains. International (Flipkart, Sam's China) strong."},
+        {"ticker": "KO", "company": "Coca-Cola", "rev_est_y": 48.0, "rev_growth": "+5%",
+         "eps_est_y": 2.95, "eps_est_ny": 3.15, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 75, "rating": "Buy", "fwd_pe": 24.0,
+         "outlook": "Organic revenue growth 8-10%. Zero-sugar variants driving mix improvement. Fairlife, BodyArmor scaling. Price/mix positive. FX headwind from strong dollar."},
+        {"ticker": "PEP", "company": "PepsiCo", "rev_est_y": 94.0, "rev_growth": "+3%",
+         "eps_est_y": 8.30, "eps_est_ny": 8.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 180, "rating": "Hold", "fwd_pe": 20.0,
+         "outlook": "Frito-Lay volumes recovering. International beverage strong. Pricing elasticity normalizing. Productivity plan $1B+ savings. Quaker recall impact fading."},
+        {"ticker": "PM", "company": "Philip Morris", "rev_est_y": 40.0, "rev_growth": "+8%",
+         "eps_est_y": 7.50, "eps_est_ny": 8.20, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 155, "rating": "Buy", "fwd_pe": 19.0,
+         "outlook": "IQOS heat-not-burn growing 15%+. ZYN nicotine pouches demand exceeding supply. Smoke-free products now >40% of revenue. US market entry via Altria deal."},
+        {"ticker": "MDLZ", "company": "Mondelez", "rev_est_y": 37.0, "rev_growth": "+4%",
+         "eps_est_y": 3.80, "eps_est_ny": 4.10, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 80, "rating": "Hold", "fwd_pe": 20.0,
+         "outlook": "Chocolate pricing passing through cocoa inflation. Biscuit volumes stable. Emerging markets 40%+ of revenue. Hershey acquisition speculation ongoing."},
+        {"ticker": "MO", "company": "Altria Group", "rev_est_y": 21.0, "rev_growth": "+1%",
+         "eps_est_y": 5.30, "eps_est_ny": 5.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 58, "rating": "Hold", "fwd_pe": 10.0,
+         "outlook": "Marlboro market share stable at 42%. NJOY e-vapor gaining traction. on! nicotine pouches growing. Dividend yield ~7%. Smokeable volumes declining 3-4% annually."},
+        {"ticker": "CL", "company": "Colgate-Palmolive", "rev_est_y": 20.0, "rev_growth": "+3%",
+         "eps_est_y": 3.70, "eps_est_ny": 4.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 105, "rating": "Hold", "fwd_pe": 27.0,
+         "outlook": "Oral care global #1. Hill's Pet Nutrition premium growth. Pricing actions holding. Emerging markets 50%+ of revenue. Gross margin expansion continuing."},
+        {"ticker": "STZ", "company": "Constellation Brands", "rev_est_y": 10.5, "rev_growth": "+4%",
+         "eps_est_y": 14.50, "eps_est_ny": 15.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 270, "rating": "Buy", "fwd_pe": 16.0,
+         "outlook": "Modelo Especial #1 US beer brand. Beer business growing mid-single digits. Wine & spirits divestitures complete. Brewery expansion in Mexico on track."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="31_ConsStaples_Sector",
+    title="Consumer Staples Sector Analysis",
+    subtitle="Top 10 US consumer staples companies — food, beverage, household, and tobacco.",
+    etf="XLP",
+    companies=STAPLES_COMPANIES,
+    subsectors={
+        "Household & Personal": ["PG", "CL"],
+        "Retail": ["COST", "WMT"],
+        "Beverage": ["KO", "PEP", "STZ"],
+        "Food & Tobacco": ["PM", "MDLZ", "MO"],
+    },
+    guidance_snapshot=STAPLES_GUIDANCE,
+    macro_overlay={"fred_series": "CPIUFDSL", "label": "CPI Food & Beverages (Index)"},
+    factor_proxies=["SPY", "XLP", "TLT", "UUP"],
+    cot_commodities=None,
+))

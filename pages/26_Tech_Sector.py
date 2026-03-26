@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("26_Tech_Sector")
+
+TECH_COMPANIES = {
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "NVDA": "NVIDIA",
+    "AVGO": "Broadcom",
+    "CRM":  "Salesforce",
+    "ORCL": "Oracle",
+    "AMD":  "AMD",
+    "ADBE": "Adobe",
+    "ACN":  "Accenture",
+    "CSCO": "Cisco Systems",
+}
+
+TECH_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "AAPL", "company": "Apple", "rev_est_y": 420.0, "rev_growth": "+5%",
+         "eps_est_y": 7.80, "eps_est_ny": 8.40, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 245, "rating": "Buy", "fwd_pe": 30.0,
+         "outlook": "Services revenue >$100B run rate. iPhone cycle stable. India manufacturing ramp. Vision Pro niche but growing."},
+        {"ticker": "MSFT", "company": "Microsoft", "rev_est_y": 280.0, "rev_growth": "+14%",
+         "eps_est_y": 14.00, "eps_est_ny": 16.00, "capex_guidance": 80.0, "capex_note": "FY26 CapEx ~$80B (AI infrastructure)",
+         "production": None, "price_target": 510, "rating": "Buy", "fwd_pe": 32.0,
+         "outlook": "Azure AI revenue tripling YoY. Copilot adoption accelerating across M365. LinkedIn and Gaming stable contributors. CapEx $80B for AI data centers."},
+        {"ticker": "NVDA", "company": "NVIDIA", "rev_est_y": 200.0, "rev_growth": "+55%",
+         "eps_est_y": 4.50, "eps_est_ny": 5.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 175, "rating": "Buy", "fwd_pe": 35.0,
+         "outlook": "Blackwell GPU ramp in full production. Data center revenue dominant. Sovereign AI deals expanding TAM. Networking (Spectrum-X) fastest-growing segment."},
+        {"ticker": "AVGO", "company": "Broadcom", "rev_est_y": 75.0, "rev_growth": "+20%",
+         "eps_est_y": 6.50, "eps_est_ny": 7.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 250, "rating": "Buy", "fwd_pe": 30.0,
+         "outlook": "VMware integration boosting margins. Custom AI accelerator (XPU) wins with 3 hyperscalers. Networking + broadband stable. 50% dividend payout ratio target."},
+        {"ticker": "CRM", "company": "Salesforce", "rev_est_y": 40.0, "rev_growth": "+9%",
+         "eps_est_y": 10.50, "eps_est_ny": 12.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 350, "rating": "Buy", "fwd_pe": 28.0,
+         "outlook": "Agentforce AI platform driving new bookings. Operating margin expanding to 33%+. First dividend initiated. Data Cloud growth 25%+ YoY."},
+        {"ticker": "ORCL", "company": "Oracle", "rev_est_y": 65.0, "rev_growth": "+12%",
+         "eps_est_y": 6.20, "eps_est_ny": 7.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 200, "rating": "Buy", "fwd_pe": 26.0,
+         "outlook": "OCI (Oracle Cloud Infrastructure) growing 50%+. Multi-cloud strategy with AWS and Azure. RPO (remaining performance obligations) >$130B. Database franchise stable."},
+        {"ticker": "AMD", "company": "AMD", "rev_est_y": 35.0, "rev_growth": "+25%",
+         "eps_est_y": 5.00, "eps_est_ny": 6.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 180, "rating": "Buy", "fwd_pe": 28.0,
+         "outlook": "MI300X AI GPU revenue >$5B. EPYC server CPU share gains continuing. Client PC recovery. Embedded segment normalizing post-Xilinx."},
+        {"ticker": "ADBE", "company": "Adobe", "rev_est_y": 24.0, "rev_growth": "+10%",
+         "eps_est_y": 20.00, "eps_est_ny": 22.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 550, "rating": "Hold", "fwd_pe": 25.0,
+         "outlook": "Firefly AI integration across Creative Cloud. Document Cloud growing 20%+. Net new ARR re-accelerating. Digital Experience segment stable."},
+        {"ticker": "ACN", "company": "Accenture", "rev_est_y": 67.0, "rev_growth": "+5%",
+         "eps_est_y": 13.50, "eps_est_ny": 14.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 380, "rating": "Hold", "fwd_pe": 26.0,
+         "outlook": "GenAI bookings >$4B cumulative. Managed services growing. Consulting spending normalizing. Headcount optimization ongoing."},
+        {"ticker": "CSCO", "company": "Cisco Systems", "rev_est_y": 58.0, "rev_growth": "+7%",
+         "eps_est_y": 3.70, "eps_est_ny": 3.95, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 68, "rating": "Hold", "fwd_pe": 16.0,
+         "outlook": "Splunk integration driving security/observability bundle. AI networking (Silicon One) ramping. Subscription ARR >$30B. Inventory digestion complete."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="26_Tech_Sector",
+    title="Technology Sector Analysis",
+    subtitle="Top 10 US technology companies — semiconductors, software, cloud, and IT services.",
+    etf="XLK",
+    companies=TECH_COMPANIES,
+    subsectors={
+        "Semiconductors": ["NVDA", "AVGO", "AMD"],
+        "Software": ["MSFT", "CRM", "ORCL", "ADBE"],
+        "Hardware": ["AAPL", "CSCO"],
+        "IT Services": ["ACN"],
+    },
+    guidance_snapshot=TECH_GUIDANCE,
+    macro_overlay={"fred_series": "DGS10", "label": "10Y Treasury Yield (%)"},
+    factor_proxies=["SPY", "QQQ", "TLT", "UUP"],
+    cot_commodities=None,
+))

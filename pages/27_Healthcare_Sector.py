@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("27_Healthcare_Sector")
+
+HEALTHCARE_COMPANIES = {
+    "UNH":  "UnitedHealth Group",
+    "LLY":  "Eli Lilly",
+    "JNJ":  "Johnson & Johnson",
+    "ABBV": "AbbVie",
+    "MRK":  "Merck",
+    "TMO":  "Thermo Fisher",
+    "ABT":  "Abbott Labs",
+    "AMGN": "Amgen",
+    "DHR":  "Danaher",
+    "PFE":  "Pfizer",
+}
+
+HEALTHCARE_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "UNH", "company": "UnitedHealth Group", "rev_est_y": 420.0, "rev_growth": "+8%",
+         "eps_est_y": 29.00, "eps_est_ny": 32.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 600, "rating": "Buy", "fwd_pe": 18.0,
+         "outlook": "Optum Health driving growth. Medicare Advantage enrollment stable. Pharmacy benefit scale advantages. Medical cost ratio in target range."},
+        {"ticker": "LLY", "company": "Eli Lilly", "rev_est_y": 58.0, "rev_growth": "+28%",
+         "eps_est_y": 22.00, "eps_est_ny": 28.00, "capex_guidance": 12.0, "capex_note": "FY26 CapEx ~$12B (manufacturing expansion for GLP-1s)",
+         "production": None, "price_target": 1000, "rating": "Buy", "fwd_pe": 40.0,
+         "outlook": "Mounjaro/Zepbound demand exceeding supply. Donanemab (Alzheimer's) launched. Manufacturing buildout $12B+. Revenue could double by 2028."},
+        {"ticker": "JNJ", "company": "Johnson & Johnson", "rev_est_y": 92.0, "rev_growth": "+4%",
+         "eps_est_y": 10.50, "eps_est_ny": 11.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 180, "rating": "Hold", "fwd_pe": 15.0,
+         "outlook": "MedTech growing mid-single digits. Innovative medicine portfolio diversifying post-Stelara LOE. Kenvue separation complete. Talc litigation resolution progressing."},
+        {"ticker": "ABBV", "company": "AbbVie", "rev_est_y": 60.0, "rev_growth": "+5%",
+         "eps_est_y": 12.00, "eps_est_ny": 13.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 210, "rating": "Buy", "fwd_pe": 16.0,
+         "outlook": "Skyrizi + Rinvoq replacing Humira revenue. Combined revenue to exceed Humira peak. Aesthetics (Botox) stable. Neuroscience pipeline promising."},
+        {"ticker": "MRK", "company": "Merck", "rev_est_y": 65.0, "rev_growth": "+6%",
+         "eps_est_y": 8.50, "eps_est_ny": 9.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 140, "rating": "Buy", "fwd_pe": 14.0,
+         "outlook": "Keytruda franchise >$28B. Subcutaneous Keytruda in development to extend lifecycle. Gardasil China headwinds. Winrevair (PAH) launch strong."},
+        {"ticker": "TMO", "company": "Thermo Fisher", "rev_est_y": 44.0, "rev_growth": "+5%",
+         "eps_est_y": 22.50, "eps_est_ny": 25.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 620, "rating": "Buy", "fwd_pe": 26.0,
+         "outlook": "Life sciences demand normalizing post-COVID. Pharma services (CDMO) growing. Bolt-on M&A continuing. Long-term organic growth target 7-9%."},
+        {"ticker": "ABT", "company": "Abbott Labs", "rev_est_y": 43.0, "rev_growth": "+7%",
+         "eps_est_y": 5.00, "eps_est_ny": 5.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 135, "rating": "Buy", "fwd_pe": 24.0,
+         "outlook": "FreeStyle Libre (CGM) growing 20%+. Medical devices leading. Diagnostics base business solid. Nutrition stable. Double-digit EPS growth trajectory."},
+        {"ticker": "AMGN", "company": "Amgen", "rev_est_y": 35.0, "rev_growth": "+9%",
+         "eps_est_y": 20.00, "eps_est_ny": 22.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 320, "rating": "Hold", "fwd_pe": 15.0,
+         "outlook": "Horizon acquisition integrated. MariTide (obesity) Phase 3 readout pending. Tezepelumab growing. Biosimilar competition on mature portfolio."},
+        {"ticker": "DHR", "company": "Danaher", "rev_est_y": 24.0, "rev_growth": "+4%",
+         "eps_est_y": 8.00, "eps_est_ny": 9.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 275, "rating": "Hold", "fwd_pe": 30.0,
+         "outlook": "Bioprocessing recovery underway. Diagnostics normalizing. Danaher Business System driving margins. Veralto separation complete."},
+        {"ticker": "PFE", "company": "Pfizer", "rev_est_y": 62.0, "rev_growth": "+3%",
+         "eps_est_y": 3.00, "eps_est_ny": 3.30, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 32, "rating": "Hold", "fwd_pe": 11.0,
+         "outlook": "Seagen oncology portfolio ramping. COVID franchise declining but stabilizing. $4B cost savings program on track. Dividend yield attractive at ~5%."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="27_Healthcare_Sector",
+    title="Healthcare Sector Analysis",
+    subtitle="Top 10 US healthcare companies — pharma, biotech, medtech, and managed care.",
+    etf="XLV",
+    companies=HEALTHCARE_COMPANIES,
+    subsectors={
+        "Pharma": ["LLY", "JNJ", "ABBV", "MRK", "PFE"],
+        "Biotech": ["AMGN"],
+        "MedTech & Life Sciences": ["TMO", "ABT", "DHR"],
+        "Managed Care": ["UNH"],
+    },
+    guidance_snapshot=HEALTHCARE_GUIDANCE,
+    macro_overlay={"fred_series": "CPIMEDSL", "label": "CPI Medical Care (Index)"},
+    factor_proxies=["SPY", "XLV", "TLT", "UUP"],
+    cot_commodities=None,
+))

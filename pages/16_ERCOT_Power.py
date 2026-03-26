@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
 import logging
 from src.layout import setup_page, error_boundary, fun_loader
 
@@ -13,19 +12,7 @@ setup_page("16_ERCOT_Power")
 st.title("⚡ ERCOT Power Dashboard")
 st.markdown("Live grid conditions, generation mix, load forecasts, and reserve data from the Electric Reliability Council of Texas.")
 
-ERCOT_BASE = "https://www.ercot.com/api/1/services/read/dashboards"
-
-
-@st.cache_data(ttl=300)
-def fetch_ercot(endpoint: str):
-    """Fetches data from ERCOT's public dashboard API."""
-    try:
-        r = requests.get(f"{ERCOT_BASE}/{endpoint}.json", timeout=15)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logger.error(f"ERCOT fetch failed for {endpoint}: {e}")
-        return None
+from src.ercot_api import fetch_dashboard as fetch_ercot
 
 
 # --- FETCH ALL DATA ---

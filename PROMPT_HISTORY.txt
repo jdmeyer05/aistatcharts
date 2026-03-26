@@ -1,6 +1,6 @@
 AI STATCHARTS — PROMPT HISTORY
 ================================
-Last updated: March 25, 2026
+Last updated: March 26, 2026
 
 This file documents all AI prompts used in the platform, their purpose,
 and the evolution of key changes. Organized by feature.
@@ -317,3 +317,52 @@ Mar 19, 2026:
 
 Mar 20, 2026:
   - Saved prompt history to PROMPT_HISTORY.txt
+
+Mar 25-26, 2026 — Major Refactor + Sector Expansion:
+
+  SECTOR ANALYSIS (11 new pages):
+  - Created src/sector_analysis.py: shared 8-tab template (SectorConfig dataclass + render_sector_page)
+  - Built pages 24-34 for all 11 SPDR sectors (XLE, XLF, XLK, XLV, XLI, XLC, XLY, XLP, XLU, XLB, XLRE)
+  - Each sector page: ~80 lines of config, all rendering via shared template
+  - Added generic fetch_sector_* functions to edgar.py (financials, revenue, capex, margins, cashflow)
+  - Fixed XBRL revenue tag selection (_best_revenue picks most recent tag)
+  - Fixed XBRL quarterly period filtering (_filter_quarterly_periods uses start/end dates)
+  - Refactored 24_Energy_Sector.py from 1,926 lines to 28 lines
+
+  CODEBASE CONSOLIDATION (6 rounds, 23 tasks):
+  - Created src/api_keys.py: centralized get_secret() replacing 14 scattered _get_key patterns
+  - Created src/json_repair.py: extracted 4-strategy JSON repair from Iran Conflict (reusable)
+  - Created src/analysis_history.py: extracted history persistence from Iran Conflict + Scenario Analysis
+  - Created src/portfolio_models.py: extracted factor betas, regime estimation, blend logic from Scenario Analysis
+  - Consolidated FRED fetchers: deleted 3 inline copies, all delegate to src/market_data
+  - Consolidated Polygon helpers: deleted 2 inline copies of _polygon_paginate/_get_massive_key
+  - Consolidated options chain: pages 07/08 now delegate to data_engine.fetch_options_chain
+  - Consolidated StockTwits: pages 02/21 now delegate to src/market_data.fetch_stocktwits_sentiment
+  - Consolidated Polymarket: pages 19/21 now delegate to src/market_data.fetch_polymarket_odds
+  - Consolidated ERCOT dashboard: pages 16/23 now use src/ercot_api.fetch_dashboard
+  - Moved EIA helpers: fetch_henry_hub_spot, fetch_henry_hub_daily, fetch_eia_hourly_grid to src/eia_helpers
+  - Added to market_data.py: fetch_commodity_futures, fetch_oil_term_structure, fetch_energy_spot_prices
+  - Removed all direct os.environ.get in pages (replaced with get_secret)
+  - Removed all unused import os, import requests across pages
+  - Eliminated insider transactions duplication (data_engine is canonical)
+  - Resolved CFTC COT: market_data (time series charts) vs gov_data (AI context snapshots)
+
+  BUG FIXES:
+  - Fixed undefined _get_fred_key() crash in market_data.fetch_fred_macro_dashboard
+  - Fixed Student-t Monte Carlo location shift (double-counted drift)
+  - Fixed RL Trading reward functions (Sharpe/Sortino formulas were incorrect, renamed honestly)
+  - Fixed options expected move factor (0.85 -> 0.80, was overstating by 6%)
+  - Fixed options risk-free rate (was hardcoded 4.5%, now fetches 3-month T-bill from FRED)
+  - Fixed RSI division by zero in simulation.py (loss=0 edge case)
+  - Fixed duplicate @st.cache_data decorator on _grok_situation_briefing
+  - Fixed sector_analysis.py: fig_roll unbound variable, column count >= 2 threshold
+
+  PERFORMANCE:
+  - Summary page: replaced 57 individual Polygon API calls with 2 batch calls (batch snapshot + grouped daily)
+  - Added 1D (default) and 1W period options to market heatmap
+  - All periods now use max 2 API calls regardless of ticker count
+
+  NAVIGATION:
+  - Added "Sectors" dropdown to nav header with all 11 sector pages
+  - Added all sector pages to PAGE_CONFIG with icons
+  - Moved Energy Sector from "Energy" group to "Sectors" group

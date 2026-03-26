@@ -29,14 +29,7 @@ st.title("🎖️ Iran Conflict Monitor")
 st.markdown("Geopolitical risk tracking via GDELT media intensity, oil price correlation, and defense/energy market impact.")
 
 
-def _get_key(name: str):
-    key = os.environ.get(name)
-    if not key:
-        try:
-            key = st.secrets[name]
-        except Exception:
-            pass
-    return key
+from src.api_keys import get_secret as _get_key
 
 
 # ─────────────────────────────────────────────
@@ -942,52 +935,15 @@ def build_prior_analysis_context() -> str:
     return "\n".join(lines)
 
 
+from src.analysis_history import (
+    load_history as _load_history,
+    get_latest as _get_latest_history,
+    compute_model_accuracy as _compute_model_accuracy,
+)
+
+
 def load_conflict_history() -> list:
-    try:
-        if os.path.exists(CONFLICT_HISTORY_FILE):
-            with open(CONFLICT_HISTORY_FILE, "r") as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load conflict history: {e}")
-    return []
-
-
-def _compute_model_accuracy(history: list) -> dict:
-    """Compute per-model accuracy weights from history.
-    Compares each model's prior oil price forecast against actual oil price movement.
-    Returns {model_key: weight} where higher = more accurate historically."""
-    if len(history) < 3:
-        return {}
-
-    # We need pairs: a prediction entry and a later entry with actual data
-    model_errors = {}  # model_key -> list of absolute errors
-    for i in range(len(history) - 1):
-        entry = history[i]
-        blended = entry.get("blended", {})
-        assessments = blended.get("escalation_risk", {}).get("model_assessments", [])
-        # Get the actual escalation from the NEXT entry as "ground truth"
-        next_blended = history[i + 1].get("blended", {})
-        actual_esc = next_blended.get("escalation_risk", {}).get("score", 0)
-        if not actual_esc:
-            continue
-
-        for ma in assessments:
-            mk = ma.get("model_key", "")
-            pred_score = ma.get("score", 0)
-            if mk and pred_score:
-                model_errors.setdefault(mk, []).append(abs(pred_score - actual_esc))
-
-    if not model_errors:
-        return {}
-
-    # Convert errors to weights: lower error = higher weight
-    weights = {}
-    for mk, errors in model_errors.items():
-        avg_err = sum(errors) / len(errors)
-        # Inverse error with floor (0.5 min weight, 2.0 max)
-        weights[mk] = max(0.5, min(2.0, 1.0 / (avg_err + 0.5)))
-
-    return weights
+    return _load_history(CONFLICT_HISTORY_FILE)
 
 
 def save_conflict_result(result: dict) -> None:
@@ -1004,7 +960,6 @@ def save_conflict_result(result: dict) -> None:
         "blended": result,
     }
     history.append(entry)
-    # Keep last 48 entries
     history = history[-48:]
     try:
         os.makedirs(os.path.dirname(CONFLICT_HISTORY_FILE), exist_ok=True)
@@ -1013,7 +968,6 @@ def save_conflict_result(result: dict) -> None:
     except Exception as e:
         logger.error(f"Failed to save conflict history: {e}")
 
-    # Update source credibility scores based on cited sources and accuracy
     try:
         _update_source_credibility(result, history)
     except Exception as e:
@@ -1021,17 +975,7 @@ def save_conflict_result(result: dict) -> None:
 
 
 def get_latest_conflict_result() -> tuple:
-    history = load_conflict_history()
-    if not history:
-        return None, True
-    latest = history[-1]
-    is_stale = True
-    try:
-        ts = pd.Timestamp(latest["timestamp"])
-        is_stale = (pd.Timestamp.now() - ts) > pd.Timedelta(hours=1)
-    except Exception:
-        pass
-    return latest, is_stale
+    return _get_latest_history(CONFLICT_HISTORY_FILE, stale_hours=1.0)
 
 
 def _validate_model_response(result: dict, model_name: str = "") -> dict:
@@ -1088,123 +1032,11 @@ def _validate_model_response(result: dict, model_name: str = "") -> dict:
     return result
 
 
-def _close_json(s: str) -> str:
-    """Close any unterminated strings, arrays, and objects in a JSON fragment."""
-    if s.count('"') % 2 == 1:
-        s += '"'
-    s += "]" * max(0, s.count("[") - s.count("]"))
-    s += "}" * max(0, s.count("{") - s.count("}"))
-    return s
-
-
-def _sanitize_json(raw: str) -> str:
-    """Clean common LLM JSON mistakes before parsing."""
-    s = raw
-    # Strip JS-style comments (// and /* */)
-    s = re.sub(r'//[^\n]*', '', s)
-    s = re.sub(r'/\*.*?\*/', '', s, flags=re.DOTALL)
-    # Replace unquoted special values
-    s = re.sub(r'\bundefined\b', 'null', s)
-    s = re.sub(r'\bNaN\b', 'null', s)
-    s = re.sub(r'\bInfinity\b', '999999', s)
-    # Trailing commas before ] or }
-    s = re.sub(r',\s*([}\]])', r'\1', s)
-    # Missing commas at line boundaries between elements
-    s = re.sub(r'("|true|false|null|\d)\s*\n(\s*")', r'\1,\n\2', s)
-    s = re.sub(r'(\})\s*\n(\s*[\{"])', r'\1,\n\2', s)
-    s = re.sub(r'(\])\s*\n(\s*[\["])', r'\1,\n\2', s)
-    # Missing commas on same line: }" or ]" or number"
-    s = re.sub(r'(\})(\s*")', r'\1,\2', s)
-    s = re.sub(r'(\])(\s*")', r'\1,\2', s)
-    # Empty values: "key": , → "key": null,
-    s = re.sub(r':\s*,', ': null,', s)
-    # Empty values at end of object: "key": } → "key": null}
-    s = re.sub(r':\s*\}', ': null}', s)
-    return s
+from src.json_repair import close_json as _close_json, sanitize_json as _sanitize_json, repair_json as _repair_json_impl
 
 
 def _repair_json(raw: str, model_name: str = "") -> dict:
-    """Multi-strategy JSON repair for malformed LLM output."""
-
-    # Strategy 1: Sanitize and try parsing
-    sanitized = _sanitize_json(raw)
-    closed = _close_json(sanitized)
-    try:
-        return json.loads(closed)
-    except json.JSONDecodeError:
-        pass
-
-    # Strategy 2: Iteratively fix errors at reported positions (up to 15 attempts)
-    attempt = sanitized
-    for _ in range(15):
-        try:
-            return json.loads(_close_json(attempt))
-        except json.JSONDecodeError as e:
-            pos = e.pos
-            if pos is None or pos >= len(attempt):
-                break
-            msg = str(e).lower()
-            if "delimiter" in msg and "expecting value" not in msg:
-                # Missing comma — insert one
-                attempt = attempt[:pos] + "," + attempt[pos:]
-            elif "expecting value" in msg:
-                # Look back to see what caused the missing value
-                before = attempt[:pos].rstrip()
-                if before.endswith(","):
-                    # Trailing comma: remove it
-                    attempt = attempt[:len(before)-1] + attempt[pos:]
-                elif before.endswith(":"):
-                    # Empty value after colon: insert null
-                    attempt = attempt[:pos] + "null" + attempt[pos:]
-                else:
-                    # Unknown context — insert null
-                    attempt = attempt[:pos] + "null" + attempt[pos:]
-            elif "unterminated string" in msg:
-                # Find the opening quote and close it
-                attempt = attempt[:pos] + '"' + attempt[pos:]
-            else:
-                break
-
-    # Strategy 3: Truncate at first error and close structures
-    try:
-        json.loads(raw)
-        pos = len(raw)
-    except json.JSONDecodeError as e:
-        pos = e.pos or len(raw)
-    # Walk back to the last complete key-value pair
-    truncated = raw[:pos]
-    # Remove any partial value at the end
-    truncated = re.sub(r',\s*"[^"]*"?\s*:?\s*[^,}\]]*$', '', truncated)
-    truncated = truncated.rstrip().rstrip(",")
-    truncated = _close_json(truncated)
-    try:
-        logger.warning(f"{model_name} JSON repaired by truncating at position {pos}/{len(raw)}")
-        return json.loads(truncated)
-    except json.JSONDecodeError:
-        pass
-
-    # Strategy 4: Extract the largest valid JSON object from the raw string
-    best = None
-    for i in range(len(raw)):
-        if raw[i] == '{':
-            depth = 0
-            for j in range(i, len(raw)):
-                if raw[j] == '{': depth += 1
-                elif raw[j] == '}': depth -= 1
-                if depth == 0:
-                    try:
-                        candidate = json.loads(raw[i:j+1])
-                        if best is None or len(raw[i:j+1]) > len(str(best)):
-                            best = candidate
-                    except json.JSONDecodeError:
-                        pass
-                    break
-    if best:
-        logger.warning(f"{model_name} JSON recovered via largest-object extraction")
-        return best
-
-    # All strategies failed — raise so caller handles it
-    raise json.JSONDecodeError(f"All repair strategies failed for {model_name}", raw, 0)
+    return _repair_json_impl(raw, model_name)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1675,57 +1507,25 @@ IRAN_POLYMARKET_SLUGS = {
 }
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+from src.market_data import fetch_polymarket_odds, fetch_oil_term_structure, fetch_energy_spot_prices
+
+
 def _fetch_iran_polymarket() -> list:
-    """Fetch Polymarket prediction odds for Iran conflict contracts."""
-    results = []
-    for slug, label in IRAN_POLYMARKET_SLUGS.items():
-        try:
-            r = requests.get(f"https://gamma-api.polymarket.com/markets?slug={slug}", timeout=8)
-            data = r.json()
-            if data and isinstance(data, list) and data[0].get("outcomePrices"):
-                prices = json.loads(data[0]["outcomePrices"])
-                yes_prob = round(float(prices[0]) * 100, 1)
-                results.append({"question": label, "yes_prob": yes_prob, "slug": slug})
-        except Exception:
-            pass
-    return results
+    return fetch_polymarket_odds(IRAN_POLYMARKET_SLUGS)
 
 
 # ─────────────────────────────────────────────
 # 3. OIL FUTURES TERM STRUCTURE
 # ─────────────────────────────────────────────
 
-OIL_FUTURES_CONTRACTS = ["CL=F", "CLK26.NYM", "CLM26.NYM", "CLN26.NYM", "CLQ26.NYM", "CLU26.NYM"]
-OIL_FUTURES_LABELS = ["Front Month", "May 26", "Jun 26", "Jul 26", "Aug 26", "Sep 26"]
-
-
-@st.cache_data(ttl=900, show_spinner=False)
 def _fetch_oil_term_structure() -> dict:
-    """Fetch oil futures term structure for backwardation/contango signal."""
-    from src.data_engine import polygon_snapshot
-    try:
-        prices = {}
-        for sym, label in zip(OIL_FUTURES_CONTRACTS, OIL_FUTURES_LABELS):
-            snap = polygon_snapshot(sym)
-            if snap and snap.get("price"):
-                prices[label] = round(float(snap["price"]), 2)
-        if len(prices) >= 2:
-            front = list(prices.values())[0]
-            back = list(prices.values())[-1]
-            spread = round(front - back, 2)
-            structure = "backwardation" if spread > 0 else "contango"
-            return {"prices": prices, "spread": spread, "structure": structure}
-    except Exception as e:
-        logger.warning(f"Oil term structure fetch failed: {e}")
-    return {}
+    return fetch_oil_term_structure()
 
 
 # ─────────────────────────────────────────────
 # 4. GROK PRE-PASS — BREAKING NEWS BRIEF
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=900, show_spinner=False)
 @st.cache_data(ttl=900, show_spinner=False)
 def _grok_situation_briefing() -> str:
     """4-hour situation briefing via Grok with live search. Displayed to users. Cached 15 min."""
@@ -1948,23 +1748,8 @@ def _build_scenario_scorecard(history: list) -> dict:
 # 6. LNG / NATURAL GAS PRICING
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=900, show_spinner=False)
 def _fetch_lng_natgas_prices() -> dict:
-    """Fetch TTF (European gas), US Henry Hub, and Asian LNG proxy prices."""
-    from src.data_engine import polygon_snapshot
-    result = {}
-    syms = {"TTF=F": ("ttf", "TTF (European Gas)"), "NG=F": ("henry_hub", "Henry Hub (US Gas)")}
-    for sym, (key, name) in syms.items():
-        try:
-            snap = polygon_snapshot(sym)
-            if snap and snap.get("price") and snap.get("prev_close"):
-                price = snap["price"]
-                prev = snap["prev_close"]
-                chg = (price / prev - 1) * 100 if prev > 0 else 0
-                result[key] = {"price": round(price, 2), "change": round(chg, 2), "name": name}
-        except Exception:
-            pass
-    return result
+    return fetch_energy_spot_prices()
 
 
 # ─────────────────────────────────────────────
@@ -2752,13 +2537,7 @@ def _postprocess_with_real_data(result: dict, market_context: dict = None,
 
 
 def _get_eia_key():
-    key = os.environ.get("EIA_API_KEY")
-    if not key:
-        try:
-            key = st.secrets["EIA_API_KEY"]
-        except Exception:
-            pass
-    return key
+    return _get_key("EIA_API_KEY")
 
 
 GDELT_HEADERS = {

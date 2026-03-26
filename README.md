@@ -13,7 +13,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **23 pages** of quantitative analysis tools
+- **34 pages** of quantitative analysis tools (incl. 11 SPDR sector analysis pages)
 - **3 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus
 - **Landing page dashboard** -- market heatmap (5 lists, drills into ETF holdings), AI intelligence cards, watchlist
 - **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
@@ -56,6 +56,7 @@ Opens at **http://localhost:8501** (or next available port).
 | **Algo Backtester** | 13 strategies, 9-tab analysis: equity curve, drawdown, trade log, monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. López de Prado methods: Deflated Sharpe, PBO (CPCV), Triple Barrier exits, bet sizing, fractional differentiation, sequential bootstrap. |
 | **Monte Carlo** | Student-t (fat tails), empirical block bootstrap, and GBM simulation. Warns when normal assumptions don't fit. |
 | **Power Analytics** | Institutional-grade ERCOT power market analysis: duck curve (historical overlay, flexibility metrics, over-gen risk, storage arbitrage, forecast vs actual, multi-ISO comparison), implied heat rates (hourly curve, System Lambda, heat rate vs load scatter, duration curve), spark spreads (VOM-adjusted margins, hourly profitability, DAM vs RT, System Lambda vs fuel cost, duration curve), generation stack (gas fleet disaggregation, inframarginal rent, fuel mix area chart, belly vs peak, reserve margin). Data: ERCOT Public API (NP6-345, NP4-737, NP4-732, NP6-905, NP4-190, NP6-322, NP4-523), EIA Hourly Grid Monitor, yfinance NG/CL futures, ERCOT dashboard real-time. |
+| **Sector Analysis (11)** | All 11 SPDR sectors (XLE-XLRE): 8-tab template with revenue, CapEx, valuation, alpha signals, risk, guidance, macro overlay, pairs correlation. Shared via `src/sector_analysis.py`. |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
@@ -180,26 +181,41 @@ Dockerfile                Cloud Run deployment (4 CPU, 4GB recommended)
 static/
   logo.png                Platform logo (base64-encoded into header)
 src/
+  api_keys.py             Centralized API key retrieval (single source of truth)
   auth.py                 Auth, tiers, tokens, Stripe, session timeout, cookies
   layout.py               setup_page(), header, nav, Settings popover, footer
   styles.py               Global CSS, 5-layer background, responsive breakpoints, Plotly defaults
   chatbot.py              Tier-based analyst chat (Gemini 2.5 Flash, inline expander)
   edgar.py                SEC EDGAR: 13F, insider scoring, 8-K, XBRL ratios, 13D activist
   gdelt_events.py         GDELT bulk event download & processing
-  data_engine.py          Polygon API (snapshots, history, intraday, financials, ticker details)
+  data_engine.py          Polygon API (snapshots, batch snapshots, history, options chains)
+  market_data.py          Yahoo Finance, FRED, StockTwits, Polymarket, CFTC COT, commodity futures
+  sector_analysis.py      Shared 8-tab sector analysis template (SectorConfig + render_sector_page)
+  portfolio_models.py     Factor betas, regime estimation, stressed correlations, blend estimates
   options_models.py       BS-Merton Jump Diffusion pricing
-  eia_helpers.py          EIA API wrapper
-  simulation.py           Stochastic price simulation
+  eia_helpers.py          EIA API v2 (supply data, Henry Hub, hourly grid monitor)
+  ercot_api.py            ERCOT Public API (authenticated + dashboard endpoints)
+  simulation.py           Stochastic price simulation (Random Forest, seasonal Monte Carlo)
+  json_repair.py          Multi-strategy JSON repair for LLM output
+  analysis_history.py     AI analysis history persistence (load/save/staleness)
+  gov_data.py             CFTC COT, Treasury yields/auctions, defense contracts
   iran_conflict_history.json  AI analysis history (48 entries, auto-managed)
   iran_infra_state.json   Self-updating infrastructure baseline (Grok-verified)
   source_credibility.json Source reliability scores (auto-updated)
 pages/
-  01_Summary.py           Landing dashboard
-  02_Scenario_Analysis.py Macro scenario engine (6 tabs)
+  01_Summary.py           Landing dashboard (batch-loaded heatmap, AI intelligence cards)
+  02_Scenario_Analysis.py Macro scenario engine (7 tabs)
   03_Stock_Analysis.py    AI stock analysis + EDGAR insider/8-K/XBRL
   04_RL_Trading.py        Reinforcement learning trading
-  05-22                   Analysis tools, options, energy, macro, futures, Fed, smart money
+  05-13                   Historical, options (3), ML predictor, screener, backtester, Monte Carlo, VaR
+  14-17                   Oil, NatGas, ERCOT Power, ERCOT Capacity
+  18_Economic_Calendar.py FRED releases, yield curve, earnings, auctions
+  19_Iran_Conflict.py     AI-powered conflict intelligence (3 models)
+  20_Futures.py           Multi-asset futures dashboard
+  21_Fed_Macro_Drivers.py Fed policy dashboard (4 tabs)
+  22_Smart_Money.py       13F holdings, congressional trades, activist investors
   23_Power_Analytics.py   Duck curve, heat rates, spark spreads, stack analysis
+  24-34                   Sector analysis (all 11 SPDR sectors: XLE-XLRE)
   99_Login.py             Standalone login/register page (accessible via Settings popover)
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)

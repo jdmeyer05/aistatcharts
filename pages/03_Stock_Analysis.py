@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests
 from src.data_engine import polygon_history, polygon_ticker_details, polygon_snapshot, polygon_financials, fetch_insider_transactions, fetch_analyst_recommendations
 from src.edgar import calculate_financial_ratios, get_ratio_history, fetch_recent_8k, score_insider_transactions
 import os
@@ -21,14 +20,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
-def _get_key(name: str):
-    key = os.environ.get(name)
-    if not key:
-        try:
-            key = st.secrets[name]
-        except Exception:
-            pass
-    return key
+from src.api_keys import get_secret as _get_key
 
 grok_key = _get_key("GROK_API_KEY")
 fred_key = _get_key("FRED_API_KEY")

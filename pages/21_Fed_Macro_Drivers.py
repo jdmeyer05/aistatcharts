@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
-import os
 import logging
 from src.layout import setup_page, error_boundary, fun_loader
 from src.styles import COLORS
@@ -16,14 +14,7 @@ st.title("Fed & Macro Drivers")
 st.markdown("The key economic indicators the Federal Reserve watches most closely when setting monetary policy.")
 
 
-def _get_key(name: str):
-    key = os.environ.get(name)
-    if not key:
-        try:
-            key = st.secrets[name]
-        except Exception:
-            pass
-    return key
+from src.api_keys import get_secret as _get_key
 
 
 fred_key = _get_key("FRED_API_KEY")
@@ -35,57 +26,22 @@ if not fred_key:
 # ════════════════════════════════════════
 # DATA
 # ════════════════════════════════════════
-@st.cache_data(ttl=3600)
+from src.market_data import fetch_fred_series as _fetch_fred_canonical
+
 def fetch_fred_series(api_key: str, series_id: str, limit: int = 60):
-    try:
-        r = requests.get(
-            "https://api.stlouisfed.org/fred/series/observations",
-            params={"series_id": series_id, "api_key": api_key, "file_type": "json",
-                    "sort_order": "desc", "limit": limit},
-            timeout=10,
-        )
-        obs = r.json().get("observations", [])
-        df = pd.DataFrame(obs)
-        df["date"] = pd.to_datetime(df["date"])
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        return df.dropna(subset=["value"]).sort_values("date")
-    except Exception as e:
-        logger.error(f"FRED fetch failed for {series_id}: {e}")
-        return pd.DataFrame()
+    """Wrapper for backward compat — delegates to src.market_data."""
+    return _fetch_fred_canonical(series_id, periods=limit)
 
 
 STOCKTWITS_MACRO_SYMBOLS = ["SPY", "QQQ", "TLT", "USO", "GLD", "DIA", "IWM", "VIX"]
 
+from src.market_data import fetch_stocktwits_sentiment as _fetch_st_canonical
 
-@st.cache_data(ttl=1800, show_spinner=False)
+
 def fetch_stocktwits_sentiment(symbols: list = None) -> list:
     if symbols is None:
         symbols = STOCKTWITS_MACRO_SYMBOLS
-    try:
-        from curl_cffi import requests as cffi_requests
-    except ImportError:
-        return []
-    results = []
-    for sym in symbols:
-        try:
-            r = cffi_requests.get(
-                f"https://api.stocktwits.com/api/2/streams/symbol/{sym}.json?limit=30",
-                impersonate="chrome", timeout=10,
-            )
-            data = r.json()
-            msgs = data.get("messages", [])
-            bull = sum(1 for m in msgs if (m.get("entities", {}).get("sentiment") or {}).get("basic") == "Bullish")
-            bear = sum(1 for m in msgs if (m.get("entities", {}).get("sentiment") or {}).get("basic") == "Bearish")
-            tagged = bull + bear
-            if tagged > 0:
-                results.append({
-                    "symbol": sym, "messages": len(msgs), "bullish": bull, "bearish": bear,
-                    "bull_ratio": round(bull / tagged * 100, 0),
-                    "signal": "Bullish" if bull / tagged > 0.6 else "Bearish" if bull / tagged < 0.4 else "Neutral",
-                })
-        except Exception:
-            pass
-    return results
+    return _fetch_st_canonical(symbols)
 
 
 POLYMARKET_SLUGS = {
@@ -107,24 +63,11 @@ POLYMARKET_SLUGS = {
 }
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+from src.market_data import fetch_polymarket_odds
+
+
 def fetch_polymarket_data() -> list:
-    results = []
-    for slug, label in POLYMARKET_SLUGS.items():
-        try:
-            r = requests.get(f"https://gamma-api.polymarket.com/markets?slug={slug}", timeout=10)
-            data = r.json()
-            if data and isinstance(data, list):
-                mkt = data[0]
-                outcomes = mkt.get("outcomePrices", "")
-                if outcomes:
-                    import json
-                    prices = json.loads(outcomes)
-                    yes_prob = round(float(prices[0]) * 100, 1)
-                    results.append({"question": label, "yes_prob": yes_prob, "slug": slug})
-        except Exception:
-            pass
-    return results
+    return fetch_polymarket_odds(POLYMARKET_SLUGS)
 
 
 FED_DRIVERS = {

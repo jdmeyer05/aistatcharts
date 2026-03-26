@@ -11,6 +11,20 @@ from src.options_models import fill_missing_options_data
 
 setup_page("06_Options_Analysis")
 
+# Fetch current risk-free rate for options pricing (3-month T-bill)
+@st.cache_data(ttl=86400, show_spinner=False)
+def _get_risk_free_rate() -> float:
+    try:
+        from src.market_data import fetch_fred_series
+        df = fetch_fred_series("DGS3MO", periods=5)
+        if not df.empty:
+            return df["value"].iloc[-1] / 100  # FRED returns percentage, need decimal
+    except Exception:
+        pass
+    return 0.045  # fallback
+
+_rfr = _get_risk_free_rate()
+
 st.title("Options Surface Analysis")
 st.caption("IV skew, open interest walls, gamma exposure, max pain, unusual activity, and Greeks across strikes.")
 
@@ -57,7 +71,7 @@ if submit:
                 tdf = fetch_options_chain(ticker, texp)
                 if tdf is not None and not tdf.empty:
                     if current_px:
-                        tdf = fill_missing_options_data(tdf, current_px)
+                        tdf = fill_missing_options_data(tdf, current_px, risk_free_rate=_rfr)
                     term_data[texp] = tdf
             except Exception:
                 pass
@@ -104,7 +118,7 @@ def _get_chain_for_exp(exp_key):
             tdf = fetch_options_chain(ticker, exp_key)
             if tdf is not None and not tdf.empty:
                 if spot:
-                    tdf = fill_missing_options_data(tdf, spot)
+                    tdf = fill_missing_options_data(tdf, spot, risk_free_rate=_rfr)
                 # Cache it so we don't re-fetch
                 term_data[exp_key] = tdf
                 st.session_state['options_term_data'] = term_data
@@ -221,7 +235,7 @@ if current_px and not calls.empty and not puts.empty:
         if atm_straddle <= 0 and atm_iv > 0 and current_px and dte > 0:
             # Fallback: estimate from IV if no price data
             atm_straddle = current_px * atm_iv * np.sqrt(max(dte, 1) / 365) * 2 * 0.4  # rough approximation
-        expected_move = atm_straddle * 0.85
+        expected_move = atm_straddle * 0.80  # straddle to 1SD: 1/sqrt(2*pi/e) ~ 0.798
         expected_move_pct = (expected_move / current_px) * 100 if current_px else 0
 
 # Total notional (volume × best price × 100)
@@ -657,7 +671,7 @@ with tab_term, error_boundary("Term Structure"):
                 tc = t_calls.iloc[(t_calls['strike_price'] - current_px).abs().argsort()[:1]]
                 tp = t_puts.iloc[(t_puts['strike_price'] - current_px).abs().argsort()[:1]]
                 t_straddle = float(tc['ask'].iloc[0] + tp['ask'].iloc[0])
-                t_em = t_straddle * 0.85
+                t_em = t_straddle * 0.80
 
             if avg_iv > 0:
                 term_ivs.append({"expiration": texp, "atm_iv": avg_iv, "dte": t_dte})

@@ -101,13 +101,18 @@ with error_boundary("Data Prefetch"):
         '<div style="color:#888;font-size:0.8rem;margin-top:10px;">Loading market data...</div>'
         '</div>', unsafe_allow_html=True,
     )
-    from concurrent.futures import ThreadPoolExecutor
+    from src.data_engine import polygon_batch_snapshot
     _market_cache = {}
     _tickers_to_fetch = [t for t, _ in MARKET_TICKERS]
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        _results = list(pool.map(fetch_market_data, _tickers_to_fetch))
-    for (_t, _), _r in zip(MARKET_TICKERS, _results):
-        _market_cache[_t] = _r
+    _snaps = polygon_batch_snapshot(_tickers_to_fetch)
+    for t, _ in MARKET_TICKERS:
+        snap = _snaps.get(t)
+        if snap:
+            _market_cache[t] = {
+                "price": snap["price"], "day_chg": snap.get("change", 0),
+                "week_chg": 0, "month_chg": 0, "prev_close": 0,
+                "close": None, "dates": None,
+            }
     _prefetch_slot.empty()
 
     # Load AI history
@@ -314,35 +319,98 @@ TREEMAP_HOLDINGS = {
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def _fetch_grouped_daily(target_date: str) -> dict:
+    """Fetch all tickers' closing prices for a single date (1 API call).
+    Returns {ticker: close_price}."""
+    from src.api_keys import get_secret
+    import requests
+    key = get_secret("MASSIVE_API_KEY")
+    if not key:
+        return {}
+    try:
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{target_date}",
+            params={"apiKey": key, "adjusted": "true"}, timeout=15,
+        )
+        if r.status_code == 200:
+            return {t["T"]: t["c"] for t in r.json().get("results", []) if t.get("c")}
+    except Exception:
+        pass
+    return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def _fetch_treemap_returns(tickers_key: str, period: str) -> dict:
-    """Fetch period returns + metadata for treemap. Returns {ticker: {pct, price, day_chg, volume}}."""
-    if period == "ytd":
-        days = (date.today() - date(date.today().year, 1, 1)).days + 5
-    else:
-        days_map = {"1mo": 35, "3mo": 95, "6mo": 185, "1y": 370}
-        days = days_map.get(period, 35)
+    """Fetch period returns for treemap. All periods use max 2 API calls:
+    - Batch snapshot for current prices (1 call)
+    - Grouped daily for start-of-period prices (1 call)"""
+    from src.data_engine import polygon_batch_snapshot, polygon_symbol
+    from datetime import timedelta
     tickers = tickers_key.split(",")
 
-    def _get_return(sym):
-        try:
-            hist = polygon_history(sym, days)
-            if not hist.empty and len(hist) >= 2:
-                first = float(hist["Close"].iloc[0])
-                last = float(hist["Close"].iloc[-1])
-                if first > 0:
-                    pct = ((last / first) - 1) * 100
-                    prev = float(hist["Close"].iloc[-2])
-                    day_chg = ((last / prev) - 1) * 100 if prev > 0 else 0
-                    vol = int(hist["Volume"].iloc[-1]) if "Volume" in hist.columns else 0
-                    return sym, {"pct": pct, "price": last, "day_chg": day_chg, "volume": vol}
-        except Exception:
-            pass
-        return sym, None
+    # Current prices via batch snapshot (1 API call)
+    snaps = polygon_batch_snapshot(tickers)
 
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        results = list(pool.map(_get_return, tickers))
-    return {sym: data for sym, data in results if data is not None}
+    if period == "1d":
+        # Day change is already in the snapshot
+        result = {}
+        for sym, snap in snaps.items():
+            if snap and snap.get("price"):
+                result[sym] = {
+                    "pct": snap.get("change", 0),
+                    "price": snap["price"],
+                    "day_chg": snap.get("change", 0),
+                    "volume": 0,
+                }
+        return result
+
+    # For all other periods: get start-of-period prices via grouped daily (1 API call)
+    if period == "1w":
+        start_date = date.today() - timedelta(days=9)
+    elif period == "ytd":
+        start_date = date(date.today().year, 1, 2)
+    else:
+        days_map = {"1mo": 32, "3mo": 92, "6mo": 183, "1y": 366}
+        start_date = date.today() - timedelta(days=days_map.get(period, 32))
+
+    # Try the target date and a few days after (in case it was a weekend/holiday)
+    historical = {}
+    for offset in range(4):
+        d = (start_date + timedelta(days=offset)).isoformat()
+        historical = _fetch_grouped_daily(d)
+        if historical:
+            break
+
+    # Build ticker→polygon symbol mapping for matching
+    sym_map = {}
+    for sym in tickers:
+        poly = polygon_symbol(sym)
+        sym_map[poly] = sym
+        sym_map[sym] = sym  # also try raw
+
+    result = {}
+    for sym in tickers:
+        snap = snaps.get(sym)
+        if not snap or not snap.get("price"):
+            continue
+        current = snap["price"]
+        day_chg = snap.get("change", 0)
+
+        # Find the historical price
+        poly_sym = polygon_symbol(sym)
+        old_price = historical.get(poly_sym) or historical.get(sym)
+        if old_price and old_price > 0:
+            pct = ((current / old_price) - 1) * 100
+        else:
+            pct = day_chg  # fallback to day change
+
+        result[sym] = {
+            "pct": round(pct, 2),
+            "price": current,
+            "day_chg": round(day_chg, 2),
+            "volume": 0,
+        }
+    return result
 
 
 def _render_treemap(list_name: str, period: str, period_label: str):
@@ -445,9 +513,9 @@ with error_boundary("Relative Performance"):
         rel_mode = st.selectbox("List", list(PERF_LISTS.keys()),
                                 key="rel_perf_mode", label_visibility="collapsed")
     with rp_c3:
-        rel_period_label = st.selectbox("Period", ["1M", "3M", "YTD", "1Y"],
+        rel_period_label = st.selectbox("Period", ["1D", "1W", "1M", "3M", "YTD", "1Y"],
                                         key="rel_perf_period", index=0, label_visibility="collapsed")
-    period_map = {"1M": "1mo", "3M": "3mo", "YTD": "ytd", "1Y": "1y"}
+    period_map = {"1D": "1d", "1W": "1w", "1M": "1mo", "3M": "3mo", "YTD": "ytd", "1Y": "1y"}
     rel_period = period_map[rel_period_label]
 
     _render_treemap(rel_mode, rel_period, rel_period_label)

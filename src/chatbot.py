@@ -1,5 +1,4 @@
 import streamlit as st
-import os
 import logging
 from src.auth import get_user_tier
 
@@ -43,10 +42,8 @@ CHAT_TIERS = {
 
 
 def _get_key(name: str):
-    try:
-        return st.secrets[name]
-    except Exception:
-        return os.environ.get(name)
+    from src.api_keys import get_secret
+    return get_secret(name)
 
 
 def _check_chat_limit(tier_config: dict) -> bool:

@@ -5,8 +5,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src.data_engine import polygon_history, polygon_ticker_details, polygon_snapshot
 import logging
-import os
-import requests
 import threading
 from datetime import datetime, timedelta
 from collections import deque
@@ -567,9 +565,9 @@ def compute_features(df, intermarket=None, stock_extras=None, sector_df=None):
 # DQN TRAINING (Enhanced)
 # ═══════════════════════════════════════════════
 REWARD_FUNCTIONS = {
-    "Sharpe": lambda ret, dd: ret * 100 / (np.std([ret]) + 1e-8) - dd * 20,
-    "Sortino": lambda ret, dd: ret * 100 / (max(abs(ret) if ret < 0 else 0.001, 0.001)) - dd * 30,
-    "Calmar": lambda ret, dd: ret * 100 - dd * 80,
+    "Sharpe-Style": lambda ret, dd: ret * 100 - dd * 20,
+    "Downside-Penalized": lambda ret, dd: (ret * 100 if ret >= 0 else ret * 300) - dd * 30,
+    "Drawdown-Heavy": lambda ret, dd: ret * 100 - dd * 80,
     "Risk-Adjusted (Default)": lambda ret, dd: ret * 100 - dd * 50,
 }
 
@@ -1327,7 +1325,8 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
             mc_stats = monte_carlo_robustness(mc_env_factory, agents, n_sims=200)
 
         # Grok strategy analysis
-        grok_key = os.environ.get("GROK_API_KEY")
+        from src.api_keys import get_secret
+        grok_key = get_secret("GROK_API_KEY")
         if not grok_key:
             try:
                 grok_key = st.secrets.get("GROK_API_KEY")

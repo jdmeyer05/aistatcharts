@@ -1,0 +1,80 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("32_Utilities_Sector")
+
+UTILITIES_COMPANIES = {
+    "NEE": "NextEra Energy",
+    "SO":  "Southern Company",
+    "DUK": "Duke Energy",
+    "CEG": "Constellation Energy",
+    "SRE": "Sempra",
+    "AEP": "American Electric Power",
+    "D":   "Dominion Energy",
+    "EXC": "Exelon",
+    "XEL": "Xcel Energy",
+    "PEG": "PSEG",
+}
+
+UTILITIES_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "NEE", "company": "NextEra Energy", "rev_est_y": 30.0, "rev_growth": "+8%",
+         "eps_est_y": 3.70, "eps_est_ny": 4.10, "capex_guidance": 25.0, "capex_note": "FY26 CapEx ~$25B (renewables + FPL grid)",
+         "production": None, "price_target": 85, "rating": "Buy", "fwd_pe": 23.0,
+         "outlook": "Largest US renewable energy generator. FPL rate base growing 9%+. Energy Resources backlog >30 GW. Data center PPA demand accelerating."},
+        {"ticker": "SO", "company": "Southern Company", "rev_est_y": 26.0, "rev_growth": "+4%",
+         "eps_est_y": 4.20, "eps_est_ny": 4.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 95, "rating": "Hold", "fwd_pe": 21.0,
+         "outlook": "Vogtle Units 3&4 fully operational (first new US nuclear in 30 years). Southeast US load growth strong. Data center demand in Georgia/Alabama. EPS growth 5-7%."},
+        {"ticker": "DUK", "company": "Duke Energy", "rev_est_y": 30.0, "rev_growth": "+3%",
+         "eps_est_y": 6.20, "eps_est_ny": 6.60, "capex_guidance": 46.0, "capex_note": "5-year CapEx plan $73B (2025-2029)",
+         "production": None, "price_target": 125, "rating": "Hold", "fwd_pe": 19.0,
+         "outlook": "Rate base growth 7-8%. Carolinas + Florida growing. Renewable transition underway. Grid hardening investments. 5-7% EPS growth target."},
+        {"ticker": "CEG", "company": "Constellation Energy", "rev_est_y": 25.0, "rev_growth": "+15%",
+         "eps_est_y": 9.50, "eps_est_ny": 11.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 280, "rating": "Buy", "fwd_pe": 25.0,
+         "outlook": "Largest US nuclear fleet (33 GW). Data center PPAs at premium prices. Three Mile Island restart approved. Clean energy credits supporting margins. Calpine merger pending."},
+        {"ticker": "SRE", "company": "Sempra", "rev_est_y": 15.0, "rev_growth": "+5%",
+         "eps_est_y": 5.00, "eps_est_ny": 5.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 90, "rating": "Hold", "fwd_pe": 16.0,
+         "outlook": "SDG&E and SoCalGas rate base growing. Oncor (Texas) benefiting from load growth. LNG export (Port Arthur) development. Infrastructure platform strategy."},
+        {"ticker": "AEP", "company": "American Electric Power", "rev_est_y": 20.0, "rev_growth": "+3%",
+         "eps_est_y": 5.80, "eps_est_ny": 6.20, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 105, "rating": "Hold", "fwd_pe": 17.0,
+         "outlook": "Data center load requests >30 GW. Transmission build-out accelerating. Rate base growth 7%+. Regulated earnings quality high. Renewable additions on track."},
+        {"ticker": "D", "company": "Dominion Energy", "rev_est_y": 15.0, "rev_growth": "+2%",
+         "eps_est_y": 3.30, "eps_est_ny": 3.60, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 60, "rating": "Hold", "fwd_pe": 16.0,
+         "outlook": "Virginia utility rate base growing. Coastal Virginia Offshore Wind project underway. Gas LDC divestiture complete. Simplified business mix. 5-7% EPS growth target."},
+        {"ticker": "EXC", "company": "Exelon", "rev_est_y": 23.0, "rev_growth": "+3%",
+         "eps_est_y": 2.60, "eps_est_ny": 2.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 48, "rating": "Hold", "fwd_pe": 17.0,
+         "outlook": "Pure-play regulated utility post Constellation spin. ComEd, PECO, BGE rate cases favorable. Grid modernization investments. EPS growth 5-7%."},
+        {"ticker": "XEL", "company": "Xcel Energy", "rev_est_y": 15.0, "rev_growth": "+4%",
+         "eps_est_y": 3.60, "eps_est_ny": 3.85, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 72, "rating": "Hold", "fwd_pe": 19.0,
+         "outlook": "Leading renewable energy transition. Colorado clean energy plan on track. Rate base growth 6-7%. Data center demand in Minnesota and Colorado. Marshall fire liabilities resolved."},
+        {"ticker": "PEG", "company": "PSEG", "rev_est_y": 11.0, "rev_growth": "+5%",
+         "eps_est_y": 3.80, "eps_est_ny": 4.10, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 90, "rating": "Hold", "fwd_pe": 22.0,
+         "outlook": "Nuclear fleet benefiting from data center PPAs. PSE&G regulated investment growing. Offshore wind transmission. Clean energy transition in New Jersey."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="32_Utilities_Sector",
+    title="Utilities Sector Analysis",
+    subtitle="Top 10 US utility companies — electric, gas, nuclear, and renewable energy.",
+    etf="XLU",
+    companies=UTILITIES_COMPANIES,
+    subsectors={
+        "Diversified Electric": ["NEE", "SO", "DUK", "AEP", "D", "XEL"],
+        "Nuclear": ["CEG", "PEG"],
+        "Regulated": ["EXC", "SRE"],
+    },
+    guidance_snapshot=UTILITIES_GUIDANCE,
+    macro_overlay={"fred_series": "DGS10", "label": "10Y Treasury Yield (%)"},
+    factor_proxies=["SPY", "XLU", "TLT", "UUP"],
+    cot_commodities=None,
+))

@@ -32,8 +32,9 @@ COT_CONTRACTS = {
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_cot_data(limit: int = 10) -> pd.DataFrame:
-    """Fetch latest CFTC Commitments of Traders data from the public bulk CSV.
-    Returns positioning data for key contracts."""
+    """Fetch latest CFTC COT data across ALL tracked contracts (JSON API).
+    Returns multi-contract snapshot for AI context.
+    For single-commodity time series charts, use src.market_data.fetch_cftc_cot() instead."""
     try:
         # CFTC publishes weekly — use the Quandl-style CFTC API (now on data.gov)
         url = "https://publicreporting.cftc.gov/api/views/deus-9w32/rows.csv?accessType=DOWNLOAD"

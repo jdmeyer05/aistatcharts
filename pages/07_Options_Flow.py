@@ -2,11 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import requests
-import os
 import logging
 from src.data_engine import format_massive_ticker, fetch_massive_data
-from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader
+from src.api_keys import get_secret
+from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
 
 logger = logging.getLogger(__name__)
 
@@ -16,68 +15,28 @@ st.title("💧 Options Flow Intelligence")
 st.markdown("Unusual activity scanner, put/call analysis, and gamma exposure profiling.")
 
 
-def _get_massive_key():
-    key = os.environ.get("MASSIVE_API_KEY")
-    if not key:
-        try:
-            key = st.secrets["MASSIVE_API_KEY"]
-        except Exception:
-            pass
-    return key
+_get_massive_key = lambda: get_secret("MASSIVE_API_KEY")
 
 
-def _polygon_paginate(url: str, api_key: str, max_pages: int = 20) -> list:
-    results = []
-    pages = 0
-    while url and pages < max_pages:
-        res = requests.get(url, timeout=30)
-        res.raise_for_status()
-        data = res.json()
-        results.extend(data.get("results", []))
-        next_url = data.get("next_url")
-        url = f"{next_url}&apiKey={api_key}" if next_url else None
-        pages += 1
-    return results
+from src.data_engine import fetch_options_chain as _fetch_chain_raw, get_expiration_dates
 
+# Column mapping: data_engine names → page 07 names
+_COL_MAP = {
+    "strike_price": "strike", "contract_type": "type",
+    "expiration_date": "expiration", "last_price": "close",
+}
 
-@st.cache_data(ttl=300)
-def fetch_full_chain(symbol: str, api_key: str, expiration: str = None):
-    """Fetch full options chain snapshot from Polygon."""
-    url = f"https://api.polygon.io/v3/snapshot/options/{symbol}?limit=250&apiKey={api_key}"
-    if expiration:
-        url += f"&expiration_date={expiration}"
-    results = _polygon_paginate(url, api_key)
+def fetch_full_chain(symbol: str, api_key: str = None, expiration: str = None):
+    """Fetch full options chain — delegates to data_engine."""
+    df = _fetch_chain_raw(symbol, expiration=expiration)
+    if not df.empty:
+        df = df.rename(columns=_COL_MAP)
+        if "close" not in df.columns and "last_price" not in df.columns:
+            df["close"] = 0
+    return df
 
-    rows = []
-    for r in results:
-        d = r.get("details", {})
-        g = r.get("greeks", {})
-        day = r.get("day", {})
-        rows.append({
-            "ticker": d.get("ticker", ""),
-            "strike": d.get("strike_price", 0),
-            "type": d.get("contract_type", ""),
-            "expiration": d.get("expiration_date", ""),
-            "volume": day.get("volume", 0),
-            "open_interest": r.get("open_interest", 0),
-            "implied_volatility": r.get("implied_volatility", 0),
-            "delta": g.get("delta", 0),
-            "gamma": g.get("gamma", 0),
-            "theta": g.get("theta", 0),
-            "vega": g.get("vega", 0),
-            "bid": r.get("last_quote", {}).get("bid", 0) if r.get("last_quote") else 0,
-            "ask": r.get("last_quote", {}).get("ask", 0) if r.get("last_quote") else 0,
-            "close": day.get("close", 0),
-        })
-    return pd.DataFrame(rows)
-
-
-@st.cache_data(ttl=300)
-def fetch_all_expirations(symbol: str, api_key: str):
-    """Get all available expiration dates for a symbol."""
-    url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=1000&apiKey={api_key}"
-    contracts = _polygon_paginate(url, api_key)
-    return sorted(set(c["expiration_date"] for c in contracts))
+def fetch_all_expirations(symbol: str, api_key: str = None):
+    return get_expiration_dates(symbol)
 
 
 # --- Controls ---

@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("25_Financials_Sector")
+
+FINANCIALS_COMPANIES = {
+    "JPM":  "JPMorgan Chase",
+    "BAC":  "Bank of America",
+    "WFC":  "Wells Fargo",
+    "GS":   "Goldman Sachs",
+    "MS":   "Morgan Stanley",
+    "BLK":  "BlackRock",
+    "SCHW": "Charles Schwab",
+    "C":    "Citigroup",
+    "AXP":  "American Express",
+    "MMC":  "Marsh McLennan",
+}
+
+FINANCIALS_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "JPM", "company": "JPMorgan Chase", "rev_est_y": 178.0, "rev_growth": "+8%",
+         "eps_est_y": 18.50, "eps_est_ny": 19.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 265, "rating": "Buy", "fwd_pe": 13.5,
+         "outlook": "Record revenue in CIB and AWM. NII guidance ~$94B for FY26. Credit costs normalizing. 10% dividend increase announced."},
+        {"ticker": "BAC", "company": "Bank of America", "rev_est_y": 105.0, "rev_growth": "+6%",
+         "eps_est_y": 3.85, "eps_est_ny": 4.20, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 52, "rating": "Buy", "fwd_pe": 12.0,
+         "outlook": "NII inflection underway as fixed-rate assets reprice higher. Digital engagement record 48M active users. Expense discipline on track."},
+        {"ticker": "WFC", "company": "Wells Fargo", "rev_est_y": 82.0, "rev_growth": "+4%",
+         "eps_est_y": 5.40, "eps_est_ny": 6.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 78, "rating": "Hold", "fwd_pe": 11.5,
+         "outlook": "Asset cap removal remains key catalyst. Efficiency ratio improving toward 60% target. Fee income diversification ongoing."},
+        {"ticker": "GS", "company": "Goldman Sachs", "rev_est_y": 55.0, "rev_growth": "+12%",
+         "eps_est_y": 42.00, "eps_est_ny": 46.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 620, "rating": "Buy", "fwd_pe": 14.0,
+         "outlook": "Investment banking recovery driving upside. AWM now >$3T AUS. Exited consumer lending. Capital markets activity rebounding."},
+        {"ticker": "MS", "company": "Morgan Stanley", "rev_est_y": 62.0, "rev_growth": "+10%",
+         "eps_est_y": 8.50, "eps_est_ny": 9.20, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 130, "rating": "Buy", "fwd_pe": 15.0,
+         "outlook": "Wealth management AUM record $7.2T. Integration of E*Trade client assets progressing. Target 30% pre-tax margin in WM."},
+        {"ticker": "BLK", "company": "BlackRock", "rev_est_y": 22.0, "rev_growth": "+14%",
+         "eps_est_y": 45.00, "eps_est_ny": 50.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 1050, "rating": "Buy", "fwd_pe": 22.0,
+         "outlook": "AUM surpassed $11.5T. ETF flows remain dominant. Private markets buildout via GIP acquisition. Technology services (Aladdin) growing double-digits."},
+        {"ticker": "SCHW", "company": "Charles Schwab", "rev_est_y": 21.0, "rev_growth": "+9%",
+         "eps_est_y": 4.20, "eps_est_ny": 4.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 88, "rating": "Buy", "fwd_pe": 20.0,
+         "outlook": "Client asset reallocation from cash sorting stabilizing. Ameritrade integration complete. Net new asset growth accelerating."},
+        {"ticker": "C", "company": "Citigroup", "rev_est_y": 82.0, "rev_growth": "+5%",
+         "eps_est_y": 7.00, "eps_est_ny": 8.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 85, "rating": "Hold", "fwd_pe": 10.0,
+         "outlook": "Simplification strategy: exited 14 consumer markets. Targeting 11-12% RoTCE medium-term. Consent order remediation ongoing."},
+        {"ticker": "AXP", "company": "American Express", "rev_est_y": 68.0, "rev_growth": "+9%",
+         "eps_est_y": 15.00, "eps_est_ny": 16.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 310, "rating": "Buy", "fwd_pe": 19.0,
+         "outlook": "Premium card spend growing. Millennial/Gen Z card acquisitions at record. Revenue growth guidance 8-10% through 2026."},
+        {"ticker": "MMC", "company": "Marsh McLennan", "rev_est_y": 25.0, "rev_growth": "+7%",
+         "eps_est_y": 9.50, "eps_est_ny": 10.30, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 235, "rating": "Hold", "fwd_pe": 25.0,
+         "outlook": "Organic revenue growth 5-6%. Insurance broking benefiting from hard market. Consulting (Oliver Wyman, Mercer) stable."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="25_Financials_Sector",
+    title="Financials Sector Analysis",
+    subtitle="Top 10 US financial companies — banking, asset management, insurance, and payments.",
+    etf="XLF",
+    companies=FINANCIALS_COMPANIES,
+    subsectors={
+        "Banks": ["JPM", "BAC", "WFC", "C"],
+        "Investment Banks": ["GS", "MS"],
+        "Asset Management": ["BLK", "SCHW"],
+        "Insurance & Payments": ["AXP", "MMC"],
+    },
+    guidance_snapshot=FINANCIALS_GUIDANCE,
+    macro_overlay={"fred_series": "DFF", "label": "Fed Funds Rate (%)"},
+    factor_proxies=["SPY", "XLF", "TLT", "UUP"],
+    cot_commodities=None,
+))

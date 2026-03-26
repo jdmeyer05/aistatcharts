@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("30_ConsDisc_Sector")
+
+CONSDISC_COMPANIES = {
+    "AMZN": "Amazon",
+    "TSLA": "Tesla",
+    "HD":   "Home Depot",
+    "MCD":  "McDonald's",
+    "NKE":  "Nike",
+    "LOW":  "Lowe's",
+    "BKNG": "Booking Holdings",
+    "SBUX": "Starbucks",
+    "TJX":  "TJX Companies",
+    "CMG":  "Chipotle",
+}
+
+CONSDISC_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "AMZN", "company": "Amazon", "rev_est_y": 680.0, "rev_growth": "+11%",
+         "eps_est_y": 6.50, "eps_est_ny": 8.00, "capex_guidance": 100.0, "capex_note": "FY26 CapEx ~$100B (AWS infrastructure + logistics)",
+         "production": None, "price_target": 240, "rating": "Buy", "fwd_pe": 32.0,
+         "outlook": "AWS growth re-accelerating with AI workloads. Retail margins expanding through regionalization. Advertising >$60B run rate. Prime membership at record levels."},
+        {"ticker": "TSLA", "company": "Tesla", "rev_est_y": 115.0, "rev_growth": "+15%",
+         "eps_est_y": 3.00, "eps_est_ny": 4.00, "capex_guidance": 12.0, "capex_note": "FY26 CapEx $11-13B",
+         "production": None, "price_target": 300, "rating": "Hold", "fwd_pe": 80.0,
+         "outlook": "New affordable model ramp. FSD (supervised) improving. Energy storage (Megapack) growing 100%+. Cybertruck production scaling. Robotaxi timeline uncertain."},
+        {"ticker": "HD", "company": "Home Depot", "rev_est_y": 160.0, "rev_growth": "+3%",
+         "eps_est_y": 16.00, "eps_est_ny": 17.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 420, "rating": "Buy", "fwd_pe": 25.0,
+         "outlook": "Pro customer segment growing faster than DIY. SRS Distribution acquisition adding $6.4B revenue. Housing turnover recovery expected. Digital penetration 15%+."},
+        {"ticker": "MCD", "company": "McDonald's", "rev_est_y": 27.0, "rev_growth": "+4%",
+         "eps_est_y": 12.50, "eps_est_ny": 13.50, "capex_guidance": 3.0, "capex_note": "FY26 CapEx ~$3B (new restaurants + remodels)",
+         "production": None, "price_target": 330, "rating": "Buy", "fwd_pe": 25.0,
+         "outlook": "Same-store sales recovering. Digital orders >40% of total. Loyalty program 175M+ members. International markets diversifying. Net restaurant growth accelerating."},
+        {"ticker": "NKE", "company": "Nike", "rev_est_y": 48.0, "rev_growth": "-2%",
+         "eps_est_y": 2.80, "eps_est_ny": 3.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 85, "rating": "Hold", "fwd_pe": 30.0,
+         "outlook": "New CEO turnaround plan. DTC rebalancing with wholesale. Innovation pipeline (Air Max Dn). China recovery uncertain. Inventory clean. Margin rebuild underway."},
+        {"ticker": "LOW", "company": "Lowe's", "rev_est_y": 84.0, "rev_growth": "+2%",
+         "eps_est_y": 12.50, "eps_est_ny": 13.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 280, "rating": "Hold", "fwd_pe": 20.0,
+         "outlook": "Total Home strategy targeting Pro growth. Operating margin expansion to 13%+. Rural/suburban store base well-positioned. Technology investments in fulfillment."},
+        {"ticker": "BKNG", "company": "Booking Holdings", "rev_est_y": 25.0, "rev_growth": "+10%",
+         "eps_est_y": 195.00, "eps_est_ny": 220.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 5500, "rating": "Buy", "fwd_pe": 22.0,
+         "outlook": "Connected trip strategy driving multi-product bookings. AI-powered trip planner. Room nights growing 8%+. Payments platform expanding. Alternative accommodations 35%+ of mix."},
+        {"ticker": "SBUX", "company": "Starbucks", "rev_est_y": 37.0, "rev_growth": "+3%",
+         "eps_est_y": 3.50, "eps_est_ny": 4.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 110, "rating": "Hold", "fwd_pe": 28.0,
+         "outlook": "New CEO turnaround: 'Back to Starbucks' strategy. Store partner investments. Menu simplification. China partnership model shift. Mobile order optimization."},
+        {"ticker": "TJX", "company": "TJX Companies", "rev_est_y": 58.0, "rev_growth": "+5%",
+         "eps_est_y": 4.40, "eps_est_ny": 4.80, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 135, "rating": "Buy", "fwd_pe": 27.0,
+         "outlook": "Off-price retail gaining share from full-price. 1,300+ new store opportunity in US. HomeGoods turnaround. International expansion (TK Maxx Europe, Australia)."},
+        {"ticker": "CMG", "company": "Chipotle", "rev_est_y": 12.0, "rev_growth": "+13%",
+         "eps_est_y": 70.00, "eps_est_ny": 80.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 65, "rating": "Buy", "fwd_pe": 45.0,
+         "outlook": "New unit growth 8-10% annually. Chipotlane drive-through 80%+ of new builds. Menu innovation (chicken al pastor). Restaurant-level margins 27%+. International expansion beginning."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="30_ConsDisc_Sector",
+    title="Consumer Discretionary Sector Analysis",
+    subtitle="Top 10 US consumer discretionary companies — retail, e-commerce, restaurants, travel, and autos.",
+    etf="XLY",
+    companies=CONSDISC_COMPANIES,
+    subsectors={
+        "E-Commerce & Tech": ["AMZN", "TSLA"],
+        "Home Improvement": ["HD", "LOW"],
+        "Restaurants": ["MCD", "SBUX", "CMG"],
+        "Retail & Travel": ["NKE", "BKNG", "TJX"],
+    },
+    guidance_snapshot=CONSDISC_GUIDANCE,
+    macro_overlay={"fred_series": "UMCSENT", "label": "Consumer Sentiment (Index)"},
+    factor_proxies=["SPY", "XLY", "TLT", "UUP"],
+    cot_commodities=None,
+))

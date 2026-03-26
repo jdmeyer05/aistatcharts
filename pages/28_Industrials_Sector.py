@@ -1,0 +1,81 @@
+from src.layout import setup_page
+from src.sector_analysis import SectorConfig, render_sector_page
+
+setup_page("28_Industrials_Sector")
+
+INDUSTRIALS_COMPANIES = {
+    "GE":  "GE Aerospace",
+    "CAT": "Caterpillar",
+    "UNP": "Union Pacific",
+    "HON": "Honeywell",
+    "RTX": "RTX (Raytheon)",
+    "DE":  "Deere & Co",
+    "LMT": "Lockheed Martin",
+    "BA":  "Boeing",
+    "ETN": "Eaton Corp",
+    "ADP": "ADP",
+}
+
+INDUSTRIALS_GUIDANCE = {
+    "date": "2026-03-25",
+    "data": [
+        {"ticker": "GE", "company": "GE Aerospace", "rev_est_y": 40.0, "rev_growth": "+12%",
+         "eps_est_y": 5.50, "eps_est_ny": 6.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 220, "rating": "Buy", "fwd_pe": 35.0,
+         "outlook": "LEAP engine installed base growing. Services revenue accelerating. GE Vernova spin-off complete. Operating margin expanding toward 20%+."},
+        {"ticker": "CAT", "company": "Caterpillar", "rev_est_y": 67.0, "rev_growth": "+3%",
+         "eps_est_y": 22.00, "eps_est_ny": 23.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 400, "rating": "Buy", "fwd_pe": 17.0,
+         "outlook": "Data center and energy infrastructure driving construction demand. Mining stable. Services revenue >$25B. Pricing power intact."},
+        {"ticker": "UNP", "company": "Union Pacific", "rev_est_y": 25.0, "rev_growth": "+4%",
+         "eps_est_y": 12.00, "eps_est_ny": 13.00, "capex_guidance": 3.6, "capex_note": "FY26 CapEx ~$3.6B (network capacity)",
+         "production": None, "price_target": 260, "rating": "Hold", "fwd_pe": 21.0,
+         "outlook": "Precision Scheduled Railroading driving efficiency. Intermodal volumes recovering. Operating ratio target <58%. Share buyback $6B+ annual."},
+        {"ticker": "HON", "company": "Honeywell", "rev_est_y": 40.0, "rev_growth": "+5%",
+         "eps_est_y": 10.50, "eps_est_ny": 11.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 230, "rating": "Hold", "fwd_pe": 21.0,
+         "outlook": "Aerospace aftermarket strong. Building automation (smart buildings) growing. Portfolio simplification announced — 3-way split. Carrier acquisition integration ongoing."},
+        {"ticker": "RTX", "company": "RTX (Raytheon)", "rev_est_y": 82.0, "rev_growth": "+7%",
+         "eps_est_y": 6.20, "eps_est_ny": 7.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 140, "rating": "Buy", "fwd_pe": 20.0,
+         "outlook": "Defense backlog >$200B. Pratt & Whitney GTF fleet management resolved. Collins Aerospace margin expansion. Free cash flow conversion improving."},
+        {"ticker": "DE", "company": "Deere & Co", "rev_est_y": 42.0, "rev_growth": "-8%",
+         "eps_est_y": 18.00, "eps_est_ny": 21.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 450, "rating": "Hold", "fwd_pe": 22.0,
+         "outlook": "Ag cycle normalizing from 2023 peak. Precision ag adoption driving mix-up. Construction equipment resilient. Smart industrial strategy long-term."},
+        {"ticker": "LMT", "company": "Lockheed Martin", "rev_est_y": 73.0, "rev_growth": "+5%",
+         "eps_est_y": 28.00, "eps_est_ny": 30.00, "capex_guidance": 2.0, "capex_note": "FY26 CapEx ~$2B",
+         "production": None, "price_target": 550, "rating": "Buy", "fwd_pe": 18.0,
+         "outlook": "F-35 deliveries stabilizing. Backlog >$166B. Missiles & Fire Control benefiting from global rearmament. Dividend aristocrat 21 consecutive years."},
+        {"ticker": "BA", "company": "Boeing", "rev_est_y": 80.0, "rev_growth": "+15%",
+         "eps_est_y": -2.00, "eps_est_ny": 3.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 200, "rating": "Hold", "fwd_pe": 0.0,
+         "outlook": "737 MAX production ramp to 38/month target. Quality improvement plan underway. Defense losses narrowing. Free cash flow positive expected by late 2026."},
+        {"ticker": "ETN", "company": "Eaton Corp", "rev_est_y": 26.0, "rev_growth": "+10%",
+         "eps_est_y": 11.50, "eps_est_ny": 13.00, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 350, "rating": "Buy", "fwd_pe": 30.0,
+         "outlook": "Electrical infrastructure megatrend: data centers, EVs, grid modernization. Backlog at record levels. Margin expansion through operating leverage. Organic growth 8-10%."},
+        {"ticker": "ADP", "company": "ADP", "rev_est_y": 20.0, "rev_growth": "+7%",
+         "eps_est_y": 10.50, "eps_est_ny": 11.50, "capex_guidance": None, "capex_note": None,
+         "production": None, "price_target": 305, "rating": "Hold", "fwd_pe": 28.0,
+         "outlook": "Payroll/HCM market leader. Client retention 92%+. Float revenue benefiting from rates. Employer Services and PEO both growing. Margin expansion ongoing."},
+    ],
+}
+
+render_sector_page(SectorConfig(
+    page_id="28_Industrials_Sector",
+    title="Industrials Sector Analysis",
+    subtitle="Top 10 US industrial companies — aerospace, machinery, defense, transports, and business services.",
+    etf="XLI",
+    companies=INDUSTRIALS_COMPANIES,
+    subsectors={
+        "Aerospace & Defense": ["GE", "RTX", "LMT", "BA"],
+        "Machinery": ["CAT", "DE", "ETN"],
+        "Transport": ["UNP"],
+        "Diversified / Services": ["HON", "ADP"],
+    },
+    guidance_snapshot=INDUSTRIALS_GUIDANCE,
+    macro_overlay={"fred_series": "MANEMP", "label": "Manufacturing Employment (Thousands)"},
+    factor_proxies=["SPY", "XLI", "TLT", "UUP"],
+    cot_commodities=None,
+))

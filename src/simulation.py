@@ -54,8 +54,8 @@ def predict_30d_random_forest(px_close: pd.Series, n_estimators: int = 200, look
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
-    rs = gain / loss
-    df['RSI_14'] = 100 - (100 / (1 + rs))
+    rs = gain / loss.replace(0, np.nan)
+    df['RSI_14'] = (100 - (100 / (1 + rs))).fillna(100)
     
     ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
@@ -94,8 +94,8 @@ def predict_30d_random_forest(px_close: pd.Series, n_estimators: int = 200, look
         delta = temp_df['Close'].diff()
         gain = delta.where(delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
         loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
-        rs = gain / loss
-        temp_df['RSI_14'] = 100 - (100 / (1 + rs))
+        rs = gain / loss.replace(0, np.nan)
+        temp_df['RSI_14'] = (100 - (100 / (1 + rs))).fillna(100)
         
         ema_12 = temp_df['Close'].ewm(span=12, adjust=False).mean()
         ema_26 = temp_df['Close'].ewm(span=26, adjust=False).mean()
