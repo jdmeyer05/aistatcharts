@@ -56,6 +56,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `data_engine.py` | Polygon API: snapshots, batch snapshots, grouped daily, history, options chains, insider txns |
 | `eia_helpers.py` | EIA API v2: energy supply data, Henry Hub (spot + daily), hourly grid monitor |
 | `ercot_api.py` | ERCOT Public API (Azure B2C auth) + dashboard API (unauthenticated) |
+| `quant_features.py` | Shared quant functions: frac_diff, cusum_filter, triple_barrier_labels, hrp_allocate, compute_vpin, compute_entropy, regime_filter |
 | `json_repair.py` | 4-strategy JSON repair for malformed LLM output (sanitize, iterative fix, truncate, extract) |
 | `analysis_history.py` | AI analysis history persistence: load/save/staleness for JSON history files |
 | `gdelt_events.py` | GDELT bulk event download & processing, conflict event filtering, parquet cache |
@@ -64,7 +65,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `options_models.py` | Black-Scholes, Merton Jump-Diffusion, BS-MJD blended pricing + Greeks |
 | `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
 
-### pages/ — 34 App Pages
+### pages/ — 39 App Pages
 
 | # | File | What It Does |
 |---|------|-------------|
@@ -93,6 +94,11 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 23 | `Power_Analytics.py` | Duck curve, implied heat rates, spark spreads, generation stack merit order (ERCOT + EIA) |
 | 24 | `Energy_Sector.py` | Energy sector analysis (XLE) — 8-tab template via `sector_analysis.py` |
 | 25-34 | `*_Sector.py` | Financials, Tech, Healthcare, Industrials, Comms, ConsDisc, ConsStaples, Utilities, Materials, Real Estate |
+| 35 | `Correlation.py` | Cross-asset correlation matrix, regime analysis, hierarchical clustering, PCA, breakdown alerts |
+| 36 | `Quant_Lab.py` | De Prado AFML: frac diff, CUSUM, SADF, triple barrier, meta-labeling, sequential bootstrap, MDI/MDA/SFI/SHAP, HRP, microstructure, entropy |
+| 37 | `Factor_Decomposition.py` | Fama-French 5+Mom: factor returns, exposure betas, alpha attribution, rolling style drift, risk decomposition |
+| 38 | `Portfolio_Optimizer.py` | 6 methods: tangency, min-var, risk parity, max diversification, HRP, Black-Litterman. Walk-forward backtest. |
+| 39 | `Signal_Scanner.py` | Cross-sectional signals: momentum (12-1), mean reversion (RSI/BB/Z), value, carry, composite ranking |
 
 ---
 

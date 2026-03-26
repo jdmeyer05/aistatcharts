@@ -62,6 +62,11 @@ PAGE_CONFIG = {
     "32_Utilities_Sector":   ("Utilities Sector | AI Statcharts", "⚡"),
     "33_Materials_Sector":   ("Materials Sector | AI Statcharts", "⛏️"),
     "34_RealEstate_Sector":  ("Real Estate Sector | AI Statcharts", "🏠"),
+    "35_Correlation":        ("Cross-Asset Correlation | AI Statcharts", "🔗"),
+    "36_Quant_Lab":          ("Quant Lab | AI Statcharts", "🔬"),
+    "37_Factor_Decomposition": ("Factor Decomposition | AI Statcharts", "🧬"),
+    "38_Portfolio_Optimizer": ("Portfolio Optimizer | AI Statcharts", "🎯"),
+    "39_Signal_Scanner":     ("Signal Scanner | AI Statcharts", "📡"),
 }
 
 
@@ -221,6 +226,11 @@ def render_header(current_page: str):
             ("11_Algo_Backtester", "Algo Backtester", "pages/11_Algo_Backtester.py"),
             ("12_Monte_Carlo", "Monte Carlo", "pages/12_Monte_Carlo.py"),
             ("13_Power_Risk_VaR", "Portfolio VaR", "pages/13_Power_Risk_VaR.py"),
+            ("35_Correlation", "Correlation", "pages/35_Correlation.py"),
+            ("36_Quant_Lab", "Quant Lab", "pages/36_Quant_Lab.py"),
+            ("37_Factor_Decomposition", "Factors", "pages/37_Factor_Decomposition.py"),
+            ("38_Portfolio_Optimizer", "Optimizer", "pages/38_Portfolio_Optimizer.py"),
+            ("39_Signal_Scanner", "Signals", "pages/39_Signal_Scanner.py"),
         ]),
         ("Sectors", [
             ("24_Energy_Sector", "Energy", "pages/24_Energy_Sector.py"),

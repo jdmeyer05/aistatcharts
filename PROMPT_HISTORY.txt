@@ -366,3 +366,73 @@ Mar 25-26, 2026 — Major Refactor + Sector Expansion:
   - Added "Sectors" dropdown to nav header with all 11 sector pages
   - Added all sector pages to PAGE_CONFIG with icons
   - Moved Energy Sector from "Energy" group to "Sectors" group
+
+Mar 26, 2026 — Quant Research Pages + Integrations:
+
+  NEW PAGES (5 quant research pages):
+
+  Page 35 — Cross-Asset Correlation (6 tabs):
+  - Correlation matrix with class-grouped boundaries (full/21D/63D rolling)
+  - Regime correlations: calm vs normal vs stress (vol-quartile detection)
+  - Stress-minus-calm diff heatmap (identifies diversification killers)
+  - Rolling correlation (4 windows) with Z-score alerts
+  - Hierarchical clustering dendrogram + cluster-reordered matrix
+  - PCA factor structure: scree plot, loadings heatmap, asset map (PC1 vs PC2)
+  - Correlation breakdown alerts (21D vs long-run Z-score > 1.5)
+
+  Page 36 — Quant Lab / De Prado Methods (8 tabs):
+  - Fractional Differentiation: min-d finder, ACF comparison, weight kernel visualization
+  - Structural Breaks: CUSUM filter, SADF bubble detection, Chow breakpoint test
+  - Triple Barrier: ATR-scaled barriers, label distribution, equity curve backtest, meta-labeling bet sizing, Kelly criterion
+  - Sample Weights: average uniqueness, sequential vs standard bootstrap Sharpe comparison
+  - Feature Importance: MDI + MDA + SFI + SHAP (TreeExplainer), normalized heatmap, rank agreement
+  - HRP: walk-forward rebalanced backtest, weight evolution over time
+  - Microstructure: Amihud illiquidity, VPIN, Kyle's Lambda, volume/dollar bars, Corwin-Schultz spread
+  - Entropy: Shannon, plugin (Miller-Madow), Lempel-Ziv complexity, rolling entropy, conditional entropy, transfer entropy
+
+  Page 37 — Factor Decomposition (5 tabs):
+  - Factor Returns: FF5 + momentum cumulative performance, statistics table, inter-factor correlation
+  - Factor Exposure: OLS regression betas with t-stats and significance, residual analysis
+  - Alpha Attribution: waterfall chart, cumulative attribution over time
+  - Factor Timing: rolling betas (63D/126D/252D), style drift detection, rolling alpha
+  - Risk Decomposition: systematic vs idiosyncratic variance pie, marginal risk contribution, per-asset factor heatmap
+
+  Page 38 — Portfolio Optimizer (5 tabs):
+  - Efficient Frontier: interactive frontier with 6 optimal portfolios plotted
+  - Optimal Weights: grouped bar comparison, HHI concentration analysis
+  - Walk-Forward Backtest: monthly/quarterly rebalance, no look-ahead bias, 6 methods compared OOS
+  - Risk Analysis: per-asset risk contribution, diversification ratio, correlation heatmap
+  - Black-Litterman: equilibrium returns, up to 3 user views, adjustable tau/delta, posterior weights
+
+  Page 39 — Systematic Signal Scanner (4 tabs):
+  - Signal Dashboard: multi-factor heatmap (momentum, RSI, BB, Z-score, vol, value, carry)
+  - Momentum: 12-1 month cross-sectional, L/S spread backtest with Sharpe
+  - Mean Reversion: RSI/BB/Z-score side-by-side, oversold/overbought alerts
+  - Composite Ranking: multi-factor combined score, factor profile for top assets
+
+  SHARED MODULE:
+  - Created src/quant_features.py: frac_diff, cusum_filter, triple_barrier_labels, avg_uniqueness,
+    sequential_bootstrap_sharpe, hrp_allocate, compute_vpin, compute_entropy, regime_filter
+  - Wired into existing pages:
+    - Portfolio VaR (page 13): added HRP allocation mode + regime-adjusted risk (entropy + vol regime)
+    - Algo Backtester (page 11): added sequential bootstrap p-value comparison
+
+  BUG FIXES (22 fixes across pages 35-39):
+  - Fixed tangency portfolio returning 0 instead of penalty when vol=0 (critical)
+  - Fixed Black-Litterman posterior covariance singularity crash (critical)
+  - Fixed RSI producing inf when loss=0 in Quant Lab feature importance
+  - Fixed factor attribution division by near-zero total return
+  - Fixed risk decomposition crash on near-zero variance
+  - Fixed regression multicollinearity undetected
+  - Fixed Signal Scanner RSI/Z-score defaulting to arbitrary values instead of NaN
+  - Fixed composite ranking ignoring NaN signals
+  - Fixed alert markdown crashes on NaN values
+  - Fixed SADF critical values (size-dependent per PSY 2015)
+  - Fixed SADF regression type (constant only, not constant+trend)
+  - Fixed ADF test maxlag (auto AIC instead of hardcoded 1)
+  - Fixed Kelly criterion negative values not clipped
+  - Fixed SFI using standard CV instead of TimeSeriesSplit
+  - Fixed efficient frontier extrapolating beyond observed return bounds
+
+  DEPENDENCIES:
+  - Added statsmodels, shap to requirements.txt

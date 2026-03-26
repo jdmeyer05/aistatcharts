@@ -9,91 +9,150 @@ from src.chatbot import run_sidebar_chatbot
 from src.layout import setup_page, error_boundary
 setup_page("13_Power_Risk_VaR")
 
-st.title("🛡️ Portfolio Risk & VaR Engine")
+st.title("Portfolio Risk & VaR Engine")
 
 _c1, _c2, _c3, _c4 = st.columns([3, 2, 2, 1])
 with _c1:
-    raw_tickers = st.text_input("Portfolio Tickers (comma separated)", "TLT,USO,QQQ")
+    raw_tickers = st.text_input("Portfolio Tickers (comma separated)", "SPY,TLT,GLD,EFA,USO")
 with _c2:
     portfolio_value = st.number_input("Total Portfolio Value ($)", value=100000, step=10000)
 with _c3:
-    lookback = st.slider("Historical Lookback (Days)", 90, 1000, 365)
+    lookback = st.slider("Historical Lookback (Days)", 90, 1000, 504)
 with _c4:
     confidence_level = st.selectbox("Confidence Level", [0.95, 0.99])
 
+# Allocation method
+alloc_method = st.radio("Allocation", ["Equal Weight", "Inverse Volatility", "HRP (de Prado)"],
+                        horizontal=True, key="var_alloc")
+
 # Parse tickers
-ticker_list = [t.strip() for t in raw_tickers.split(",")]
+ticker_list = [t.strip().upper() for t in raw_tickers.split(",") if t.strip()]
 
 # --- Fetch & Align Data ---
-st.info("Aggregating portfolio data...")
-all_data = {}
-failed_tickers = []
-for t in ticker_list:
-    formatted_t = format_massive_ticker(t)
-    df = fetch_massive_data(formatted_t, lookback)
-    if df is not None:
-        all_data[t] = df['Close']
-    else:
-        failed_tickers.append(t)
+with st.spinner("Loading portfolio data..."):
+    all_data = {}
+    failed_tickers = []
+    for t in ticker_list:
+        formatted_t = format_massive_ticker(t)
+        df = fetch_massive_data(formatted_t, lookback)
+        if df is not None:
+            all_data[t] = df['Close']
+        else:
+            failed_tickers.append(t)
 
 if failed_tickers:
     st.warning(f"Could not load data for: {', '.join(failed_tickers)}")
 
-if all_data:
+if all_data and len(all_data) >= 2:
     portfolio_df = pd.DataFrame(all_data).dropna()
-    
-    # Calculate daily returns
     daily_returns = portfolio_df.pct_change().dropna()
-    
-    # Assume equal weighting for simplicity
-    weights = np.full(len(ticker_list), 1.0 / len(ticker_list))
+    n_assets = len(daily_returns.columns)
+
+    # --- Compute Weights ---
+    if alloc_method == "Equal Weight":
+        weights = pd.Series(1.0 / n_assets, index=daily_returns.columns)
+    elif alloc_method == "Inverse Volatility":
+        vol = daily_returns.std() * np.sqrt(252)
+        weights = (1 / vol) / (1 / vol).sum()
+    else:  # HRP
+        from src.quant_features import hrp_allocate
+        weights = hrp_allocate(daily_returns)
+
     portfolio_returns = daily_returns.dot(weights)
-    
-    # --- VaR & CVaR MATHEMATICS ---
-    # We look at the historical worst days. If confidence is 95%, we find the 5th percentile return.
+
+    # Show weights
+    st.subheader("Portfolio Weights")
+    st.caption(f"Allocation method: **{alloc_method}**")
+    wt_cols = st.columns(min(n_assets, 8))
+    for i, (t, w) in enumerate(weights.items()):
+        wt_cols[i % len(wt_cols)].metric(t, f"{w * 100:.1f}%")
+
+    # --- VaR & CVaR ---
     percentile = (1 - confidence_level) * 100
     var_percent = np.percentile(portfolio_returns, percentile)
     var_dollar = portfolio_value * var_percent
 
-    # Conditional VaR (Expected Shortfall) — average loss beyond VaR
     tail_returns = portfolio_returns[portfolio_returns <= var_percent]
     cvar_percent = tail_returns.mean() if len(tail_returns) > 0 else var_percent
     cvar_dollar = portfolio_value * cvar_percent
-    
-    # --- CHART: RETURNS DISTRIBUTION ---
+
+    # --- CHART: Returns Distribution ---
     st.subheader("Daily Returns Distribution")
-    
-    fig_hist = px.histogram(
-        portfolio_returns, 
-        nbins=50, 
-        title="Historical Portfolio Returns",
-        color_discrete_sequence=['#00d1ff']
-    )
-    
-    # Draw the VaR threshold line
-    fig_hist.add_vline(
-        x=var_percent, 
-        line_dash="dash", 
-        line_color="red", 
-        annotation_text=f"{int(confidence_level*100)}% VaR",
-        annotation_position="top left"
-    )
-    
-    fig_hist.update_layout(template="plotly_dark", showlegend=False, xaxis_title="Daily Return", yaxis_title="Frequency")
-    st.plotly_chart(fig_hist, use_container_width=True)
-    
+
+    fig_hist = go.Figure()
+    fig_hist.add_trace(go.Histogram(x=portfolio_returns, nbinsx=60, marker_color='#00d1ff', name="Returns"))
+    fig_hist.add_vline(x=var_percent, line_dash="dash", line_color="red",
+                       annotation_text=f"{int(confidence_level*100)}% VaR")
+    fig_hist.add_vline(x=cvar_percent, line_dash="dot", line_color="#ff8800",
+                       annotation_text=f"CVaR")
+    fig_hist.update_layout(template="plotly_dark", showlegend=False,
+                           xaxis_title="Daily Return", yaxis_title="Frequency",
+                           margin=dict(l=0, r=0, t=10, b=0))
+    st.plotly_chart(fig_hist, use_container_width=True, config={"displayModeBar": False})
+
     # --- METRICS ---
-    st.divider()
     c1, c2, c3 = st.columns(3)
     c1.metric(f"1-Day {int(confidence_level*100)}% VaR (%)", f"{var_percent*100:.2f}%")
-    c2.metric(f"1-Day {int(confidence_level*100)}% VaR ($)", f"${abs(var_dollar):,.2f}", delta="Max Expected Loss", delta_color="inverse")
-    c3.metric(f"1-Day {int(confidence_level*100)}% CVaR ($)", f"${abs(cvar_dollar):,.2f}", delta="Avg Loss Beyond VaR", delta_color="inverse")
+    c2.metric(f"1-Day {int(confidence_level*100)}% VaR ($)", f"${abs(var_dollar):,.2f}",
+              delta="Max Expected Loss", delta_color="inverse")
+    c3.metric(f"1-Day {int(confidence_level*100)}% CVaR ($)", f"${abs(cvar_dollar):,.2f}",
+              delta="Avg Loss Beyond VaR", delta_color="inverse")
 
-    st.caption(f"**VaR:** There is a {int(confidence_level*100)}% probability that the portfolio will not lose more than **${abs(var_dollar):,.2f}** in a single trading day. "
+    st.caption(f"**VaR:** {int(confidence_level*100)}% probability the portfolio won't lose more than "
+               f"**${abs(var_dollar):,.2f}** in a single day. "
                f"**CVaR:** If losses exceed VaR, the average expected loss is **${abs(cvar_dollar):,.2f}**.")
 
+    # --- Regime Filter (VPIN + Entropy) ---
+    st.markdown("---")
+    st.subheader("Regime-Adjusted Risk")
+    st.caption("Uses VPIN (flow toxicity) and entropy (predictability) to flag whether current conditions are favorable for trading.")
+
+    with error_boundary("Regime Filter"):
+        # Use SPY as the regime proxy if available
+        regime_ticker = "SPY" if "SPY" in daily_returns.columns else daily_returns.columns[0]
+        regime_vol = daily_returns[regime_ticker].rolling(20).std().dropna()
+        if not regime_vol.empty:
+            # Simple regime: high vol periods
+            vol_q75 = regime_vol.quantile(0.75)
+            current_vol = regime_vol.iloc[-1]
+            stressed = current_vol > vol_q75
+
+            # Compute entropy
+            from src.quant_features import compute_entropy
+            log_ret = np.log(portfolio_df[regime_ticker] / portfolio_df[regime_ticker].shift(1)).dropna()
+            ent = compute_entropy(log_ret, n_bins=8, window=63)
+            current_ent = ent.iloc[-1] if not ent.empty else 1.0
+
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Current Vol Regime",
+                       "STRESSED" if stressed else "CALM",
+                       delta=f"20D vol: {current_vol * np.sqrt(252) * 100:.1f}% ann.",
+                       delta_color="inverse" if stressed else "normal")
+            rc2.metric("Entropy", f"{current_ent:.3f}",
+                       help="<0.85 = predictable (favorable), >0.95 = random (unfavorable)")
+            regime_label = "Favorable" if not stressed and current_ent < 0.90 else \
+                           "Caution" if stressed or current_ent > 0.90 else "Favorable"
+            regime_color = "#00ff88" if regime_label == "Favorable" else "#ffaa00"
+            rc3.markdown(f'<div style="text-align:center;padding-top:10px;">'
+                         f'<span style="font-size:1.3rem;font-weight:700;color:{regime_color};">{regime_label}</span><br>'
+                         f'<span style="font-size:0.7rem;color:#888;">Trading Regime</span></div>',
+                         unsafe_allow_html=True)
+
+            # Stressed VaR
+            if stressed:
+                stress_returns = portfolio_returns[regime_vol.reindex(portfolio_returns.index) > vol_q75]
+                if len(stress_returns) > 10:
+                    stress_var = np.percentile(stress_returns, percentile)
+                    st.warning(f"**Stress VaR:** During high-vol periods, the {int(confidence_level*100)}% VaR is "
+                               f"**{stress_var*100:.2f}%** (${abs(portfolio_value * stress_var):,.2f}) — "
+                               f"worse than the unconditional {var_percent*100:.2f}%.")
+
     # Chatbot Context
-    ctx = f"The 1-Day {int(confidence_level*100)}% VaR for a ${portfolio_value} portfolio containing {raw_tickers} is ${abs(var_dollar):.2f}."
+    ctx = (f"The 1-Day {int(confidence_level*100)}% VaR for a ${portfolio_value:,.0f} portfolio "
+           f"containing {raw_tickers} ({alloc_method}) is ${abs(var_dollar):,.2f}. "
+           f"CVaR is ${abs(cvar_dollar):,.2f}.")
     run_sidebar_chatbot(context_data=ctx)
+elif all_data:
+    st.error("Need at least 2 tickers for portfolio analysis.")
 else:
     st.error("Could not load data for the requested tickers.")

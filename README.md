@@ -13,7 +13,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **34 pages** of quantitative analysis tools (incl. 11 SPDR sector analysis pages)
+- **39 pages** of quantitative analysis tools (incl. 11 sector pages, 5 quant research pages)
 - **3 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus
 - **Landing page dashboard** -- market heatmap (5 lists, drills into ETF holdings), AI intelligence cards, watchlist
 - **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
@@ -57,6 +57,11 @@ Opens at **http://localhost:8501** (or next available port).
 | **Monte Carlo** | Student-t (fat tails), empirical block bootstrap, and GBM simulation. Warns when normal assumptions don't fit. |
 | **Power Analytics** | Institutional-grade ERCOT power market analysis: duck curve (historical overlay, flexibility metrics, over-gen risk, storage arbitrage, forecast vs actual, multi-ISO comparison), implied heat rates (hourly curve, System Lambda, heat rate vs load scatter, duration curve), spark spreads (VOM-adjusted margins, hourly profitability, DAM vs RT, System Lambda vs fuel cost, duration curve), generation stack (gas fleet disaggregation, inframarginal rent, fuel mix area chart, belly vs peak, reserve margin). Data: ERCOT Public API (NP6-345, NP4-737, NP4-732, NP6-905, NP4-190, NP6-322, NP4-523), EIA Hourly Grid Monitor, yfinance NG/CL futures, ERCOT dashboard real-time. |
 | **Sector Analysis (11)** | All 11 SPDR sectors (XLE-XLRE): 8-tab template with revenue, CapEx, valuation, alpha signals, risk, guidance, macro overlay, pairs correlation. Shared via `src/sector_analysis.py`. |
+| **Correlation** | Cross-asset correlation matrix, regime correlations (calm/normal/stress), rolling correlation, hierarchical clustering, breakdown alerts, PCA factor structure |
+| **Quant Lab** | Lopez de Prado methods: fractional differentiation, CUSUM filter, SADF bubble detection, triple barrier labeling, meta-labeling, sequential bootstrap, feature importance (MDI/MDA/SFI/SHAP), HRP, microstructure (VPIN/Kyle's Lambda/Amihud), entropy |
+| **Factor Decomposition** | Fama-French 5-factor + momentum decomposition: factor returns, exposure betas, alpha attribution waterfall, rolling style drift detection, risk decomposition pie |
+| **Portfolio Optimizer** | 6 allocation methods head-to-head: mean-variance tangency, min variance, risk parity, max diversification, HRP, Black-Litterman with user views. Walk-forward OOS backtest. |
+| **Signal Scanner** | Cross-sectional momentum (12-1), mean reversion (RSI/BB/Z-score), value, carry, quality signals across configurable universes. Composite multi-factor ranking. Momentum L/S spread backtest. |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
@@ -198,6 +203,7 @@ src/
   simulation.py           Stochastic price simulation (Random Forest, seasonal Monte Carlo)
   json_repair.py          Multi-strategy JSON repair for LLM output
   analysis_history.py     AI analysis history persistence (load/save/staleness)
+  quant_features.py       Shared quant functions (frac diff, CUSUM, triple barrier, HRP, VPIN, entropy)
   gov_data.py             CFTC COT, Treasury yields/auctions, defense contracts
   iran_conflict_history.json  AI analysis history (48 entries, auto-managed)
   iran_infra_state.json   Self-updating infrastructure baseline (Grok-verified)
@@ -216,6 +222,11 @@ pages/
   22_Smart_Money.py       13F holdings, congressional trades, activist investors
   23_Power_Analytics.py   Duck curve, heat rates, spark spreads, stack analysis
   24-34                   Sector analysis (all 11 SPDR sectors: XLE-XLRE)
+  35_Correlation.py       Cross-asset correlation, regime analysis, PCA
+  36_Quant_Lab.py         De Prado methods (8 tabs: frac diff, CUSUM, triple barrier, HRP, etc.)
+  37_Factor_Decomposition.py  Fama-French 5-factor + momentum decomposition
+  38_Portfolio_Optimizer.py    6 allocation methods + Black-Litterman
+  39_Signal_Scanner.py    Systematic signal scanner (momentum, mean reversion, composite)
   99_Login.py             Standalone login/register page (accessible via Settings popover)
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)

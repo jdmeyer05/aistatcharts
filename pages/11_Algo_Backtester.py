@@ -1056,6 +1056,35 @@ with tab3:
             )
             st.plotly_chart(fig_boot, use_container_width=True)
 
+            # Uniqueness-weighted comparison
+            with st.expander("De Prado Sequential Bootstrap (Uniqueness-Weighted)"):
+                st.caption("Standard block bootstrap preserves autocorrelation but treats all samples equally. "
+                           "The sequential bootstrap weights by average uniqueness — samples that overlap with many "
+                           "others get downweighted. This produces a wider, more honest Sharpe distribution.")
+                try:
+                    from src.quant_features import avg_uniqueness, sequential_bootstrap_sharpe
+                    uniq = avg_uniqueness(pd.Series(daily_rets, index=df.index[-len(daily_rets):]), window=20)
+                    std_sharpes, seq_sharpes = sequential_bootstrap_sharpe(
+                        pd.Series(daily_rets, index=df.index[-len(daily_rets):]), uniq, n_bootstrap=1000)
+                    if seq_sharpes:
+                        seq_p = np.mean([s >= actual_sharpe for s in seq_sharpes])
+                        sp1, sp2 = st.columns(2)
+                        sp1.metric("Block Bootstrap p-value", f"{p_value:.3f}")
+                        sp2.metric("Sequential Bootstrap p-value", f"{seq_p:.3f}",
+                                   help="Sequential is typically more conservative (higher p-value)")
+                        fig_comp = go.Figure()
+                        fig_comp.add_trace(go.Histogram(x=boot_sharpes, name="Block Bootstrap",
+                                                        marker_color="#ff6b6b", opacity=0.5, nbinsx=40))
+                        fig_comp.add_trace(go.Histogram(x=seq_sharpes, name="Sequential Bootstrap",
+                                                        marker_color="#00d1ff", opacity=0.5, nbinsx=40))
+                        fig_comp.add_vline(x=actual_sharpe, line_color="#00ff88", line_width=2,
+                                           annotation_text=f"Strategy: {actual_sharpe:.2f}")
+                        fig_comp.update_layout(template="plotly_dark", height=250, barmode="overlay",
+                                               xaxis_title="Sharpe Ratio", margin=dict(t=30, b=0, l=0, r=0))
+                        st.plotly_chart(fig_comp, use_container_width=True, config={"displayModeBar": False})
+                except Exception as e:
+                    st.info(f"Sequential bootstrap unavailable: {e}")
+
         # Probability of Backtest Overfitting (PBO)
         if st.session_state.get("opt_n_trials", 1) > 1:
             st.divider()
