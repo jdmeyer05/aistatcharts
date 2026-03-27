@@ -1,19 +1,24 @@
 """
 Portfolio Optimizer — Institutional-Grade Allocation Engine
 
-5 allocation methods compared head-to-head:
+9 allocation methods compared head-to-head:
 1. Mean-Variance (Markowitz) — efficient frontier + tangency portfolio
-2. Minimum Variance — lowest possible volatility
-3. Risk Parity — equal risk contribution from each asset
-4. Maximum Diversification — maximize diversification ratio
-5. HRP (de Prado) — hierarchical risk parity
-6. Black-Litterman — blend market equilibrium with user views
+2. Robust Max Sharpe — worst-case return within confidence set
+3. Minimum Variance — lowest possible volatility
+4. Risk Parity — equal risk contribution from each asset
+5. Maximum Diversification — maximize diversification ratio
+6. HRP (de Prado) — hierarchical risk parity (Ward linkage)
+7. HERC (Raffinot) — hierarchical equal risk contribution with CVaR
+8. HCAA (Raffinot) — hierarchical clustering-based 1/N allocation
+9. Black-Litterman — blend market equilibrium with user views
+
+Optional Ledoit-Wolf covariance denoising (shrinkage) applied before clustering.
 
 Tabs:
 1. Efficient Frontier — interactive frontier with all portfolios plotted
 2. Optimal Weights — side-by-side weight comparison
 3. Backtest — walk-forward out-of-sample performance
-4. Risk Analysis — contribution, concentration, drawdown
+4. Risk Analysis — contribution, concentration, drawdown, dendrogram
 5. Constraints & Views — Black-Litterman views, weight bounds
 """
 import streamlit as st
@@ -25,14 +30,14 @@ import logging
 from scipy.optimize import minimize
 from src.layout import setup_page, error_boundary
 from src.market_data import fetch_energy_price_history as fetch_price_history
-from src.quant_features import hrp_allocate
+from src.quant_features import hrp_allocate, herc_allocate, hcaa_allocate, denoise_covariance
 from src.styles import COLORS
 
 logger = logging.getLogger(__name__)
 setup_page("38_Portfolio_Optimizer")
 
 st.title("Portfolio Optimizer")
-st.markdown("Mean-variance, minimum variance, risk parity, maximum diversification, and HRP — compared head-to-head with walk-forward backtesting.")
+st.markdown("Mean-variance, risk parity, HRP, HERC (CVaR), HCAA, and more — compared head-to-head with walk-forward backtesting and Ledoit-Wolf denoising.")
 
 PLOTLY_NOBAR = {"displayModeBar": False}
 
@@ -43,6 +48,8 @@ METHOD_COLORS = {
     "Risk Parity": "#ffaa00",
     "Max Diversification": "#ff00ff",
     "HRP": "#88ccff",
+    "HERC (CVaR)": "#cc88ff",
+    "HCAA (1/N)": "#66aacc",
     "Equal Weight": "#555",
     "Black-Litterman": "#ff6b6b",
 }
@@ -248,6 +255,21 @@ n_assets = len(tickers)
 cov = returns.cov().values
 ann_cov = cov * 252
 
+# ── Covariance denoising option ──
+use_denoising = st.checkbox(
+    "Ledoit-Wolf covariance denoising",
+    value=True,
+    key="po_denoise",
+    help="Shrinks the sample covariance toward a structured target, reducing estimation noise. "
+         "Stabilizes clustering (HRP/HERC/HCAA) and reduces portfolio turnover. "
+         "Recommended when estimation window < 3 years.",
+)
+if use_denoising:
+    denoised_cov, denoised_corr = denoise_covariance(returns)
+else:
+    denoised_cov = pd.DataFrame(ann_cov, index=tickers, columns=tickers)
+    denoised_corr = returns.corr()
+
 # Date context
 data_start = returns.index[0].strftime("%Y-%m-%d")
 data_end = returns.index[-1].strftime("%Y-%m-%d")
@@ -268,7 +290,7 @@ RETURN_METHODS = {
 ret_method = st.radio("Return estimation method", list(RETURN_METHODS.keys()),
                       index=1, horizontal=True, key="po_ret_method",
                       help="How expected returns are estimated. This only affects Tangency and the Efficient Frontier — "
-                           "Min Var, Risk Parity, Max Div, and HRP use only the covariance matrix.")
+                           "Min Var, Risk Parity, Max Div, HRP, HERC, and HCAA use only the covariance matrix.")
 
 with st.expander(f"About: {ret_method}"):
     st.caption(RETURN_METHODS[ret_method])
@@ -373,7 +395,16 @@ with st.spinner("Computing optimal portfolios..."):
     w_minvar = _min_variance(cov)
     w_riskparity = _risk_parity(cov)
     w_maxdiv = _max_diversification(cov)
-    w_hrp = hrp_allocate(returns).reindex(tickers).fillna(0).values
+    w_hrp = hrp_allocate(
+        returns, cov=denoised_cov, corr=denoised_corr, linkage_method="ward",
+    ).reindex(tickers).fillna(0).values
+    w_herc = herc_allocate(
+        returns, cov=denoised_cov, corr=denoised_corr,
+        risk_metric="cvar", linkage_method="ward",
+    ).reindex(tickers).fillna(0).values
+    w_hcaa = hcaa_allocate(
+        returns, corr=denoised_corr, linkage_method="ward",
+    ).reindex(tickers).fillna(0).values
     w_equal = np.full(n_assets, 1 / n_assets)
     # Robust: use SE of mean as uncertainty
     mu_se = returns.std().values / np.sqrt(len(returns))
@@ -386,6 +417,8 @@ allocations = {
     "Risk Parity": w_riskparity,
     "Max Diversification": w_maxdiv,
     "HRP": w_hrp,
+    "HERC (CVaR)": w_herc,
+    "HCAA (1/N)": w_hcaa,
     "Equal Weight": w_equal,
 }
 
@@ -596,7 +629,9 @@ with tab_weights, error_boundary("Optimal Weights"):
             "| **Min Variance** | What minimizes total portfolio volatility? | Heavy in bonds/low-vol assets |\n"
             "| **Risk Parity** | What gives each asset equal risk contribution? | Overweights low-vol, underweights high-vol |\n"
             "| **Max Diversification** | What maximizes diversification benefit? | Favors uncorrelated assets |\n"
-            "| **HRP** | What's stable and doesn't need matrix inversion? | Most balanced, lowest turnover |\n"
+            "| **HRP** | What's stable and doesn't need matrix inversion? | Balanced, low turnover |\n"
+            "| **HERC (CVaR)** | HRP + equal risk contribution using tail risk? | Tail-risk-aware, most robust hierarchical |\n"
+            "| **HCAA (1/N)** | What if we don't trust risk estimates at all? | Equal-weight within cluster branches |\n"
             "| **Equal Weight** | Baseline — no optimization | 1/N for all assets |\n\n"
             "**Red flags:** Any method with >40% in one asset is fragile. "
             "Methods that agree on an asset's weight are more reliable than methods that disagree."
@@ -834,9 +869,18 @@ with tab_weights, error_boundary("Optimal Weights"):
                         w_cov = w_ret.cov().values
 
                         # Compute weights for the selected method
+                        if use_denoising:
+                            _wd_cov, _wd_corr = denoise_covariance(w_ret)
+                        else:
+                            _wd_cov = pd.DataFrame(w_cov * 252, index=w_tickers, columns=w_tickers)
+                            _wd_corr = w_ret.corr()
                         if selected_method == "Tangency (Max Sharpe)":
                             w_mu = w_ret.mean().values
                             ww = _tangency_portfolio(w_mu, w_cov)
+                        elif selected_method == "Robust Max Sharpe":
+                            w_mu = w_ret.mean().values
+                            w_se = w_ret.std().values / np.sqrt(len(w_ret))
+                            ww = _robust_max_sharpe(w_mu, w_cov, w_se)
                         elif selected_method == "Min Variance":
                             ww = _min_variance(w_cov)
                         elif selected_method == "Risk Parity":
@@ -844,7 +888,11 @@ with tab_weights, error_boundary("Optimal Weights"):
                         elif selected_method == "Max Diversification":
                             ww = _max_diversification(w_cov)
                         elif selected_method == "HRP":
-                            ww = hrp_allocate(w_ret).reindex(w_tickers).fillna(0).values
+                            ww = hrp_allocate(w_ret, cov=_wd_cov, corr=_wd_corr).reindex(w_tickers).fillna(0).values
+                        elif selected_method == "HERC (CVaR)":
+                            ww = herc_allocate(w_ret, cov=_wd_cov, corr=_wd_corr, risk_metric="cvar").reindex(w_tickers).fillna(0).values
+                        elif selected_method == "HCAA (1/N)":
+                            ww = hcaa_allocate(w_ret, corr=_wd_corr).reindex(w_tickers).fillna(0).values
                         else:
                             ww = np.full(len(w_tickers), 1 / len(w_tickers))
 
@@ -952,12 +1000,21 @@ with tab_backtest, error_boundary("Walk-Forward Backtest"):
                 est_cov = est_ret.cov().values
 
                 # Compute weights from estimation window
+                if use_denoising:
+                    _d_cov, _d_corr = denoise_covariance(est_ret)
+                else:
+                    _d_cov = pd.DataFrame(est_cov * 252, index=tickers, columns=tickers)
+                    _d_corr = est_ret.corr()
+                est_se = est_ret.std().values / np.sqrt(len(est_ret))
                 methods_w = {
                     "Tangency (Max Sharpe)": _tangency_portfolio(est_mu, est_cov),
+                    "Robust Max Sharpe": _robust_max_sharpe(est_mu, est_cov, est_se),
                     "Min Variance": _min_variance(est_cov),
                     "Risk Parity": _risk_parity(est_cov),
                     "Max Diversification": _max_diversification(est_cov),
-                    "HRP": hrp_allocate(est_ret).reindex(tickers).fillna(0).values,
+                    "HRP": hrp_allocate(est_ret, cov=_d_cov, corr=_d_corr).reindex(tickers).fillna(0).values,
+                    "HERC (CVaR)": herc_allocate(est_ret, cov=_d_cov, corr=_d_corr, risk_metric="cvar").reindex(tickers).fillna(0).values,
+                    "HCAA (1/N)": hcaa_allocate(est_ret, corr=_d_corr).reindex(tickers).fillna(0).values,
                     "Equal Weight": np.full(n_assets, 1 / n_assets),
                 }
 
@@ -980,7 +1037,7 @@ with tab_backtest, error_boundary("Walk-Forward Backtest"):
             df_m = df_m[~df_m.index.duplicated(keep="first")]
             cum = (1 + df_m["return"]).cumprod() * 100
             color = METHOD_COLORS.get(method, "#888")
-            width = 3 if method in ("Tangency (Max Sharpe)", "HRP") else 1
+            width = 3 if method in ("Tangency (Max Sharpe)", "HRP", "HERC (CVaR)") else 1
             fig_bt.add_trace(go.Scatter(
                 x=cum.index, y=cum, mode="lines", name=method,
                 line=dict(color=color, width=width),
@@ -1071,6 +1128,42 @@ with tab_risk, error_boundary("Risk Analysis"):
     fig_corr.update_layout(template="plotly_dark", height=max(300, n_assets * 30),
                             margin=dict(l=0, r=0, t=10, b=0))
     st.plotly_chart(fig_corr, use_container_width=True, config=PLOTLY_NOBAR)
+
+    # ── Dendrogram ──
+    st.subheader("Hierarchical Clustering Dendrogram")
+    st.caption(
+        "Shows how HRP/HERC/HCAA group assets into clusters based on "
+        + ("**Ledoit-Wolf denoised**" if use_denoising else "sample")
+        + " correlation distance. Assets joined lower in the tree are more similar. "
+        "Ward linkage minimizes within-cluster variance."
+    )
+
+    from src.quant_features import _hrp_linkage
+
+    _link, _sorted = _hrp_linkage(denoised_corr, method="ward")
+
+    # Use Plotly to render the dendrogram
+    import plotly.figure_factory as ff
+    try:
+        fig_dend = ff.create_dendrogram(
+            denoised_corr.values,
+            labels=tickers,
+            linkagefun=lambda x: _link,
+            color_threshold=0.7 * _link[-1, 2],
+        )
+        fig_dend.update_layout(
+            template="plotly_dark", height=350,
+            title="Asset Clustering Dendrogram (Ward Linkage"
+                  + (", Ledoit-Wolf Denoised" if use_denoising else "")
+                  + ")",
+            xaxis_title="Assets",
+            yaxis_title="Distance",
+            margin=dict(l=0, r=0, t=40, b=0),
+        )
+        st.plotly_chart(fig_dend, use_container_width=True, config=PLOTLY_NOBAR)
+    except Exception as e:
+        logger.warning(f"Dendrogram rendering failed: {e}")
+        st.caption("Dendrogram could not be rendered.")
 
 
 # ═══════════════════════════════════════════════

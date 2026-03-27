@@ -97,9 +97,10 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 35 | `Correlation.py` | Cross-asset correlation matrix, regime analysis, hierarchical clustering, PCA, breakdown alerts |
 | 36 | `Quant_Lab.py` | De Prado AFML: frac diff, CUSUM, SADF, triple barrier, meta-labeling, sequential bootstrap, MDI/MDA/SFI/SHAP, HRP, microstructure, entropy |
 | 37 | `Factor_Decomposition.py` | Fama-French 5+Mom: factor returns, exposure betas, alpha attribution, rolling style drift, risk decomposition |
-| 38 | `Portfolio_Optimizer.py` | 6 methods: tangency, min-var, risk parity, max diversification, HRP, Black-Litterman. Walk-forward backtest. |
-| 39 | `Signal_Scanner.py` | Cross-sectional signals: momentum (12-1), mean reversion (RSI/BB/Z), value, carry, composite ranking |
+| 38 | `Portfolio_Optimizer.py` | 9 methods: tangency, robust Sharpe, min-var, risk parity, max diversification, HRP (Ward), HERC (CVaR), HCAA (1/N), Black-Litterman. Ledoit-Wolf denoising. Walk-forward backtest. Dendrogram. |
+| 39 | `Signal_Scanner.py` | 8-tab institutional scanner: momentum, mean reversion, value & quality, earnings & sentiment, regime & microstructure (VPIN/entropy), factor correlation, composite ranking |
 | 40 | `Power_Strategies.py` | Power trading: live charts (NG/CL/XLE/XLU + ERCOT system), spark spreads, heat rate, peak/off-peak, RT/DAM arb, curtailment, congestion, de Prado backtester, multi-strategy meta-analysis |
+| 41 | `Meta_Analysis.py` | 9-tab cross-method portfolio engine: walk-forward equity curves, allocations, forward estimates, institutional analytics (net-of-cost, regime, capture ratios, stress, capacity), de Prado stats (DSR, PBO, bootstrap), universe grid, hierarchical two-layer allocation, SPY benchmark, CSV export |
 
 ---
 

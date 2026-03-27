@@ -171,30 +171,73 @@ def sequential_bootstrap_sharpe(returns: pd.Series, uniqueness: pd.Series,
 
 
 # ─────────────────────────────────────────────
-# HRP ALLOCATION (AFML/MLAM Ch. 16)
+# HIERARCHICAL CLUSTERING HELPERS
 # ─────────────────────────────────────────────
 
-def hrp_allocate(returns: pd.DataFrame) -> pd.Series:
-    """Compute Hierarchical Risk Parity weights from a returns DataFrame."""
+def _hrp_linkage(corr: pd.DataFrame, method: str = "ward"):
+    """Build hierarchical tree from a correlation matrix.
+
+    Returns (linkage_matrix, sorted_tickers).
+    """
     from scipy.cluster.hierarchy import linkage, leaves_list
     from scipy.spatial.distance import squareform
 
-    cov = returns.cov() * 252
-    corr = returns.corr()
-    tickers = cov.columns.tolist()
-
-    # 1. Tree clustering
     dist = ((1 - corr) / 2.0).clip(lower=0) ** 0.5
     np.fill_diagonal(dist.values, 0)
     dist = (dist + dist.T) / 2
     condensed = squareform(dist.values, checks=False)
-    link = linkage(condensed, method="single")
-
-    # 2. Quasi-diagonalization
+    link = linkage(condensed, method=method)
     sort_idx = leaves_list(link).tolist()
-    sorted_tickers = [tickers[i] for i in sort_idx]
+    sorted_tickers = [corr.columns[i] for i in sort_idx]
+    return link, sorted_tickers
 
-    # 3. Recursive bisection
+
+def denoise_covariance(returns: pd.DataFrame):
+    """Apply Ledoit-Wolf shrinkage to get denoised covariance and correlation.
+
+    Returns (shrunk_cov_df, shrunk_corr_df) as DataFrames with ticker labels.
+    """
+    from sklearn.covariance import LedoitWolf
+
+    lw = LedoitWolf()
+    shrunk_cov_arr = lw.fit(returns.values).covariance_ * 252  # annualised
+    tickers = returns.columns
+    shrunk_cov = pd.DataFrame(shrunk_cov_arr, index=tickers, columns=tickers)
+
+    vols = np.sqrt(np.diag(shrunk_cov_arr))
+    outer = np.outer(vols, vols)
+    outer[outer == 0] = 1e-12
+    shrunk_corr = pd.DataFrame(
+        shrunk_cov_arr / outer, index=tickers, columns=tickers,
+    )
+    np.fill_diagonal(shrunk_corr.values, 1.0)
+    return shrunk_cov, shrunk_corr
+
+
+# ─────────────────────────────────────────────
+# HRP ALLOCATION (AFML/MLAM Ch. 16)
+# ─────────────────────────────────────────────
+
+def hrp_allocate(
+    returns: pd.DataFrame,
+    cov: pd.DataFrame | None = None,
+    corr: pd.DataFrame | None = None,
+    linkage_method: str = "ward",
+) -> pd.Series:
+    """Hierarchical Risk Parity (de Prado 2016).
+
+    Upgraded from original: supports Ward linkage (default) and accepts
+    pre-computed (optionally denoised) covariance / correlation matrices.
+    """
+    if cov is None:
+        cov = returns.cov() * 252
+    if corr is None:
+        corr = returns.corr()
+    tickers = cov.columns.tolist()
+
+    link, sorted_tickers = _hrp_linkage(corr, method=linkage_method)
+
+    # Recursive bisection with inverse-variance weighting
     weights = pd.Series(1.0, index=sorted_tickers)
 
     def _cluster_var(cov_sub, tk):
@@ -216,6 +259,121 @@ def hrp_allocate(returns: pd.DataFrame) -> pd.Series:
             alpha = 1 - vl / total if total > 0 else 0.5
             weights[left] *= alpha
             weights[right] *= (1 - alpha)
+            if len(left) > 1:
+                new_clusters.append(left)
+            if len(right) > 1:
+                new_clusters.append(right)
+        clusters = new_clusters
+
+    return weights / weights.sum()
+
+
+# ─────────────────────────────────────────────
+# HERC — Hierarchical Equal Risk Contribution (Raffinot 2018)
+# ─────────────────────────────────────────────
+
+def herc_allocate(
+    returns: pd.DataFrame,
+    cov: pd.DataFrame | None = None,
+    corr: pd.DataFrame | None = None,
+    risk_metric: str = "cvar",
+    linkage_method: str = "ward",
+    cvar_alpha: float = 0.05,
+) -> pd.Series:
+    """HERC allocation — Equal Risk Contribution across and within clusters.
+
+    Unlike HRP's naive inverse-variance bisection, HERC:
+      1. Uses the cluster tree structure for allocation (not just ordering)
+      2. Applies Equal Risk Contribution at each tree split
+      3. Supports CVaR/variance as the risk metric
+
+    Parameters
+    ----------
+    risk_metric : 'cvar' or 'variance'
+    cvar_alpha  : tail probability for CVaR (default 5%)
+    """
+    if cov is None:
+        cov = returns.cov() * 252
+    if corr is None:
+        corr = returns.corr()
+    tickers = cov.columns.tolist()
+
+    link, sorted_tickers = _hrp_linkage(corr, method=linkage_method)
+
+    def _cluster_risk(tk_list):
+        """Compute cluster risk using inverse-variance portfolio, then measure
+        its risk with the chosen metric."""
+        sub_cov = cov.loc[tk_list, tk_list].values
+        ivp = 1.0 / np.diag(sub_cov)
+        ivp /= ivp.sum()
+        if risk_metric == "cvar":
+            # Build cluster portfolio returns, compute CVaR
+            port_ret = (returns[tk_list].values @ ivp)
+            sorted_ret = np.sort(port_ret)
+            cutoff = max(1, int(len(sorted_ret) * cvar_alpha))
+            return -sorted_ret[:cutoff].mean() * np.sqrt(252)
+        else:
+            return np.sqrt(ivp @ sub_cov @ ivp)
+
+    # Recursive bisection with Equal Risk Contribution
+    weights = pd.Series(1.0, index=sorted_tickers)
+    clusters = [sorted_tickers]
+    while clusters:
+        new_clusters = []
+        for cluster in clusters:
+            if len(cluster) <= 1:
+                continue
+            mid = len(cluster) // 2
+            left, right = cluster[:mid], cluster[mid:]
+            rl = _cluster_risk(left)
+            rr = _cluster_risk(right)
+            total = rl + rr
+            # ERC: allocate inversely proportional to risk contribution
+            alpha = 1 - rl / total if total > 0 else 0.5
+            weights[left] *= alpha
+            weights[right] *= (1 - alpha)
+            if len(left) > 1:
+                new_clusters.append(left)
+            if len(right) > 1:
+                new_clusters.append(right)
+        clusters = new_clusters
+
+    return weights / weights.sum()
+
+
+# ─────────────────────────────────────────────
+# HCAA — Hierarchical Clustering-Based Asset Allocation (Raffinot)
+# ─────────────────────────────────────────────
+
+def hcaa_allocate(
+    returns: pd.DataFrame,
+    corr: pd.DataFrame | None = None,
+    linkage_method: str = "ward",
+) -> pd.Series:
+    """HCAA — 1/N within each cluster branch.
+
+    The most robust, lowest-turnover hierarchical allocation.
+    Divides capital equally across major branches, then equally within.
+    No risk estimation needed beyond the correlation for clustering.
+    """
+    if corr is None:
+        corr = returns.corr()
+    tickers = corr.columns.tolist()
+
+    link, sorted_tickers = _hrp_linkage(corr, method=linkage_method)
+
+    # Equal split at each bisection (no risk weighting)
+    weights = pd.Series(1.0, index=sorted_tickers)
+    clusters = [sorted_tickers]
+    while clusters:
+        new_clusters = []
+        for cluster in clusters:
+            if len(cluster) <= 1:
+                continue
+            mid = len(cluster) // 2
+            left, right = cluster[:mid], cluster[mid:]
+            weights[left] *= 0.5
+            weights[right] *= 0.5
             if len(left) > 1:
                 new_clusters.append(left)
             if len(right) > 1:

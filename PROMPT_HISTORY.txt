@@ -1,13 +1,44 @@
 AI STATCHARTS — PROMPT HISTORY
 ================================
-Last updated: March 26, 2026
+Last updated: March 27, 2026
 
 This file documents all AI prompts used in the platform, their purpose,
 and the evolution of key changes. Organized by feature.
 
 
 ================================================================================
-0. POWER ANALYTICS — No AI Prompts (Quantitative Only)
+0a. META ANALYSIS — No AI Prompts (Quantitative Only)
+================================================================================
+File: pages/41_Meta_Analysis.py
+Note: This page uses no AI models. All analysis is computed quantitatively:
+  - Walk-forward backtesting with 9 allocation methods + custom blends
+  - Forward return estimates from analyst consensus (yfinance), EPS revisions,
+    forward PE valuation, FRED macro indicators (yield curve, VIX)
+  - De Prado statistical tests: Deflated Sharpe Ratio, PBO (CPCV),
+    sequential bootstrap, minimum track record length
+  - Institutional analytics: net-of-cost returns, regime analysis,
+    up/down capture ratios, information ratio, stress scenarios, capacity
+  - Universe grid: independent walk-forward across 15 preset groups
+  - Hierarchical two-layer allocation (group-level + within-group)
+  - SPY Buy & Hold benchmark comparison
+
+
+================================================================================
+0b. SIGNAL SCANNER — No AI Prompts (Quantitative Only)
+================================================================================
+File: pages/39_Signal_Scanner.py
+Note: This page uses no AI models. All signals computed from market data:
+  - Momentum (12-1, acceleration, risk-adjusted, consistency)
+  - Mean reversion (RSI-14, Bollinger Band position, Z-score, confluence)
+  - Value & quality (forward PE, P/B, EV/EBITDA, FCF yield, ROE, margins)
+  - Earnings momentum (EPS revisions via yfinance)
+  - Insider activity (buy/sell via yfinance)
+  - Microstructure (VPIN, entropy from quant_features.py)
+  - Factor correlation and eigenvalue decomposition
+
+
+================================================================================
+0c. POWER ANALYTICS — No AI Prompts (Quantitative Only)
 ================================================================================
 File: pages/23_Power_Analytics.py
 Note: This page uses no AI models. All analysis is computed from live market data:

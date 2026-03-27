@@ -718,3 +718,149 @@ Files Modified:
       StockTwits, Polymarket, and Gemini calls that were running in
       background threads for no consumer. Reduces import overhead and
       memory footprint.
+
+
+================================================================================
+March 26-27, 2026 — SIGNAL SCANNER, PORTFOLIO OPTIMIZER, META ANALYSIS
+================================================================================
+Scope: Major upgrades to Signal Scanner (8 tabs), Portfolio Optimizer (9 methods),
+new Meta Analysis page (3029 lines, 9 tabs), quant_features upgrades.
+Files changed: pages/39_Signal_Scanner.py, pages/38_Portfolio_Optimizer.py,
+pages/41_Meta_Analysis.py (new), src/quant_features.py, src/data_engine.py,
+src/layout.py
+
+SIGNAL SCANNER — EXPANDED FROM 4 TO 8 TABS:
+  Files changed: pages/39_Signal_Scanner.py (complete rewrite, 1511 lines)
+  1. Dashboard — market regime indicator, factor spread metrics, top/bottom picks,
+     multi-factor signal heatmap
+  2. Momentum — 12-1 momentum, acceleration, risk-adjusted, consistency, L/S spread
+  3. Mean Reversion — RSI/BB/Z-score with confluence scoring (-3 to +3)
+  4. Value & Quality (NEW) — valuation heatmap (PE/PB/EV-EBITDA/FCF/div yield),
+     quality heatmap (ROE/margins/growth), value-vs-quality quadrant scatter,
+     balance sheet risk table
+  5. Earnings & Sentiment (NEW) — EPS revisions (30D net), insider buying/selling
+     (90D net value), high-conviction combined signals
+  6. Regime & Microstructure (NEW) — VPIN (informed trading probability), entropy
+     (market orderliness), vol regime (20D/63D ratio), regime classification table
+  7. Factor Correlation (NEW) — Spearman correlation matrix, redundancy alerts
+     (|r|>0.7), conflict alerts (r<-0.3), eigenvalue decomposition, effective
+     factor count
+  8. Composite Ranking — configurable factor weights via sliders, weighted composite
+     bar chart, top-10 factor profile heatmap, full ranking table
+  New signals (12 added): momentum acceleration, risk-adjusted momentum, momentum
+  consistency, MR confluence, ROE, profit/operating/gross margins, revenue/earnings
+  growth, EPS revision ratio, insider buy/sell ratio, VPIN, entropy.
+  Performance: parallel data loading (ThreadPoolExecutor), combined yfinance
+  download for price+volume, parallelized fundamentals fetch.
+
+PORTFOLIO OPTIMIZER — UPGRADED FROM 6 TO 9 METHODS:
+  Files changed: pages/38_Portfolio_Optimizer.py, src/quant_features.py
+  New allocation methods:
+  - HERC (CVaR) — Hierarchical Equal Risk Contribution (Raffinot 2018), uses
+    CVaR as risk metric instead of variance for tail-risk awareness
+  - HCAA (1/N) — Hierarchical Clustering-Based Asset Allocation, equal-weight
+    within cluster branches, ultra-robust lowest-turnover
+  - Robust Max Sharpe added to walk-forward backtest (was missing)
+  Upgrades:
+  - HRP upgraded from single linkage to Ward linkage (more balanced clusters)
+  - HRP/HERC/HCAA accept pre-computed denoised covariance/correlation
+  - Ledoit-Wolf covariance denoising toggle (default ON) — sklearn LedoitWolf
+    shrinkage applied before all clustering methods
+  - Dendrogram visualization in Risk Analysis tab (Plotly figure_factory)
+  - Estimation window sensitivity handles all 9 methods
+  New shared functions in src/quant_features.py:
+  - denoise_covariance() — Ledoit-Wolf shrinkage, returns annualized cov/corr
+  - _hrp_linkage() — shared clustering helper for HRP/HERC/HCAA
+  - herc_allocate() — HERC with CVaR or variance risk metric
+  - hcaa_allocate() — hierarchical equal-weight allocation
+
+META ANALYSIS PAGE (NEW — 3029 lines, 9 tabs):
+  Files changed: pages/41_Meta_Analysis.py (new), src/layout.py
+  Purpose: Institutional-grade cross-method portfolio comparison engine.
+  Walk-forward backtests 9 allocation methods + custom blends + SPY benchmark
+  on a configurable multi-group ticker universe.
+
+  Controls:
+  - 15 preset groups (Multi-Asset, 11 sectors, Mega Caps, Global Macro)
+  - Individual ticker toggles with group auto-sync
+  - Configurable lookback (1-5Y), rebalance (monthly/quarterly), est. window
+  - Ledoit-Wolf denoising toggle
+  - Forward estimates toggle (analyst targets, EPS revisions, valuation, macro)
+  - Blended portfolio presets (Robust+MaxDiv 50/50, HRP+HERC 50/50, custom)
+
+  Tab 1 — Equity Curves:
+  - Walk-forward P/L paths for all methods + SPY Buy & Hold (white line)
+  - Top-N slider, final value metrics
+
+  Tab 2 — Allocations:
+  - Current optimal weights (donut + position list)
+  - All methods side-by-side weight table
+  - Rebalance weight history heatmap
+  - Portfolio turnover bar chart with annual cost estimate
+  - CSV download button
+
+  Tab 3 — Forecasts:
+  - Forward return estimates blending 4 components:
+    40% analyst implied return (yfinance consensus target)
+    30% EPS revision momentum (net upgrades/downgrades)
+    20% valuation signal (forward PE vs universe median)
+    10% macro overlay (FRED yield curve + VIX regime)
+  - Macro context dashboard (yield curve, VIX, fed funds, 10Y)
+  - Component breakdown stacked bar chart
+  - Historical vs forecast comparison
+  - Analyst coverage detail table
+
+  Tab 4 — Performance:
+  - Ranked table (Return, Vol, Sharpe, Sortino, Max DD, Calmar, Win Rate)
+  - Grouped bar chart comparing risk-adjusted metrics
+
+  Tab 5 — Institutional Analytics:
+  - Net-of-cost equity curves (gross dotted vs net solid, 10bps round-trip)
+  - Cost drag table per method
+  - Regime analysis (Bull/Bear/Crisis/Recovery Sharpe heatmap + return bars)
+  - Up/Down capture ratio scatter + Information Ratio bar chart
+  - Stress scenario analysis (2008 GFC, COVID, 2022 rates, etc. via beta)
+  - Capacity estimate (1% ADV rule, bottleneck ticker identification)
+
+  Tab 6 — Statistical Tests (de Prado):
+  - Deflated Sharpe Ratio (adjusts for multiple testing bias)
+  - Probability of Backtest Overfitting (CPCV with 6 blocks)
+  - Sequential Bootstrap CI (20-day block bootstrap, 90% CI)
+  - Minimum Track Record Length (days needed at 95% confidence)
+  - Overfitting Scorecard (4-point PASS/FAIL per method, verdict)
+
+  Tab 7 — Drawdown:
+  - Underwater equity curves
+  - Max drawdown comparison bar chart
+  - Drawdown duration analysis (longest, average, episodes)
+
+  Tab 8 — Rolling Analysis:
+  - Rolling 63D Sharpe (top 5 methods)
+  - Method correlation matrix (Spearman)
+  - Independent vs redundant method pairs
+  - Cumulative excess return vs Equal Weight
+
+  Tab 9 — Universe Grid:
+  - Backtests ALL 15 preset groups independently
+  - Sharpe / Return / Max DD heatmaps (universes x methods)
+  - Top 15 universe+method combinations
+  - Best method per universe, best universe per method
+  - Method consistency chart (avg Sharpe with std dev error bars)
+  - Incremental analysis (Sharpe impact of adding each sector to Multi-Asset)
+  - Hierarchical two-layer allocation:
+    Layer 1: group-level optimization (how to split between groups)
+    Layer 2: within-group best method (how to split within each group)
+    Final combined portfolio with SPY comparison banner, CSV downloads,
+    dollar allocation table
+
+  Executive Summary (above tabs):
+  - SPY comparison banner (table: Sharpe/Return/MaxDD with edge)
+  - Top 8 positions as metric cards
+  - CSV download button for current best portfolio weights
+
+OPTIONS FIX — EXPIRATION DATE FETCH:
+  Files changed: src/data_engine.py
+  - get_expiration_dates() now filters to expired=false, contract_type=call,
+    single-page fetch with 10s timeout
+  - Added yfinance fallback (yf.Ticker.options) — instant, always works
+  - SPY expirations now load in ~12s instead of timing out

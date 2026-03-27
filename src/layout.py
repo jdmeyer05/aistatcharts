@@ -68,6 +68,7 @@ PAGE_CONFIG = {
     "38_Portfolio_Optimizer": ("Portfolio Optimizer | AI Statcharts", "🎯"),
     "39_Signal_Scanner":     ("Signal Scanner | AI Statcharts", "📡"),
     "40_Power_Strategies":   ("Power Strategies | AI Statcharts", "⚡"),
+    "41_Meta_Analysis":      ("Meta Analysis | AI Statcharts", "📊"),
 }
 
 
@@ -232,6 +233,7 @@ def render_header(current_page: str):
             ("37_Factor_Decomposition", "Factors", "pages/37_Factor_Decomposition.py"),
             ("38_Portfolio_Optimizer", "Optimizer", "pages/38_Portfolio_Optimizer.py"),
             ("39_Signal_Scanner", "Signals", "pages/39_Signal_Scanner.py"),
+            ("41_Meta_Analysis", "Meta Analysis", "pages/41_Meta_Analysis.py"),
         ]),
         ("Sectors", [
             ("24_Energy_Sector", "Energy", "pages/24_Energy_Sector.py"),

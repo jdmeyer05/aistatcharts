@@ -264,17 +264,39 @@ def polygon_paginate(url: str, api_key: str, max_pages: int = 20) -> list:
 
 @st.cache_data(ttl=3600)
 def get_expiration_dates(symbol: str):
-    """Fetches all available expiration dates."""
+    """Fetches all available expiration dates.
+
+    Uses expired=false and contract_type=call (halves results) to minimize
+    API calls. Only needs expiration_date from each contract.
+    """
     api_key = _get_massive_key()
     if api_key:
+        # Try efficient single-page fetch first (covers most tickers)
         try:
-            url = f"https://api.polygon.io/v3/reference/options/contracts?underlying_ticker={symbol}&limit=1000&apiKey={api_key}"
-            contracts = polygon_paginate(url, api_key)
+            url = (
+                f"https://api.polygon.io/v3/reference/options/contracts"
+                f"?underlying_ticker={symbol}&expired=false&contract_type=call"
+                f"&limit=1000&order=asc&sort=expiration_date&apiKey={api_key}"
+            )
+            # Quick fetch — 10s timeout, max 3 pages. Falls back to yfinance if slow.
+            res = requests.get(url, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+            contracts = data.get("results", [])
             exps = sorted(set(c['expiration_date'] for c in contracts))
             if exps:
                 return exps
         except Exception as e:
             logger.warning(f"Massive expirations fetch failed for {symbol}: {e}")
+
+    # yfinance fallback for expiration dates
+    try:
+        import yfinance as yf
+        t = yf.Ticker(symbol)
+        if t.options:
+            return sorted(t.options)
+    except Exception:
+        pass
 
     return []
 

@@ -13,7 +13,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **40 pages** of quantitative analysis tools (incl. 11 sector pages, 6 quant research pages, power trading strategies)
+- **41 pages** of quantitative analysis tools (incl. 11 sector pages, 6 quant research pages, power trading strategies, meta portfolio analysis)
 - **3 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus
 - **Landing page dashboard** -- market heatmap (5 lists, drills into ETF holdings), AI intelligence cards, watchlist
 - **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
@@ -60,8 +60,9 @@ Opens at **http://localhost:8501** (or next available port).
 | **Correlation** | Cross-asset correlation matrix, regime correlations (calm/normal/stress), rolling correlation, hierarchical clustering, breakdown alerts, PCA factor structure |
 | **Quant Lab** | Lopez de Prado methods: fractional differentiation, CUSUM filter, SADF bubble detection, triple barrier labeling, meta-labeling, sequential bootstrap, feature importance (MDI/MDA/SFI/SHAP), HRP, microstructure (VPIN/Kyle's Lambda/Amihud), entropy |
 | **Factor Decomposition** | Fama-French 5-factor + momentum decomposition: factor returns, exposure betas, alpha attribution waterfall, rolling style drift detection, risk decomposition pie |
-| **Portfolio Optimizer** | 6 allocation methods head-to-head: mean-variance tangency, min variance, risk parity, max diversification, HRP, Black-Litterman with user views. Walk-forward OOS backtest. |
-| **Signal Scanner** | Cross-sectional momentum (12-1), mean reversion (RSI/BB/Z-score), value, carry, quality signals across configurable universes. Composite multi-factor ranking. Momentum L/S spread backtest. |
+| **Portfolio Optimizer** | 9 allocation methods head-to-head: tangency, robust Sharpe, min variance, risk parity, max diversification, HRP (Ward), HERC (CVaR), HCAA (1/N), Black-Litterman. Ledoit-Wolf covariance denoising. Walk-forward OOS backtest. Dendrogram visualization. |
+| **Signal Scanner** | 8-tab institutional scanner: momentum (12-1, acceleration, risk-adjusted), mean reversion (RSI/BB/Z-score, confluence), value & quality (PE/PB/ROE/margins), earnings & sentiment (EPS revisions, insider buying), regime & microstructure (VPIN, entropy), factor correlation (redundancy, eigenvalue decomposition), composite ranking (configurable weights). |
+| **Meta Analysis** | 9-tab cross-method portfolio comparison engine: walk-forward equity curves, allocations with rebalance history, forward return estimates (analyst/EPS/valuation/macro), performance ranking, institutional analytics (net-of-cost, regime analysis, capture ratios, stress tests, capacity), de Prado statistical tests (DSR, PBO, sequential bootstrap, min track record), drawdown duration, rolling analysis, universe grid with hierarchical two-layer allocation. SPY benchmark. CSV export. |
 | **Power Strategies** | Spark spreads, heat rate trades, peak/off-peak, RT vs DAM arb, renewable curtailment, congestion analysis. Live intraday charts. De Prado-style strategy backtester with walk-forward, sequential bootstrap, DSR. Multi-strategy meta-analysis with HRP/risk parity blending. |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
