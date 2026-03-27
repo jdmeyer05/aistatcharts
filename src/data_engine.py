@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import requests
 from datetime import date, timedelta
-from supabase import create_client
+from supabase import create_client, Client
 import streamlit as st
 
 logger = logging.getLogger(__name__)
