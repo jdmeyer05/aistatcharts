@@ -85,6 +85,9 @@ def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collap
     st.set_page_config(page_title=title, page_icon=icon, layout=layout,
                        initial_sidebar_state=sidebar_state)
     check_auth()
+    # Load theme preference before CSS injection
+    from src.styles import load_theme_preference
+    load_theme_preference()
     inject_global_css()
     render_header(page_key)
     _inject_mobile_session_guard()
@@ -398,8 +401,12 @@ def render_header(current_page: str):
                 unsafe_allow_html=True,
             )
 
-            # ── Actions ──
+            # ── Theme Toggle ──
             st.divider()
+            from src.styles import render_theme_toggle
+            render_theme_toggle()
+
+            # ── Actions ──
             if _is_guest:
                 st.markdown(
                     f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-bottom:6px;">'

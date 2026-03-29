@@ -103,7 +103,7 @@ if gas_price and latest_hub is not None and latest_hub > 0:
 # TABS
 # ═══════════════════════════════════════════════
 
-tab_charts, tab_spark, tab_heatrate, tab_peakoff, tab_rtdam, tab_curtail, tab_congestion, tab_backtest, tab_meta = st.tabs([
+tab_charts, tab_spark, tab_heatrate, tab_peakoff, tab_rtdam, tab_curtail, tab_congestion, tab_simday, tab_backtest, tab_meta = st.tabs([
     "Live Charts",
     "Spark Spread",
     "Heat Rate Trade",
@@ -111,6 +111,7 @@ tab_charts, tab_spark, tab_heatrate, tab_peakoff, tab_rtdam, tab_curtail, tab_co
     "RT vs DAM Arb",
     "Renewable Curtailment",
     "Congestion",
+    "Similar Day Forecast",
     "Strategy Backtest",
     "Meta-Analysis",
 ])
@@ -765,20 +766,30 @@ with tab_rtdam, error_boundary("RT vs DAM Arb"):
                     rt_api_df[rt_price_col] = pd.to_numeric(rt_api_df[rt_price_col], errors="coerce")
                     dam_api_df[dam_price_col] = pd.to_numeric(dam_api_df[dam_price_col], errors="coerce")
 
+                    def _parse_hour(series):
+                        """Parse hour from various ERCOT formats: numeric (1-24), string ('01:00'), etc."""
+                        parsed = pd.to_numeric(series, errors="coerce")
+                        if parsed.isna().all():
+                            # Try parsing as time string like "01:00" or "1:00"
+                            parsed = series.astype(str).str.extract(r"(\d+)")[0].astype(float)
+                        return parsed
+
                     # Aggregate RT to hourly if it's 15-min intervals
                     if rt_time_col and rt_time_col in rt_api_df.columns:
-                        rt_api_df["_hour"] = pd.to_numeric(rt_api_df[rt_time_col], errors="coerce")
+                        rt_api_df["_hour"] = _parse_hour(rt_api_df[rt_time_col])
+                        rt_api_df = rt_api_df.dropna(subset=["_hour"])
                         rt_hourly = rt_api_df.groupby("_hour")[rt_price_col].mean().reset_index()
                         rt_hourly.columns = ["hour", "rt_price"]
                     else:
-                        rt_hourly = pd.DataFrame({"hour": range(len(rt_api_df)), "rt_price": rt_api_df[rt_price_col].values})
+                        rt_hourly = pd.DataFrame({"hour": range(1, len(rt_api_df) + 1), "rt_price": rt_api_df[rt_price_col].values})
 
                     if dam_time_col and dam_time_col in dam_api_df.columns:
-                        dam_api_df["_hour"] = pd.to_numeric(dam_api_df[dam_time_col], errors="coerce")
+                        dam_api_df["_hour"] = _parse_hour(dam_api_df[dam_time_col])
+                        dam_api_df = dam_api_df.dropna(subset=["_hour"])
                         dam_hourly = dam_api_df.groupby("_hour")[dam_price_col].mean().reset_index()
                         dam_hourly.columns = ["hour", "dam_price"]
                     else:
-                        dam_hourly = pd.DataFrame({"hour": range(len(dam_api_df)), "dam_price": dam_api_df[dam_price_col].values})
+                        dam_hourly = pd.DataFrame({"hour": range(1, len(dam_api_df) + 1), "dam_price": dam_api_df[dam_price_col].values})
 
                     # Merge on hour
                     merged_prices = rt_hourly.merge(dam_hourly, on="hour", how="inner")
@@ -1092,7 +1103,335 @@ with tab_congestion, error_boundary("Congestion"):
 
 
 # ═══════════════════════════════════════════════
-# TAB 7: STRATEGY BACKTEST
+# TAB 8: SIMILAR DAY FORECAST
+# ═══════════════════════════════════════════════
+
+with tab_simday, error_boundary("Similar Day Forecast"):
+    st.subheader("Similar Day Price Forecast")
+    st.caption(
+        "Finds historical days with similar weather and demand patterns to tomorrow's forecast. "
+        "Averages their hourly price profiles to estimate day-ahead prices."
+    )
+
+    import requests as _sim_req
+
+    # ERCOT weather nodes: Houston + Dallas (weighted population centers)
+    _WEATHER_NODES = [
+        {"name": "Houston", "lat": 29.76, "lon": -95.37, "weight": 0.6},
+        {"name": "Dallas", "lat": 32.78, "lon": -96.80, "weight": 0.4},
+    ]
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _fetch_weather_forecast():
+        """Fetch tomorrow's hourly weather forecast from Open-Meteo (free, no key)."""
+        results = {}
+        for node in _WEATHER_NODES:
+            try:
+                r = _sim_req.get("https://api.open-meteo.com/v1/forecast", params={
+                    "latitude": node["lat"], "longitude": node["lon"],
+                    "hourly": "temperature_2m,wind_speed_10m,cloud_cover,relative_humidity_2m",
+                    "temperature_unit": "fahrenheit",
+                    "wind_speed_unit": "mph",
+                    "timezone": "America/Chicago",
+                    "forecast_days": 2,
+                }, timeout=10)
+                data = r.json().get("hourly", {})
+                if data:
+                    results[node["name"]] = {
+                        "temp": data.get("temperature_2m", []),
+                        "wind": data.get("wind_speed_10m", []),
+                        "cloud": data.get("cloud_cover", []),
+                        "humidity": data.get("relative_humidity_2m", []),
+                        "time": data.get("time", []),
+                        "weight": node["weight"],
+                    }
+            except Exception:
+                pass
+        return results
+
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def _fetch_weather_history(start_date: str, end_date: str):
+        """Fetch historical hourly weather from Open-Meteo archive."""
+        results = {}
+        for node in _WEATHER_NODES:
+            try:
+                r = _sim_req.get("https://archive-api.open-meteo.com/v1/archive", params={
+                    "latitude": node["lat"], "longitude": node["lon"],
+                    "hourly": "temperature_2m,wind_speed_10m,cloud_cover",
+                    "temperature_unit": "fahrenheit",
+                    "wind_speed_unit": "mph",
+                    "timezone": "America/Chicago",
+                    "start_date": start_date, "end_date": end_date,
+                }, timeout=30)
+                data = r.json().get("hourly", {})
+                if data:
+                    results[node["name"]] = data
+            except Exception:
+                pass
+        return results
+
+    with st.spinner("Loading weather data..."):
+        _forecast = _fetch_weather_forecast()
+
+    if _forecast:
+        # Build tomorrow's feature vector (hours 24-47 = tomorrow)
+        _tomorrow_temps, _tomorrow_winds, _tomorrow_clouds = [], [], []
+        for node_name, node_data in _forecast.items():
+            w = node_data["weight"]
+            temps = node_data["temp"][24:48] if len(node_data["temp"]) >= 48 else node_data["temp"][-24:]
+            winds = node_data["wind"][24:48] if len(node_data["wind"]) >= 48 else node_data["wind"][-24:]
+            clouds = node_data["cloud"][24:48] if len(node_data["cloud"]) >= 48 else node_data["cloud"][-24:]
+            _tomorrow_temps.append([t * w for t in temps])
+            _tomorrow_winds.append([v * w for v in winds])
+            _tomorrow_clouds.append([c * w for c in clouds])
+
+        # Weighted average across nodes
+        import numpy as _np
+        _tm_temp = _np.sum(_tomorrow_temps, axis=0)
+        _tm_wind = _np.sum(_tomorrow_winds, axis=0)
+        _tm_cloud = _np.sum(_tomorrow_clouds, axis=0)
+
+        _temp_high = float(max(_tm_temp))
+        _temp_low = float(min(_tm_temp))
+        _temp_avg = float(_np.mean(_tm_temp))
+        _wind_avg = float(_np.mean(_tm_wind))
+        _cloud_avg = float(_np.mean(_tm_cloud))
+
+        from datetime import date, timedelta, datetime
+        _tomorrow = date.today() + timedelta(days=1)
+        _dow = _tomorrow.weekday()  # 0=Mon, 6=Sun
+        _month = _tomorrow.month
+        _is_weekend = _dow >= 5
+
+        # Display tomorrow's forecast
+        st.markdown("#### Tomorrow's Forecast")
+        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+        fc1.metric("Date", _tomorrow.strftime("%a %b %d"))
+        fc2.metric("High / Low", f"{_temp_high:.0f}°F / {_temp_low:.0f}°F")
+        fc3.metric("Avg Wind", f"{_wind_avg:.0f} mph")
+        fc4.metric("Cloud Cover", f"{_cloud_avg:.0f}%")
+        fc5.metric("Day Type", "Weekend" if _is_weekend else "Weekday")
+
+        # Hourly forecast chart
+        fig_wx = go.Figure()
+        fig_wx.add_trace(go.Scatter(
+            x=list(range(1, 25)), y=_tm_temp,
+            mode="lines+markers", name="Temperature (°F)",
+            line=dict(color="#ff6b35", width=2),
+        ))
+        fig_wx.add_trace(go.Scatter(
+            x=list(range(1, 25)), y=_tm_wind,
+            mode="lines", name="Wind (mph)",
+            line=dict(color="#00d1ff", width=2), yaxis="y2",
+        ))
+        fig_wx.update_layout(
+            template="plotly_dark", height=250,
+            margin=dict(t=10, b=0, l=0, r=50),
+            xaxis_title="Hour", yaxis_title="Temperature (°F)",
+            yaxis2=dict(title="Wind (mph)", overlaying="y", side="right"),
+            hovermode="x unified", legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(fig_wx, use_container_width=True, config={"displayModeBar": False})
+
+        # ── Find similar historical days ──
+        st.divider()
+        st.markdown("#### Similar Day Analysis")
+
+        _lookback_months = st.slider("Historical lookback (months)", 3, 24, 12, key="simday_lookback")
+        _n_similar = st.slider("Number of similar days", 3, 15, 7, key="simday_n")
+
+        _hist_start = (date.today() - timedelta(days=_lookback_months * 30)).strftime("%Y-%m-%d")
+        _hist_end = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        with st.spinner(f"Loading {_lookback_months} months of weather history..."):
+            _hist_weather = _fetch_weather_history(_hist_start, _hist_end)
+
+        if _hist_weather:
+            # Build daily feature vectors for each historical day
+            _ref_node = list(_hist_weather.values())[0]
+            _hist_times = _ref_node.get("time", [])
+            _hist_temps = _ref_node.get("temperature_2m", [])
+            _hist_winds = _ref_node.get("wind_speed_10m", [])
+            _hist_clouds = _ref_node.get("cloud_cover", [])
+
+            if len(_hist_temps) >= 48:
+                # Group into days (24 hours each)
+                _n_days = len(_hist_temps) // 24
+                _daily_features = []
+
+                for i in range(_n_days):
+                    s, e = i * 24, (i + 1) * 24
+                    day_temps = _hist_temps[s:e]
+                    day_winds = _hist_winds[s:e]
+                    day_clouds = _hist_clouds[s:e] if _hist_clouds else [50] * 24
+                    day_date_str = _hist_times[s][:10] if s < len(_hist_times) else ""
+
+                    try:
+                        day_date = datetime.strptime(day_date_str, "%Y-%m-%d").date()
+                    except Exception:
+                        continue
+
+                    t_high = max(day_temps) if day_temps else 70
+                    t_low = min(day_temps) if day_temps else 50
+                    t_avg = sum(day_temps) / len(day_temps) if day_temps else 60
+                    w_avg = sum(day_winds) / len(day_winds) if day_winds else 10
+                    c_avg = sum(day_clouds) / len(day_clouds) if day_clouds else 50
+                    d_dow = day_date.weekday()
+                    d_month = day_date.month
+                    d_weekend = 1 if d_dow >= 5 else 0
+
+                    _daily_features.append({
+                        "date": day_date, "date_str": day_date_str,
+                        "temp_high": t_high, "temp_low": t_low, "temp_avg": t_avg,
+                        "wind_avg": w_avg, "cloud_avg": c_avg,
+                        "dow": d_dow, "month": d_month, "is_weekend": d_weekend,
+                        "hourly_temps": day_temps,
+                    })
+
+                if _daily_features:
+                    # Compute similarity to tomorrow
+                    _target = _np.array([_temp_high, _temp_low, _temp_avg, _wind_avg, _cloud_avg,
+                                         _dow, _month, 1 if _is_weekend else 0])
+
+                    # Normalize weights: temp matters most, then wind, then calendar
+                    _weights = _np.array([3.0, 3.0, 2.0, 2.0, 1.0, 1.5, 2.0, 3.0])
+
+                    for day in _daily_features:
+                        _feat = _np.array([day["temp_high"], day["temp_low"], day["temp_avg"],
+                                           day["wind_avg"], day["cloud_avg"],
+                                           day["dow"], day["month"], day["is_weekend"]])
+                        # Normalized Euclidean distance
+                        _diff = (_target - _feat) / (_np.array([30, 30, 20, 15, 50, 3, 6, 1]) + 1e-6)
+                        day["distance"] = float(_np.sqrt((_diff * _weights) @ (_diff * _weights)))
+
+                    # Sort by similarity
+                    _daily_features.sort(key=lambda d: d["distance"])
+                    _similar_days = _daily_features[:_n_similar]
+
+                    # Display similar days
+                    st.markdown(f"**Top {_n_similar} most similar days to {_tomorrow.strftime('%b %d, %Y')}:**")
+
+                    _sim_rows = []
+                    for d in _similar_days:
+                        _sim_rows.append({
+                            "Date": d["date"].strftime("%Y-%m-%d (%a)"),
+                            "High": f"{d['temp_high']:.0f}°F",
+                            "Low": f"{d['temp_low']:.0f}°F",
+                            "Wind": f"{d['wind_avg']:.0f} mph",
+                            "Cloud": f"{d['cloud_avg']:.0f}%",
+                            "Similarity": f"{100 / (1 + d['distance']):.0f}%",
+                        })
+                    st.dataframe(pd.DataFrame(_sim_rows), use_container_width=True, hide_index=True)
+
+                    # ── Fetch ERCOT prices for similar days and build forecast ──
+                    st.divider()
+                    st.markdown("#### Day-Ahead Price Estimate")
+
+                    if _has_api:
+                        _price_profiles = []
+                        _found_dates = []
+                        for d in _similar_days:
+                            try:
+                                _dam = ercot_api.fetch_dam_spp(d["date_str"])
+                                if _dam is not None and not _dam.empty:
+                                    _price_col = next((c for c in _dam.columns if "price" in c.lower() or "spp" in c.lower()), None)
+                                    if _price_col:
+                                        prices = pd.to_numeric(_dam[_price_col], errors="coerce").dropna().values
+                                        if len(prices) >= 20:
+                                            # Normalize to 24 hours
+                                            if len(prices) > 24:
+                                                prices = prices[:24]
+                                            elif len(prices) < 24:
+                                                prices = _np.pad(prices, (0, 24 - len(prices)), mode="edge")
+                                            _price_profiles.append(prices)
+                                            _found_dates.append(d["date_str"])
+                            except Exception:
+                                pass
+
+                        if _price_profiles:
+                            _profiles = _np.array(_price_profiles)
+                            _mean_profile = _np.mean(_profiles, axis=0)
+                            _min_profile = _np.min(_profiles, axis=0)
+                            _max_profile = _np.max(_profiles, axis=0)
+                            _hours = list(range(1, 25))
+
+                            # Forecast chart
+                            fig_forecast = go.Figure()
+
+                            # Confidence band
+                            fig_forecast.add_trace(go.Scatter(
+                                x=_hours + _hours[::-1],
+                                y=list(_max_profile) + list(_min_profile[::-1]),
+                                fill="toself", fillcolor="rgba(0,209,255,0.12)",
+                                line=dict(color="rgba(0,0,0,0)"), name="Range",
+                                hoverinfo="skip",
+                            ))
+
+                            # Individual similar day profiles
+                            for i, (profile, dt) in enumerate(zip(_price_profiles, _found_dates)):
+                                fig_forecast.add_trace(go.Scatter(
+                                    x=_hours, y=profile, mode="lines",
+                                    line=dict(color="#555", width=1), opacity=0.4,
+                                    name=dt, showlegend=False,
+                                ))
+
+                            # Mean forecast
+                            fig_forecast.add_trace(go.Scatter(
+                                x=_hours, y=_mean_profile, mode="lines+markers",
+                                line=dict(color="#00d1ff", width=3),
+                                marker=dict(size=5), name="Forecast (Mean)",
+                            ))
+
+                            fig_forecast.update_layout(
+                                template="plotly_dark", height=400,
+                                margin=dict(t=10, b=0, l=0, r=0),
+                                xaxis_title="Hour Ending", yaxis_title="Price ($/MWh)",
+                                hovermode="x unified",
+                                legend=dict(orientation="h", y=-0.15),
+                            )
+                            st.plotly_chart(fig_forecast, use_container_width=True, config={"displayModeBar": False})
+
+                            # Summary metrics
+                            pm1, pm2, pm3, pm4 = st.columns(4)
+                            pm1.metric("Avg Price", f"${_np.mean(_mean_profile):.2f}/MWh")
+                            pm2.metric("Peak Price (HE)", f"${max(_mean_profile):.2f} (HE{_np.argmax(_mean_profile)+1})")
+                            pm3.metric("Off-Peak Avg", f"${_np.mean(_mean_profile[:6]):.2f}/MWh",
+                                       help="Hours 1-6 (midnight to 6am)")
+                            pm4.metric("Similar Days Used", f"{len(_price_profiles)}")
+
+                            # Peak hours analysis
+                            _peak_hours = _mean_profile[6:22]  # HE7-HE22
+                            _offpeak = _np.concatenate([_mean_profile[:6], _mean_profile[22:]])
+                            st.caption(
+                                f"**Peak (HE7-22):** ${_np.mean(_peak_hours):.2f}/MWh avg | "
+                                f"**Off-Peak (HE1-6, 23-24):** ${_np.mean(_offpeak):.2f}/MWh avg | "
+                                f"**Spread:** ${_np.mean(_peak_hours) - _np.mean(_offpeak):.2f}/MWh"
+                            )
+
+                            # Temperature-price correlation insight
+                            if _temp_high > 95:
+                                st.warning(f"**Heat alert:** Forecast high of {_temp_high:.0f}°F. "
+                                           f"Similar hot days averaged ${_np.mean(_mean_profile):.2f}/MWh — "
+                                           f"watch for scarcity pricing in HE15-18.")
+                            elif _wind_avg > 15:
+                                st.info(f"**High wind day:** {_wind_avg:.0f} mph average. "
+                                        f"Expect potential negative prices during overnight/early morning wind peaks.")
+                        else:
+                            st.warning("Could not fetch ERCOT prices for similar days. ERCOT API may have limited historical data.")
+                    else:
+                        st.info("ERCOT API not configured. Connect ERCOT API to see price estimates from similar days.")
+                else:
+                    st.warning("Could not build daily feature vectors from weather history.")
+            else:
+                st.warning("Not enough weather history data (need at least 2 days).")
+        else:
+            st.warning("Could not fetch historical weather data from Open-Meteo.")
+    else:
+        st.warning("Could not fetch weather forecast from Open-Meteo.")
+
+
+# ═══════════════════════════════════════════════
+# TAB 9: STRATEGY BACKTEST
 # ═══════════════════════════════════════════════
 with tab_backtest, error_boundary("Strategy Backtest"):
     st.subheader("Power Strategy Backtester")

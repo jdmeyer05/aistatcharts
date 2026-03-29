@@ -1,7 +1,7 @@
 """Centralized color system and global CSS for AI Statcharts."""
 import streamlit as st
 
-COLORS = {
+COLORS_DARK = {
     "bg_primary": "#0e1117",
     "bg_secondary": "#1c1f26",
     "accent": "#00d1ff",
@@ -14,6 +14,29 @@ COLORS = {
     "card_border": "#30363d",
 }
 
+COLORS_LIGHT = {
+    "bg_primary": "#ffffff",
+    "bg_secondary": "#f6f8fa",
+    "accent": "#0969da",
+    "text_primary": "#1f2328",
+    "text_muted": "#656d76",
+    "success": "#1a7f37",
+    "danger": "#cf222e",
+    "warning": "#bf8700",
+    "card_bg": "#ffffff",
+    "card_border": "#d0d7de",
+}
+
+
+def _is_light_mode() -> bool:
+    return st.session_state.get("_theme_mode", "dark") == "light"
+
+
+# Active color set — always dark at import time.
+# Light mode is handled via CSS overrides in inject_global_css(), not by changing COLORS.
+# This keeps all inline HTML consistent (dark colors) while CSS flips the visual theme.
+COLORS = COLORS_DARK
+
 APP_VERSION = "2.1.0"
 
 # Default Plotly config — disables scroll zoom so mobile users can scroll the page
@@ -25,19 +48,44 @@ PLOTLY_CONFIG = {
 
 
 def _set_plotly_defaults():
-    """Set Plotly defaults globally so all charts inherit uirevision and dark theme.
-    Call once at import time."""
+    """Set Plotly defaults globally. Respects current theme mode."""
     try:
         import plotly.io as pio
-        import plotly.graph_objects as go
-        # Set uirevision on the default template so charts don't re-animate on Streamlit reruns
-        pio.templates["plotly_dark"].layout.uirevision = "stable"
-        pio.templates.default = "plotly_dark"
+        template = "plotly_white" if _is_light_mode() else "plotly_dark"
+        pio.templates[template].layout.uirevision = "stable"
+        pio.templates.default = template
     except Exception:
         pass
 
 
 _set_plotly_defaults()
+
+
+def render_theme_toggle():
+    """Render a dark/light mode toggle. Call from layout header."""
+    current = st.session_state.get("_theme_mode", "dark")
+    icon = "☀️" if current == "dark" else "🌙"
+    if st.button(icon, key="_theme_toggle", help="Toggle dark/light mode"):
+        new_mode = "light" if current == "dark" else "dark"
+        st.session_state["_theme_mode"] = new_mode
+        # Persist preference
+        try:
+            from src.user_prefs import save_pref
+            save_pref("theme_mode", new_mode)
+        except Exception:
+            pass
+        st.rerun()
+
+
+def load_theme_preference():
+    """Load saved theme preference on startup."""
+    if "_theme_mode" not in st.session_state:
+        try:
+            from src.user_prefs import load_pref
+            saved = load_pref("theme_mode", "dark")
+            st.session_state["_theme_mode"] = saved
+        except Exception:
+            st.session_state["_theme_mode"] = "dark"
 
 
 def inject_global_css():
@@ -587,6 +635,201 @@ def inject_global_css():
     }}
 </style>
 """, unsafe_allow_html=True)
+
+    # Light mode override — comprehensive CSS override for all Streamlit elements
+    if _is_light_mode():
+        _L = COLORS_LIGHT
+        st.markdown(f"""<style>
+        /* ── Base app background ── */
+        .stApp {{
+            background: {_L['bg_primary']} !important;
+            background-image: none !important;
+            color: {_L['text_primary']} !important;
+        }}
+        .stApp::before, .stApp::after {{
+            display: none !important;
+        }}
+
+        /* ── All text elements ── */
+        .stMarkdown, .stMarkdown p, .stCaption, .stText,
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] li,
+        [data-testid="stMarkdownContainer"] span,
+        [data-testid="stMarkdownContainer"] td,
+        [data-testid="stMarkdownContainer"] th,
+        label, .stSelectbox label, .stTextInput label, .stNumberInput label,
+        .stSlider label, .stRadio label, .stCheckbox label {{
+            color: {_L['text_primary']} !important;
+        }}
+        h1, h2, h3, h4, h5, h6,
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {{
+            color: {_L['text_primary']} !important;
+        }}
+        .stCaption, [data-testid="stCaptionContainer"] {{
+            color: {_L['text_muted']} !important;
+        }}
+
+        /* ── Cards & containers ── */
+        div[data-testid="stVerticalBlockBorderWrapper"] {{
+            background-color: {_L['card_bg']} !important;
+            border-color: {_L['card_border']} !important;
+            backdrop-filter: none !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08) !important;
+        }}
+
+        /* ── Metrics ── */
+        [data-testid="stMetric"] {{
+            background: {_L['card_bg']} !important;
+            border-color: {_L['card_border']} !important;
+            backdrop-filter: none !important;
+        }}
+        [data-testid="stMetric"] [data-testid="stMetricValue"] {{
+            color: {_L['text_primary']} !important;
+        }}
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] {{
+            color: {_L['text_muted']} !important;
+        }}
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] {{
+            opacity: 0.85;
+        }}
+
+        /* ── Tabs ── */
+        .stTabs {{
+            border-color: {_L['card_border']} !important;
+            background: {_L['card_bg']} !important;
+        }}
+        .stTabs [data-baseweb="tab-list"] {{
+            background: {_L['bg_secondary']} !important;
+            border-color: {_L['card_border']} !important;
+        }}
+        .stTabs [data-baseweb="tab"] {{
+            color: {_L['text_muted']} !important;
+        }}
+        .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+            color: {_L['accent']} !important;
+            border-bottom-color: {_L['accent']} !important;
+        }}
+        .stTabs [data-baseweb="tab-panel"] {{
+            background: {_L['card_bg']} !important;
+        }}
+
+        /* ── Charts, tables, expanders, alerts ── */
+        [data-testid="stPlotlyChart"],
+        [data-testid="stDataFrame"],
+        [data-testid="stTable"],
+        [data-testid="stExpander"],
+        [data-testid="stAlert"] {{
+            border-color: {_L['card_border']} !important;
+        }}
+        [data-testid="stExpander"] details {{
+            background: {_L['card_bg']} !important;
+        }}
+        [data-testid="stExpander"] summary {{
+            color: {_L['text_primary']} !important;
+        }}
+
+        /* ── Buttons ── */
+        .stPopover > button,
+        .stMainBlockContainer .stButton > button[kind="secondary"] {{
+            background: {_L['bg_secondary']} !important;
+            border-color: {_L['card_border']} !important;
+            color: {_L['text_primary']} !important;
+        }}
+        .stMainBlockContainer .stButton > button[kind="primary"] {{
+            color: white !important;
+        }}
+        .stPopover > button:hover,
+        .stMainBlockContainer .stButton > button[kind="secondary"]:hover {{
+            border-color: {_L['accent']} !important;
+        }}
+
+        /* ── Form inputs ── */
+        .stTextInput > div > div, .stNumberInput > div > div,
+        .stSelectbox > div > div, .stMultiSelect > div > div {{
+            background: {_L['card_bg']} !important;
+            border-color: {_L['card_border']} !important;
+            color: {_L['text_primary']} !important;
+        }}
+        .stTextInput input, .stNumberInput input {{
+            color: {_L['text_primary']} !important;
+        }}
+        [data-baseweb="select"] {{
+            background: {_L['card_bg']} !important;
+        }}
+        [data-baseweb="select"] [data-testid="stMarkdownContainer"] {{
+            color: {_L['text_primary']} !important;
+        }}
+
+        /* ── Slider ── */
+        .stSlider [data-testid="stThumbValue"] {{
+            color: {_L['text_primary']} !important;
+        }}
+
+        /* ── Radio buttons ── */
+        .stRadio > div {{
+            color: {_L['text_primary']} !important;
+        }}
+
+        /* ── Dataframes ── */
+        [data-testid="stDataFrame"] {{
+            background: {_L['card_bg']} !important;
+        }}
+
+        /* ── Popover content ── */
+        [data-testid="stPopoverBody"] {{
+            background: {_L['card_bg']} !important;
+            border-color: {_L['card_border']} !important;
+            color: {_L['text_primary']} !important;
+        }}
+
+        /* ── Dividers ── */
+        hr, [data-testid="stDivider"] {{
+            border-color: {_L['card_border']} !important;
+        }}
+
+        /* ── Toast notifications ── */
+        [data-testid="stToast"] {{
+            background: {_L['card_bg']} !important;
+            color: {_L['text_primary']} !important;
+            border-color: {_L['card_border']} !important;
+        }}
+
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar {{
+            width: 8px;
+        }}
+        ::-webkit-scrollbar-track {{
+            background: {_L['bg_secondary']};
+        }}
+        ::-webkit-scrollbar-thumb {{
+            background: {_L['card_border']};
+            border-radius: 4px;
+        }}
+
+        /* ── Ticker tape ── */
+        .ticker-tape-container {{
+            background: {_L['bg_secondary']} !important;
+        }}
+
+        /* ── Skeleton loading ── */
+        .skeleton {{
+            background: linear-gradient(90deg, {_L['bg_secondary']} 25%, #e8ecf0 50%, {_L['bg_secondary']} 75%) !important;
+            border-color: {_L['card_border']} !important;
+        }}
+
+        /* ── Error/exception display ── */
+        .stException {{
+            background: rgba(207, 34, 46, 0.06) !important;
+            border-color: {_L['danger']} !important;
+        }}
+
+        /* ── Site header ── */
+        .site-header {{
+            border-bottom: 1px solid {_L['card_border']};
+            padding-bottom: 8px;
+            margin-bottom: 8px;
+        }}
+        </style>""", unsafe_allow_html=True)
 
     # Disable Plotly scrollZoom globally via JS (prevents mobile scroll hijack)
     st.markdown("""<script>
