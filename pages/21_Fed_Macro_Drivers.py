@@ -192,10 +192,14 @@ with error_boundary("Dual Mandate Scorecard"):
 # ════════════════════════════════════════
 # TABS
 # ════════════════════════════════════════
-tab_signals, tab_trends, tab_fed, tab_sentiment = st.tabs([
+tab_signals, tab_trends, tab_fed, tab_fomc_diff, tab_inflation, tab_labor, tab_yields, tab_sentiment = st.tabs([
     "Signal Matrix",
     "Driver Trends",
     "Fed Policy",
+    "FOMC Statement Diff",
+    "Inflation Deep Dive",
+    "Labor Market",
+    "Yield Curve",
     "Market Sentiment",
 ])
 
@@ -352,6 +356,91 @@ with tab_signals, error_boundary("Policy Signal Matrix"):
             f'Current Fed Funds Rate: <strong>{ff_row["Current"]}</strong></div>',
             unsafe_allow_html=True,
         )
+
+    # Aggregate hawkish/dovish score
+    n_hawk = sum(1 for r in signal_rows if r["Signal"] in ("Hawkish", "Tightening", "Stress", "Recession Risk"))
+    n_dove = sum(1 for r in signal_rows if r["Signal"] in ("Dovish", "Easing", "Calm"))
+    n_neutral = sum(1 for r in signal_rows if r["Signal"] in ("Neutral", "Normal"))
+    n_total = len(signal_rows)
+
+    if n_total > 0:
+        hawk_pct = n_hawk / n_total * 100
+        dove_pct = n_dove / n_total * 100
+        net_label = "HAWKISH" if hawk_pct > dove_pct + 10 else ("DOVISH" if dove_pct > hawk_pct + 10 else "MIXED")
+        net_color = COLORS["danger"] if net_label == "HAWKISH" else (COLORS["success"] if net_label == "DOVISH" else COLORS["warning"])
+
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.markdown(
+            f'<div style="text-align:center;padding:10px;border:2px solid {net_color};border-radius:8px;">'
+            f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};">NET SIGNAL</div>'
+            f'<div style="font-size:1.3rem;font-weight:800;color:{net_color};">{net_label}</div>'
+            f'</div>', unsafe_allow_html=True)
+        sc2.metric("Hawkish", f"{n_hawk}/{n_total}", f"{hawk_pct:.0f}%")
+        sc3.metric("Dovish", f"{n_dove}/{n_total}", f"{dove_pct:.0f}%")
+        sc4.metric("Neutral", f"{n_neutral}/{n_total}")
+
+    # Taylor Rule estimate
+    st.divider()
+    st.markdown("##### Taylor Rule vs Actual Rate")
+    _cpi_df = driver_data.get("CPIAUCSL")
+    _ur_df = driver_data.get("UNRATE")
+    _ff_df = driver_data.get("FEDFUNDS")
+    if _cpi_df is not None and len(_cpi_df) >= 13 and _ur_df is not None and _ff_df is not None:
+        _cpi_13 = _cpi_df.iloc[-13]["value"]
+        _cpi_yoy = ((_cpi_df.iloc[-1]["value"] / _cpi_13) - 1) * 100 if _cpi_13 and _cpi_13 > 0 else 0
+        _unemployment = float(_ur_df.iloc[-1]["value"])
+        _fed_rate = float(_ff_df.iloc[-1]["value"])
+        _r_star = 2.5  # neutral real rate estimate
+        _inflation_target = 2.0
+        _natural_ur = 4.2  # NAIRU estimate
+
+        # Taylor Rule: r = r* + 0.5*(π - π*) + 0.5*(u* - u)
+        _taylor = _r_star + 0.5 * (_cpi_yoy - _inflation_target) + 0.5 * (_natural_ur - _unemployment)
+        _taylor = max(0, _taylor)  # can't go negative in standard Taylor
+
+        _gap = _fed_rate - _taylor
+
+        tc1, tc2, tc3 = st.columns(3)
+        tc1.metric("Actual Rate", f"{_fed_rate:.2f}%")
+        tc2.metric("Taylor Rule", f"{_taylor:.2f}%")
+        _gap_label = "Too Tight" if _gap > 0.5 else ("Too Loose" if _gap < -0.5 else "About Right")
+        _gap_color = "inverse" if _gap > 0.5 else ("normal" if _gap < -0.5 else "off")
+        tc3.metric("Gap", f"{_gap:+.2f}%", _gap_label, delta_color=_gap_color)
+
+        st.caption(
+            f"Taylor Rule inputs: CPI YoY {_cpi_yoy:.1f}%, Unemployment {_unemployment:.1f}%, "
+            f"r* = {_r_star}%, NAIRU = {_natural_ur}%. "
+            f"{'The Fed is tighter than the rule suggests — dovish pivot possible.' if _gap > 0.5 else 'The Fed is looser than the rule suggests — more hikes needed.' if _gap < -0.5 else 'Policy rate is roughly aligned with the Taylor Rule.'}"
+        )
+
+    # FOMC countdown
+    st.divider()
+    from src.economic_calendar import get_next_fomc
+    _next_fomc_raw = get_next_fomc()
+    if _next_fomc_raw:
+        from datetime import datetime
+        _next_fomc = pd.to_datetime(_next_fomc_raw).date() if isinstance(_next_fomc_raw, str) else _next_fomc_raw
+        _days_to_fomc = (_next_fomc - datetime.now().date()).days
+        _fomc_color = COLORS["danger"] if _days_to_fomc <= 7 else (COLORS["warning"] if _days_to_fomc <= 21 else COLORS["accent"])
+        st.markdown(
+            f'<div style="text-align:center;padding:12px;border:1px solid {_fomc_color};border-radius:8px;'
+            f'background:rgba({int(_fomc_color[1:3],16)},{int(_fomc_color[3:5],16)},{int(_fomc_color[5:7],16)},0.06);">'
+            f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};">NEXT FOMC MEETING</div>'
+            f'<div style="font-size:2rem;font-weight:800;color:{_fomc_color};">{_days_to_fomc}d</div>'
+            f'<div style="font-size:0.85rem;color:{COLORS["text_muted"]};">{_next_fomc.strftime("%B %d, %Y")}</div>'
+            f'</div>', unsafe_allow_html=True)
+
+        # Market-implied expectations (2Y yield as proxy)
+        _2y_df = driver_data.get("DGS2")
+        if _2y_df is not None and not _2y_df.empty and _ff_df is not None:
+            _2y_yield = float(_2y_df.iloc[-1]["value"])
+            _implied_cuts = round((_fed_rate - _2y_yield) / 0.25)
+            if _implied_cuts > 0:
+                st.caption(f"Market-implied: ~{_implied_cuts} rate cut{'s' if _implied_cuts > 1 else ''} priced in (2Y at {_2y_yield:.2f}% vs Fed Funds at {_fed_rate:.2f}%)")
+            elif _implied_cuts < 0:
+                st.caption(f"Market-implied: ~{abs(_implied_cuts)} rate hike{'s' if abs(_implied_cuts) > 1 else ''} priced in")
+            else:
+                st.caption("Market pricing: no change expected near-term")
 
     st.divider()
 
@@ -760,3 +849,549 @@ with error_boundary("OECD CLI"):
             st.info("OECD CLI data unavailable.")
     except Exception as e:
         st.info(f"OECD data unavailable: {e}")
+
+
+# ════════════════════════════════════════
+# TAB 4: FOMC STATEMENT DIFF
+# ════════════════════════════════════════
+
+# FOMC statements — key paragraphs (trimmed to policy-relevant sections)
+FOMC_STATEMENTS = {
+    "March 18-19, 2026": """The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. Uncertainty around the economic outlook has increased. The Committee is attentive to the risks to both sides of its dual mandate.
+
+Recent indicators suggest that economic activity has continued to expand at a solid pace. The unemployment rate has stabilized at a low level in recent months, and labor market conditions remain solid. Inflation remains somewhat elevated.
+
+In support of its goals, the Committee decided to maintain the target range for the federal funds rate at 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee is prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals.
+
+In assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.""",
+
+    "January 28-29, 2026": """The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.
+
+Recent indicators suggest that economic activity has continued to expand at a solid pace. The unemployment rate has stabilized at a low level in recent months, and labor market conditions remain solid. Inflation has made progress toward the Committee's 2 percent objective but remains somewhat elevated.
+
+In support of its goals, the Committee decided to maintain the target range for the federal funds rate at 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee does not expect it will be appropriate to reduce the target range until it has gained greater confidence that inflation is moving sustainably toward 2 percent.
+
+In assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.""",
+
+    "December 17-18, 2025": """The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.
+
+Recent indicators suggest that economic activity has continued to expand at a solid pace. Labor market conditions have generally eased, and the unemployment rate has moved up but remains low. Inflation has made further progress toward the Committee's 2 percent objective but remains somewhat elevated.
+
+In support of its goals, the Committee decided to lower the target range for the federal funds rate by 1/4 percentage point to 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance.
+
+In assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.""",
+}
+
+with tab_fomc_diff:
+    with error_boundary("FOMC Statement Diff"):
+        st.subheader("FOMC Statement Language Analysis")
+        st.caption(
+            "Side-by-side comparison of consecutive FOMC statements. "
+            "Green = new language added. Red = language removed. "
+            "Every word change signals a shift in Fed thinking."
+        )
+
+        dates = list(FOMC_STATEMENTS.keys())  # newest first
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            newer_date = st.selectbox("Current Statement", dates[:-1], index=0, key="fomc_newer")
+        with dc2:
+            # Only show dates older than the selected current
+            newer_idx = dates.index(newer_date)
+            older_options = dates[newer_idx + 1:]
+            older_date = st.selectbox("Previous Statement", older_options, index=0, key="fomc_older")
+
+        older_text = FOMC_STATEMENTS[older_date]
+        newer_text = FOMC_STATEMENTS[newer_date]
+
+        # Word-level diff
+        import difflib
+
+        older_words = older_text.split()
+        newer_words = newer_text.split()
+        matcher = difflib.SequenceMatcher(None, older_words, newer_words)
+
+        diff_html = ""
+        for op, i1, i2, j1, j2 in matcher.get_opcodes():
+            if op == "equal":
+                diff_html += " ".join(older_words[i1:i2]) + " "
+            elif op == "delete":
+                removed = " ".join(older_words[i1:i2])
+                diff_html += f'<span style="background:rgba(255,68,68,0.25);color:#ff6666;text-decoration:line-through;padding:1px 3px;border-radius:2px;">{removed}</span> '
+            elif op == "insert":
+                added = " ".join(newer_words[j1:j2])
+                diff_html += f'<span style="background:rgba(0,255,150,0.2);color:#00ff96;font-weight:600;padding:1px 3px;border-radius:2px;">{added}</span> '
+            elif op == "replace":
+                removed = " ".join(older_words[i1:i2])
+                added = " ".join(newer_words[j1:j2])
+                diff_html += f'<span style="background:rgba(255,68,68,0.25);color:#ff6666;text-decoration:line-through;padding:1px 3px;border-radius:2px;">{removed}</span> '
+                diff_html += f'<span style="background:rgba(0,255,150,0.2);color:#00ff96;font-weight:600;padding:1px 3px;border-radius:2px;">{added}</span> '
+
+        st.markdown(
+            f'<div style="padding:16px 20px;border:1px solid {COLORS["card_border"]};border-radius:8px;'
+            f'background:{COLORS["card_bg"]};line-height:1.8;font-size:0.85rem;">'
+            f'{diff_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Key phrase tracker
+        st.divider()
+        st.markdown("#### Key Phrase Tracker")
+        st.caption("How critical Fed phrases have evolved across statements.")
+
+        KEY_PHRASES = [
+            ("inflation", "Inflation characterization"),
+            ("labor market", "Labor market assessment"),
+            ("risks", "Risk balance language"),
+            ("additional adjustments", "Rate path guidance"),
+            ("confidence", "Inflation confidence"),
+            ("uncertain", "Uncertainty language"),
+            ("prepared to adjust", "Policy flexibility"),
+        ]
+
+        phrase_rows = []
+        for phrase, label in KEY_PHRASES:
+            for stmt_date, stmt_text in FOMC_STATEMENTS.items():
+                sentences = [s.strip() for s in stmt_text.split(".") if phrase.lower() in s.lower()]
+                if sentences:
+                    phrase_rows.append({
+                        "Phrase": label,
+                        "Meeting": stmt_date.split(",")[0],
+                        "Context": sentences[0][:120] + "..." if len(sentences[0]) > 120 else sentences[0],
+                    })
+
+        if phrase_rows:
+            _pdf = pd.DataFrame(phrase_rows)
+            # Pivot: phrase × meeting
+            for phrase_label in [p[1] for p in KEY_PHRASES]:
+                subset = _pdf[_pdf["Phrase"] == phrase_label]
+                if not subset.empty:
+                    with st.expander(f"**{phrase_label}**", expanded=False):
+                        for _, row in subset.iterrows():
+                            st.markdown(f'**{row["Meeting"]}:** {row["Context"]}')
+
+        # AI interpretation
+        st.divider()
+        st.markdown("#### AI Interpretation")
+
+        gemini_key = _get_key("GEMINI_API_KEY")
+        # Store current selections in session_state so the fragment reads fresh values
+        st.session_state["_fomc_older"] = older_date
+        st.session_state["_fomc_newer"] = newer_date
+        st.session_state["_fomc_older_text"] = older_text
+        st.session_state["_fomc_newer_text"] = newer_text
+
+        if gemini_key:
+            @st.fragment
+            def _fomc_ai_analysis():
+                # Read from session_state (not closure) to avoid stale values
+                _od = st.session_state.get("_fomc_older", "")
+                _nd = st.session_state.get("_fomc_newer", "")
+                _ot = st.session_state.get("_fomc_older_text", "")
+                _nt = st.session_state.get("_fomc_newer_text", "")
+
+                if st.button("Analyze Changes with Gemini", type="primary",
+                             use_container_width=True, key="fomc_diff_ai"):
+                    from src.ai_cache import get_cached_ai, cache_ai_response, build_cache_key
+                    _cache_key = build_cache_key("fomc_diff", f"{_od}_{_nd}", "")
+
+                    cached = get_cached_ai(_cache_key)
+                    if cached:
+                        st.session_state["fomc_diff_result"] = cached
+                        st.toast("Loaded from AI cache")
+                    else:
+                        with fun_loader("ai"):
+                            try:
+                                from google import genai
+                                from google.genai import types
+
+                                prompt = f"""You are a Fed watcher and fixed income strategist. Analyze the language changes between two consecutive FOMC statements.
+
+PREVIOUS ({_od}):
+{_ot}
+
+CURRENT ({_nd}):
+{_nt}
+
+Provide a structured analysis:
+
+## Key Language Changes
+For each meaningful change, explain:
+- What was removed/added
+- What it signals about Fed thinking
+- Market implications (rates, equities, dollar, gold)
+
+## Hawkish vs Dovish Shift
+Rate the overall shift on a scale: Very Dovish (-2) to Very Hawkish (+2)
+Explain why.
+
+## Trading Implications
+- Fixed income: duration positioning
+- Equities: sector rotation implications
+- FX: dollar direction
+- Commodities: gold/oil implications
+
+## Next Meeting Expectations
+Based on this language evolution, what should we expect at the next meeting?
+
+Be specific and actionable. Reference exact phrases that changed."""
+
+                                client = genai.Client(api_key=gemini_key)
+                                response = client.models.generate_content(
+                                    model="gemini-2.5-pro",
+                                    contents=prompt,
+                                    config=types.GenerateContentConfig(
+                                        max_output_tokens=5000,
+                                        temperature=0.3,
+                                    ),
+                                )
+                                result = response.text
+                                st.session_state["fomc_diff_result"] = result
+                                cache_ai_response(_cache_key, result, model="gemini-2.5-pro",
+                                                   source_page="fed_macro", ticker="FED",
+                                                   ttl_hours=24, cost_estimate=0.03,
+                                                   prompt_summary=f"FOMC diff {_od} vs {_nd}")
+                            except Exception as e:
+                                st.error(f"Gemini error: {e}")
+
+                if "fomc_diff_result" in st.session_state:
+                    st.markdown(st.session_state["fomc_diff_result"])
+            _fomc_ai_analysis()
+        else:
+            st.info("Add GEMINI_API_KEY to enable AI interpretation of FOMC changes.")
+
+
+# ════════════════════════════════════════
+# TAB 5: INFLATION DEEP DIVE
+# ════════════════════════════════════════
+
+_INFLATION_SERIES = [
+    ("CPIAUCSL", "CPI All Items", COLORS["danger"]),
+    ("CPILFESL", "Core CPI (ex Food & Energy)", COLORS["warning"]),
+    ("PCEPILFE", "Core PCE (Fed's preferred)", COLORS["accent"]),
+    ("CUUR0000SAH1", "Shelter", "#ad7fff"),
+    ("CUUR0000SAF1", "Food", "#00ff87"),
+    ("CUUR0000SETB01", "Gasoline", "#ff6b35"),
+    ("CUSR0000SETA02", "Used Cars", "#ff2277"),
+    ("CUSR0000SAM1", "Medical Care", "#00e0d0"),
+]
+
+with tab_inflation:
+    with error_boundary("Inflation Deep Dive"):
+        st.subheader("Inflation Decomposition")
+        st.caption("Which components are driving inflation — and which are falling.")
+
+        _inf_data = {}
+        for sid, label, color in _INFLATION_SERIES:
+            df = fetch_fred_series(fred_key, sid, limit=36)
+            if not df.empty and len(df) >= 13:
+                _inf_data[sid] = {"df": df, "label": label, "color": color}
+
+        if _inf_data:
+            # YoY chart
+            fig_inf = go.Figure()
+            for sid, info in _inf_data.items():
+                df = info["df"]
+                yoy = (df["value"] / df["value"].shift(12) - 1) * 100
+                fig_inf.add_trace(go.Scatter(
+                    x=df["date"].iloc[12:], y=yoy.iloc[12:],
+                    mode="lines", name=info["label"],
+                    line=dict(color=info["color"], width=2),
+                ))
+            fig_inf.add_hline(y=2.0, line_dash="dash", line_color=COLORS["success"],
+                              annotation_text="Fed 2% Target")
+            fig_inf.update_layout(template="plotly_dark", height=450,
+                                   margin=dict(t=10, b=0, l=0, r=0),
+                                   yaxis_title="Year-over-Year (%)", hovermode="x unified",
+                                   legend=dict(orientation="h", y=-0.15))
+            st.plotly_chart(fig_inf, use_container_width=True)
+
+            # Current readings table
+            st.markdown("#### Current Readings")
+            inf_rows = []
+            for sid, info in _inf_data.items():
+                df = info["df"]
+                yoy = ((df.iloc[-1]["value"] / df.iloc[-13]["value"]) - 1) * 100 if df.iloc[-13]["value"] != 0 else 0
+                prev_yoy = ((df.iloc[-2]["value"] / df.iloc[-14]["value"]) - 1) * 100 if len(df) >= 14 and df.iloc[-14]["value"] != 0 else yoy
+                mom = (df.iloc[-1]["value"] / df.iloc[-2]["value"] - 1) * 100 if len(df) > 1 else 0
+                direction = "Falling" if yoy < prev_yoy else ("Rising" if yoy > prev_yoy else "Flat")
+                inf_rows.append({
+                    "Component": info["label"],
+                    "YoY (%)": f"{yoy:.1f}%",
+                    "MoM (%)": f"{mom:.2f}%",
+                    "Direction": direction,
+                    "Annualized MoM": f"{mom * 12:.1f}%",
+                })
+            inf_df = pd.DataFrame(inf_rows)
+            st.dataframe(
+                inf_df.style.apply(
+                    lambda row: ["background-color: rgba(0,255,150,0.08)"] * len(row)
+                    if "Falling" in str(row.get("Direction", "")) else
+                    (["background-color: rgba(255,68,68,0.08)"] * len(row)
+                     if "Rising" in str(row.get("Direction", "")) else [""] * len(row)),
+                    axis=1),
+                use_container_width=True, hide_index=True)
+
+            # Sticky vs flexible inflation
+            st.divider()
+            st.markdown("#### Sticky vs Flexible Inflation")
+            st.caption("Shelter and medical care are 'sticky' — slow to change. Energy and used cars are 'flexible' — quick to move.")
+
+            _sticky = [s for s in ("CUUR0000SAH1", "CUSR0000SAM1") if s in _inf_data]
+            _flex = [s for s in ("CUUR0000SETB01", "CUSR0000SETA02") if s in _inf_data]
+
+            if _sticky and _flex:
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    st.markdown("**Sticky Components**")
+                    for sid in _sticky:
+                        df = _inf_data[sid]["df"]
+                        yoy = ((df.iloc[-1]["value"] / df.iloc[-13]["value"]) - 1) * 100 if df.iloc[-13]["value"] != 0 else 0
+                        st.metric(_inf_data[sid]["label"], f"{yoy:.1f}% YoY")
+                with sc2:
+                    st.markdown("**Flexible Components**")
+                    for sid in _flex:
+                        df = _inf_data[sid]["df"]
+                        yoy = ((df.iloc[-1]["value"] / df.iloc[-13]["value"]) - 1) * 100 if df.iloc[-13]["value"] != 0 else 0
+                        st.metric(_inf_data[sid]["label"], f"{yoy:.1f}% YoY")
+        else:
+            st.warning("Insufficient inflation data from FRED.")
+
+
+# ════════════════════════════════════════
+# TAB 6: LABOR MARKET DEEP DIVE
+# ════════════════════════════════════════
+
+_LABOR_SERIES = [
+    ("PAYEMS", "Nonfarm Payrolls", "change"),
+    ("UNRATE", "Unemployment Rate", "level"),
+    ("ICSA", "Initial Jobless Claims", "level"),
+    ("JTSJOL", "JOLTS Job Openings", "level"),
+    ("JTSQUR", "JOLTS Quits Rate", "level"),
+    ("CES0500000003", "Avg Hourly Earnings", "level"),
+    ("LNS12300060", "Prime-Age EPOP (25-54)", "level"),
+    ("CIVPART", "Labor Force Participation", "level"),
+]
+
+with tab_labor:
+    with error_boundary("Labor Market"):
+        st.subheader("Labor Market Dashboard")
+        st.caption("The indicators the Fed watches to assess 'maximum employment.'")
+
+        _labor_data = {}
+        for sid, label, calc_type in _LABOR_SERIES:
+            df = fetch_fred_series(fred_key, sid, limit=60)
+            if not df.empty:
+                _labor_data[sid] = {"df": df, "label": label, "type": calc_type}
+
+        if _labor_data:
+            # Key metrics row
+            lm1, lm2, lm3, lm4 = st.columns(4)
+            if "UNRATE" in _labor_data:
+                _ur = float(_labor_data["UNRATE"]["df"].iloc[-1]["value"])
+                _ur_prev = float(_labor_data["UNRATE"]["df"].iloc[-2]["value"]) if len(_labor_data["UNRATE"]["df"]) > 1 else _ur
+                lm1.metric("Unemployment", f"{_ur:.1f}%", f"{_ur - _ur_prev:+.1f}%")
+            if "PAYEMS" in _labor_data:
+                _nfp_df = _labor_data["PAYEMS"]["df"]
+                _nfp_change = float(_nfp_df.iloc[-1]["value"] - _nfp_df.iloc[-2]["value"]) if len(_nfp_df) > 1 else 0
+                lm2.metric("NFP Change", f"{_nfp_change:+,.0f}K")
+            if "ICSA" in _labor_data:
+                _claims = float(_labor_data["ICSA"]["df"].iloc[-1]["value"])
+                lm3.metric("Initial Claims", f"{_claims:,.0f}")
+            if "CES0500000003" in _labor_data:
+                _ahe = float(_labor_data["CES0500000003"]["df"].iloc[-1]["value"])
+                lm4.metric("Avg Hourly Earnings", f"${_ahe:.2f}")
+
+            st.divider()
+
+            # NFP monthly bars
+            if "PAYEMS" in _labor_data:
+                st.markdown("#### Monthly Payroll Changes")
+                _nfp_df = _labor_data["PAYEMS"]["df"]
+                _nfp_df["change"] = _nfp_df["value"].diff()
+                _nfp_plot = _nfp_df.dropna(subset=["change"])
+                if not _nfp_plot.empty:
+                    fig_nfp = go.Figure()
+                    _nfp_colors = [COLORS["success"] if v > 0 else COLORS["danger"] for v in _nfp_plot["change"]]
+                    fig_nfp.add_trace(go.Bar(x=_nfp_plot["date"], y=_nfp_plot["change"],
+                                             marker_color=_nfp_colors))
+                    fig_nfp.add_hline(y=0, line_color="white", line_width=0.5)
+                    fig_nfp.add_hline(y=150, line_dash="dot", line_color=COLORS["warning"],
+                                      annotation_text="Strong (150K+)")
+                    fig_nfp.update_layout(template="plotly_dark", height=300,
+                                           margin=dict(t=10, b=0, l=0, r=0),
+                                           yaxis_title="Monthly Change (Thousands)")
+                    st.plotly_chart(fig_nfp, use_container_width=True)
+
+            # JOLTS: openings vs quits
+            if "JTSJOL" in _labor_data:
+                st.markdown("#### Job Openings (JOLTS)")
+                st.caption("Falling job openings = cooling labor market. The Fed watches this closely for demand-side slack.")
+                _jolts_df = _labor_data["JTSJOL"]["df"]
+                fig_jolts = go.Figure()
+                fig_jolts.add_trace(go.Scatter(x=_jolts_df["date"], y=_jolts_df["value"],
+                                               mode="lines", line=dict(color=COLORS["accent"], width=2),
+                                               name="Job Openings"))
+                if "JTSQUR" in _labor_data:
+                    _quits = _labor_data["JTSQUR"]["df"]
+                    fig_jolts.add_trace(go.Scatter(x=_quits["date"], y=_quits["value"] * 1000,
+                                                   mode="lines", line=dict(color=COLORS["warning"], width=2),
+                                                   name="Quits Rate (scaled)", yaxis="y2"))
+                    fig_jolts.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                                                        title="Quits Rate"))
+                fig_jolts.update_layout(template="plotly_dark", height=300,
+                                         margin=dict(t=10, b=0, l=0, r=0),
+                                         yaxis_title="Thousands", hovermode="x unified")
+                st.plotly_chart(fig_jolts, use_container_width=True)
+
+            # 2x2 grid for remaining indicators
+            st.markdown("#### Additional Indicators")
+            _grid_series = [s for s in ("LNS12300060", "CIVPART", "CES0500000003", "ICSA") if s in _labor_data]
+            if _grid_series:
+                _gc = st.columns(min(len(_grid_series), 2))
+                for i, sid in enumerate(_grid_series):
+                    with _gc[i % 2]:
+                        info = _labor_data[sid]
+                        df = info["df"]
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=df["date"], y=df["value"],
+                                                  mode="lines", line=dict(color=COLORS["accent"], width=2)))
+                        fig.update_layout(template="plotly_dark", height=200,
+                                           margin=dict(t=25, b=0, l=0, r=0),
+                                           title=dict(text=info["label"], font=dict(size=11)),
+                                           hovermode="x unified")
+                        st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Insufficient labor market data from FRED.")
+
+
+# ════════════════════════════════════════
+# TAB 7: YIELD CURVE & FINANCIAL CONDITIONS
+# ════════════════════════════════════════
+
+_YIELD_SERIES = [
+    ("DGS1MO", "1M"), ("DGS3MO", "3M"), ("DGS6MO", "6M"), ("DGS1", "1Y"),
+    ("DGS2", "2Y"), ("DGS3", "3Y"), ("DGS5", "5Y"), ("DGS7", "7Y"),
+    ("DGS10", "10Y"), ("DGS20", "20Y"), ("DGS30", "30Y"),
+]
+
+with tab_yields:
+    with error_boundary("Yield Curve"):
+        st.subheader("Yield Curve & Financial Conditions")
+
+        # Fetch yield data
+        _yield_data = {}
+        for sid, label in _YIELD_SERIES:
+            df = fetch_fred_series(fred_key, sid, limit=260)
+            if not df.empty:
+                _yield_data[label] = df
+
+        if _yield_data:
+            # Current curve
+            st.markdown("#### US Treasury Yield Curve")
+            tenor_labels = [label for _, label in _YIELD_SERIES if label in _yield_data]
+            current_yields = [float(_yield_data[label].iloc[-1]["value"]) for label in tenor_labels]
+
+            fig_yc = go.Figure()
+
+            # Historical curves for comparison
+            for offset, name, color, dash in [(22, "1M Ago", "#888", "dot"), (66, "3M Ago", COLORS["warning"], "dot"),
+                                               (252, "1Y Ago", "#ad7fff", "dot")]:
+                hist_y = []
+                for label in tenor_labels:
+                    df = _yield_data[label]
+                    if len(df) > offset:
+                        hist_y.append(float(df.iloc[-(offset+1)]["value"]))
+                    else:
+                        hist_y.append(None)
+                if any(v is not None for v in hist_y):
+                    fig_yc.add_trace(go.Scatter(x=tenor_labels, y=hist_y, mode="lines+markers",
+                                                 name=name, line=dict(color=color, width=1.5, dash=dash),
+                                                 marker=dict(size=5)))
+
+            fig_yc.add_trace(go.Scatter(x=tenor_labels, y=current_yields, mode="lines+markers",
+                                         name="Current", line=dict(color=COLORS["accent"], width=3),
+                                         marker=dict(size=8)))
+            fig_yc.update_layout(template="plotly_dark", height=400,
+                                  margin=dict(t=10, b=0, l=0, r=0),
+                                  xaxis_title="Maturity", yaxis_title="Yield (%)",
+                                  hovermode="x unified")
+            st.plotly_chart(fig_yc, use_container_width=True)
+
+            # Key spread metrics
+            _2y = float(_yield_data["2Y"].iloc[-1]["value"]) if "2Y" in _yield_data else 0
+            _10y = float(_yield_data["10Y"].iloc[-1]["value"]) if "10Y" in _yield_data else 0
+            _30y = float(_yield_data["30Y"].iloc[-1]["value"]) if "30Y" in _yield_data else 0
+            _3m = float(_yield_data["3M"].iloc[-1]["value"]) if "3M" in _yield_data else 0
+            _2s10s = _10y - _2y
+            _3m10y = _10y - _3m
+
+            yc1, yc2, yc3, yc4 = st.columns(4)
+            yc1.metric("2Y", f"{_2y:.2f}%")
+            yc2.metric("10Y", f"{_10y:.2f}%")
+            _inv_color = "inverse" if _2s10s < 0 else "normal"
+            yc3.metric("2s10s Spread", f"{_2s10s:.2f}%", delta_color=_inv_color)
+            _3m10y_color = "inverse" if _3m10y < 0 else "normal"
+            yc4.metric("3M-10Y Spread", f"{_3m10y:.2f}%", delta_color=_3m10y_color)
+
+            if _2s10s < 0:
+                st.warning(f"**Yield curve inverted** (2s10s at {_2s10s:.2f}%). Historically precedes recessions by 12-18 months.")
+            if _3m10y < 0:
+                st.error(f"**3M-10Y inverted** ({_3m10y:.2f}%) — the Fed's preferred recession indicator is triggered.")
+
+            # 2s10s spread over time
+            st.markdown("#### 2s10s Spread History")
+            _spread_df = fetch_fred_series(fred_key, "T10Y2Y", limit=260)
+            if not _spread_df.empty:
+                fig_sp = go.Figure()
+                fig_sp.add_trace(go.Scatter(x=_spread_df["date"], y=_spread_df["value"],
+                                             mode="lines", line=dict(color=COLORS["accent"], width=2)))
+                fig_sp.add_hline(y=0, line_color="white", line_width=1)
+                fig_sp.add_hrect(y0=-5, y1=0, fillcolor="rgba(255,68,68,0.1)", line_width=0)
+                fig_sp.update_layout(template="plotly_dark", height=250,
+                                      margin=dict(t=10, b=0, l=0, r=0),
+                                      yaxis_title="Spread (%)", hovermode="x unified")
+                st.plotly_chart(fig_sp, use_container_width=True)
+
+        # Financial Conditions
+        st.divider()
+        st.markdown("#### Financial Conditions Index (NFCI)")
+        st.caption("Positive = tight conditions (restrictive). Negative = loose conditions (accommodative). Source: Chicago Fed.")
+        _nfci_df = fetch_fred_series(fred_key, "NFCI", limit=260)
+        if not _nfci_df.empty:
+            fig_nfci = go.Figure()
+            fig_nfci.add_trace(go.Scatter(x=_nfci_df["date"], y=_nfci_df["value"],
+                                           mode="lines", line=dict(color=COLORS["accent"], width=2),
+                                           fill="tozeroy",
+                                           fillcolor="rgba(0,209,255,0.1)"))
+            fig_nfci.add_hline(y=0, line_color="white", line_width=1)
+            fig_nfci.update_layout(template="plotly_dark", height=300,
+                                    margin=dict(t=10, b=0, l=0, r=0),
+                                    yaxis_title="NFCI", hovermode="x unified")
+            st.plotly_chart(fig_nfci, use_container_width=True)
+
+            _nfci_val = float(_nfci_df.iloc[-1]["value"])
+            if _nfci_val > 0:
+                st.warning(f"Financial conditions are **tight** (NFCI: {_nfci_val:.2f}). Credit stress elevated — dovish for the Fed.")
+            else:
+                st.success(f"Financial conditions are **loose** (NFCI: {_nfci_val:.2f}). Markets accommodative — less urgency to cut.")
+
+        # Sahm Rule
+        st.divider()
+        st.markdown("#### Sahm Rule Recession Indicator")
+        _sahm_df = fetch_fred_series(fred_key, "SAHMCURRENT", limit=60)
+        if not _sahm_df.empty:
+            _sahm_val = float(_sahm_df.iloc[-1]["value"])
+            fig_sahm = go.Figure()
+            fig_sahm.add_trace(go.Scatter(x=_sahm_df["date"], y=_sahm_df["value"],
+                                           mode="lines", line=dict(color="#ff2277", width=2)))
+            fig_sahm.add_hline(y=0.5, line_dash="dash", line_color=COLORS["danger"],
+                                annotation_text="Recession Threshold (0.5)")
+            fig_sahm.update_layout(template="plotly_dark", height=250,
+                                    margin=dict(t=10, b=0, l=0, r=0),
+                                    yaxis_title="Sahm Rule Indicator", hovermode="x unified")
+            st.plotly_chart(fig_sahm, use_container_width=True)
+            if _sahm_val >= 0.5:
+                st.error(f"**Sahm Rule triggered** ({_sahm_val:.2f} ≥ 0.5). Historically 100% accurate recession indicator.")
+            else:
+                st.info(f"Sahm Rule: {_sahm_val:.2f} (below 0.5 threshold — no recession signal)")

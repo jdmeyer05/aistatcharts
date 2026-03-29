@@ -98,19 +98,81 @@ def polygon_snapshot(symbol: str) -> dict | None:
     return None
 
 
+def _load_snapshot_cache(symbols: list) -> dict:
+    """Load recent snapshots from Supabase. Returns {symbol: {price, change}} for found symbols."""
+    try:
+        from src.db import get_client
+        from datetime import datetime
+        db = get_client()
+        if not db:
+            return {}
+        result = db.table("api_cache").select("symbol, response")\
+            .in_("symbol", symbols).eq("endpoint", "snapshot")\
+            .gt("expires_at", datetime.now().isoformat()).execute()
+        found = {}
+        for row in (result.data or []):
+            sym = row.get("symbol")
+            data = row.get("response")
+            if sym and data:
+                found[sym] = data if isinstance(data, dict) else {}
+        return found
+    except Exception:
+        return {}
+
+
+def _save_snapshot_cache(results: dict) -> None:
+    """Save snapshots to Supabase with 3-min TTL."""
+    try:
+        from src.db import get_client
+        from datetime import datetime
+        import json
+        db = get_client()
+        if not db:
+            return
+        rows = []
+        expires = (datetime.now() + timedelta(minutes=3)).isoformat()
+        for sym, data in results.items():
+            rows.append({
+                "cache_key": f"snap_{sym}",
+                "response": data,
+                "endpoint": "snapshot",
+                "symbol": sym,
+                "ttl_seconds": 180,
+                "created_at": datetime.now().isoformat(),
+                "expires_at": expires,
+            })
+        if rows:
+            db.table("api_cache").upsert(rows, on_conflict="cache_key").execute()
+    except Exception:
+        pass
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def polygon_batch_snapshot(symbols: list) -> dict:
     """Get price snapshots for multiple symbols via Polygon all-tickers snapshot.
-    Returns {original_symbol: {price, prev_close, change}}."""
+    Returns {original_symbol: {price, prev_close, change}}.
+    Uses Supabase snapshot cache to avoid redundant API calls."""
     api_key = _get_polygon_key()
     results = {}
     if not api_key:
         return results
 
-    # Try the bulk snapshot endpoint first (one API call for all tickers)
+    # Check Supabase snapshot cache first
+    cached = _load_snapshot_cache(symbols)
+    if cached and len(cached) >= len(symbols) * 0.8:
+        # Most symbols found in cache — return directly
+        return cached
+    # Merge any cached results we do have
+    results.update(cached)
+    # Only fetch symbols not in cache
+    symbols_to_fetch = [s for s in symbols if s not in cached]
+    if not symbols_to_fetch:
+        return results
+
+    # Try the bulk snapshot endpoint (one API call for remaining tickers)
     try:
-        # Build a set of polygon-formatted symbols for matching
-        sym_map = {polygon_symbol(s): s for s in symbols}
+        # Build a set of polygon-formatted symbols for matching — only uncached
+        sym_map = {polygon_symbol(s): s for s in symbols_to_fetch}
         poly_syms = ",".join(sym_map.keys())
         r = requests.get(
             f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers",
@@ -158,6 +220,12 @@ def polygon_batch_snapshot(symbols: list) -> dict:
                 prev = snap.get("prev_close") or snap["price"]
                 chg = ((snap["price"] / prev) - 1) * 100 if prev > 0 else 0
                 results[sym] = {"price": snap["price"], "change": round(chg, 2)}
+
+    # Save all fetched results to Supabase cache
+    new_results = {k: v for k, v in results.items() if k not in cached}
+    if new_results:
+        _save_snapshot_cache(new_results)
+
     return results
 
 
@@ -216,33 +284,123 @@ def translate_to_yahoo(formatted_symbol: str) -> str:
     return formatted_symbol.replace("X:", "").replace("ERCOT.", "")
 
 # --- PRICE DATA ENGINE ---
+
+def _load_price_history(ticker: str, days: int) -> pd.DataFrame | None:
+    """Load price history from Supabase. Returns DataFrame or None."""
+    try:
+        from src.db import get_client
+        db = get_client()
+        if not db:
+            return None
+        result = db.table("price_history").select("date, close")\
+            .eq("ticker", ticker)\
+            .gte("date", (date.today() - timedelta(days=days + 10)).isoformat())\
+            .order("date", desc=False).execute()
+        if result.data and len(result.data) >= max(days * 0.6, 2):
+            df = pd.DataFrame(result.data)
+            df["Date"] = pd.to_datetime(df["date"])
+            df = df.set_index("Date")[["close"]].rename(columns={"close": "Close"})
+            return df
+    except Exception:
+        pass
+    return None
+
+
+def _save_price_history(ticker: str, df: pd.DataFrame) -> None:
+    """Save price bars to Supabase. Upserts to avoid duplicates."""
+    try:
+        from src.db import get_client
+        db = get_client()
+        if not db or df is None or df.empty:
+            return
+        rows = []
+        for dt, row in df.iterrows():
+            rows.append({
+                "ticker": ticker,
+                "date": dt.strftime("%Y-%m-%d"),
+                "close": float(row["Close"]),
+            })
+        # Batch upsert in chunks of 100
+        for i in range(0, len(rows), 100):
+            chunk = rows[i:i+100]
+            db.table("price_history").upsert(chunk, on_conflict="ticker,date").execute()
+    except Exception as e:
+        logger.debug(f"Price history save failed for {ticker}: {e}")
+
+
+def _last_trading_day() -> date:
+    """Return the most recent trading day (skip weekends).
+    Uses UTC-5 (ET approximation) for the 4pm market close check."""
+    from datetime import datetime, timezone
+    # ET is UTC-5 (EST) or UTC-4 (EDT). Use UTC-5 as conservative estimate.
+    et_now = datetime.now(timezone.utc) - timedelta(hours=5)
+    d = et_now.date()
+    # If before 4pm ET on a weekday, yesterday's bar is the latest
+    if d.weekday() < 5 and et_now.hour < 16:
+        d = d - timedelta(days=1)
+    while d.weekday() >= 5:
+        d = d - timedelta(days=1)
+    return d
+
+
 @st.cache_data(ttl=3600, show_spinner="Fetching market data...")
 def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
     end_date = date.today()
     start_date = end_date - timedelta(days=days)
     formatted_symbol = format_massive_ticker(symbol)
-    
+
     api_key = _get_polygon_key()
     if not api_key:
         logger.error("No MASSIVE_API_KEY configured")
         return None
+
+    # Step 1: Check Supabase price_history (fast path ~100ms)
+    cached_df = _load_price_history(formatted_symbol, days)
+    if cached_df is not None and not cached_df.empty:
+        last_bar = cached_df.index[-1].date() if hasattr(cached_df.index[-1], 'date') else cached_df.index[-1]
+        latest_trading = _last_trading_day()
+        if last_bar >= latest_trading:
+            # Data is current — return from cache
+            st.session_state['current_data_source'] = "Supabase Cache"
+            return cached_df.tail(days)
+        else:
+            # Data exists but stale — fetch only the gap
+            gap_start = (last_bar + timedelta(days=1)).isoformat()
+            try:
+                url = f"https://api.polygon.io/v2/aggs/ticker/{formatted_symbol}/range/1/day/{gap_start}/{end_date.strftime('%Y-%m-%d')}"
+                res = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50000}, timeout=15)
+                res.raise_for_status()
+                data = res.json()
+                if data and 'results' in data:
+                    new_df = pd.DataFrame(data['results'])
+                    new_df['Date'] = pd.to_datetime(new_df['t'], unit='ms')
+                    new_df = new_df.set_index('Date')[['c']].rename(columns={'c': 'Close'})
+                    # Merge and save
+                    merged = pd.concat([cached_df, new_df])
+                    merged = merged[~merged.index.duplicated(keep='last')]
+                    _save_price_history(formatted_symbol, new_df)
+                    st.session_state['current_data_source'] = "Supabase + Polygon (gap fill)"
+                    return merged.tail(days)
+            except Exception:
+                # Gap fill failed — return stale cache (better than nothing)
+                st.session_state['current_data_source'] = "Supabase Cache (stale)"
+                return cached_df.tail(days)
+
+    # Step 2: Full fetch from Polygon (cold start)
     try:
         url = f"https://api.polygon.io/v2/aggs/ticker/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
-        params = {"apiKey": api_key, "sort": "asc", "limit": 50000}
-        # Try Supabase cache first (100ms vs 1-2s)
-        try:
-            from src.api_cache import cached_request
-            data = cached_request(url, params, ttl=1800)
-        except Exception:
-            res = requests.get(url, params=params, timeout=30)
-            res.raise_for_status()
-            data = res.json()
+        res = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50000}, timeout=30)
+        res.raise_for_status()
+        data = res.json()
         if data and 'results' in data:
-            st.session_state['current_data_source'] = "Massive API (Live Feed)"
+            st.session_state['current_data_source'] = "Polygon API (full fetch)"
             df = pd.DataFrame(data['results'])
             df['Date'] = pd.to_datetime(df['t'], unit='ms')
             df.set_index('Date', inplace=True)
-            return df[['c']].rename(columns={'c': 'Close'})
+            result_df = df[['c']].rename(columns={'c': 'Close'})
+            # Save to Supabase for future fast loads
+            _save_price_history(formatted_symbol, result_df)
+            return result_df
     except Exception as e:
         logger.warning(f"Massive API fetch failed for {formatted_symbol}: {e}")
     return None
@@ -307,10 +465,65 @@ def get_expiration_dates(symbol: str):
     return []
 
 
+def _load_cached_chain(symbol: str, expiration: str = None) -> pd.DataFrame | None:
+    """Load options chain from Supabase cache if fresh (< 2 hours)."""
+    try:
+        from src.db import get_client
+        from datetime import datetime
+        db = get_client()
+        if not db:
+            return None
+        cache_key = f"chain_{symbol}_{expiration or 'all'}"
+        result = db.table("api_cache").select("response")\
+            .eq("cache_key", cache_key).gt("expires_at", datetime.now().isoformat())\
+            .limit(1).execute()
+        if result.data:
+            import json
+            rows = result.data[0]["response"]
+            if isinstance(rows, str):
+                rows = json.loads(rows)
+            if rows:
+                return pd.DataFrame(rows)
+    except Exception:
+        pass
+    return None
+
+
+def _save_cached_chain(symbol: str, expiration: str, df: pd.DataFrame) -> None:
+    """Save options chain to Supabase cache with 2-hour TTL."""
+    try:
+        from src.db import get_client
+        from datetime import datetime
+        import json
+        db = get_client()
+        if not db or df is None or df.empty:
+            return
+        cache_key = f"chain_{symbol}_{expiration or 'all'}"
+        db.table("api_cache").upsert({
+            "cache_key": cache_key,
+            "response": df.to_dict(orient="records"),
+            "endpoint": f"/v3/snapshot/options/{symbol}",
+            "symbol": symbol,
+            "ttl_seconds": 7200,
+            "created_at": datetime.now().isoformat(),
+            "expires_at": (datetime.now() + timedelta(hours=2)).isoformat(),
+        }, on_conflict="cache_key").execute()
+    except Exception:
+        pass
+
+
 @st.cache_data(ttl=3600, show_spinner="Fetching options chain from Massive...")
 def fetch_options_chain(symbol: str, expiration: str = None, max_pages: int = 20) -> pd.DataFrame:
     """Fetches full options chain with Greeks from Massive (Polygon), yfinance fallback.
-    Pass expiration=None to fetch across ALL expirations (for vol surfaces)."""
+    Pass expiration=None to fetch across ALL expirations (for vol surfaces).
+    Uses Supabase cache (2h TTL) to avoid redundant API calls across pages."""
+
+    # Try Supabase cache first (~100ms vs ~2s)
+    cached = _load_cached_chain(symbol, expiration)
+    if cached is not None and not cached.empty:
+        st.session_state['current_data_source'] = "Supabase Cache (options)"
+        return cached
+
     api_key = _get_massive_key()
     if api_key:
         try:
@@ -326,7 +539,6 @@ def fetch_options_chain(symbol: str, expiration: str = None, max_pages: int = 20
                     day = r.get('day', {})
                     quote = r.get('last_quote', {})
 
-                    # Bid/ask: try live quote first, fall back to day close ±1%
                     bid = quote.get('bid') or 0
                     ask = quote.get('ask') or 0
                     day_close = day.get('close', 0) or 0
@@ -356,6 +568,8 @@ def fetch_options_chain(symbol: str, expiration: str = None, max_pages: int = 20
                     })
                 df = pd.DataFrame(rows)
                 st.session_state['current_data_source'] = "Massive API (Polygon)"
+                # Cache in Supabase for other pages
+                _save_cached_chain(symbol, expiration, df)
                 return df
         except Exception as e:
             logger.warning(f"Massive options chain fetch failed for {symbol}: {e}")

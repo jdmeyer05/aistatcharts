@@ -1,0 +1,50 @@
+name: Hourly Worker
+
+on:
+  schedule:
+    # Run every hour at minute 5 (avoid exact :00 when GitHub is busiest)
+    - cron: '5 * * * *'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions tab
+    inputs:
+      task:
+        description: 'Task to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - conflict
+          - briefing
+          - timeline
+          - metrics
+          - cleanup
+
+jobs:
+  run-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install supabase openai anthropic google-genai requests toml
+
+      - name: Run worker
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          python worker.py --task ${{ github.event.inputs.task || 'all' }}

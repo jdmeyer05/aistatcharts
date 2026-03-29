@@ -62,6 +62,29 @@ def fetch_analyst_estimates(ticker: str) -> dict:
         except Exception:
             pass
 
+        # Recommendation breakdown (buy/hold/sell counts)
+        result["rec_mean_score"] = info.get("recommendationMean")  # 1=strong buy → 5=sell
+        try:
+            recs = t.recommendations
+            if recs is not None and not recs.empty:
+                latest = recs.iloc[0]
+                result["rec_strong_buy"] = int(latest.get("strongBuy", 0))
+                result["rec_buy"] = int(latest.get("buy", 0))
+                result["rec_hold"] = int(latest.get("hold", 0))
+                result["rec_sell"] = int(latest.get("sell", 0))
+                result["rec_strong_sell"] = int(latest.get("strongSell", 0))
+        except Exception:
+            pass
+
+        # Recent upgrades/downgrades (last 10)
+        try:
+            upgrades = t.upgrades_downgrades
+            if upgrades is not None and not upgrades.empty:
+                recent = upgrades.head(10).reset_index()
+                result["upgrades_downgrades"] = recent.to_dict(orient="records")
+        except Exception:
+            pass
+
         return result
     except Exception as e:
         logger.warning(f"Yahoo Finance fetch failed for {ticker}: {e}")
@@ -293,7 +316,20 @@ def fetch_commodity_futures(symbol: str, period: str = "1mo") -> dict | None:
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_stocktwits_sentiment(symbols: list[str]) -> list:
     """Fetch StockTwits sentiment for a list of symbols using curl_cffi to bypass Cloudflare.
+    Uses Supabase api_cache (30 min TTL) for cross-user sharing.
     Returns list of dicts with symbol, messages, bullish, bearish, bull_ratio, signal."""
+
+    # Check Supabase cache first
+    try:
+        from src.api_cache import get_cached_ai, cache_ai_response
+        import json
+        _st_key = f"stocktwits_{'_'.join(sorted(symbols))}"
+        _cached = get_cached_ai(_st_key)
+        if _cached:
+            return json.loads(_cached)
+    except Exception:
+        pass
+
     try:
         from curl_cffi import requests as cffi_requests
     except ImportError:
@@ -324,6 +360,18 @@ def fetch_stocktwits_sentiment(symbols: list[str]) -> list:
                 })
         except Exception as e:
             logger.warning(f"StockTwits fetch failed for {sym}: {e}")
+
+    # Cache in Supabase for cross-user sharing
+    if results:
+        try:
+            import json
+            from src.ai_cache import cache_ai_response
+            _st_key = f"stocktwits_{'_'.join(sorted(symbols))}"
+            cache_ai_response(_st_key, json.dumps(results), model="stocktwits",
+                               source_page="sentiment", ttl_hours=0.5)
+        except Exception:
+            pass
+
     return results
 
 
@@ -334,7 +382,20 @@ def fetch_stocktwits_sentiment(symbols: list[str]) -> list:
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_polymarket_odds(slugs: dict[str, str]) -> list:
     """Fetch Polymarket prediction odds for a dict of {slug: label} contracts.
+    Uses Supabase api_cache (30 min TTL) for cross-user sharing.
     Returns list of dicts with question, yes_prob, slug."""
+
+    # Check Supabase cache first
+    try:
+        from src.ai_cache import get_cached_ai, cache_ai_response
+        import json as _jcache
+        _pm_key = f"polymarket_{'_'.join(sorted(slugs.keys()))}"
+        _cached = get_cached_ai(_pm_key)
+        if _cached:
+            return _jcache.loads(_cached)
+    except Exception:
+        pass
+
     import requests as _req
     import json as _json
     results = []
@@ -348,6 +409,18 @@ def fetch_polymarket_odds(slugs: dict[str, str]) -> list:
                 results.append({"question": label, "yes_prob": yes_prob, "slug": slug})
         except Exception:
             pass
+
+    # Cache in Supabase
+    if results:
+        try:
+            import json as _jcache
+            from src.ai_cache import cache_ai_response
+            _pm_key = f"polymarket_{'_'.join(sorted(slugs.keys()))}"
+            cache_ai_response(_pm_key, _jcache.dumps(results), model="polymarket",
+                               source_page="prediction_markets", ttl_hours=0.5)
+        except Exception:
+            pass
+
     return results
 
 

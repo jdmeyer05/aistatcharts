@@ -24,9 +24,9 @@ MAX_SIGNALS = 2000
 
 SOURCE_WEIGHTS = {
     "ml_predictor": 1.5, "rl_trading": 1.4, "signal_scanner": 1.3,
-    "stock_analysis": 1.2, "scenario_analysis": 1.1, "vol_surface": 1.1,
-    "options_flow": 1.0, "market_expectations": 1.0, "correlation": 0.9,
-    "tech_screener": 0.8,
+    "analyst_consensus": 1.3, "stock_analysis": 1.2, "scenario_analysis": 1.1,
+    "vol_surface": 1.1, "options_flow": 1.0, "market_expectations": 1.0,
+    "correlation": 0.9, "tech_screener": 0.8,
 }
 
 VALID_DIRECTIONS = {"bull", "bear", "neutral"}

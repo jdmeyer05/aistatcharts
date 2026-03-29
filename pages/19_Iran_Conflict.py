@@ -186,6 +186,27 @@ CONFLICT_TIMELINE_EVENTS = [
     {"date": "2026-03-22", "event": "Iran vows to close Hormuz permanently and target all Gulf energy/water infrastructure if attacked",
      "category": "Escalation", "impact": "Markets in panic; Brent above $110; safe havens surge",
      "infrastructure": "Iran threatens 'irreversible destruction' of regional energy infrastructure; Gulf states on highest alert"},
+    {"date": "2026-03-23", "event": "Trump ultimatum deadline passes — US B-1 bombers strike 3 Iranian power plants; nationwide blackouts",
+     "category": "Military", "impact": "Brent surges; gold hits all-time highs; US equities sell off sharply",
+     "infrastructure": "Isfahan, Bandar Abbas, Ahvaz power plants hit; 40% of Iranian grid offline"},
+    {"date": "2026-03-24", "event": "Iran retaliates with mass drone/missile salvo at US carrier group in Arabian Sea; USS Eisenhower damaged",
+     "category": "Military", "impact": "Oil surges further; VIX spikes; flight-to-safety drives Treasury yields lower",
+     "infrastructure": "USS Eisenhower flight deck damaged, 12 casualties; carrier ops suspended 48h"},
+    {"date": "2026-03-25", "event": "Strait of Hormuz fully closed — zero tanker transits; Iran deploys additional mine fields",
+     "category": "Supply", "impact": "Oil prices spike to multi-year highs; Asian spot LNG prices surge; OPEC emergency meeting called",
+     "infrastructure": "21 mbpd of crude transit halted; UAE/Saudi pipelines at max bypass capacity (~7 mbpd)"},
+    {"date": "2026-03-26", "event": "US strikes Fordow enrichment site and Bandar Abbas naval base; IRGC Navy destroyed",
+     "category": "Military", "impact": "Oil pulls back slightly on 'peak escalation' hopes; defense stocks rally",
+     "infrastructure": "Fordow 60% offline; 6 IRGC fast-attack boats sunk; Bandar Abbas port cratered"},
+    {"date": "2026-03-27", "event": "Trump issues second ultimatum: reopen Hormuz in 48h or 'all Iranian energy infrastructure will be obliterated'",
+     "category": "Escalation", "impact": "Oil re-surges on second ultimatum; EU calls for emergency energy rationing plans",
+     "infrastructure": "Ultimatum deadline ~Mar 29; targets include refineries, pipelines, remaining power plants"},
+    {"date": "2026-03-28", "event": "Iran launches 47 ballistic missiles at Tel Aviv/Haifa; 14 dead; US B-2s sink 2 frigates at Bandar Abbas",
+     "category": "Military", "impact": "Brent surges past $145; global recession fears intensify; S&P futures drop sharply; gold hits new highs",
+     "infrastructure": "Bat Yam suburbs hit; Bandar Abbas pier destroyed; Hezbollah fires 120 rockets into Galilee"},
+    {"date": "2026-03-28", "event": "UNSC emergency session fails — Russia/China block US resolution; no ceasefire path visible",
+     "category": "Diplomatic", "impact": "Hope for diplomatic resolution collapses; markets price in extended conflict",
+     "infrastructure": "Khamenei successor Salami rejects all talks; Trump vows 'Iran blinks or blacks out'"},
 ]
 
 INFRASTRUCTURE_TARGETS = {
@@ -1497,14 +1518,37 @@ IMPORTANT: "posted_at" must be the actual UTC timestamp when the tweet was poste
 @st.cache_data(ttl=3600, show_spinner=False)
 def _auto_update_timeline() -> list:
     """Use Grok to discover new conflict events since the last hardcoded entry.
-    Returns the full timeline (hardcoded + new events). Cached 1 hour."""
-    last_date = CONFLICT_TIMELINE_EVENTS[-1]["date"]
+    Persists new events to Supabase. Returns full timeline (hardcoded + DB + new)."""
+
+    # Load any previously discovered events from Supabase
+    db_events = []
+    try:
+        from src.db import get_client
+        db = get_client()
+        if db:
+            result = db.table("conflict_timeline").select("*")\
+                .order("date", desc=False).execute()
+            db_events = result.data or []
+    except Exception:
+        pass
+
+    # Merge hardcoded + DB events
+    existing_keys = {(e["date"], e["event"][:50]) for e in CONFLICT_TIMELINE_EVENTS}
+    merged = list(CONFLICT_TIMELINE_EVENTS)
+    for evt in db_events:
+        key = (evt.get("date", ""), evt.get("event", "")[:50])
+        if key not in existing_keys:
+            merged.append(evt)
+            existing_keys.add(key)
+
+    last_date = merged[-1]["date"] if merged else "2026-03-28"
     grok_key = _get_key("GROK_API_KEY")
     if not grok_key:
-        return CONFLICT_TIMELINE_EVENTS
+        merged.sort(key=lambda e: e.get("date", ""))
+        return merged
 
     prompt = f"""You have real-time access to X/Twitter and news. The last event in our Iran conflict timeline is:
-  {last_date}: {CONFLICT_TIMELINE_EVENTS[-1]['event']}
+  {last_date}: {merged[-1]['event']}
 
 Search for MAJOR conflict developments that occurred AFTER {last_date} (up to right now).
 Only include events that are significant enough to move oil prices, change military posture, or shift diplomatic dynamics.
@@ -1529,7 +1573,8 @@ Only include CONFIRMED events from credible sources. Do NOT fabricate."""
         )
         raw = response.choices[0].message.content
         if not raw:
-            return CONFLICT_TIMELINE_EVENTS
+            merged.sort(key=lambda e: e.get("date", ""))
+            return merged
 
         cleaned = re.sub(r"^```json?\s*", "", raw.strip())
         cleaned = re.sub(r"\s*```$", "", cleaned)
@@ -1537,21 +1582,42 @@ Only include CONFIRMED events from credible sources. Do NOT fabricate."""
 
         new_events = parsed if isinstance(parsed, list) else parsed.get("events", parsed.get("timeline", []))
         if not new_events:
-            return CONFLICT_TIMELINE_EVENTS
+            merged.sort(key=lambda e: e.get("date", ""))
+            return merged
 
-        # Merge: hardcoded + new, deduplicate by date+event similarity
-        existing_dates = {e["date"] for e in CONFLICT_TIMELINE_EVENTS}
-        merged = list(CONFLICT_TIMELINE_EVENTS)
+        # Add new events and persist to Supabase
         for evt in new_events:
-            if evt.get("date") and evt["date"] not in existing_dates:
+            evt_date = evt.get("date", "")
+            evt_text = evt.get("event", "")
+            if not evt_date or not evt_text:
+                continue
+            key = (evt_date, evt_text[:50])
+            if key not in existing_keys:
                 merged.append(evt)
-                existing_dates.add(evt["date"])
+                existing_keys.add(key)
+
+                # Persist to Supabase
+                try:
+                    from src.db import get_client
+                    db = get_client()
+                    if db:
+                        db.table("conflict_timeline").upsert({
+                            "date": evt_date,
+                            "event": evt_text,
+                            "category": evt.get("category", "Military"),
+                            "impact": evt.get("impact", ""),
+                            "infrastructure": evt.get("infrastructure", ""),
+                            "source": "grok_auto",
+                        }, on_conflict="date,event").execute()
+                except Exception:
+                    pass
 
         merged.sort(key=lambda e: e.get("date", ""))
         return merged
     except Exception as e:
         logger.warning(f"Timeline auto-update failed: {e}")
-        return CONFLICT_TIMELINE_EVENTS
+        merged.sort(key=lambda e: e.get("date", ""))
+        return merged
 
 
 # ─────────────────────────────────────────────
@@ -1588,7 +1654,17 @@ def _fetch_oil_term_structure() -> dict:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _grok_situation_briefing() -> str:
-    """4-hour situation briefing via Grok with live search. Displayed to users. Cached 15 min."""
+    """4-hour situation briefing via Grok with live search. Cached 15 min in Streamlit, 30 min in Supabase."""
+    # Check Supabase AI cache (shared across users)
+    try:
+        from src.ai_cache import get_cached_ai, cache_ai_response
+        _brief_key = f"situation_briefing_{datetime.now().strftime('%Y%m%d_%H')}"  # hourly key
+        _cached = get_cached_ai(_brief_key)
+        if _cached:
+            return _cached
+    except Exception:
+        pass
+
     grok_key = _get_key("GROK_API_KEY")
     if not grok_key:
         return ""
@@ -1645,7 +1721,18 @@ STYLE:
                 temperature=0.3,
             )
         brief = response.choices[0].message.content
-        return brief.strip() if brief else ""
+        brief = brief.strip() if brief else ""
+        # Cache in Supabase for 30 min
+        if brief:
+            try:
+                from src.ai_cache import cache_ai_response
+                cache_ai_response(_brief_key, brief, model="grok-4-1-fast",
+                                   source_page="iran_conflict", ticker="CONFLICT",
+                                   ttl_hours=0.5, cost_estimate=0.02,
+                                   prompt_summary="Situation briefing")
+            except Exception:
+                pass
+        return brief
     except Exception as e:
         logger.warning(f"Grok situation briefing failed: {e}")
         return ""
@@ -3076,16 +3163,91 @@ if _change_alerts and _change_alerts.get("alerts"):
 if situation_briefing:
     st.markdown("#### Situation Briefing")
     _briefing_time = datetime.now().strftime("%b %d, %I:%M %p")
+
+    # Parse sections from the briefing text
+    _section_colors = {
+        "MILITARY": "#ff4b4b", "HORMUZ": "#ff6b35", "ENERGY": "#ff6b35",
+        "DIPLOMATIC": "#00d1ff", "X/TWITTER": "#1DA1F2", "TWITTER": "#1DA1F2",
+        "HUMANITARIAN": "#ffaa00", "NUCLEAR": "#bf6fff", "ESCALATION": "#ff2277",
+    }
+    _section_icons = {
+        "MILITARY": "🎯", "HORMUZ": "🚢", "ENERGY": "⛽",
+        "DIPLOMATIC": "🏛️", "X/TWITTER": "𝕏", "TWITTER": "𝕏",
+        "HUMANITARIAN": "🏥", "NUCLEAR": "☢️", "ESCALATION": "🔺",
+    }
+
+    import re as _re
+    _brief_lines = situation_briefing.strip().split("\n")
+    _brief_html = ""
+    _header_line = ""
+
+    for _line in _brief_lines:
+        _line = _line.strip()
+        if not _line:
+            continue
+
+        # Check if this is a section header like **MILITARY:** or **HORMUZ & ENERGY:**
+        _section_match = _re.match(r'\*\*([A-Z][A-Z\s&/]+?)[:：]\*\*\s*(.*)', _line)
+        if _section_match:
+            _sec_name = _section_match.group(1).strip()
+            _sec_content = _section_match.group(2).strip()
+
+            # Find matching color/icon
+            _sec_color = "#888"
+            _sec_icon = "•"
+            for _key, _color in _section_colors.items():
+                if _key in _sec_name.upper():
+                    _sec_color = _color
+                    _sec_icon = _section_icons.get(_key, "•")
+                    break
+
+            # Convert **bold** and @handles in content
+            _sec_content = _re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', _sec_content)
+            _sec_content = _re.sub(r'@(\w+)', r'<span style="color:#1DA1F2;">@\1</span>', _sec_content)
+
+            _brief_html += (
+                f'<div style="margin:10px 0 6px 0;padding:8px 12px;border-left:3px solid {_sec_color};'
+                f'background:rgba({int(_sec_color[1:3],16)},{int(_sec_color[3:5],16)},{int(_sec_color[5:7],16)},0.06);'
+                f'border-radius:0 6px 6px 0;">'
+                f'<div style="font-size:0.7rem;font-weight:700;color:{_sec_color};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">'
+                f'{_sec_icon} {_sec_name}</div>'
+                f'<div style="font-size:0.82rem;color:#ddd;line-height:1.6;">{_sec_content}</div>'
+                f'</div>'
+            )
+        elif _line.startswith("**IRAN WAR DISPATCH") or _line.startswith("**SITUATION"):
+            # Header/title line
+            _clean = _re.sub(r'\*\*(.+?)\*\*', r'\1', _line)
+            _header_line = _clean
+        elif _line.startswith("(") and _line.endswith(")"):
+            # Word count footer — skip
+            pass
+        else:
+            # Regular paragraph
+            _line = _re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', _line)
+            _line = _re.sub(r'@(\w+)', r'<span style="color:#1DA1F2;">@\1</span>', _line)
+            _brief_html += f'<div style="font-size:0.82rem;color:#ddd;line-height:1.6;margin:6px 0;">{_line}</div>'
+
+    # Render the full briefing
     st.markdown(
-        f'<div style="padding:14px 18px;border:1px solid #30363d;border-radius:8px;'
-        f'background:rgba(0,209,255,0.03);margin-bottom:16px;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-        f'<span style="color:#00d1ff;font-size:0.75rem;font-weight:600;">LIVE INTELLIGENCE BRIEFING</span>'
-        f'<span style="color:#888;font-size:0.7rem;">Last 4 hours · Updated {_briefing_time} · Source: Grok + X/Twitter</span>'
+        f'<div style="padding:16px 20px;border:1px solid #30363d;border-radius:8px;'
+        f'background:linear-gradient(135deg, rgba(0,209,255,0.04), rgba(255,68,68,0.02));margin-bottom:16px;">'
+        # Header bar
+        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'
+        f'padding-bottom:8px;border-bottom:1px solid #30363d;">'
+        f'<div>'
+        f'<span style="color:#ff4b4b;font-size:0.65rem;font-weight:800;letter-spacing:1px;'
+        f'background:rgba(255,68,68,0.15);padding:2px 8px;border-radius:3px;">LIVE</span>'
+        f'<span style="color:#00d1ff;font-size:0.75rem;font-weight:600;margin-left:8px;">INTELLIGENCE BRIEFING</span>'
         f'</div>'
-        f'<div style="color:#ddd;font-size:0.85rem;line-height:1.65;">'
-        f'{situation_briefing.replace(chr(10), "<br/>")}'
+        f'<span style="color:#888;font-size:0.65rem;">Updated {_briefing_time} · Grok + X/Twitter</span>'
         f'</div>'
+        # Title if present
+        + (f'<div style="font-size:0.9rem;font-weight:700;color:#e0e0e0;margin-bottom:8px;">{_header_line}</div>' if _header_line else '')
+        # Body sections
+        + _brief_html
+        # Footer
+        + f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid #30363d;'
+        f'font-size:0.6rem;color:#555;text-align:right;">Auto-refreshes every 15 minutes</div>'
         f'</div>',
         unsafe_allow_html=True,
     )

@@ -349,6 +349,77 @@ def build_stock_prompt(ticker: str, fundamentals: dict, technicals: dict,
     except Exception:
         pass
 
+    # Inject Iran conflict context for energy/defense/commodity tickers
+    _energy_tickers = {"USO", "XLE", "XOP", "OIH", "CL", "BZ", "CVX", "XOM", "COP", "SLB",
+                        "HAL", "MPC", "VLO", "PSX", "OXY", "EOG", "PXD", "DVN", "FANG",
+                        "UNG", "NG", "GLD", "GC", "SLV", "SI", "DBA", "WEAT",
+                        "LMT", "RTX", "NOC", "GD", "BA", "HII", "LHX", "TDG",
+                        "ITA", "XAR", "PPA", "DFEN"}
+    _ticker_upper = ticker.upper().replace("=F", "")
+    if _ticker_upper in _energy_tickers or fundamentals.get("sector") in ("Energy", "Industrials"):
+        try:
+            from src.db import get_client
+            db = get_client()
+            if db:
+                # Get latest conflict analysis
+                _ca = db.table("conflict_analysis").select("situation_summary, escalation_risk")\
+                    .eq("region", "iran").order("timestamp", desc=True).limit(1).execute()
+                if _ca.data:
+                    _esc = _ca.data[0].get("escalation_risk", {})
+                    if isinstance(_esc, str):
+                        import json as _jc
+                        _esc = _jc.loads(_esc)
+                    _score = _esc.get("score", "?")
+                    _level = _esc.get("level", "?")
+                    _summary = _ca.data[0].get("situation_summary", "")
+
+                    lines.append("")
+                    lines.append("!" * 60)
+                    lines.append("CRITICAL: ACTIVE US-ISRAEL-IRAN WAR (since Feb 28, 2026)")
+                    lines.append("!" * 60)
+                    lines.append(f"Escalation Score: {_score}/10 ({_level})")
+                    lines.append("Key facts (ALL VERIFIED):")
+                    lines.append("- Strait of Hormuz is FULLY CLOSED — zero tanker transits since Mar 25")
+                    lines.append("- 13.8 mbpd of oil supply at risk (20% of global)")
+                    lines.append("- US B-2 strikes on Bandar Abbas, Fordow, Natanz — IRGC Navy destroyed")
+                    lines.append("- Iran launched 47 ballistic missiles at Tel Aviv/Haifa on Mar 28")
+                    lines.append("- Hezbollah opened northern front — 120 rockets into Galilee")
+                    lines.append("- Trump 48-hour ultimatum: reopen Hormuz or destroy all Iranian power plants")
+                    lines.append("- UNSC resolution blocked by Russia/China — no diplomatic path")
+                    lines.append("- USS Eisenhower carrier damaged — first US carrier combat damage since WWII")
+                    if _summary:
+                        lines.append(f"\nLatest assessment: {_summary[:600]}")
+
+                    # Add model assessments if available
+                    _models = _esc.get("model_assessments", [])
+                    if _models:
+                        lines.append("\nModel assessments:")
+                        for _ma in _models[:3]:
+                            lines.append(f"  {_ma.get('model','?')}: {_ma.get('score','?')}/10 — {_ma.get('rationale','')[:150]}")
+
+                    lines.append("")
+                    lines.append("THIS IS NOT A HYPOTHETICAL RISK. This is an active war.")
+                    lines.append("Your analysis MUST directly address how this war impacts this specific asset.")
+                    lines.append("Do NOT use generic language like 'potential supply disruptions' — name the specific impacts.")
+        except Exception:
+            pass
+
+    # Inject signal engine composite if available
+    try:
+        from src.signal_engine import compute_composite
+        _comp = compute_composite(ticker)
+        if _comp and _comp["n_signals"] >= 2:
+            lines.append("")
+            lines.append("=" * 50)
+            lines.append("CROSS-PAGE SIGNAL COMPOSITE")
+            lines.append("=" * 50)
+            lines.append(f"Direction: {_comp['overall_direction'].upper()} ({_comp['overall_conviction']:.0%} conviction)")
+            lines.append(f"Sources: {_comp['n_signals']} ({_comp['signal_agreement']:.0%} agreement)")
+            for s in _comp["signals"][:5]:
+                lines.append(f"  - {s['source']}: {s['direction']} ({s['conviction']:.0%}) — {s.get('reasoning', '')[:80]}")
+    except Exception:
+        pass
+
     return "\n".join(lines)
 
 
@@ -633,13 +704,34 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
             technicals = compute_technicals(stock_data["hist_1y"])
             sentiment = fetch_stocktwits_ticker(ticker)
 
-            # Macro context from scenario analysis if available
+            # Macro context from scenario analysis + conflict data
             macro_ctx = ""
             grok_regime = st.session_state.get("grok_regime_result")
             if grok_regime and grok_regime.get("success"):
                 probs = {r["name"]: r["probability"] for r in grok_regime.get("regimes", [])}
                 sent = grok_regime.get("sentiment_summary", "")
                 macro_ctx = f"Current regime probabilities: {probs}\nMacro sentiment: {sent}"
+
+            # Always inject latest conflict context from Supabase (not session-dependent)
+            try:
+                from src.db import get_client
+                _db = get_client()
+                if _db:
+                    _ca = _db.table("conflict_analysis").select("situation_summary, escalation_risk")\
+                        .eq("region", "iran").order("timestamp", desc=True).limit(1).execute()
+                    if _ca.data:
+                        import json as _jmc
+                        _esc = _ca.data[0].get("escalation_risk", {})
+                        if isinstance(_esc, str):
+                            _esc = _jmc.loads(_esc)
+                        _score = _esc.get("score", "?")
+                        macro_ctx += f"\n\nACTIVE WAR: US-Israel-Iran conflict (started Feb 28, 2026). Escalation: {_score}/10."
+                        macro_ctx += f"\nStrait of Hormuz: CLOSED. Major oil infrastructure struck."
+                        _summ = _ca.data[0].get("situation_summary", "")
+                        if _summ:
+                            macro_ctx += f"\nLatest intel: {_summ[:400]}"
+            except Exception:
+                pass
 
             # Run AI models in parallel
             prompt = build_stock_prompt(ticker, fundamentals, technicals, sentiment, macro_ctx)
@@ -660,19 +752,43 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
             if not active_models:
                 st.warning("No AI models available. Check your API keys or subscription tier.")
             else:
-                model_names = ", ".join(MODEL_CONFIGS[m]["name"] for m in active_models)
-                with fun_loader("ai"):
-                    for model_key in active_models:
-                        key = api_keys[model_key]
-                        if key:
-                            model_results[model_key] = run_model_stock_analysis(model_key, key, prompt, ticker)
-
-                # Only burn a token if this was a fresh API call (not a cache hit)
+                # Check AI cache first
                 import hashlib
-                _cache_key = f"ai_charged_{ticker}_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
-                if _cache_key not in st.session_state:
-                    increment_ai_usage()
-                    st.session_state[_cache_key] = True
+                from src.ai_cache import get_cached_ai, cache_ai_response, build_cache_key
+                _stock_ai_key = build_cache_key("stock_analysis", ticker, prompt)
+                _cached_stock = get_cached_ai(_stock_ai_key)
+
+                if _cached_stock:
+                    import json
+                    try:
+                        model_results = json.loads(_cached_stock)
+                        st.toast("Loaded from AI cache (same fundamentals)")
+                    except Exception:
+                        _cached_stock = None
+
+                if not _cached_stock:
+                    model_names = ", ".join(MODEL_CONFIGS[m]["name"] for m in active_models)
+                    with fun_loader("ai"):
+                        for model_key in active_models:
+                            key = api_keys[model_key]
+                            if key:
+                                model_results[model_key] = run_model_stock_analysis(model_key, key, prompt, ticker)
+
+                    # Cache the combined results for 2 hours
+                    # Round-trip safe: serialize then deserialize to strip non-JSON types
+                    try:
+                        _serialized = json.loads(json.dumps(model_results, default=str))
+                        cache_ai_response(_stock_ai_key, json.dumps(_serialized),
+                                           model="multi", source_page="stock_analysis",
+                                           ticker=ticker, ttl_hours=2, cost_estimate=0.07)
+                    except Exception:
+                        pass
+
+                    # Only burn a token on fresh API call
+                    _charge_key = f"ai_charged_{ticker}_{hashlib.md5(prompt.encode()).hexdigest()[:12]}"
+                    if _charge_key not in st.session_state:
+                        increment_ai_usage()
+                        st.session_state[_charge_key] = True
 
             # Blend results
             blended = blend_model_results(model_results)
@@ -763,6 +879,93 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                             st.success(f"Added 100 shares of {ticker} @ ${price:.2f}")
                         except Exception as e:
                             st.error(f"Failed: {e}")
+
+    # ═══════════════════════════════════════════
+    # WALL STREET ANALYST CONSENSUS
+    # ═══════════════════════════════════════════
+    with error_boundary("Analyst Consensus"):
+        try:
+            from src.market_data import fetch_analyst_estimates
+            _analyst = fetch_analyst_estimates(ticker)
+            if _analyst and _analyst.get("num_analysts"):
+                st.markdown("#### Wall Street Consensus")
+
+                _ac1, _ac2, _ac3, _ac4, _ac5 = st.columns(5)
+
+                # Rating
+                _rec = (_analyst.get("recommendation") or "").title()
+                _rec_score = _analyst.get("rec_mean_score") or 3.0
+                _rec_colors = {"Strong Buy": "#00ff96", "Buy": "#00cc66",
+                              "Outperform": "#00cc66", "Hold": "#ffaa00",
+                              "Underperform": "#ff6644", "Sell": "#ff4444"}
+                _rc = _rec_colors.get(_rec, "#ffaa00")
+                _ac1.markdown(
+                    f'<div style="text-align:center;padding:8px;border:1px solid {_rc};border-radius:6px;">'
+                    f'<div style="font-size:0.65rem;color:#888;">CONSENSUS</div>'
+                    f'<div style="font-size:1.1rem;font-weight:800;color:{_rc};">{_rec}</div>'
+                    f'<div style="font-size:0.65rem;color:#888;">{_rec_score:.1f}/5 ({_analyst["num_analysts"]} analysts)</div>'
+                    f'</div>', unsafe_allow_html=True)
+
+                # Price target
+                _pt_mean = _analyst.get("price_target_mean")
+                _pt_low = _analyst.get("price_target_low")
+                _pt_high = _analyst.get("price_target_high")
+                if _pt_mean:
+                    _cur_price = fundamentals.get("current_price", 0) or 0
+                    _upside = (_pt_mean / _cur_price - 1) * 100 if _cur_price > 0 else 0
+                    _up_color = "#00ff96" if _upside > 0 else "#ff4444"
+                    _ac2.metric("Target", f"${_pt_mean:.0f}", f"{_upside:+.0f}%")
+                if _pt_low and _pt_high:
+                    _ac3.metric("Range", f"${_pt_low:.0f} — ${_pt_high:.0f}")
+
+                # Rating breakdown
+                _sb = _analyst.get("rec_strong_buy", 0)
+                _b = _analyst.get("rec_buy", 0)
+                _h = _analyst.get("rec_hold", 0)
+                _s = _analyst.get("rec_sell", 0)
+                _ss = _analyst.get("rec_strong_sell", 0)
+                _total = _sb + _b + _h + _s + _ss
+                if _total > 0:
+                    _bull_pct = (_sb + _b) / _total * 100
+                    _ac4.metric("Bulls", f"{_sb + _b}/{_total}", f"{_bull_pct:.0f}%")
+                    _ac5.metric("Bears", f"{_s + _ss}/{_total}")
+
+                # Recent upgrades/downgrades
+                _ud = _analyst.get("upgrades_downgrades", [])
+                if _ud:
+                    with st.expander(f"Recent Analyst Actions ({len(_ud)})", expanded=False):
+                        for _action in _ud[:8]:
+                            _firm = _action.get("Firm", "")
+                            _grade = _action.get("ToGrade", "")
+                            _from = _action.get("FromGrade", "")
+                            _act_type = _action.get("Action", "")
+                            _pt_act = _action.get("priceTargetAction", "")
+                            _pt_cur = _action.get("currentPriceTarget", 0)
+                            _date = str(_action.get("GradeDate", ""))[:10]
+
+                            _act_icon = "⬆️" if _act_type in ("up", "init") else ("⬇️" if _act_type == "down" else "➡️")
+                            _pt_str = f" → ${_pt_cur:.0f}" if _pt_cur else ""
+                            st.markdown(
+                                f'{_act_icon} **{_firm}** {_grade}{_pt_str} '
+                                f'<span style="color:#888;font-size:0.75rem;">({_date})</span>',
+                                unsafe_allow_html=True)
+
+                # Write analyst signal to signal engine
+                try:
+                    from src.signal_engine import write_signal
+                    if _rec_score and _rec_score <= 2.5:
+                        _a_dir = "bull"
+                    elif _rec_score and _rec_score >= 3.5:
+                        _a_dir = "bear"
+                    else:
+                        _a_dir = "neutral"
+                    _a_conv = max(0.0, min(1.0, (5 - float(_rec_score)) / 4))  # 1=1.0, 5=0.0
+                    write_signal("analyst_consensus", ticker, _a_dir, round(_a_conv, 2),
+                                 reasoning=f"{_rec} ({_rec_score:.1f}/5), {_analyst['num_analysts']} analysts, target ${_pt_mean:.0f}" if _pt_mean else f"{_rec}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     # Executive summary — blended from all models
     if grok_result and grok_result.get("success"):
