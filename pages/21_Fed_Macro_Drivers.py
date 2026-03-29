@@ -737,9 +737,9 @@ with tab_sentiment:
             st.info("StockTwits data unavailable.")
 
 # ════════════════════════════════════════
-# FED BALANCE SHEET & LIQUIDITY
+# FED BALANCE SHEET & LIQUIDITY (inside Fed Policy tab)
 # ════════════════════════════════════════
-with error_boundary("Fed Balance Sheet"):
+with tab_fed, error_boundary("Fed Balance Sheet"):
     st.markdown("---")
     st.subheader("Fed Balance Sheet & Liquidity")
     st.caption(
@@ -780,9 +780,9 @@ with error_boundary("Fed Balance Sheet"):
         st.info(f"Fed balance sheet data unavailable: {e}")
 
 # ════════════════════════════════════════
-# MANAGED MONEY POSITIONING (CFTC COT)
+# MANAGED MONEY POSITIONING (CFTC COT) (inside Fed Policy tab)
 # ════════════════════════════════════════
-with error_boundary("COT Positioning"):
+with tab_fed, error_boundary("COT Positioning"):
     st.markdown("---")
     st.subheader("Managed Money Positioning (CFTC COT)")
     st.caption(
@@ -807,9 +807,9 @@ with error_boundary("COT Positioning"):
         st.info(f"COT data unavailable: {e}")
 
 # ════════════════════════════════════════
-# OECD LEADING INDICATORS
+# OECD LEADING INDICATORS (inside Fed Policy tab)
 # ════════════════════════════════════════
-with error_boundary("OECD CLI"):
+with tab_fed, error_boundary("OECD CLI"):
     st.markdown("---")
     st.subheader("OECD Composite Leading Indicators")
     st.caption(
