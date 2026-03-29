@@ -100,7 +100,7 @@ def save_pref(key: str, value) -> None:
             db.table("user_preferences").upsert({
                 "user_id": _user_id(),
                 "key": key,
-                "value": json.dumps(db_value) if isinstance(db_value, (dict, list)) else db_value,
+                "value": db_value,
                 "updated_at": datetime.now().isoformat(),
             }, on_conflict="user_id,key").execute()
         except Exception as e:
