@@ -829,6 +829,34 @@ and tells you if they're liquid enough to actually trade.
             if disl_rows:
                 disl_df = pd.DataFrame(disl_rows)
 
+                # ── Surface richness summary ──
+                avg_disl = disl_df["dislocation"].mean()
+                put_disl = disl_df[disl_df["contract_type"] == "put"]["dislocation"].mean() if len(disl_df[disl_df["contract_type"] == "put"]) > 0 else 0
+                call_disl = disl_df[disl_df["contract_type"] == "call"]["dislocation"].mean() if len(disl_df[disl_df["contract_type"] == "call"]) > 0 else 0
+                max_rich = disl_df.nlargest(1, "dislocation").iloc[0] if len(disl_df) > 0 else None
+                max_cheap = disl_df.nsmallest(1, "dislocation").iloc[0] if len(disl_df) > 0 else None
+
+                dm1, dm2, dm3, dm4 = st.columns(4)
+                _surf_color = COLORS["danger"] if avg_disl > 2 else (COLORS["success"] if avg_disl < -2 else COLORS["warning"])
+                dm1.markdown(
+                    f'<div style="text-align:center;padding:8px;border:2px solid {_surf_color};border-radius:8px;">'
+                    f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};">SURFACE</div>'
+                    f'<div style="font-size:1.2rem;font-weight:800;color:{_surf_color};">{"RICH" if avg_disl > 2 else "CHEAP" if avg_disl < -2 else "FAIR"}</div>'
+                    f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{avg_disl:+.1f}% avg</div>'
+                    f'</div>', unsafe_allow_html=True)
+                dm2.metric("Put Side", f"{put_disl:+.1f}%",
+                           "Rich" if put_disl > 2 else ("Cheap" if put_disl < -2 else "Fair"),
+                           help="Average dislocation for put options")
+                dm3.metric("Call Side", f"{call_disl:+.1f}%",
+                           "Rich" if call_disl > 2 else ("Cheap" if call_disl < -2 else "Fair"),
+                           help="Average dislocation for call options")
+                if max_rich is not None and max_cheap is not None:
+                    dm4.metric("Spread",
+                               f"{max_rich['dislocation'] - max_cheap['dislocation']:.1f}%",
+                               help="Richest minus cheapest — wider = more mispricings to exploit")
+
+                st.divider()
+
                 # ── Main heatmap ──
                 pivot_disl = disl_df.pivot_table(
                     index="dte", columns="moneyness", values="dislocation", aggfunc="mean"
@@ -1670,25 +1698,19 @@ options market expects (realized > implied), you profit. If it moves less, theta
 with tab7:
     with error_boundary("Surface Animation"):
         st.subheader("IV Surface — Daily Replay")
-        st.caption(
-            "Fetches actual historical options prices from Polygon, backs out IV via Black-Scholes, "
-            "and animates the surface day-by-day. Hit **Load History** to fetch."
-        )
 
-        @st.fragment
-        def _load_hist_fragment():
-            if st.button("Load 10-Day History", type="primary", use_container_width=True, key="vs_load_hist"):
-                with fun_loader("data"):
-                    hist_surface = fetch_options_surface_history(ticker_display, days=10, max_contracts=150)
-                    if hist_surface:
-                        st.session_state["vs_hist_surface"] = hist_surface
-                        st.success(f"Loaded {len(hist_surface)} trading days of options data.")
-                    else:
-                        st.error("Could not fetch historical options data.")
-        _load_hist_fragment()
+        # Load snapshots from Supabase (pre-computed IV, no need to back out from prices)
+        cached_snapshots = _load_surface_snapshots(ticker_display, n_days=10)
+        n_snaps = len(cached_snapshots)
 
-        if "vs_hist_surface" in st.session_state and st.session_state["vs_hist_surface"]:
-            hist_surface = st.session_state["vs_hist_surface"]
+        if n_snaps < 2:
+            st.info(
+                f"**{n_snaps} snapshot{'s' if n_snaps != 1 else ''} available.** "
+                "A snapshot is saved each time you load this page, and the background worker saves one hourly. "
+                "After 2+ snapshots you'll see the surface change day-over-day."
+            )
+        else:
+            st.caption(f"Replaying **{n_snaps} daily snapshots** — real market IV, one day at a time.")
 
             from scipy.interpolate import griddata as _gd
             try:
@@ -1696,7 +1718,6 @@ with tab7:
             except ImportError:
                 _gf = None
 
-            rfr = _get_rfr()
             GRID_M, GRID_D = 40, 20
             m_range = np.linspace(0.82, 1.18, GRID_M)
 
@@ -1704,46 +1725,50 @@ with tab7:
             frames = []
             frame_labels = []
 
-            for dt in sorted(hist_surface.keys()):
-                day_data = hist_surface[dt]
-                day_spot = day_data["spot"]
+            for snap in cached_snapshots:
+                day_spot = snap["spot"]
+                day_date = snap["date"]
+                snap_data = snap["data"]
 
-                # Back out IV from prices
+                # Snapshots already have IV — no need to back out from prices
                 pts_m, pts_d, pts_iv = [], [], []
-                for r in day_data["data"]:
-                    k, dte, price = r["strike"], r["dte"], r["close"]
-                    opt_type = r.get("type", "call")
-                    if dte <= 0 or price <= 0 or k <= 0:
-                        continue
-                    T = dte / 365.0
-                    iv = implied_vol(price, day_spot, k, T, rfr, opt_type)
-                    if 0.02 < iv < 3.0:
+                for r in snap_data:
+                    k = r.get("strike", 0)
+                    dte = r.get("dte", 0)
+                    iv = r.get("iv", 0)
+                    if iv > 0.01 and dte > 0 and k > 0 and 0.78 * day_spot <= k <= 1.22 * day_spot:
                         pts_m.append(k / day_spot)
                         pts_d.append(dte)
                         pts_iv.append(iv)
 
-                if len(pts_m) < 20:
+                if len(pts_m) < 15:
                     continue
 
                 pts_m, pts_d, pts_iv = np.array(pts_m), np.array(pts_d), np.array(pts_iv)
                 d_range = np.linspace(max(pts_d.min(), 1), min(pts_d.max(), 365), GRID_D)
-                gm, gd = np.meshgrid(m_range, d_range)
+                gm, gd_mesh = np.meshgrid(m_range, d_range)
 
-                z = _gd((pts_m, pts_d), pts_iv, (gm, gd), method="cubic")
-                z_nn = _gd((pts_m, pts_d), pts_iv, (gm, gd), method="nearest")
+                z = _gd((pts_m, pts_d), pts_iv, (gm, gd_mesh), method="cubic")
+                z_nn = _gd((pts_m, pts_d), pts_iv, (gm, gd_mesh), method="nearest")
                 z[np.isnan(z)] = z_nn[np.isnan(z)]
                 if _gf is not None:
                     z = _gf(z, sigma=0.7)
 
-                # Cap outliers
-                z = np.clip(z, 0.01, np.percentile(z[~np.isnan(z)], 98) if np.any(~np.isnan(z)) else 2.0)
+                if not np.any(~np.isnan(z)):
+                    continue
+                z = np.clip(z, 0.01, np.nanpercentile(z[~np.isnan(z)], 98))
 
                 all_z_min = min(all_z_min, float(np.nanmin(z)))
                 all_z_max = max(all_z_max, float(np.nanmax(z)))
 
                 strike_grid = (m_range * day_spot).tolist()
-                frame_labels.append(f"{dt} — ${day_spot:,.2f}")
+                frame_labels.append(f"{day_date} — ${day_spot:,.2f}")
                 frames.append({"x": strike_grid, "y": d_range.tolist(), "z": z.tolist(), "spot": day_spot})
+
+            # Also store for comparison tab
+            if frames:
+                st.session_state["vs_hist_frames"] = frames
+                st.session_state["vs_hist_labels"] = frame_labels
 
             if len(frames) < 2:
                 st.warning("Not enough days with valid options data to animate.")
@@ -1937,29 +1962,25 @@ with tab8:
         if comp_mode == "Current vs N Days Ago":
             st.caption("Compare today's IV surface against a historical snapshot.")
 
-            hist_surface = st.session_state.get("vs_hist_surface", {})
-            if not hist_surface:
-                st.info("Click **Load 10-Day History** in the Surface Animation tab first.")
+            # Load snapshots directly (not dependent on animation tab)
+            _comp_snaps = _load_surface_snapshots(ticker_display, n_days=10)
+            if len(_comp_snaps) < 2:
+                st.info("Need at least 2 daily snapshots. Load this page on different days, or the hourly worker will build them automatically.")
             else:
-                avail_dates = sorted(hist_surface.keys())
-                if len(avail_dates) < 2:
-                    st.warning("Need at least 2 days of history.")
+                avail_dates = [s["date"] for s in _comp_snaps[:-1]]  # exclude today (compare against older)
+                compare_date = st.selectbox("Compare current surface to:",
+                                             avail_dates,
+                                             format_func=lambda d: f"{d} (Spot: ${next((s['spot'] for s in _comp_snaps if s['date'] == d), 0):,.2f})",
+                                             key="vs_comp_date")
+
+                old_snap = next((s for s in _comp_snaps if s["date"] == compare_date), None)
+                if not old_snap:
+                    st.warning("Selected snapshot not found.")
                 else:
-                    compare_date = st.selectbox("Compare current surface to:", avail_dates[:-1],
-                                                 format_func=lambda d: f"{d} (Spot: ${hist_surface[d]['spot']:,.2f})",
-                                                 key="vs_comp_date")
-
-                    old_data = hist_surface[compare_date]
-                    old_spot = old_data["spot"]
-
-                    # Back out IV for old date
-                    rfr = _get_rfr()
-                    old_rows = []
-                    for r in old_data["data"]:
-                        T = r["dte"] / 365.0
-                        iv = implied_vol(r["close"], old_spot, r["strike"], T, rfr, r.get("type", "call"))
-                        if 0.02 < iv < 3.0:
-                            old_rows.append({"strike": r["strike"], "dte": r["dte"], "iv": iv})
+                    old_spot = old_snap["spot"]
+                    # Snapshots already have IV — use directly
+                    old_rows = [{"strike": r["strike"], "dte": r["dte"], "iv": r.get("iv", 0)}
+                                for r in old_snap["data"] if r.get("iv", 0) > 0.01]
 
                     # DTE grid: use current expirations as reference
                     all_dtes = sorted(set(r["dte"] for r in _current_chain_rows() if r["dte"] > 0))
