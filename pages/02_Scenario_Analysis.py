@@ -401,6 +401,18 @@ def run_grok_if_stale(api_key: str, driver_data: dict, fed_drivers: dict, macro_
                 "asset_estimates": latest.get("asset_estimates", {}),
                 "timestamp": latest["timestamp"], "from_cache": True}
 
+    # Check Supabase AI cache (shared across users/sessions)
+    try:
+        from src.ai_cache import get_cached_ai, cache_ai_response, build_cache_key
+        _grok_key = build_cache_key("scenario_grok", "MACRO", json.dumps(list(macro_regimes.keys())))
+        _cached_grok = get_cached_ai(_grok_key)
+        if _cached_grok:
+            cached_result = json.loads(_cached_grok)
+            cached_result["from_cache"] = True
+            return cached_result
+    except Exception:
+        pass
+
     # Stale or no history — run fresh analysis
     try:
         fred_summary = build_fred_summary(driver_data, fed_drivers, fred_key_ref=fred_api_key)
@@ -413,6 +425,14 @@ def run_grok_if_stale(api_key: str, driver_data: dict, fed_drivers: dict, macro_
             save_grok_result(result)
             result["timestamp"] = pd.Timestamp.now().isoformat()
             result["from_cache"] = False
+            # Cache in Supabase for cross-user sharing (1 hour)
+            try:
+                _safe = json.loads(json.dumps(result, default=str))
+                cache_ai_response(_grok_key, json.dumps(_safe),
+                                   model="grok-3", source_page="scenario_analysis",
+                                   ticker="MACRO", ttl_hours=1, cost_estimate=0.03)
+            except Exception:
+                pass
         return result
     except Exception as e:
         logger.error(f"Grok analysis failed: {e}")

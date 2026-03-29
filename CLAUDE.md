@@ -70,6 +70,8 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `prediction_tracker.py` | Prediction accuracy — T+30/60/90 evaluation, Supabase + JSON fallback |
 | `api_cache.py` | Polygon API response caching in Supabase (~100ms reads vs ~1.5s) |
 | `db.py` | Shared Supabase client accessor with user ID resolution |
+| `ai_cache.py` | AI response caching — eliminates redundant Gemini/Grok/Claude calls across users |
+| `user_prefs.py` | Persistent user preferences via Supabase (active ticker, watchlist, settings) |
 
 ### pages/ — 47 App Pages
 
@@ -153,7 +155,7 @@ Flask server (port 5000) handling Stripe webhook events:
 
 Run: `python webhook_server.py` (separate from Streamlit)
 
-### Supabase Tables (14)
+### Supabase Tables (18)
 - `subscriptions` — user tier tracking (Stripe webhook-driven)
 - `user_tokens` — AI analysis credit balance
 - `payment_failures` — failed payment flags
@@ -168,6 +170,10 @@ Run: `python webhook_server.py` (separate from Streamlit)
 - `chat_history` — persistent chat conversation log
 - `source_credibility` — news source reliability scores
 - `api_cache` — Polygon API response cache (TTL-based)
+- `ai_response_cache` — AI model response cache (shared across users, TTL-based)
+- `price_history` — Daily OHLCV cache (fetch once, append daily)
+- `user_preferences` — Persistent user settings (active ticker, watchlist, defaults)
+- `conflict_timeline` — Grok-discovered conflict events (auto-updated by worker)
 
 ### Supabase Views
 - `signal_composites` — real-time weighted signal aggregation
@@ -177,8 +183,16 @@ Run: `python webhook_server.py` (separate from Streamlit)
 - `increment_tokens` — atomic token balance update
 - `increment_ai_usage` — atomic daily usage/chat counter
 - `get_metrics_coverage` — ticker summary
-- `cleanup_expired_cache` / `cleanup_old_signals` — data pruning
+- `cleanup_expired_cache` / `cleanup_old_signals` / `cleanup_expired_ai_cache` — data pruning
 - `refresh_percentiles` — refresh materialized view
+
+### Background Worker (`worker.py`)
+Runs via GitHub Actions cron. Hourly during market hours, every 4h off-hours/weekends.
+- `update_situation_briefing()` — Grok searches X/Twitter for latest war developments
+- `update_timeline()` — Grok finds new conflict events, persists to `conflict_timeline`
+- `update_conflict_analysis()` — 3-model blend (Grok + Gemini + Claude) escalation assessment
+- `update_metrics_snapshots()` — Price history + HV20 for 10 key tickers
+- `cleanup_caches()` — Purge expired entries from all cache tables
 
 ---
 

@@ -13,14 +13,18 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **47 pages** of quantitative analysis tools (incl. 11 sector pages, 6 quant research pages, power trading strategies, meta portfolio analysis, calendar spreads, vol surface with Gemini AI trade ideas, portfolio Greeks with delta hedging, universe portfolio, market expectations engine)
+- **47 pages** of quantitative analysis tools + automated hourly background worker (incl. 11 sector pages, 6 quant research pages, power trading strategies, meta portfolio analysis, calendar spreads, vol surface with Gemini AI trade ideas, portfolio Greeks with delta hedging, universe portfolio, market expectations engine)
 - **4 AI models**: Grok 4, Gemini 2.5 Pro, Claude Sonnet/Opus, Gemini 2.5 Flash (chat)
 - **Unified Signal Engine** -- aggregates signals from 8+ analysis pages into weighted composite scores per ticker
 - **Historical Metrics Store** -- daily vol/options snapshots with 252-day percentile ranks
 - **Position Lifecycle Manager** -- Greek tracking, P&L attribution (delta/gamma/theta/vega), alerts, trade journal
 - **14-table Supabase backend** -- signals, metrics, positions, predictions, chat history, API cache, AI usage tracking
 - **API response caching** -- Polygon responses cached in Supabase (~100ms vs ~1.5s on cache hit)
-- **Landing page dashboard** -- market pulse bar (auto-refresh), signal composites, vol regime, position book, heatmap, AI intelligence, prediction accuracy, 12 feature cards
+- **AI response caching** -- Gemini/Grok/Claude responses cached by input hash, shared across users
+- **Hourly background worker** -- GitHub Actions cron updates conflict analysis, briefings, timeline, metrics 24/7
+- **User preferences** -- active ticker, watchlist, heatmap defaults persist across sessions via Supabase
+- **Wall Street analyst consensus** -- yfinance ratings, price targets, upgrades/downgrades fed into Signal Engine
+- **Landing page dashboard** -- market pulse bar + futures bar (auto-refresh), signal composites, vol regime, position book, heatmap, AI intelligence, prediction accuracy, 12 feature cards
 - **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
 - **Fun loader** -- animated spinner with quips, progress bar, milestone status, countdown ETA
 - **Open Beta** -- no login required, all features unlocked, optional account creation via Settings > Log In
@@ -55,7 +59,7 @@ Opens at **http://localhost:8501** (or next available port).
 | **Stock Analysis** | 3-model AI consensus scorecard + SEC EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | **RL Trading** | Dueling DQN ensemble with 31 features, walk-forward validation, Monte Carlo robustness, feature redundancy detection |
 | **Iran Conflict** | 3-model AI war analysis (search-grounded), live situation briefing, Grok infrastructure monitoring, trending tweets, conflict timeline with ultimatum countdown |
-| **Fed & Macro Drivers** | 4-tab page: signal matrix, driver trend charts, FOMC dot plot, SEP, Polymarket |
+| **Fed & Macro Drivers** | 8-tab page: signal matrix (aggregate score, Taylor Rule, FOMC countdown), driver trends, Fed policy (dot plot, SEP), FOMC statement diff (word-level with Gemini AI interpretation), inflation deep dive (CPI decomposition, sticky vs flexible), labor market (NFP, JOLTS, Beveridge), yield curve & financial conditions (NFCI, Sahm Rule), market sentiment (StockTwits, Polymarket) |
 | **Smart Money** | 13F institutional holdings, congressional trades, activist investors (13D), 8-K event search |
 | **Economic Calendar** | Today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
 | **Algo Backtester** | 13 strategies, 9-tab analysis: equity curve, drawdown, trade log, monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. López de Prado methods: Deflated Sharpe, PBO (CPCV), Triple Barrier exits, bet sizing, fractional differentiation, sequential bootstrap. |
@@ -199,7 +203,10 @@ $$ LANGUAGE plpgsql;
 
 ```
 app.py                    Entry point (redirects to Summary; login disabled for open beta)
+worker.py                 Hourly background worker (conflict analysis, metrics, cleanup)
 webhook_server.py         Stripe webhook handler (Flask, port 5000)
+.github/workflows/
+  hourly-worker.yml       GitHub Actions cron (hourly market, 4h off-hours)
 Dockerfile                Cloud Run deployment (4 CPU, 4GB recommended)
 static/
   logo.png                Platform logo (base64-encoded into header)
@@ -228,6 +235,8 @@ src/
   prediction_tracker.py   Prediction accuracy tracking (T+30/60/90 evaluation)
   api_cache.py            Supabase-backed API response caching layer
   db.py                   Shared Supabase client accessor with user ID resolution
+  ai_cache.py             AI response caching (eliminates redundant Gemini/Grok/Claude calls)
+  user_prefs.py           Persistent user preferences via Supabase (ticker, watchlist, settings)
   macro_data.py           Extended macro sources (VIX term structure, SKEW, Fed balance sheet, CFTC COT, OECD CLI, BIS credit gap)
   economic_calendar.py    Centralized FOMC dates and macro event detection
   quant_features.py       Shared quant functions (frac diff, CUSUM, triple barrier, HRP, VPIN, entropy)

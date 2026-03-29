@@ -2443,34 +2443,51 @@ with tab9:
                         f"ANALYSIS FOCUS: {style_prompts[idea_style]}"
                     )
 
-                    with fun_loader("ai"):
-                        try:
-                            from google import genai
-                            from google.genai import types
+                    # Check AI cache first
+                    from src.ai_cache import get_cached_ai, cache_ai_response, build_cache_key_from_metrics
+                    _ai_key = build_cache_key_from_metrics(
+                        f"vol_surface_{idea_style}", ticker_display,
+                        spot=spot, iv=_front_atm, skew=_put_skew_ratio, vrp=_vrp,
+                    )
+                    _cached_ai = get_cached_ai(_ai_key)
+                    if _cached_ai:
+                        st.session_state["vs_gemini_result"] = _cached_ai
+                        st.session_state["vs_gemini_style_used"] = idea_style
+                        st.toast("Loaded from AI cache (same surface profile)")
+                    else:
+                        with fun_loader("ai"):
+                            try:
+                                from google import genai
+                                from google.genai import types
 
-                            client = genai.Client(api_key=gemini_key)
-                            response = client.models.generate_content(
-                                model="gemini-2.5-pro",
-                                contents=system_prompt,
-                                config=types.GenerateContentConfig(
-                                    max_output_tokens=20000,
-                                    temperature=0.4,
-                                ),
-                            )
-                            result_text = response.text
-                            st.session_state["vs_gemini_result"] = result_text
-                            st.session_state["vs_gemini_style_used"] = idea_style
-                        except Exception as e:
-                            err = str(e).lower()
-                            if "api_key" in err or "authentication" in err or "403" in err:
-                                st.error("Gemini API key is invalid or expired. Check your GEMINI_API_KEY secret.")
-                            elif "quota" in err or "rate" in err or "429" in err:
-                                st.error("Rate limit exceeded. Wait 30 seconds and try again.")
-                            elif "404" in err or "not found" in err:
-                                st.error("Model not available. Check that `gemini-2.5-pro` is accessible on your API key.")
-                            else:
-                                st.error(f"Gemini API error: {e}")
-                            logger.error(f"Gemini trade ideas failed: {e}")
+                                client = genai.Client(api_key=gemini_key)
+                                response = client.models.generate_content(
+                                    model="gemini-2.5-pro",
+                                    contents=system_prompt,
+                                    config=types.GenerateContentConfig(
+                                        max_output_tokens=20000,
+                                        temperature=0.4,
+                                    ),
+                                )
+                                result_text = response.text
+                                st.session_state["vs_gemini_result"] = result_text
+                                st.session_state["vs_gemini_style_used"] = idea_style
+                                # Cache for 2 hours
+                                cache_ai_response(_ai_key, result_text, model="gemini-2.5-pro",
+                                                   source_page="vol_surface", ticker=ticker_display,
+                                                   ttl_hours=2, cost_estimate=0.05,
+                                                   prompt_summary=f"{idea_style} | spot={spot:.0f} IV={_front_atm:.1%} skew={_put_skew_ratio:.2f}")
+                            except Exception as e:
+                                err = str(e).lower()
+                                if "api_key" in err or "authentication" in err or "403" in err:
+                                    st.error("Gemini API key is invalid or expired. Check your GEMINI_API_KEY secret.")
+                                elif "quota" in err or "rate" in err or "429" in err:
+                                    st.error("Rate limit exceeded. Wait 30 seconds and try again.")
+                                elif "404" in err or "not found" in err:
+                                    st.error("Model not available. Check that `gemini-2.5-pro` is accessible on your API key.")
+                                else:
+                                    st.error(f"Gemini API error: {e}")
+                                logger.error(f"Gemini trade ideas failed: {e}")
 
                 # Display results
                 if "vs_gemini_result" in st.session_state:

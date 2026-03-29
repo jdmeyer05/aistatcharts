@@ -468,21 +468,46 @@ def card_header(title: str, icon: str = ""):
 
 
 def get_active_ticker(default: str = "SPY") -> str:
-    """Get the active ticker from query params or session state.
+    """Get the active ticker from query params, session state, or Supabase prefs.
     Use as the default value for ticker inputs to enable cross-page linking."""
-    # Priority: query param > session state > default
+    # Priority: query param > session state > saved pref > default
     qp_ticker = st.query_params.get("ticker", "").strip().upper()
     if qp_ticker:
         st.session_state["active_ticker"] = qp_ticker
         return qp_ticker
-    return st.session_state.get("active_ticker", default)
+    if "active_ticker" in st.session_state:
+        return st.session_state["active_ticker"]
+    # Load from Supabase prefs
+    try:
+        from src.user_prefs import load_pref
+        saved = load_pref("active_ticker")
+        if saved:
+            st.session_state["active_ticker"] = saved
+            return saved
+    except Exception:
+        pass
+    return default
 
 
 def set_active_ticker(ticker: str):
-    """Set the active ticker in session state for cross-page linking."""
+    """Set the active ticker in session state and persist to Supabase."""
     ticker = ticker.strip().upper()
     if ticker:
+        old = st.session_state.get("active_ticker", "")
         st.session_state["active_ticker"] = ticker
+        # Persist to Supabase (only on change to avoid excess writes)
+        if ticker != old:
+            try:
+                from src.user_prefs import save_pref
+                save_pref("active_ticker", ticker)
+                # Track recent tickers
+                recent = st.session_state.get("_recent_tickers", [])
+                if ticker not in recent:
+                    recent = [ticker] + recent[:19]
+                    st.session_state["_recent_tickers"] = recent
+                    save_pref("recent_tickers", recent)
+            except Exception:
+                pass
 
 
 @contextmanager

@@ -1,5 +1,76 @@
 # Changelog
 
+## 2026-03-29 — Background Worker, AI Caching, Fed Macro Expansion
+
+### Background Worker (`worker.py`)
+- Standalone Python script running via GitHub Actions cron — 24/7, no Streamlit required
+- **5 tasks**: situation briefing (Grok), timeline updates, 3-model conflict analysis, metrics snapshots (10 tickers), cache cleanup
+- **Schedule**: hourly during market hours (Mon-Fri 9am-5pm ET), every 4 hours off-hours/weekends
+- Writes directly to Supabase — data is fresh when users arrive
+
+### AI Response Cache (`src/ai_cache.py`)
+- Caches AI model responses keyed by input hash — same data = same analysis, skip the API call
+- Vol Surface Gemini trade ideas: cached by metrics hash (spot ±0.5%, IV ±0.5%, skew ±0.02)
+- Stock Analysis 3-model blend: cached by prompt hash (2h TTL)
+- Scenario Analysis Grok regime: cached by regime names (1h TTL)
+- Iran briefing: hourly key shared across all users (30min TTL)
+- StockTwits + Polymarket: cached for cross-user sharing (30min TTL)
+- **Estimated savings**: ~$0.12/duplicate call avoided, 10-60s saved per cache hit
+
+### Fed Macro Drivers (page 21) — 8 Tabs (was 4)
+- **Signal Matrix enhanced**: Aggregate hawkish/dovish score, Taylor Rule calculator (r* + inflation gap + output gap), FOMC countdown with market-implied rate expectations
+- **FOMC Statement Diff** (new): Word-level diff of consecutive statements with green/red highlighting, key phrase tracker, Gemini AI interpretation (hawkish/dovish score, trading implications)
+- **Inflation Deep Dive** (new): 8 CPI/PCE components charted YoY, current readings table with direction, sticky vs flexible inflation breakdown
+- **Labor Market** (new): NFP bars, JOLTS openings + quits, prime-age EPOP, participation rate, wage growth
+- **Yield Curve & Financial Conditions** (new): Full Treasury curve (1M-30Y) with historical overlays, 2s10s + 3M-10Y spreads with inversion alerts, Chicago Fed NFCI, Sahm Rule recession indicator
+
+### Wall Street Analyst Consensus (Stock Analysis page)
+- New section with consensus rating, price target (mean/high/low), analyst count, bull/bear breakdown
+- Recent upgrades/downgrades with firm names, grades, price targets, dates
+- Analyst signal wired into Signal Engine at 1.3x weight
+- All data from yfinance (free, no API key needed)
+
+### Iran Conflict Context Injection
+- Energy/defense/commodity tickers now receive verified war facts in AI prompts: Hormuz closure, missile counts, infrastructure strikes, model assessments
+- Data pulled from Supabase `conflict_analysis` table (always current, not session-dependent)
+- Explicit instruction: "Do NOT use generic language — name specific impacts"
+
+### User Preferences (`src/user_prefs.py`)
+- Active ticker persists across sessions and devices via Supabase `user_preferences` table
+- Watchlist survives page refreshes and restarts
+- Heatmap list/period defaults remembered
+- Recent tickers tracked (last 20)
+
+### Summary Page — Futures Bar
+- ES, NQ, Dow, Crude, Gold, Silver, NatGas, 30Y Bond, 10Y Note, Euro FX, Bitcoin
+- Auto-refreshes every 2 minutes alongside the equity pulse bar
+
+### Performance Optimizations
+- **Price history table**: fetch once from Polygon, append daily — subsequent loads ~100ms vs ~1.5s
+- **Options chain cache**: 2-hour TTL in Supabase, shared across all pages hitting same ticker
+- **Snapshot cache**: Market pulse, heatmap, watchlist share cached snapshots (3-min TTL)
+- **Batch snapshot optimization**: only fetches uncached symbols from Polygon
+
+### Supabase Schema Additions
+- `ai_response_cache` — AI model response cache with TTL
+- `price_history` — daily OHLCV cache (primary key: ticker + date)
+- `user_preferences` — persistent user settings
+- `conflict_timeline` — Grok-discovered conflict events
+
+### Bug Fixes
+- Fixed Vol Surface Gemini indentation error (try/except inside with block)
+- Fixed JSON round-trip safety for AI cache writes (double-serialize to strip non-JSON types)
+- Fixed FOMC countdown date type mismatch (string → date conversion)
+- Fixed Taylor Rule division by zero on CPI YoY calculation
+- Fixed inflation tab division by zero on all YoY calculations
+- Removed fabricated price numbers from conflict timeline impact descriptions
+- Fixed `polygon_batch_snapshot` fetching all symbols instead of only uncached ones
+- Fixed `_last_trading_day()` timezone (local → ET approximation via UTC-5)
+- Fixed Stock Analysis `price` variable scope in analyst section
+- Fixed `_rec_score` None guard in analyst consensus signal write
+
+---
+
 ## 2026-03-28 — Major Platform Upgrade
 
 ### New Systems

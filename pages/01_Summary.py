@@ -42,6 +42,13 @@ PULSE_TICKERS = [
     ("TLT", "20Y Bond"), ("DX-Y.NYB", "Dollar"),
 ]
 
+FUTURES_TICKERS = [
+    ("ES=F", "ES"), ("NQ=F", "NQ"), ("YM=F", "Dow"),
+    ("CL=F", "Crude"), ("GC=F", "Gold"), ("SI=F", "Silver"),
+    ("NG=F", "NatGas"), ("ZB=F", "30Y Bond"), ("ZN=F", "10Y Note"),
+    ("6E=F", "Euro FX"), ("BTC-USD", "Bitcoin"),
+]
+
 @st.fragment(run_every=120)
 def _market_pulse():
     tickers = [t for t, _ in PULSE_TICKERS]
@@ -80,6 +87,52 @@ def _market_pulse():
         )
 
 _market_pulse()
+
+# Futures bar
+@st.fragment(run_every=120)
+def _futures_pulse():
+    tickers = [t for t, _ in FUTURES_TICKERS]
+    snaps = polygon_batch_snapshot(tickers)
+
+    cells = []
+    for ticker, label in FUTURES_TICKERS:
+        snap = snaps.get(ticker)
+        if not snap or not snap.get("price"):
+            continue
+        price = snap["price"]
+        chg = snap.get("change", 0)
+        color = COLORS["success"] if chg >= 0 else COLORS["danger"]
+        arrow = "▲" if chg >= 0 else "▼"
+
+        if ticker == "BTC-USD":
+            p_str = f"${price:,.0f}"
+        elif price >= 1000:
+            p_str = f"{price:,.0f}"
+        elif price >= 10:
+            p_str = f"{price:.1f}"
+        else:
+            p_str = f"{price:.3f}"
+
+        cells.append(
+            f'<div style="flex:1 1 85px;text-align:center;padding:5px 3px;">'
+            f'<div style="font-size:0.55rem;color:{COLORS["text_muted"]};text-transform:uppercase;">{label}</div>'
+            f'<div style="font-size:0.9rem;font-weight:700;">{p_str}</div>'
+            f'<div style="font-size:0.7rem;color:{color};font-weight:600;">{arrow}{abs(chg):.2f}%</div>'
+            f'</div>'
+        )
+
+    if cells:
+        st.markdown(
+            f'<div style="display:flex;flex-wrap:wrap;gap:2px;border:1px solid {COLORS["card_border"]};'
+            f'border-radius:8px;background:{COLORS["card_bg"]};margin-bottom:12px;">'
+            f'<div style="padding:6px 10px;display:flex;align-items:center;">'
+            f'<span style="font-size:0.6rem;color:{COLORS["text_muted"]};writing-mode:vertical-rl;'
+            f'text-orientation:mixed;letter-spacing:1px;">FUTURES</span></div>'
+            f'{"".join(cells)}</div>',
+            unsafe_allow_html=True,
+        )
+
+_futures_pulse()
 
 
 # ═══════════════════════════════════════════════
@@ -308,14 +361,36 @@ def _fetch_perf_returns(tickers_key: str, period: str) -> dict:
 
 
 with error_boundary("Market Heatmap"):
+    # Load saved heatmap preferences
+    try:
+        from src.user_prefs import load_pref, save_pref as _save_hm_pref
+        _saved_list = load_pref("hm_list", "Sectors")
+        _saved_period = load_pref("hm_period", "1D")
+    except Exception:
+        _saved_list, _saved_period = "Sectors", "1D"
+
+    _list_options = list(PERF_LISTS.keys())
+    _period_options = ["1D", "1W", "1M", "3M", "YTD", "1Y"]
+    _list_idx = _list_options.index(_saved_list) if _saved_list in _list_options else 0
+    _period_idx = _period_options.index(_saved_period) if _saved_period in _period_options else 0
+
     hm1, hm2, hm3 = st.columns([3, 1, 1])
     with hm1:
         st.markdown("##### Market Heatmap")
     with hm2:
-        hm_list = st.selectbox("List", list(PERF_LISTS.keys()), key="hm_list", label_visibility="collapsed")
+        hm_list = st.selectbox("List", _list_options, key="hm_list", index=_list_idx, label_visibility="collapsed")
     with hm3:
-        hm_period_label = st.selectbox("Period", ["1D", "1W", "1M", "3M", "YTD", "1Y"],
-                                        key="hm_period", index=0, label_visibility="collapsed")
+        hm_period_label = st.selectbox("Period", _period_options,
+                                        key="hm_period", index=_period_idx, label_visibility="collapsed")
+
+    # Save if changed
+    try:
+        if hm_list != _saved_list:
+            _save_hm_pref("hm_list", hm_list)
+        if hm_period_label != _saved_period:
+            _save_hm_pref("hm_period", hm_period_label)
+    except Exception:
+        pass
     period_map = {"1D": "1d", "1W": "1w", "1M": "1mo", "3M": "3mo", "YTD": "ytd", "1Y": "1y"}
     hm_period = period_map[hm_period_label]
 
@@ -556,7 +631,13 @@ with fc12:
 # ═══════════════════════════════════════════════
 with error_boundary("Watchlist"):
     if "watchlist" not in st.session_state:
-        st.session_state["watchlist"] = {}
+        # Load saved watchlist from Supabase
+        try:
+            from src.user_prefs import load_pref
+            saved_wl = load_pref("watchlist", {})
+            st.session_state["watchlist"] = saved_wl if isinstance(saved_wl, dict) else {}
+        except Exception:
+            st.session_state["watchlist"] = {}
     watchlist = st.session_state["watchlist"]
 
     with st.expander(f"Watchlist ({len(watchlist)} tickers)"):
@@ -582,6 +663,11 @@ with error_boundary("Watchlist"):
                         st.markdown(f'<div style="text-align:center;padding:8px;"><strong>{wl_t}</strong><br><span style="color:{COLORS["text_muted"]};">Loading...</span></div>', unsafe_allow_html=True)
                     if st.button("Remove", key=f"wl_rm_{wl_t}", use_container_width=True):
                         del st.session_state["watchlist"][wl_t]
+                        try:
+                            from src.user_prefs import save_pref
+                            save_pref("watchlist", st.session_state["watchlist"])
+                        except Exception:
+                            pass
                         st.rerun()
 
         st.markdown("---")
@@ -602,6 +688,11 @@ with error_boundary("Watchlist"):
                         "below": wl_below if wl_below > 0 else None,
                         "move_pct": 5,
                     }
+                    try:
+                        from src.user_prefs import save_pref
+                        save_pref("watchlist", st.session_state["watchlist"])
+                    except Exception:
+                        pass
                     st.rerun()
 
 

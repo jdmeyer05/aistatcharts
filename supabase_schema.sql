@@ -329,7 +329,59 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- ─── 17. API CACHE (Polygon response caching layer) ─────────
+-- ─── 17. CONFLICT TIMELINE EVENTS (auto-updated by Grok) ────
+CREATE TABLE IF NOT EXISTS conflict_timeline (
+    id BIGSERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    event TEXT NOT NULL,
+    category TEXT DEFAULT 'Military',
+    impact TEXT DEFAULT '',
+    infrastructure TEXT DEFAULT '',
+    source TEXT DEFAULT 'grok_auto',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (date, event)
+);
+CREATE INDEX IF NOT EXISTS idx_timeline_date ON conflict_timeline (date DESC);
+
+
+-- ─── 18. PRICE HISTORY (fetch once, append daily) ───────────
+CREATE TABLE IF NOT EXISTS price_history (
+    ticker TEXT NOT NULL,
+    date DATE NOT NULL,
+    close FLOAT NOT NULL,
+    PRIMARY KEY (ticker, date)
+);
+CREATE INDEX IF NOT EXISTS idx_ph_ticker ON price_history (ticker, date DESC);
+
+
+-- ─── 19. AI RESPONSE CACHE ───────────────────────────────────
+-- Caches AI model responses keyed by input hash.
+-- Same input = same output. Shared across users. TTL-based expiry.
+CREATE TABLE IF NOT EXISTS ai_response_cache (
+    input_hash TEXT PRIMARY KEY,
+    model TEXT NOT NULL,
+    source_page TEXT NOT NULL,
+    ticker TEXT,
+    prompt_summary TEXT,
+    response TEXT NOT NULL,
+    tokens_used INTEGER DEFAULT 0,
+    cost_estimate FLOAT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '2 hours'
+);
+CREATE INDEX IF NOT EXISTS idx_ai_cache_ticker ON ai_response_cache (ticker, source_page);
+CREATE INDEX IF NOT EXISTS idx_ai_cache_expires ON ai_response_cache (expires_at);
+
+-- Cleanup expired AI cache
+CREATE OR REPLACE FUNCTION cleanup_expired_ai_cache()
+RETURNS void AS $$
+BEGIN
+    DELETE FROM ai_response_cache WHERE expires_at < NOW();
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ─── 20. API CACHE (Polygon response caching layer) ─────────
 -- Replaces Edge Function approach — cache API responses in Postgres.
 -- Python checks cache before hitting Polygon. ~100ms vs ~1-2s.
 CREATE TABLE IF NOT EXISTS api_cache (
