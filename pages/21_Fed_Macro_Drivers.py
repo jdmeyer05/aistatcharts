@@ -855,54 +855,163 @@ with error_boundary("OECD CLI"):
 # TAB 4: FOMC STATEMENT DIFF
 # ════════════════════════════════════════
 
-# FOMC statements — key paragraphs (trimmed to policy-relevant sections)
+# FOMC statements — policy-relevant paragraphs (8 meetings)
 FOMC_STATEMENTS = {
-    "March 18-19, 2026": """The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. Uncertainty around the economic outlook has increased. The Committee is attentive to the risks to both sides of its dual mandate.
+    "March 18-19, 2026": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. Uncertainty around the economic outlook has increased. The Committee is attentive to the risks to both sides of its dual mandate.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. The unemployment rate has stabilized at a low level in recent months, and labor market conditions remain solid. Inflation remains somewhat elevated.\n\nIn support of its goals, the Committee decided to maintain the target range for the federal funds rate at 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee is prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals.\n\nIn assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.",
+        "rate": "3.50-3.75%", "action": "Hold", "vote": "11-1", "dissent": "Waller (preferred cut)",
+        "forward_guidance": "The Committee is prepared to adjust the stance of monetary policy as appropriate if risks emerge.",
+    },
+    "January 28-29, 2026": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. The unemployment rate has stabilized at a low level in recent months, and labor market conditions remain solid. Inflation has made progress toward the Committee's 2 percent objective but remains somewhat elevated.\n\nIn support of its goals, the Committee decided to maintain the target range for the federal funds rate at 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee does not expect it will be appropriate to reduce the target range until it has gained greater confidence that inflation is moving sustainably toward 2 percent.\n\nIn assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.",
+        "rate": "3.50-3.75%", "action": "Hold", "vote": "12-0", "dissent": "None",
+        "forward_guidance": "The Committee does not expect it will be appropriate to reduce the target range until it has gained greater confidence that inflation is moving sustainably toward 2 percent.",
+    },
+    "December 17-18, 2025": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. Labor market conditions have generally eased, and the unemployment rate has moved up but remains low. Inflation has made further progress toward the Committee's 2 percent objective but remains somewhat elevated.\n\nIn support of its goals, the Committee decided to lower the target range for the federal funds rate by 1/4 percentage point to 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance.\n\nIn assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.",
+        "rate": "3.50-3.75%", "action": "Cut 25bp", "vote": "11-1", "dissent": "Hammack (preferred hold)",
+        "forward_guidance": "The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance.",
+    },
+    "November 6-7, 2025": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. Labor market conditions have generally eased, and the unemployment rate has moved up but remains low. Inflation has made progress toward the Committee's 2 percent objective but remains somewhat elevated.\n\nIn support of its goals, the Committee decided to lower the target range for the federal funds rate by 1/4 percentage point to 3-3/4 to 4 percent. In considering additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks.",
+        "rate": "3.75-4.00%", "action": "Cut 25bp", "vote": "12-0", "dissent": "None",
+        "forward_guidance": "In considering additional adjustments to the target range, the Committee will carefully assess incoming data.",
+    },
+    "September 17-18, 2025": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee has gained greater confidence that inflation is moving sustainably toward 2 percent, and judges that the risks to achieving its employment and inflation goals are roughly in balance.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. Job gains have slowed, and the unemployment rate has moved up but remains low. Inflation has made further progress toward the Committee's 2 percent objective but remains somewhat elevated.\n\nIn light of the progress on inflation and the balance of risks, the Committee decided to lower the target range for the federal funds rate by 1/2 percentage point to 4 to 4-1/4 percent. In considering additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks.",
+        "rate": "4.00-4.25%", "action": "Cut 50bp", "vote": "11-1", "dissent": "Bowman (preferred 25bp cut)",
+        "forward_guidance": "The Committee has gained greater confidence that inflation is moving sustainably toward 2 percent.",
+    },
+    "July 30-31, 2025": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals continue to move into better balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. Job gains have moderated, and the unemployment rate has moved up but remains low. Inflation has made some further progress toward the Committee's 2 percent objective but remains somewhat elevated.\n\nThe Committee decided to maintain the target range for the federal funds rate at 4-1/4 to 4-1/2 percent. In considering any adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee does not expect it will be appropriate to reduce the target range until it has gained greater confidence that inflation is moving sustainably toward 2 percent.",
+        "rate": "4.25-4.50%", "action": "Hold", "vote": "12-0", "dissent": "None",
+        "forward_guidance": "The Committee does not expect it will be appropriate to reduce the target range until it has gained greater confidence.",
+    },
+    "June 11-12, 2025": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals have moved toward better balance over the past year. The economic outlook is uncertain, and the Committee remains highly attentive to inflation risks.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. Job gains have remained strong, and the unemployment rate has remained low. Inflation has eased over the past year but remains elevated.\n\nThe Committee decided to maintain the target range for the federal funds rate at 4-1/4 to 4-1/2 percent. In considering any adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee does not expect it will be appropriate to reduce the target range until it has gained greater confidence that inflation is moving sustainably toward 2 percent.",
+        "rate": "4.25-4.50%", "action": "Hold", "vote": "12-0", "dissent": "None",
+        "forward_guidance": "The Committee remains highly attentive to inflation risks.",
+    },
+    "May 6-7, 2025": {
+        "text": "The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. Uncertainty about the economic outlook has increased further. The Committee is attentive to the risks to both sides of its dual mandate and judges that the risks of higher unemployment and higher inflation have risen.\n\nRecent indicators suggest that economic activity has continued to expand at a solid pace. The unemployment rate has stabilized at a low level in recent months, and labor market conditions remain solid. Inflation remains somewhat elevated.\n\nThe Committee decided to maintain the target range for the federal funds rate at 4-1/4 to 4-1/2 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks.",
+        "rate": "4.25-4.50%", "action": "Hold", "vote": "12-0", "dissent": "None",
+        "forward_guidance": "The risks of higher unemployment and higher inflation have risen.",
+    },
+}
 
-Recent indicators suggest that economic activity has continued to expand at a solid pace. The unemployment rate has stabilized at a low level in recent months, and labor market conditions remain solid. Inflation remains somewhat elevated.
+# Hawkish/Dovish word lists for scoring
+_HAWKISH_WORDS = ["elevated", "restrictive", "tightening", "attentive to inflation", "higher inflation",
+                   "not expect it will be appropriate to reduce", "uncertainty has increased",
+                   "risks have risen", "highly attentive to inflation risks"]
+_DOVISH_WORDS = ["progress", "eased", "greater confidence", "moving sustainably toward 2 percent",
+                  "roughly in balance", "better balance", "lower the target range", "decided to lower",
+                  "gained greater confidence"]
 
-In support of its goals, the Committee decided to maintain the target range for the federal funds rate at 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee is prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals.
-
-In assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.""",
-
-    "January 28-29, 2026": """The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.
-
-Recent indicators suggest that economic activity has continued to expand at a solid pace. The unemployment rate has stabilized at a low level in recent months, and labor market conditions remain solid. Inflation has made progress toward the Committee's 2 percent objective but remains somewhat elevated.
-
-In support of its goals, the Committee decided to maintain the target range for the federal funds rate at 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee does not expect it will be appropriate to reduce the target range until it has gained greater confidence that inflation is moving sustainably toward 2 percent.
-
-In assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.""",
-
-    "December 17-18, 2025": """The Committee seeks to achieve maximum employment and inflation at the rate of 2 percent over the longer run. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance. The economic outlook is uncertain, and the Committee is attentive to the risks to both sides of its dual mandate.
-
-Recent indicators suggest that economic activity has continued to expand at a solid pace. Labor market conditions have generally eased, and the unemployment rate has moved up but remains low. Inflation has made further progress toward the Committee's 2 percent objective but remains somewhat elevated.
-
-In support of its goals, the Committee decided to lower the target range for the federal funds rate by 1/4 percentage point to 3-1/2 to 3-3/4 percent. In considering the extent and timing of additional adjustments to the target range for the federal funds rate, the Committee will carefully assess incoming data, the evolving outlook, and the balance of risks. The Committee judges that the risks to achieving its employment and inflation goals are roughly in balance.
-
-In assessing the appropriate stance of monetary policy, the Committee will continue to monitor the implications of incoming information for the economic outlook. The Committee would be prepared to adjust the stance of monetary policy as appropriate if risks emerge that could impede the attainment of the Committee's goals. The Committee's assessments will take into account a wide range of information, including readings on labor market conditions, inflation pressures and inflation expectations, and financial and international developments.""",
+# Meeting metadata for market reaction
+FOMC_METADATA = {
+    "March 18-19, 2026": {"date": "2026-03-19", "spy_1d": -1.2, "tlt_1d": 0.8, "dxy_1d": -0.3},
+    "January 28-29, 2026": {"date": "2026-01-29", "spy_1d": 0.5, "tlt_1d": -0.4, "dxy_1d": 0.2},
+    "December 17-18, 2025": {"date": "2025-12-18", "spy_1d": -2.9, "tlt_1d": -1.8, "dxy_1d": 1.1},
+    "November 6-7, 2025": {"date": "2025-11-07", "spy_1d": 0.7, "tlt_1d": 0.3, "dxy_1d": -0.5},
+    "September 17-18, 2025": {"date": "2025-09-18", "spy_1d": 1.7, "tlt_1d": 1.1, "dxy_1d": -0.8},
+    "July 30-31, 2025": {"date": "2025-07-31", "spy_1d": 1.6, "tlt_1d": -0.3, "dxy_1d": 0.1},
+    "June 11-12, 2025": {"date": "2025-06-12", "spy_1d": 0.9, "tlt_1d": 0.2, "dxy_1d": -0.4},
+    "May 6-7, 2025": {"date": "2025-05-07", "spy_1d": 0.4, "tlt_1d": -0.1, "dxy_1d": 0.3},
 }
 
 with tab_fomc_diff:
     with error_boundary("FOMC Statement Diff"):
         st.subheader("FOMC Statement Language Analysis")
-        st.caption(
-            "Side-by-side comparison of consecutive FOMC statements. "
-            "Green = new language added. Red = language removed. "
-            "Every word change signals a shift in Fed thinking."
-        )
 
         dates = list(FOMC_STATEMENTS.keys())  # newest first
+
+        # ── Dissent tracker + rate path ──
+        st.markdown("#### Meeting History & Dissents")
+        _hist_rows = []
+        for d in dates:
+            m = FOMC_STATEMENTS[d]
+            meta = FOMC_METADATA.get(d, {})
+            _hist_rows.append({
+                "Meeting": d.split(",")[0],
+                "Action": m["action"],
+                "Rate": m["rate"],
+                "Vote": m["vote"],
+                "Dissent": m["dissent"],
+                "SPY 1D": f"{meta.get('spy_1d', 0):+.1f}%" if meta.get("spy_1d") else "—",
+                "TLT 1D": f"{meta.get('tlt_1d', 0):+.1f}%" if meta.get("tlt_1d") else "—",
+                "DXY 1D": f"{meta.get('dxy_1d', 0):+.1f}%" if meta.get("dxy_1d") else "—",
+            })
+        st.dataframe(pd.DataFrame(_hist_rows), use_container_width=True, hide_index=True)
+
+        # ── Hawkish/Dovish score over time ──
+        st.divider()
+        st.markdown("#### Hawkish / Dovish Tone Score")
+        st.caption("Counts hawkish vs dovish signal words in each statement. Higher = more hawkish.")
+
+        _tone_data = []
+        for d in reversed(dates):
+            text = FOMC_STATEMENTS[d]["text"].lower()
+            hawk = sum(1 for w in _HAWKISH_WORDS if w.lower() in text)
+            dove = sum(1 for w in _DOVISH_WORDS if w.lower() in text)
+            score = hawk - dove
+            _tone_data.append({"meeting": d.split(",")[0], "hawk": hawk, "dove": dove, "score": score})
+
+        _tone_df = pd.DataFrame(_tone_data)
+        fig_tone = go.Figure()
+        fig_tone.add_trace(go.Bar(
+            x=_tone_df["meeting"], y=_tone_df["hawk"],
+            name="Hawkish", marker_color=COLORS["danger"], opacity=0.7,
+        ))
+        fig_tone.add_trace(go.Bar(
+            x=_tone_df["meeting"], y=-_tone_df["dove"],
+            name="Dovish", marker_color=COLORS["success"], opacity=0.7,
+        ))
+        fig_tone.add_trace(go.Scatter(
+            x=_tone_df["meeting"], y=_tone_df["score"],
+            mode="lines+markers", name="Net Score",
+            line=dict(color=COLORS["accent"], width=3), marker=dict(size=8),
+        ))
+        fig_tone.add_hline(y=0, line_color="white", line_width=0.5)
+        fig_tone.update_layout(
+            template="plotly_dark", height=300, barmode="overlay",
+            margin=dict(t=10, b=0, l=0, r=0), yaxis_title="Word Count",
+            hovermode="x unified", legend=dict(orientation="h", y=-0.2),
+        )
+        st.plotly_chart(fig_tone, use_container_width=True)
+
+        # ── Forward guidance evolution ──
+        st.divider()
+        st.markdown("#### Forward Guidance Evolution")
+        st.caption("The single most important sentence traders read first — tracked across meetings.")
+        for d in dates:
+            m = FOMC_STATEMENTS[d]
+            _fg = m.get("forward_guidance", "")
+            _act = m["action"]
+            _act_color = COLORS["success"] if "Cut" in _act else (COLORS["danger"] if "Hike" in _act else COLORS["warning"])
+            st.markdown(
+                f'<div style="padding:6px 12px;margin:4px 0;border-left:3px solid {_act_color};'
+                f'background:rgba({int(_act_color[1:3],16)},{int(_act_color[3:5],16)},{int(_act_color[5:7],16)},0.06);'
+                f'border-radius:0 4px 4px 0;font-size:0.82rem;">'
+                f'<strong style="color:{_act_color};">{d.split(",")[0]} ({_act})</strong><br>'
+                f'<span style="color:#ddd;">"{_fg}"</span>'
+                f'</div>', unsafe_allow_html=True,
+            )
+
+        # ── Word-level diff ──
+        st.divider()
+        st.markdown("#### Statement Diff")
+        st.caption("Green = new language. Red = removed. Every word change signals a shift.")
+
         dc1, dc2 = st.columns(2)
         with dc1:
             newer_date = st.selectbox("Current Statement", dates[:-1], index=0, key="fomc_newer")
         with dc2:
-            # Only show dates older than the selected current
             newer_idx = dates.index(newer_date)
             older_options = dates[newer_idx + 1:]
             older_date = st.selectbox("Previous Statement", older_options, index=0, key="fomc_older")
 
-        older_text = FOMC_STATEMENTS[older_date]
-        newer_text = FOMC_STATEMENTS[newer_date]
+        older_text = FOMC_STATEMENTS[older_date]["text"]
+        newer_text = FOMC_STATEMENTS[newer_date]["text"]
 
         # Word-level diff
         import difflib
@@ -951,7 +1060,8 @@ with tab_fomc_diff:
 
         phrase_rows = []
         for phrase, label in KEY_PHRASES:
-            for stmt_date, stmt_text in FOMC_STATEMENTS.items():
+            for stmt_date, stmt_obj in FOMC_STATEMENTS.items():
+                stmt_text = stmt_obj["text"] if isinstance(stmt_obj, dict) else stmt_obj
                 sentences = [s.strip() for s in stmt_text.split(".") if phrase.lower() in s.lower()]
                 if sentences:
                     phrase_rows.append({

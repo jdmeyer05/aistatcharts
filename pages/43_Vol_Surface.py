@@ -441,24 +441,73 @@ Peaks are expensive options, valleys are cheap ones.
             sm5.metric("Term Structure", "N/A")
 
         metric_sel = st.selectbox("Surface metric", ["IV", "Delta", "Gamma", "Vega"], key="vs_metric")
+
+        # Date slider — scrub through historical snapshots
+        _snaps_for_slider = _load_surface_snapshots(ticker_display, n_days=30)
+        _snap_dates = [s["date"] for s in _snaps_for_slider]
+
+        if _snap_dates:
+            _snap_dates_display = _snap_dates + ["Today"]
+            _date_idx = st.slider(
+                "Surface Date", 0, len(_snap_dates_display) - 1,
+                value=len(_snap_dates_display) - 1,
+                format="",
+                key="vs_date_slider",
+            )
+            _selected_date = _snap_dates_display[_date_idx]
+            if _selected_date != "Today":
+                _snap_for_label = next((s for s in _snaps_for_slider if s["date"] == _selected_date), None)
+                st.caption(f"Viewing **{_selected_date}** — Spot: ${_snap_for_label['spot']:,.2f}" if _snap_for_label else "")
+            else:
+                st.caption("Viewing **live** surface data")
+        else:
+            _selected_date = "Today"
+
         field_map = {"IV": "implied_volatility", "Delta": "delta", "Gamma": "gamma", "Vega": "vega"}
         field = field_map[metric_sel]
+
+        # If historical date selected, build surface from snapshot
+        _using_snapshot = _selected_date != "Today" and _snaps_for_slider
+        _snap_surface_rows = None
+        _sel_snap = None
+
+        if _using_snapshot:
+            _sel_snap = next((s for s in _snaps_for_slider if s["date"] == _selected_date), None)
+            if _sel_snap:
+                _snap_spot = _sel_snap["spot"]
+                _snap_surface_rows = []
+                for r in _sel_snap["data"]:
+                    k = r.get("strike", 0)
+                    dte = r.get("dte", 0)
+                    iv = r.get("iv", 0)
+                    delta = r.get("delta", 0)
+                    gamma = r.get("gamma", 0)
+                    vega = gamma * _snap_spot * 0.01 if gamma else 0  # approximate vega
+                    val_map = {"implied_volatility": iv, "delta": delta, "gamma": gamma, "vega": vega}
+                    val = val_map.get(field, iv)
+                    if val != 0 and dte > 0 and 0.70 * _snap_spot <= k <= 1.30 * _snap_spot:
+                        _snap_surface_rows.append({
+                            "strike": k, "expiration": r.get("exp", ""), "dte": dte, field: val,
+                        })
 
         # Build surface grid
         strike_lo = spot * 0.70
         strike_hi = spot * 1.30
         surface_rows = []
-        for exp in expirations:
-            chain = term_data[exp]
-            dte = _dte(exp)
-            calls = chain[(chain["contract_type"] == "call") & (chain["strike_price"] >= spot * 0.98)]
-            puts = chain[(chain["contract_type"] == "put") & (chain["strike_price"] < spot * 0.98)]
-            for _, row in pd.concat([calls, puts]).iterrows():
-                k = row["strike_price"]
-                val = row.get(field, 0) or 0
-                if strike_lo <= k <= strike_hi and val != 0:
+
+        if _snap_surface_rows is not None:
+            surface_rows = _snap_surface_rows
+        else:
+            for exp in expirations:
+                chain = term_data[exp]
+                dte = _dte(exp)
+                calls = chain[(chain["contract_type"] == "call") & (chain["strike_price"] >= spot * 0.98)]
+                puts = chain[(chain["contract_type"] == "put") & (chain["strike_price"] < spot * 0.98)]
+                for _, row in pd.concat([calls, puts]).iterrows():
+                    k = row["strike_price"]
+                    val = row.get(field, 0) or 0
                     iv = row.get("implied_volatility", 0) or 0
-                    if iv > 0:
+                    if strike_lo <= k <= strike_hi and val != 0 and iv > 0:
                         surface_rows.append({"strike": k, "expiration": exp, "dte": dte, field: val})
 
         if surface_rows:
@@ -484,8 +533,9 @@ Peaks are expensive options, valleys are cheap ones.
                 opacity=0.92,
             )])
 
-            # Spot price line
-            spot_col = (np.abs(np.array(pivot.columns) - spot)).argmin()
+            # Spot price line (use snapshot spot if viewing historical)
+            _display_spot = _sel_snap["spot"] if _sel_snap else spot
+            spot_col = (np.abs(np.array(pivot.columns) - _display_spot)).argmin()
             spot_z = z_vals[:, spot_col]
             fig_3d.add_trace(go.Scatter3d(
                 x=[spot] * len(pivot.index),
@@ -871,7 +921,7 @@ and tells you if they're liquid enough to actually trade.
                     colorscale=[[0, COLORS["success"]], [0.5, "#1c1f26"], [1, COLORS["danger"]]],
                     zmid=0,
                     colorbar=dict(title="IV - Baseline (%)"),
-                    text=np.round(pivot_disl.values, 1),
+                    text=np.round(pivot_disl.values, 0).astype(int),
                     texttemplate="%{text}",
                     textfont=dict(size=9),
                     hovertemplate="Moneyness: %{x}<br>DTE: %{y}<br>Dislocation: %{z:+.1f}%<extra></extra>",
@@ -1166,7 +1216,7 @@ These are the same metrics institutional desks track daily.
             # Charts
             fig_skm = make_subplots(rows=2, cols=2,
                                      subplot_titles=["Put Skew", "Call Skew", "Risk Reversal", "Butterfly"],
-                                     vertical_spacing=0.12, horizontal_spacing=0.08)
+                                     vertical_spacing=0.22, horizontal_spacing=0.12)
 
             fig_skm.add_trace(go.Scatter(
                 x=skew_df["DTE"], y=skew_df["Put Skew"],
@@ -1199,9 +1249,9 @@ These are the same metrics institutional desks track daily.
             fig_skm.update_xaxes(title_text="DTE")
             fig_skm.update_layout(
                 template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)", height=500,
+                plot_bgcolor="rgba(0,0,0,0)", height=600,
                 showlegend=False,
-                margin=dict(l=50, r=20, t=40, b=40),
+                margin=dict(l=60, r=20, t=50, b=50),
             )
             st.plotly_chart(fig_skm, use_container_width=True, config=PLOTLY_NOBAR)
 
@@ -2389,6 +2439,45 @@ with tab9:
                 except Exception:
                     pass
 
+                # Liquidity map (OI by strike for suggested trade validation)
+                lines.append(f"\n--- LIQUIDITY MAP (Open Interest by Strike) ---")
+                try:
+                    front_chain = term_data[expirations[0]]
+                    _oi_data = front_chain[front_chain["open_interest"] > 0]\
+                        .groupby("strike_price")["open_interest"].sum()\
+                        .sort_values(ascending=False).head(15)
+                    for strike, oi in _oi_data.items():
+                        liq = "HIGH" if oi > 5000 else ("MEDIUM" if oi > 500 else "LOW")
+                        lines.append(f"  ${strike:.0f}: OI={oi:,} ({liq})")
+                except Exception:
+                    lines.append("  Liquidity data unavailable")
+
+                # Iran war context for energy/defense/commodity tickers
+                _energy_syms = {"USO", "XLE", "XOP", "OIH", "CL", "BZ", "CVX", "XOM", "COP",
+                                "GLD", "GC", "SLV", "SI", "UNG", "NG", "LMT", "RTX", "NOC", "GD"}
+                _tk_check = ticker_display.upper().replace("=F", "")
+                if _tk_check in _energy_syms:
+                    try:
+                        from src.db import get_client
+                        _db_ctx = get_client()
+                        if _db_ctx:
+                            _ca = _db_ctx.table("conflict_analysis").select("situation_summary, escalation_risk")\
+                                .eq("region", "iran").order("timestamp", desc=True).limit(1).execute()
+                            if _ca.data:
+                                import json as _jctx
+                                _esc = _ca.data[0].get("escalation_risk", {})
+                                if isinstance(_esc, str):
+                                    _esc = _jctx.loads(_esc)
+                                _score = _esc.get("score", "?")
+                                lines.append(f"\n--- CRITICAL: ACTIVE IRAN WAR ---")
+                                lines.append(f"Escalation: {_score}/10. Strait of Hormuz CLOSED. 13.8 mbpd at risk.")
+                                lines.append(f"This asset is DIRECTLY affected by the ongoing conflict.")
+                                _summ = _ca.data[0].get("situation_summary", "")
+                                if _summ:
+                                    lines.append(f"Latest: {_summ[:300]}")
+                    except Exception:
+                        pass
+
                 return "\n".join(lines)
 
             # Trade idea styles
@@ -2459,7 +2548,10 @@ with tab9:
                         "- Separate each trade with a horizontal rule (---).\n"
                         "- Estimated prices must be realistic given the IV data.\n"
                         "- Be direct. No disclaimers. No 'this is not financial advice'. Give your real desk view.\n"
-                        "- Include Prob. of Profit estimate in the P&L table (use delta as proxy).\n\n"
+                        "- Include Prob. of Profit estimate in the P&L table (use delta as proxy).\n"
+                        "- LIQUIDITY CHECK: Reference the OI map provided. Only suggest strikes with MEDIUM or HIGH OI. If a strike has LOW OI, explicitly warn about fill risk.\n"
+                        "- UNLIMITED LOSS WARNING: If any trade has unlimited or undefined max loss, you MUST add a prominent risk flag. If an active war or geopolitical crisis is noted in the data, flag how it specifically threatens that trade.\n"
+                        "- If IRAN WAR context is provided, every trade MUST address how the conflict affects the position. Do NOT ignore it.\n\n"
                         f"SURFACE DATA:\n{context}\n\n"
                         f"ANALYSIS FOCUS: {style_prompts[idea_style]}"
                     )
@@ -2514,9 +2606,9 @@ with tab9:
                 if "vs_gemini_result" in st.session_state:
                     style_used = st.session_state.get("vs_gemini_style_used", "")
 
-                    # Header
+                    # Header badge
                     st.markdown(
-                        f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">'
+                        f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">'
                         f'<div style="border:1px solid {COLORS["accent"]};border-radius:6px;padding:6px 14px;'
                         f'background:rgba(0,209,255,0.06);">'
                         f'<span style="color:{COLORS["accent"]};font-weight:700;font-size:0.9rem;">Gemini 2.5 Pro</span></div>'
@@ -2526,25 +2618,9 @@ with tab9:
                         unsafe_allow_html=True,
                     )
 
-                    # Split on --- and render each section
-                    raw = st.session_state["vs_gemini_result"]
-                    sections = [s.strip() for s in raw.split("---") if s.strip() and len(s.strip()) > 30]
-
-                    for section in sections:
-                        is_trade = section.startswith("## Trade") or "#### Legs" in section or "| # |" in section
-                        is_portfolio = "## Portfolio" in section
-
-                        if is_trade:
-                            # Extract trade title for the expander
-                            first_line = section.split("\n")[0].strip().lstrip("#").strip()
-                            with st.expander(first_line, expanded=True):
-                                st.markdown(section)
-                        elif is_portfolio:
-                            st.markdown("---")
-                            st.markdown(section)
-                        else:
-                            # Surface Assessment or other prose
-                            st.markdown(section)
+                    # Render full response — escape $ signs so Streamlit doesn't parse as LaTeX
+                    _display_text = st.session_state["vs_gemini_result"].replace("$", "\\$")
+                    st.markdown(_display_text)
 
                     st.divider()
                     st.caption(
