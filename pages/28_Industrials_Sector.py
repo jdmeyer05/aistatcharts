@@ -49,7 +49,7 @@ INDUSTRIALS_GUIDANCE = {
          "outlook": "F-35 deliveries stabilizing. Backlog >$166B. Missiles & Fire Control benefiting from global rearmament. Dividend aristocrat 21 consecutive years."},
         {"ticker": "BA", "company": "Boeing", "rev_est_y": 80.0, "rev_growth": "+15%",
          "eps_est_y": -2.00, "eps_est_ny": 3.50, "capex_guidance": None, "capex_note": None,
-         "production": None, "price_target": 200, "rating": "Hold", "fwd_pe": 0.0,
+         "production": None, "price_target": 200, "rating": "Hold", "fwd_pe": None,
          "outlook": "737 MAX production ramp to 38/month target. Quality improvement plan underway. Defense losses narrowing. Free cash flow positive expected by late 2026."},
         {"ticker": "ETN", "company": "Eaton Corp", "rev_est_y": 26.0, "rev_growth": "+10%",
          "eps_est_y": 11.50, "eps_est_ny": 13.00, "capex_guidance": None, "capex_note": None,

@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import logging
 from src.layout import setup_page, error_boundary, fun_loader
 from src.styles import COLORS
+from src.cross_context import write_context
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,11 @@ FED_DRIVERS = {
     "PERMIT":    {"name": "Building Permits",       "unit": "K",      "yoy": False, "color": "#ce93d8", "category": "Housing",    "fed_weight": "Medium"},
     "DGORDER":   {"name": "Durable Goods Orders",   "unit": "$M",     "yoy": True,  "color": "#80cbc4", "category": "Production", "fed_weight": "Medium"},
     "JTSJOL":    {"name": "JOLTS Job Openings",     "unit": "K",      "yoy": False, "color": "#4dd0e1", "category": "Employment", "fed_weight": "High"},
+    "GDPNOW":    {"name": "GDPNow (Atlanta Fed)", "unit": "%",      "yoy": False, "color": "#26a69a", "category": "Growth",     "fed_weight": "High"},
+    "DGS1MO":    {"name": "1-Month Treasury",     "unit": "%",      "yoy": False, "color": "#b0bec5", "category": "Yield Curve", "fed_weight": "Low"},
+    "DGS3MO":    {"name": "3-Month Treasury",     "unit": "%",      "yoy": False, "color": "#90a4ae", "category": "Yield Curve", "fed_weight": "Low"},
+    "DGS5":      {"name": "5-Year Treasury",       "unit": "%",      "yoy": False, "color": "#78909c", "category": "Yield Curve", "fed_weight": "Medium"},
+    "DGS30":     {"name": "30-Year Treasury",      "unit": "%",      "yoy": False, "color": "#546e7a", "category": "Yield Curve", "fed_weight": "Medium"},
 }
 
 
@@ -172,6 +178,15 @@ with error_boundary("Dual Mandate Scorecard"):
             f'<div style="display:flex;gap:6px;margin-bottom:16px;">{"".join(cards)}</div>',
             unsafe_allow_html=True,
         )
+
+    # Write cross-page context
+    _fed_ctx = {}
+    for sid, info in FED_DRIVERS.items():
+        if sid in driver_data and not driver_data[sid].empty:
+            _fed_ctx[info.get("name", sid)] = f"{driver_data[sid].iloc[-1]['value']:.2f}"
+    _ff_val = driver_data["FEDFUNDS"].iloc[-1]["value"] if "FEDFUNDS" in driver_data and not driver_data["FEDFUNDS"].empty else 0
+    _policy = "tightening" if _ff_val > 4 else "neutral/easing"
+    write_context("fed_macro", {"signals": _fed_ctx, "policy_stance": _policy})
 
 
 # ════════════════════════════════════════
@@ -631,3 +646,117 @@ with tab_sentiment:
                 )
         else:
             st.info("StockTwits data unavailable.")
+
+# ════════════════════════════════════════
+# FED BALANCE SHEET & LIQUIDITY
+# ════════════════════════════════════════
+with error_boundary("Fed Balance Sheet"):
+    st.markdown("---")
+    st.subheader("Fed Balance Sheet & Liquidity")
+    st.caption(
+        "Net liquidity = Total Assets - TGA - Reverse Repo. "
+        "This is the dominant driver of risk asset prices. "
+        "When the Fed drains liquidity, equities face headwinds."
+    )
+    try:
+        from src.macro_data import fetch_fed_balance_sheet, get_fed_liquidity_snapshot
+        _fed_bs = fetch_fed_balance_sheet()
+        _fed_snap = get_fed_liquidity_snapshot()
+
+        if _fed_snap:
+            bc1, bc2, bc3, bc4 = st.columns(4)
+            bc1.metric("Total Assets", f"${_fed_snap.get('total_assets', '?')}T")
+            bc2.metric("TGA", f"${_fed_snap.get('tga', '?')}B")
+            bc3.metric("Reverse Repo", f"${_fed_snap.get('rrp', '?')}B")
+            _liq_delta = _fed_snap.get("net_liq_change", 0)
+            bc4.metric("Net Liquidity", f"${_fed_snap.get('net_liquidity', '?')}T",
+                        delta=f"${_liq_delta:+.0f}B/mo" if _liq_delta else None)
+
+        if not _fed_bs.empty:
+            import plotly.graph_objects as go
+            fig_bs = go.Figure()
+            for col in _fed_bs.columns:
+                fig_bs.add_trace(go.Scatter(
+                    x=_fed_bs.index, y=_fed_bs[col] / 1e6,
+                    mode="lines", name=col,
+                ))
+            fig_bs.update_layout(
+                template="plotly_dark", height=350,
+                yaxis_title="$ Trillions",
+                legend=dict(orientation="h", y=-0.15),
+                margin=dict(l=50, r=20, t=10, b=50),
+            )
+            st.plotly_chart(fig_bs, use_container_width=True, config={"displayModeBar": False})
+    except Exception as e:
+        st.info(f"Fed balance sheet data unavailable: {e}")
+
+# ════════════════════════════════════════
+# MANAGED MONEY POSITIONING (CFTC COT)
+# ════════════════════════════════════════
+with error_boundary("COT Positioning"):
+    st.markdown("---")
+    st.subheader("Managed Money Positioning (CFTC COT)")
+    st.caption(
+        "Hedge fund and CTA positioning from weekly Commitments of Traders reports. "
+        "Extreme positioning often precedes reversals — crowded long = sell signal, crowded short = squeeze risk."
+    )
+    try:
+        from src.macro_data import get_cot_positioning_snapshot
+        _cot = get_cot_positioning_snapshot()
+        if _cot:
+            _cot_cols = st.columns(min(5, len(_cot)))
+            for i, (contract, pos) in enumerate(_cot.items()):
+                _dir_color = COLORS["success"] if pos["direction"] == "Long" else COLORS["danger"]
+                _cot_cols[i].metric(
+                    contract,
+                    f"{pos['direction']} ({pos['net_pct_oi']:+.1f}%)",
+                    delta=f"{pos['change']:+,} weekly",
+                )
+        else:
+            st.info("CFTC COT data unavailable.")
+    except Exception as e:
+        st.info(f"COT data unavailable: {e}")
+
+# ════════════════════════════════════════
+# OECD LEADING INDICATORS
+# ════════════════════════════════════════
+with error_boundary("OECD CLI"):
+    st.markdown("---")
+    st.subheader("OECD Composite Leading Indicators")
+    st.caption(
+        "CLI leads GDP by 6-9 months. Values above 100 = expansion, below 100 = contraction. "
+        "The turning points are the signal — when CLI peaks, a slowdown is coming."
+    )
+    try:
+        from src.macro_data import fetch_oecd_cli
+        _cli = fetch_oecd_cli(["USA", "GBR", "DEU", "JPN", "CHN", "OECD"])
+        if not _cli.empty:
+            import plotly.graph_objects as go
+            fig_cli = go.Figure()
+            for col in _cli.columns:
+                fig_cli.add_trace(go.Scatter(
+                    x=_cli.index, y=_cli[col], mode="lines", name=col,
+                ))
+            fig_cli.add_hline(y=100, line_dash="dash", line_color=COLORS["text_muted"],
+                               annotation_text="Expansion threshold")
+            fig_cli.update_layout(
+                template="plotly_dark", height=350,
+                yaxis_title="CLI (100 = trend)",
+                legend=dict(orientation="h", y=-0.15),
+                margin=dict(l=50, r=20, t=10, b=50),
+            )
+            st.plotly_chart(fig_cli, use_container_width=True, config={"displayModeBar": False})
+
+            # US CLI assessment
+            if "USA" in _cli.columns and len(_cli["USA"].dropna()) >= 2:
+                _us_last = float(_cli["USA"].dropna().iloc[-1])
+                _us_prev = float(_cli["USA"].dropna().iloc[-2])
+                _us_trend = "rising" if _us_last > _us_prev else "falling"
+                if _us_last > 100:
+                    st.success(f"US CLI: {_us_last:.1f} ({_us_trend}) — above trend, expansion.")
+                else:
+                    st.warning(f"US CLI: {_us_last:.1f} ({_us_trend}) — below trend, contraction risk.")
+        else:
+            st.info("OECD CLI data unavailable.")
+    except Exception as e:
+        st.info(f"OECD data unavailable: {e}")

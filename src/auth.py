@@ -22,6 +22,8 @@ TIERS = {
             "16_ERCOT_Power", "17_ERCOT_Capacity", "18_Economic_Calendar",
             "19_Iran_Conflict", "20_Futures", "21_Fed_Macro_Drivers",
             "22_Smart_Money", "23_Power_Analytics", "24_Energy_Sector",
+            "42_Calendar_Spreads", "43_Vol_Surface", "44_Portfolio_Greeks",
+            "45_Universe_Portfolio", "46_Market_Expectations", "47_Track_Record",
         ],
         "daily_ai_analyses": 0,
         "ai_models": [],
@@ -400,10 +402,24 @@ def check_ai_quota() -> bool:
         # Free tier — can still use purchased tokens
         return get_token_balance() > 0
 
-    # Check daily included allowance first
+    # Check daily included allowance — persistent via Supabase
     from datetime import date
     today = date.today().isoformat()
+
+    # Try Supabase first for accurate count
     used = st.session_state.get(f"ai_usage_{today}", 0)
+    supabase = init_supabase()
+    if supabase:
+        try:
+            user_id = st.session_state.get("user_email", "default")
+            result = supabase.table("ai_usage").select("usage_count")\
+                .eq("user_id", user_id).eq("date", today).execute()
+            if result.data:
+                used = result.data[0]["usage_count"]
+                st.session_state[f"ai_usage_{today}"] = used
+        except Exception:
+            pass
+
     if used < limit:
         return True
 
@@ -412,7 +428,8 @@ def check_ai_quota() -> bool:
 
 
 def increment_ai_usage():
-    """Use one AI analysis — deducts from daily allowance first, then tokens."""
+    """Use one AI analysis — deducts from daily allowance first, then tokens.
+    Persists usage count to Supabase ai_usage table."""
     from datetime import date
     today = date.today().isoformat()
     key = f"ai_usage_{today}"
@@ -423,6 +440,14 @@ def increment_ai_usage():
 
     if used < limit:
         st.session_state[key] = used + 1
+        # Persist to Supabase
+        supabase = init_supabase()
+        if supabase:
+            try:
+                user_id = st.session_state.get("user_email", "default")
+                supabase.rpc("increment_ai_usage", {"p_user_id": user_id, "p_field": "usage_count"}).execute()
+            except Exception:
+                pass
     else:
         # Deduct from token balance and persist
         balance = get_token_balance()

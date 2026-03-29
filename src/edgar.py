@@ -1349,7 +1349,11 @@ _CAPEX_TAGS = [
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def fetch_sector_capex(companies: dict[str, str]) -> pd.DataFrame:
-    """Fetch latest CapEx for companies from XBRL."""
+    """Fetch latest CapEx for companies from XBRL.
+
+    Uses priority order of _CAPEX_TAGS — takes the first tag that has data,
+    not the highest value (avoids inflating CapEx with broader asset tags).
+    """
     rows = []
     for ticker, name in companies.items():
         facts = fetch_company_facts(ticker)
@@ -1363,9 +1367,9 @@ def fetch_sector_capex(companies: dict[str, str]) -> pd.DataFrame:
             df = df[df["end"] >= "2024-01-01"]
             if not df.empty:
                 latest = df.iloc[-1]
-                if best_val is None or latest["val"] > best_val:
-                    best_val = latest["val"]
-                    best_form = latest["form"]
+                best_val = latest["val"]
+                best_form = latest["form"]
+                break  # Use first matching tag (priority order)
         if best_val is not None:
             rows.append({
                 "ticker": ticker,
@@ -1384,7 +1388,11 @@ def fetch_energy_capex() -> pd.DataFrame:
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def fetch_sector_capex_history(companies: dict[str, str]) -> pd.DataFrame:
-    """Fetch quarterly CapEx history for companies (2024+)."""
+    """Fetch quarterly CapEx history for companies (2024+).
+
+    Uses priority order of _CAPEX_TAGS (first match wins, not most rows)
+    to stay consistent with fetch_sector_capex.
+    """
     rows = []
     for ticker, name in companies.items():
         facts = fetch_company_facts(ticker)
@@ -1396,8 +1404,9 @@ def fetch_sector_capex_history(companies: dict[str, str]) -> pd.DataFrame:
             if df.empty:
                 continue
             df = df[df["end"] >= "2024-01-01"]
-            if len(df) > len(best_df):
+            if not df.empty:
                 best_df = df
+                break  # Use first matching tag (priority order)
         if not best_df.empty:
             best_df = best_df.sort_values("end").drop_duplicates(subset=["end"], keep="last")
             for _, r in best_df.iterrows():

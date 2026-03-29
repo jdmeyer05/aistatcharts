@@ -41,7 +41,25 @@ INFRA_STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "src", "iran_in
 
 
 def _load_infra_state() -> list:
-    """Load the last Grok-verified infrastructure state from disk."""
+    """Load the last Grok-verified infrastructure state from Supabase, local JSON fallback."""
+    # --- Supabase primary ---
+    try:
+        from src.db import get_client, get_user_id
+        db = get_client()
+        if db:
+            resp = (db.table("conflict_analysis")
+                    .select("infrastructure_status")
+                    .eq("region", "iran")
+                    .order("timestamp", desc=True)
+                    .limit(1)
+                    .execute())
+            if resp.data and resp.data[0].get("infrastructure_status"):
+                infra = resp.data[0]["infrastructure_status"]
+                return infra if isinstance(infra, list) else json.loads(infra) if isinstance(infra, str) else []
+    except Exception as e:
+        logger.warning(f"Supabase infra state load failed: {e}")
+
+    # --- Local JSON fallback ---
     try:
         if os.path.exists(INFRA_STATE_FILE):
             with open(INFRA_STATE_FILE, "r") as f:
@@ -52,7 +70,27 @@ def _load_infra_state() -> list:
 
 
 def _save_infra_state(infra: list):
-    """Persist Grok-verified infrastructure state to disk for next check."""
+    """Persist Grok-verified infrastructure state to Supabase, local JSON fallback."""
+    # --- Supabase primary ---
+    try:
+        from src.db import get_client, get_user_id
+        db = get_client()
+        if db:
+            db.table("conflict_analysis").upsert({
+                "user_id": get_user_id(),
+                "region": "iran_infra_state",
+                "timestamp": datetime.now().isoformat(),
+                "infrastructure_status": json.dumps(infra),
+                "situation_summary": "Infrastructure state snapshot",
+                "escalation_risk": json.dumps({}),
+                "models_used": [],
+                "latest_developments": json.dumps([]),
+            }).execute()
+            # Also save locally as backup
+    except Exception as e:
+        logger.warning(f"Supabase infra state save failed: {e}")
+
+    # --- Local JSON fallback (always write) ---
     try:
         os.makedirs(os.path.dirname(INFRA_STATE_FILE), exist_ok=True)
         with open(INFRA_STATE_FILE, "w") as f:
@@ -356,7 +394,7 @@ CRITICAL: This data is displayed to paying customers as VERIFIED intelligence.
         result = json.loads(cleaned)
 
         # Validate the response has the expected structure
-        if not isinstance(result.get("facilities"), list) or not result.get("net_disruption_mbpd"):
+        if not isinstance(result.get("facilities"), list) or result.get("net_disruption_mbpd") is None:
             return {}
 
         logger.info(f"Infrastructure validation: {result.get('summary', '')}")
@@ -961,6 +999,28 @@ def save_conflict_result(result: dict) -> None:
     }
     history.append(entry)
     history = history[-48:]
+
+    # --- Supabase primary ---
+    _saved_to_supa = False
+    try:
+        from src.db import get_client, get_user_id
+        db = get_client()
+        if db:
+            db.table("conflict_analysis").insert({
+                "user_id": get_user_id(),
+                "region": "iran",
+                "timestamp": entry["timestamp"],
+                "situation_summary": result.get("situation_summary", ""),
+                "escalation_risk": json.dumps(result.get("escalation_risk", {})),
+                "models_used": result.get("models_used", []),
+                "latest_developments": json.dumps(result.get("latest_developments", [])),
+                "infrastructure_status": json.dumps(result.get("infrastructure_status", {})),
+            }).execute()
+            _saved_to_supa = True
+    except Exception as e:
+        logger.warning(f"Supabase conflict_analysis insert failed: {e}")
+
+    # --- Local JSON fallback ---
     try:
         os.makedirs(os.path.dirname(CONFLICT_HISTORY_FILE), exist_ok=True)
         with open(CONFLICT_HISTORY_FILE, "w") as f:
@@ -1268,7 +1328,7 @@ def _blend_scenario_forecasts(successful: dict) -> list:
 
         # Average probability across models
         probs = [s.get("probability", 0) for s in cluster]
-        avg_prob = sum(probs) / len(probs)
+        avg_prob = sum(probs) / len(probs) if probs else 0
 
         # Pick the longest (most detailed) description
         descriptions = [s.get("description", "") for s in cluster]
@@ -1831,7 +1891,26 @@ SOURCE_CREDIBILITY_FILE = os.path.join(os.path.dirname(__file__), "..", "src", "
 
 
 def _load_source_credibility() -> dict:
-    """Load source credibility scores from file."""
+    """Load source credibility scores from Supabase, local JSON fallback."""
+    # --- Supabase primary ---
+    try:
+        from src.db import get_client
+        db = get_client()
+        if db:
+            resp = db.table("source_credibility").select("*").execute()
+            if resp.data:
+                return {
+                    row["source_handle"]: {
+                        "citations": row.get("total_citations", 0),
+                        "accuracy_sum": row.get("total_accuracy_sum", 0),
+                        "score": row.get("rolling_score", 50),
+                    }
+                    for row in resp.data
+                }
+    except Exception as e:
+        logger.warning(f"Supabase source_credibility read failed: {e}")
+
+    # --- Local JSON fallback ---
     try:
         if os.path.exists(SOURCE_CREDIBILITY_FILE):
             with open(SOURCE_CREDIBILITY_FILE, "r") as f:
@@ -1842,7 +1921,28 @@ def _load_source_credibility() -> dict:
 
 
 def _save_source_credibility(data: dict):
-    """Persist source credibility scores."""
+    """Persist source credibility scores to Supabase, local JSON fallback."""
+    # --- Supabase primary ---
+    try:
+        from src.db import get_client
+        db = get_client()
+        if db:
+            rows = []
+            for handle, info in data.items():
+                rows.append({
+                    "source_handle": handle,
+                    "total_citations": info.get("citations", 0),
+                    "total_accuracy_sum": info.get("accuracy_sum", 0),
+                    "rolling_score": info.get("score", 50),
+                    "last_updated": datetime.now().isoformat(),
+                })
+            if rows:
+                db.table("source_credibility").upsert(rows).execute()
+                return
+    except Exception as e:
+        logger.warning(f"Supabase source_credibility upsert failed: {e}")
+
+    # --- Local JSON fallback ---
     try:
         os.makedirs(os.path.dirname(SOURCE_CREDIBILITY_FILE), exist_ok=True)
         with open(SOURCE_CREDIBILITY_FILE, "w") as f:
@@ -2405,6 +2505,18 @@ def blend_conflict_results(results: dict, configs: dict = None) -> dict:
     # AI quality filter — score each tweet for informational value
     all_tweets = _ai_filter_tweets(all_tweets, configs)
     blended["trending_tweets"] = all_tweets[:10]
+
+    # Write cross-page context
+    try:
+        from src.cross_context import write_context
+        write_context("iran_conflict", {
+            "escalation": avg_escalation,
+            "oil_disruption": avg_disruption,
+            "ceasefire_prob": avg_ceasefire,
+            "oil_price_base": round(price_base),
+        })
+    except Exception:
+        pass
 
     return blended
 

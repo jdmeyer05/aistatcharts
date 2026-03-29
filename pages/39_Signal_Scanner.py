@@ -1415,6 +1415,60 @@ with tab_comp, error_boundary("Composite Ranking"):
 
     weighted_composite = weighted_composite / total_weight_per_asset.replace(0, np.nan)
 
+    # Track top/bottom predictions for accuracy measurement
+    try:
+        from src.prediction_tracker import record_prediction
+        _top5 = weighted_composite.dropna().nlargest(5)
+        _bot5 = weighted_composite.dropna().nsmallest(5)
+        for _tk, _score in _top5.items():
+            record_prediction(
+                source="signal_scanner", ticker=_tk,
+                prediction={"direction": "Bullish", "score": round(float(_score), 1), "quintile": "Top"},
+                spot=0,  # scanner doesn't track individual prices
+                metadata={"universe": len(weighted_composite.dropna())},
+            )
+        for _tk, _score in _bot5.items():
+            record_prediction(
+                source="signal_scanner", ticker=_tk,
+                prediction={"direction": "Bearish", "score": round(float(_score), 1), "quintile": "Bottom"},
+                spot=0,
+                metadata={"universe": len(weighted_composite.dropna())},
+            )
+    except Exception:
+        pass
+
+    # Write cross-page context (limit to top/bottom 50 tickers to avoid memory bloat)
+    try:
+        from src.cross_context import write_context
+        _comp_sorted = weighted_composite.dropna().sort_values()
+        _keep = set(_comp_sorted.head(25).index) | set(_comp_sorted.tail(25).index)
+        _scores_dict = {}
+        for _tk in _keep:
+            _scores_dict[_tk] = {
+                "composite": round(float(weighted_composite[_tk]), 1),
+            }
+            for gname, gcols in FACTOR_GROUPS.items():
+                if _tk in ranks.index:
+                    _valid_cols = [c for c in gcols if c in ranks.columns]
+                    if _valid_cols:
+                        _gv = ranks.loc[_tk, _valid_cols].mean()
+                        if pd.notna(_gv):
+                            _scores_dict[_tk][gname] = round(float(_gv), 1)
+        write_context("signal_scanner", {"scores": _scores_dict})
+
+        # Write signals for top/bottom tickers
+        from src.signal_engine import write_signal
+        for _tk in _comp_sorted.tail(5).index:
+            _sc = float(weighted_composite[_tk])
+            write_signal("signal_scanner", _tk, "bull", min(1.0, _sc / 100),
+                         reasoning=f"Composite score {_sc:.0f} — top-ranked by multi-factor scan")
+        for _tk in _comp_sorted.head(5).index:
+            _sc = float(weighted_composite[_tk])
+            write_signal("signal_scanner", _tk, "bear", min(1.0, abs(_sc) / 100),
+                         reasoning=f"Composite score {_sc:.0f} — bottom-ranked by multi-factor scan")
+    except Exception:
+        pass
+
     # ── Composite bar chart ──
     comp_sorted = weighted_composite.sort_values(ascending=True)
     fig_comp = go.Figure()

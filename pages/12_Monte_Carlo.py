@@ -64,7 +64,7 @@ if run_sim or 'mc_data' not in st.session_state or st.session_state.get('mc_tick
                 # Generate t-distributed shocks centered on the GBM drift
                 # (loc from fit captures the mean; use GBM drift instead to avoid double-counting)
                 drift_t = mu - 0.5 * scale_t**2
-                t_shocks = t_dist.rvs(df_t, loc=drift_t, scale=scale_t, size=(sim_days, sim_count), random_state=rng)
+                t_shocks = t_dist.rvs(df_t, loc=drift_t, scale=scale_t, size=(sim_days, sim_count), random_state=42)
                 daily_returns_sim = np.exp(t_shocks)
 
             elif sim_method == "Empirical Bootstrap":
@@ -190,3 +190,42 @@ if 'mc_paths' in st.session_state:
             f"and will understate tail risk. Switch to **Student-t** or **Empirical Bootstrap** for "
             f"more realistic crash/rally scenarios."
         )
+
+    # Regime context
+    st.divider()
+    st.subheader("Regime Context")
+    st.caption(
+        "The simulation uses a single volatility estimate from the training window. "
+        "If the current regime differs from the historical average, results may be misleading."
+    )
+    _rv_20 = float(hist_rets.tail(20).std() * np.sqrt(252))
+    _rv_full = float(hist_rets.std() * np.sqrt(252))
+    _rv_ratio = _rv_20 / _rv_full if _rv_full > 0 else 1
+
+    rc1, rc2, rc3 = st.columns(3)
+    rc1.metric("20-Day Realized Vol", f"{_rv_20*100:.1f}%")
+    rc2.metric(f"{lookback}D Historical Vol", f"{_rv_full*100:.1f}%")
+    _regime = "High Vol" if _rv_ratio > 1.3 else ("Low Vol" if _rv_ratio < 0.7 else "Normal")
+    _regime_color = "#ff4444" if _regime == "High Vol" else ("#00ff88" if _regime == "Low Vol" else "#ffaa00")
+    rc3.markdown(
+        f'<div style="text-align:center;padding:8px;">'
+        f'<div style="font-size:0.7rem;color:#888;text-transform:uppercase;">Regime</div>'
+        f'<div style="font-size:1.2rem;font-weight:700;color:{_regime_color};">{_regime}</div>'
+        f'<div style="font-size:0.7rem;color:#888;">{_rv_ratio:.2f}x historical avg</div>'
+        f'</div>', unsafe_allow_html=True,
+    )
+
+    if _regime == "High Vol":
+        st.warning(
+            f"Current vol ({_rv_20*100:.0f}%) is {_rv_ratio:.1f}x the historical average ({_rv_full*100:.0f}%). "
+            f"The simulation uses the historical average — actual uncertainty is likely **higher** than shown. "
+            f"Consider widening confidence intervals by {(_rv_ratio - 1)*100:.0f}%."
+        )
+    elif _regime == "Low Vol":
+        st.info(
+            f"Current vol ({_rv_20*100:.0f}%) is only {_rv_ratio:.1f}x the historical average. "
+            f"The simulation may **overstate** uncertainty. Current market is calmer than what the model assumes."
+        )
+
+    from src.data_engine import render_data_source_footer
+    render_data_source_footer()

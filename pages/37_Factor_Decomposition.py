@@ -60,7 +60,9 @@ def _load_ff_factors() -> pd.DataFrame:
         z = zipfile.ZipFile(io.BytesIO(r.content))
         raw = z.read(z.namelist()[0]).decode("utf-8")
         lines = raw.split("\n")
-        start = next(i for i, l in enumerate(lines) if l.strip() and l.strip()[0].isdigit())
+        start = next((i for i, l in enumerate(lines) if l.strip() and l.strip()[0].isdigit()), None)
+        if start is None:
+            return pd.DataFrame()
         header = [h.strip() for h in lines[start - 1].split(",")]
         data_lines = [l for l in lines[start:] if l.strip() and l.strip()[0].isdigit() and len(l.split(",")) >= 6]
         df = pd.DataFrame([l.split(",") for l in data_lines])
@@ -82,7 +84,9 @@ def _load_ff_factors() -> pd.DataFrame:
         z = zipfile.ZipFile(io.BytesIO(r.content))
         raw = z.read(z.namelist()[0]).decode("utf-8")
         lines = raw.split("\n")
-        start = next(i for i, l in enumerate(lines) if l.strip() and l.strip()[0].isdigit())
+        start = next((i for i, l in enumerate(lines) if l.strip() and l.strip()[0].isdigit()), None)
+        if start is None:
+            return pd.DataFrame()
         data_lines = [l for l in lines[start:] if l.strip() and l.strip()[0].isdigit() and len(l.split(",")) >= 2]
         mom_df = pd.DataFrame([l.split(",") for l in data_lines], columns=["date", "Mom"])
         mom_df["date"] = pd.to_datetime(mom_df["date"].str.strip(), format="%Y%m%d")
@@ -320,7 +324,7 @@ with tab_exposure, error_boundary("Factor Exposure"):
     em1.metric("Alpha (ann.)", f"{alpha_ann:+.2f}%",
                help=f"t-stat: {t_stats[0]:.2f}" if not np.isnan(t_stats[0]) else "")
     em2.metric("R-squared", f"{r2:.3f}")
-    em3.metric("Mkt Beta", f"{betas.get('Mkt-RF', 0):.3f}")
+    em3.metric("Mkt Beta", f"{betas.get('Mkt-RF') or 0:.3f}")
     alpha_sig = abs(t_stats[0]) > 2 if not np.isnan(t_stats[0]) else False
     em4.metric("Alpha Significant?", "Yes (t > 2)" if alpha_sig else "No",
                delta=f"t = {t_stats[0]:.2f}" if not np.isnan(t_stats[0]) else "")

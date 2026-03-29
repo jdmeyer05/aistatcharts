@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import requests
 import logging
 from datetime import date, timedelta, datetime
@@ -430,7 +431,7 @@ with error_boundary("Today Hero"):
 # ============================
 # TABS
 # ============================
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Week at a Glance",
     "Economic Releases",
     "Yield Curve",
@@ -439,6 +440,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Macro Dashboard",
     "Earnings Calendar",
     "Treasury Auctions",
+    "Surprise Tracker",
 ])
 
 
@@ -728,9 +730,6 @@ with tab2, error_boundary("Economic Releases"):
             st.plotly_chart(fig_hist, use_container_width=True)
     else:
         st.warning("FRED API key not configured.")
-
-# Need subplots import for tab 2
-from plotly.subplots import make_subplots
 
 
 # ---- TAB 3: Yield Curve ----
@@ -1228,3 +1227,183 @@ with tab8, error_boundary("Treasury Auctions"):
         st.plotly_chart(fig_auc, use_container_width=True)
     else:
         st.info("No upcoming Treasury auction data available.")
+
+
+# ---- TAB 9: Surprise Tracker ----
+with tab9, error_boundary("Surprise Tracker"):
+    st.subheader("Economic Surprise Tracker")
+    st.markdown(
+        "Compares **actual economic releases** to consensus expectations. "
+        "Positive surprises (beats) tend to be bullish for equities; negative surprises (misses) bearish. "
+        "Persistent surprise streaks indicate economists are systematically under/over-estimating growth."
+    )
+
+    if fred_key:
+        # Key indicators with clear units for surprise calculation
+        surprise_indicators = [
+            ("PAYEMS", "Nonfarm Payrolls", "K", "change"),     # Monthly change
+            ("UNRATE", "Unemployment Rate", "%", "level"),
+            ("CPIAUCSL", "CPI", "%", "yoy"),                   # YoY change
+            ("RSAFS", "Retail Sales", "%", "mom"),              # MoM change
+            ("INDPRO", "Industrial Production", "%", "mom"),
+            ("UMCSENT", "Consumer Sentiment", "pts", "level"),
+            ("HOUST", "Housing Starts", "K", "level"),
+        ]
+
+        surprise_rows = []
+        for sid, name, unit, calc_type in surprise_indicators:
+            df_s = fetch_fred_series(fred_key, sid, limit=26)
+            min_required = 14 if calc_type == "yoy" else 4
+            if df_s.empty or len(df_s) < min_required:
+                continue
+            df_s = df_s.sort_values("date").reset_index(drop=True)
+
+            # Build surprise series: compare each release to "consensus" (3-month moving average prior)
+            start_idx = 13 if calc_type == "yoy" else 3
+            for i in range(start_idx, len(df_s)):
+                if calc_type == "change":
+                    actual = df_s.iloc[i]["value"] - df_s.iloc[i - 1]["value"]
+                    consensus = np.mean([
+                        df_s.iloc[j]["value"] - df_s.iloc[j - 1]["value"]
+                        for j in range(max(1, i - 3), i)
+                    ])
+                elif calc_type == "yoy":
+                    actual = (df_s.iloc[i]["value"] / df_s.iloc[i - 12]["value"] - 1) * 100
+                    consensus = (df_s.iloc[i - 1]["value"] / df_s.iloc[i - 13]["value"] - 1) * 100
+                elif calc_type == "mom":
+                    actual = (df_s.iloc[i]["value"] / df_s.iloc[i - 1]["value"] - 1) * 100
+                    consensus = np.mean([
+                        (df_s.iloc[j]["value"] / df_s.iloc[j - 1]["value"] - 1) * 100
+                        for j in range(max(1, i - 3), i)
+                    ])
+                else:  # level
+                    actual = df_s.iloc[i]["value"]
+                    consensus = np.mean([df_s.iloc[j]["value"] for j in range(i - 3, i)])
+
+                surprise = actual - consensus
+                surprise_rows.append({
+                    "date": df_s.iloc[i]["date"],
+                    "indicator": name,
+                    "actual": actual,
+                    "consensus": consensus,
+                    "surprise": surprise,
+                    "unit": unit,
+                })
+
+        if surprise_rows:
+            df_surprise = pd.DataFrame(surprise_rows)
+            df_surprise["date"] = pd.to_datetime(df_surprise["date"])
+
+            # Latest surprise for each indicator
+            st.subheader("Latest Release Surprises")
+            latest = df_surprise.sort_values("date").groupby("indicator").last().reset_index()
+            latest = latest.sort_values("surprise", ascending=False)
+
+            sc = st.columns(min(len(latest), 4))
+            for i, (_, row) in enumerate(latest.iterrows()):
+                col = sc[i % len(sc)]
+                beat_miss = "BEAT" if row["surprise"] > 0 else ("MISS" if row["surprise"] < 0 else "MET")
+                # For unemployment, lower = better (invert signal)
+                if row["indicator"] == "Unemployment Rate":
+                    beat_miss = "BEAT" if row["surprise"] < 0 else ("MISS" if row["surprise"] > 0 else "MET")
+                color = COLORS["success"] if beat_miss == "BEAT" else (COLORS["danger"] if beat_miss == "MISS" else COLORS["warning"])
+                col.markdown(
+                    f'<div style="text-align:center;padding:8px;border:1px solid {COLORS["card_border"]};border-radius:6px;">'
+                    f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{row["indicator"]}</div>'
+                    f'<div style="font-size:1.1rem;font-weight:700;color:{color};">{beat_miss}</div>'
+                    f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};">'
+                    f'Actual: {row["actual"]:.1f}{row["unit"]} | Exp: {row["consensus"]:.1f}{row["unit"]}</div>'
+                    f'<div style="font-size:0.7rem;color:{color};">{row["surprise"]:+.2f} surprise</div>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+
+            st.divider()
+
+            # Aggregate Surprise Index (sum of standardized surprises)
+            st.subheader("Economic Surprise Index")
+            st.caption(
+                "Aggregates surprises across all indicators. Positive = economy beating expectations. "
+                "A falling index means economists are catching up (or economy is weakening)."
+            )
+
+            # Standardize surprises per indicator
+            for ind in df_surprise["indicator"].unique():
+                mask = df_surprise["indicator"] == ind
+                std = df_surprise.loc[mask, "surprise"].std()
+                if std > 1e-10:
+                    # Invert unemployment (lower = better)
+                    mult = -1 if ind == "Unemployment Rate" else 1
+                    df_surprise.loc[mask, "z_surprise"] = (df_surprise.loc[mask, "surprise"] / std) * mult
+                else:
+                    df_surprise.loc[mask, "z_surprise"] = 0
+            df_surprise["z_surprise"] = df_surprise["z_surprise"].fillna(0)
+
+            # Monthly average surprise index
+            df_surprise["month"] = df_surprise["date"].dt.to_period("M")
+            monthly_idx = df_surprise.groupby("month")["z_surprise"].mean().reset_index()
+            monthly_idx["date"] = monthly_idx["month"].dt.to_timestamp()
+
+            fig_surp = go.Figure()
+            colors_surp = [COLORS["success"] if v > 0 else COLORS["danger"] for v in monthly_idx["z_surprise"]]
+            fig_surp.add_trace(go.Bar(
+                x=monthly_idx["date"], y=monthly_idx["z_surprise"],
+                marker_color=colors_surp, name="Surprise Index",
+                hovertemplate="Date: %{x|%b %Y}<br>Surprise Index: %{y:.2f}<extra></extra>",
+            ))
+            fig_surp.add_hline(y=0, line_color="white", line_width=1)
+            fig_surp.update_layout(
+                template="plotly_dark", height=350, margin=dict(t=10, b=0, l=0, r=0),
+                yaxis_title="Surprise Index (z-score)", hovermode="x unified",
+            )
+            st.plotly_chart(fig_surp, use_container_width=True)
+
+            # Current streak
+            recent_z = monthly_idx["z_surprise"].iloc[-3:]
+            if len(recent_z) >= 3:
+                streak_positive = all(recent_z > 0)
+                streak_negative = all(recent_z < 0)
+                if streak_positive:
+                    st.success(
+                        "**3-month positive surprise streak.** Economy is consistently beating expectations. "
+                        "Analysts may be behind the curve — consider positioning for continued upside."
+                    )
+                elif streak_negative:
+                    st.warning(
+                        "**3-month negative surprise streak.** Economy is consistently missing expectations. "
+                        "Growth may be decelerating faster than consensus — consider defensive positioning."
+                    )
+
+            # Surprise heatmap by indicator
+            st.subheader("Surprise Heatmap by Indicator")
+            pivot = df_surprise.pivot_table(
+                index="indicator", columns=df_surprise["date"].dt.strftime("%b %Y"),
+                values="z_surprise", aggfunc="mean"
+            )
+            # Keep only last 6 months
+            pivot = pivot[pivot.columns[-6:]] if len(pivot.columns) > 6 else pivot
+
+            fig_heat = go.Figure(data=go.Heatmap(
+                z=pivot.values,
+                x=pivot.columns.tolist(),
+                y=pivot.index.tolist(),
+                colorscale="RdYlGn",
+                zmid=0,
+                text=np.round(pivot.values, 2),
+                texttemplate="%{text}",
+                hovertemplate="Indicator: %{y}<br>Month: %{x}<br>Surprise: %{z:.2f}σ<extra></extra>",
+            ))
+            fig_heat.update_layout(
+                template="plotly_dark", height=300, margin=dict(t=10, b=0, l=0, r=0),
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
+
+            st.caption(
+                "**How to read:** Green = actual beat expectations. Red = missed. "
+                "A row that is consistently one color suggests systematic mis-estimation. "
+                "The surprise index uses the 3-month moving average as a proxy for consensus — "
+                "actual Bloomberg/Reuters consensus surveys are behind paywalls."
+            )
+        else:
+            st.info("Not enough historical data to compute surprises.")
+    else:
+        st.warning("FRED API key not configured.")

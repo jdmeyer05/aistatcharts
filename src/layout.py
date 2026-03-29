@@ -69,6 +69,12 @@ PAGE_CONFIG = {
     "39_Signal_Scanner":     ("Signal Scanner | AI Statcharts", "📡"),
     "40_Power_Strategies":   ("Power Strategies | AI Statcharts", "⚡"),
     "41_Meta_Analysis":      ("Meta Analysis | AI Statcharts", "📊"),
+    "42_Calendar_Spreads":   ("Calendar Spreads | AI Statcharts", "📅"),
+    "43_Vol_Surface":        ("Vol Surface | AI Statcharts", "🌊"),
+    "44_Portfolio_Greeks":   ("Portfolio Greeks | AI Statcharts", "📐"),
+    "45_Universe_Portfolio": ("Universe Portfolio | AI Statcharts", "🌐"),
+    "46_Market_Expectations": ("Market Expectations | AI Statcharts", "🔮"),
+    "47_Track_Record":       ("Track Record | AI Statcharts", "🎯"),
 }
 
 
@@ -95,7 +101,8 @@ def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collap
     _SIGNAL_PAGES = {
         "02_Scenario_Analysis", "03_Stock_Analysis", "04_RL_Trading",
         "09_ML_Stock_Predictor", "11_Algo_Backtester", "12_Monte_Carlo",
-        "13_Power_Risk_VaR",
+        "13_Power_Risk_VaR", "42_Calendar_Spreads", "44_Portfolio_Greeks",
+        "45_Universe_Portfolio",
     }
     if page_key in _SIGNAL_PAGES:
         st.markdown(
@@ -220,6 +227,9 @@ def render_header(current_page: str):
             ("06_Options_Analysis", "Options Analysis", "pages/06_Options_Analysis.py"),
             ("07_Options_Flow", "Options Flow", "pages/07_Options_Flow.py"),
             ("08_Options_Lab", "Options Lab", "pages/08_Options_Lab.py"),
+            ("42_Calendar_Spreads", "Calendar Spreads", "pages/42_Calendar_Spreads.py"),
+            ("43_Vol_Surface", "Vol Surface", "pages/43_Vol_Surface.py"),
+            ("44_Portfolio_Greeks", "Portfolio Greeks", "pages/44_Portfolio_Greeks.py"),
         ]),
         ("Tools", [
             ("05_Historical_Analysis", "Historical", "pages/05_Historical_Analysis.py"),
@@ -234,6 +244,9 @@ def render_header(current_page: str):
             ("38_Portfolio_Optimizer", "Optimizer", "pages/38_Portfolio_Optimizer.py"),
             ("39_Signal_Scanner", "Signals", "pages/39_Signal_Scanner.py"),
             ("41_Meta_Analysis", "Meta Analysis", "pages/41_Meta_Analysis.py"),
+            ("45_Universe_Portfolio", "Universe Portfolio", "pages/45_Universe_Portfolio.py"),
+            ("46_Market_Expectations", "Market Expectations", "pages/46_Market_Expectations.py"),
+            ("47_Track_Record", "Track Record", "pages/47_Track_Record.py"),
         ]),
         ("Sectors", [
             ("24_Energy_Sector", "Energy", "pages/24_Energy_Sector.py"),
@@ -333,22 +346,39 @@ def render_header(current_page: str):
                     unsafe_allow_html=True,
                 )
 
-            # ── Market Status ──
+            # ── Market Status (Polygon API with hardcoded fallback) ──
             st.markdown(f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:1px;margin:10px 0 4px 0;">Market</div>', unsafe_allow_html=True)
+            mkt_status, mkt_color = "Unknown", "#888"
             now = datetime.now()
-            hour, weekday = now.hour, now.weekday()
-            if weekday >= 5:
-                mkt_status, mkt_color = "Closed (Weekend)", "#888"
-            elif hour < 4:
-                mkt_status, mkt_color = "Closed", "#888"
-            elif hour < 9 or (hour == 9 and now.minute < 30):
-                mkt_status, mkt_color = "Pre-Market", "#ffaa00"
-            elif hour < 16:
-                mkt_status, mkt_color = "Market Open", "#00ff96"
-            elif hour < 20:
-                mkt_status, mkt_color = "After Hours", "#ffaa00"
-            else:
-                mkt_status, mkt_color = "Closed", "#888"
+            try:
+                from src.data_engine import fetch_market_status
+                _ms = fetch_market_status()
+                if _ms.get("is_open"):
+                    mkt_status, mkt_color = "Market Open", "#00ff96"
+                elif _ms.get("market") == "closed":
+                    mkt_status, mkt_color = "Closed", "#888"
+                elif _ms.get("market") == "extended-hours":
+                    mkt_status, mkt_color = "Extended Hours", "#ffaa00"
+                elif _ms.get("market"):
+                    mkt_status, mkt_color = _ms["market"].title(), "#ffaa00"
+            except Exception:
+                pass
+            if mkt_status == "Unknown":
+                # Fallback to hardcoded logic
+                now = datetime.now()
+                hour, weekday = now.hour, now.weekday()
+                if weekday >= 5:
+                    mkt_status, mkt_color = "Closed (Weekend)", "#888"
+                elif hour < 4:
+                    mkt_status, mkt_color = "Closed", "#888"
+                elif hour < 9 or (hour == 9 and now.minute < 30):
+                    mkt_status, mkt_color = "Pre-Market", "#ffaa00"
+                elif hour < 16:
+                    mkt_status, mkt_color = "Market Open", "#00ff96"
+                elif hour < 20:
+                    mkt_status, mkt_color = "After Hours", "#ffaa00"
+                else:
+                    mkt_status, mkt_color = "Closed", "#888"
             st.markdown(
                 f'<div style="font-size:0.78rem;">'
                 f'<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:{mkt_color};margin-right:5px;vertical-align:middle;"></span>'

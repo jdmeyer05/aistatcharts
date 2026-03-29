@@ -305,8 +305,8 @@ def calculate_rsi(data, periods=14):
     delta = data.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=int(periods)).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=int(periods)).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    rs = gain / loss.replace(0, np.nan)
+    return (100 - (100 / (1 + rs))).fillna(50)
 
 
 def calculate_atr(df, period=14):
@@ -335,6 +335,8 @@ STRATEGIES = [
 def run_strategy(df, strat_name, p1=None, p2=None):
     df = df.copy()
     c = df["Close"]
+    if c.empty:
+        return df
     df["Position"] = 0
     df["Signal"] = np.nan
 
@@ -1368,6 +1370,9 @@ def _run_walk_forward(df_wf_base, strat_name, train_d, test_d, cost_pct, borrow_
         df_test_full["Strat_Returns"] -= df_test_full["Position"].diff().abs().clip(upper=2) * cost_pct
         df_test_full["Strat_Returns"] -= (df_test_full["Position"].shift(1) == -1).astype(float) * borrow_daily
         df_oos = df_test_full.iloc[warmup:]
+        if df_oos.empty:
+            start_idx += test_d
+            continue
         oos_segments.append(df_oos)
 
         oos_cum = np.exp(df_oos["Strat_Returns"].dropna().cumsum()).iloc[-1] if not df_oos["Strat_Returns"].dropna().empty else 1.0

@@ -7,6 +7,7 @@ from src.data_engine import fetch_massive_data, format_massive_ticker
 from src.chatbot import run_sidebar_chatbot
 
 from src.layout import setup_page, error_boundary
+from src.styles import COLORS
 setup_page("13_Power_Risk_VaR")
 
 st.title("Portfolio Risk & VaR Engine")
@@ -53,6 +54,7 @@ if all_data and len(all_data) >= 2:
         weights = pd.Series(1.0 / n_assets, index=daily_returns.columns)
     elif alloc_method == "Inverse Volatility":
         vol = daily_returns.std() * np.sqrt(252)
+        vol = vol.replace(0, vol[vol > 0].min() if (vol > 0).any() else 1)  # avoid div-by-zero
         weights = (1 / vol) / (1 / vol).sum()
     else:  # HRP
         from src.quant_features import hrp_allocate
@@ -146,6 +148,58 @@ if all_data and len(all_data) >= 2:
                     st.warning(f"**Stress VaR:** During high-vol periods, the {int(confidence_level*100)}% VaR is "
                                f"**{stress_var*100:.2f}%** (${abs(portfolio_value * stress_var):,.2f}) — "
                                f"worse than the unconditional {var_percent*100:.2f}%.")
+
+    # --- COMPONENT VaR ---
+    st.markdown("---")
+    st.subheader("Component VaR — Risk Contribution by Position")
+    st.caption(
+        "Shows how much each position contributes to total portfolio risk. "
+        "A position with 50% component VaR contributes half of the portfolio's total risk."
+    )
+
+    with error_boundary("Component VaR"):
+        cov_matrix = daily_returns.cov() * 252  # annualized
+        port_vol = np.sqrt(weights.values @ cov_matrix.values @ weights.values)
+
+        if port_vol > 0:
+            # Marginal contribution to risk
+            mcr = (cov_matrix.values @ weights.values) / port_vol
+            # Component VaR = weight × MCR × VaR_scalar
+            var_scalar = abs(var_percent) * np.sqrt(252)  # annualized
+            comp_var = weights.values * mcr * var_scalar
+            comp_var_pct = comp_var / comp_var.sum() * 100 if comp_var.sum() != 0 else comp_var * 0
+
+            comp_df = pd.DataFrame({
+                "Ticker": weights.index,
+                "Weight": [f"{w*100:.1f}%" for w in weights.values],
+                "Risk Contribution": [f"{c:.1f}%" for c in comp_var_pct],
+                "Marginal VaR": [f"{m*100:.3f}%" for m in mcr],
+            })
+            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+
+            # Bar chart
+            fig_comp = go.Figure(go.Bar(
+                x=weights.index, y=comp_var_pct,
+                marker_color=[COLORS["danger"] if c > 100 / len(weights) * 1.5 else COLORS["accent"]
+                              for c in comp_var_pct],
+                text=[f"{c:.1f}%" for c in comp_var_pct],
+                textposition="outside",
+            ))
+            fig_comp.add_hline(y=100 / len(weights), line_dash="dot",
+                                line_color=COLORS["text_muted"],
+                                annotation_text="Equal contribution")
+            fig_comp.update_layout(
+                template="plotly_dark", height=300,
+                yaxis_title="Risk Contribution (%)",
+                margin=dict(l=50, r=20, t=10, b=50),
+            )
+            st.plotly_chart(fig_comp, use_container_width=True, config={"displayModeBar": False})
+
+            # Flag concentrated risk
+            max_risk_ticker = weights.index[np.argmax(comp_var_pct)]
+            max_risk_pct = comp_var_pct.max()
+            if max_risk_pct > 40:
+                st.warning(f"**{max_risk_ticker}** contributes {max_risk_pct:.0f}% of portfolio risk — consider reducing position or hedging.")
 
     # Chatbot Context
     ctx = (f"The 1-Day {int(confidence_level*100)}% VaR for a ${portfolio_value:,.0f} portfolio "

@@ -13,14 +13,19 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **41 pages** of quantitative analysis tools (incl. 11 sector pages, 6 quant research pages, power trading strategies, meta portfolio analysis)
-- **3 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus
-- **Landing page dashboard** -- market heatmap (5 lists, drills into ETF holdings), AI intelligence cards, watchlist
+- **47 pages** of quantitative analysis tools (incl. 11 sector pages, 6 quant research pages, power trading strategies, meta portfolio analysis, calendar spreads, vol surface with Gemini AI trade ideas, portfolio Greeks with delta hedging, universe portfolio, market expectations engine)
+- **4 AI models**: Grok 4, Gemini 2.5 Pro, Claude Sonnet/Opus, Gemini 2.5 Flash (chat)
+- **Unified Signal Engine** -- aggregates signals from 8+ analysis pages into weighted composite scores per ticker
+- **Historical Metrics Store** -- daily vol/options snapshots with 252-day percentile ranks
+- **Position Lifecycle Manager** -- Greek tracking, P&L attribution (delta/gamma/theta/vega), alerts, trade journal
+- **14-table Supabase backend** -- signals, metrics, positions, predictions, chat history, API cache, AI usage tracking
+- **API response caching** -- Polygon responses cached in Supabase (~100ms vs ~1.5s on cache hit)
+- **Landing page dashboard** -- market pulse bar (auto-refresh), signal composites, vol regime, position book, heatmap, AI intelligence, prediction accuracy, 12 feature cards
 - **Top nav header** -- logo, dropdown navigation, Settings popover (account, usage, market status)
 - **Fun loader** -- animated spinner with quips, progress bar, milestone status, countdown ETA
 - **Open Beta** -- no login required, all features unlocked, optional account creation via Settings > Log In
 - **Session persistence** -- cookie-based auth recovery, auto-reload on stale mobile connections
-- **Tier-based analyst chat** -- Gemini 2.5 Flash (all tiers) in inline expander
+- **Tier-based analyst chat** -- Gemini 2.5 Flash (all tiers) in inline expander, chat history persisted to Supabase
 - **Subscription tiers** -- Free, Pro ($12), Premium ($29), Platinum ($79) *(currently disabled — open beta)*
 - **Token system** -- buy analysis tokens ($8/50, $25/200, $50/500) *(currently disabled — open beta)*
 - **Supabase auth** -- login, registration, "remember me", session timeout warning *(optional during open beta)*
@@ -64,6 +69,12 @@ Opens at **http://localhost:8501** (or next available port).
 | **Signal Scanner** | 8-tab institutional scanner: momentum (12-1, acceleration, risk-adjusted), mean reversion (RSI/BB/Z-score, confluence), value & quality (PE/PB/ROE/margins), earnings & sentiment (EPS revisions, insider buying), regime & microstructure (VPIN, entropy), factor correlation (redundancy, eigenvalue decomposition), composite ranking (configurable weights). |
 | **Meta Analysis** | 9-tab cross-method portfolio comparison engine: walk-forward equity curves, allocations with rebalance history, forward return estimates (analyst/EPS/valuation/macro), performance ranking, institutional analytics (net-of-cost, regime analysis, capture ratios, stress tests, capacity), de Prado statistical tests (DSR, PBO, sequential bootstrap, min track record), drawdown duration, rolling analysis, universe grid with hierarchical two-layer allocation. SPY benchmark. CSV export. |
 | **Power Strategies** | Spark spreads, heat rate trades, peak/off-peak, RT vs DAM arb, renewable curtailment, congestion analysis. Live intraday charts. De Prado-style strategy backtester with walk-forward, sequential bootstrap, DSR. Multi-strategy meta-analysis with HRP/risk parity blending. |
+| **Calendar Spreads** | 8-tab calendar spread suite: builder, term structure, scanner with VIX regime, P&L simulator, roll optimizer, risk analysis, backtest, AI assessment |
+| **Vol Surface** | 9-tab: 3D surface, IV skew, term structure, dislocations, skew metrics, gamma scalping (with P&L backtest), surface animation (real historical data), surface comparison (date/call-put/cross-ticker), Gemini 2.5 Pro AI trade ideas |
+| **Portfolio Greeks** | Position entry (imports from Position Book), aggregate dollar Greeks, risk scenario heatmap, Greeks by expiration, Greeks over time, delta hedging calculator with gamma scalping P&L projection |
+| **Track Record** | Prediction accuracy dashboard — evaluates T+30/60/90 outcomes for every AI signal |
+| **Universe Portfolio** | 15-group universe scan, cross-group correlation, hierarchical two-layer allocation, walk-forward backtest, statistical tests |
+| **Market Expectations** | Cross-asset options intelligence: vol dashboard, term structure comparison, skew landscape, PCA, implied correlation, VRP, trade synthesis |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
 
 ## AI Models
@@ -113,6 +124,11 @@ Opens at **http://localhost:8501** (or next available port).
 | **StockTwits** | Social feed (official accounts only) | Public API |
 | **MarineTraffic** | Vessel tracking / AIS data (via Grok X search) | X/Twitter |
 | **yfinance** | Fallback price data when Polygon returns stale/bad data | Free |
+| **CBOE (via yfinance)** | VIX term structure (VIX9D/VIX/VIX3M/VIX6M/VIX1Y), SKEW index | Free |
+| **CFTC** | Commitments of Traders — managed money positioning | Public API |
+| **OECD** | Composite Leading Indicators (6 countries) | Public SDMX API |
+| **BIS** | Credit-to-GDP gap (financial crisis predictor) | Public API |
+| **Treasury.gov** | Auction results (bid-to-cover, yields) | Public API |
 
 ## Quantitative Methods (López de Prado Framework)
 
@@ -205,11 +221,17 @@ src/
   simulation.py           Stochastic price simulation (Random Forest, seasonal Monte Carlo)
   json_repair.py          Multi-strategy JSON repair for LLM output
   analysis_history.py     AI analysis history persistence (load/save/staleness)
+  cross_context.py        Cross-page intelligence sharing (write/read/build_ai_context)
+  signal_engine.py        Unified signal aggregation (8 pages → weighted composite scores)
+  metrics_store.py        Historical metrics store (daily snapshots, percentile ranks)
+  position_book.py        Position lifecycle (Greeks, P&L attribution, alerts, journal)
+  prediction_tracker.py   Prediction accuracy tracking (T+30/60/90 evaluation)
+  api_cache.py            Supabase-backed API response caching layer
+  db.py                   Shared Supabase client accessor with user ID resolution
+  macro_data.py           Extended macro sources (VIX term structure, SKEW, Fed balance sheet, CFTC COT, OECD CLI, BIS credit gap)
+  economic_calendar.py    Centralized FOMC dates and macro event detection
   quant_features.py       Shared quant functions (frac diff, CUSUM, triple barrier, HRP, VPIN, entropy)
   gov_data.py             CFTC COT, Treasury yields/auctions, defense contracts
-  iran_conflict_history.json  AI analysis history (48 entries, auto-managed)
-  iran_infra_state.json   Self-updating infrastructure baseline (Grok-verified)
-  source_credibility.json Source reliability scores (auto-updated)
 pages/
   01_Summary.py           Landing dashboard (batch-loaded heatmap, AI intelligence cards)
   02_Scenario_Analysis.py Macro scenario engine (7 tabs)
@@ -230,9 +252,21 @@ pages/
   38_Portfolio_Optimizer.py    6 allocation methods + Black-Litterman
   39_Signal_Scanner.py    Systematic signal scanner (momentum, mean reversion, composite)
   40_Power_Strategies.py  Power trading strategies (9 tabs: charts, spark, heat rate, peak/off-peak, RT/DAM, curtailment, congestion, backtest, meta)
+  41_Meta_Analysis.py     9-tab cross-method portfolio comparison engine with hierarchical allocation
+  42_Calendar_Spreads.py  8-tab calendar spread suite with scanner, backtest, AI assessment
+  43_Vol_Surface.py       9-tab vol surface: 3D, skew, term structure, dislocations, metrics, gamma scalp, animation, comparison, Gemini AI trade ideas
+  44_Portfolio_Greeks.py   Position-level Greeks with delta hedging calculator
+  45_Universe_Portfolio.py 7-tab multi-group portfolio construction engine
+  46_Market_Expectations.py 8-tab cross-asset options intelligence with trade synthesis
+  47_Track_Record.py      Prediction accuracy dashboard
   99_Login.py             Standalone login/register page (accessible via Settings popover)
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)
+  signals/                Signal engine JSON fallback (gitignored)
+  metrics_history/        Per-ticker metrics JSON fallback (gitignored)
+  positions/              Position book JSON fallback (gitignored)
+  predictions/            Prediction tracker JSON fallback (gitignored)
+  iv_surface_cache/       IV surface daily snapshots (gitignored)
 .streamlit/
   config.toml             Theme, toolbar, static serving, sidebar disabled
   secrets.toml            API keys (gitignored)
@@ -285,7 +319,30 @@ Payment links in `src/auth.py` -> `STRIPE_LINKS`. Tier detection: price metadata
 
 **Webhook:** dashboard.stripe.com/webhooks -> endpoint `/stripe/webhook` -> events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed`
 
-**Supabase tables:**
+**Supabase tables (14):**
 - `subscriptions` -- email, plan_type, status, stripe_customer_id, stripe_price_id
 - `user_tokens` -- email, balance
 - `payment_failures` -- email, invoice_id, failed_at, resolved
+- `signals` -- unified signal engine (direction, conviction, vol_view per source/ticker)
+- `metrics_history` -- daily vol/options snapshots (ATM IV, skew, VRP, HV20/60)
+- `positions` -- position book with JSONB Greeks, alerts, journal
+- `pnl_history` -- daily P&L attribution (delta/gamma/theta/vega decomposition)
+- `predictions` -- prediction tracker (T+30/60/90 outcome evaluation)
+- `iv_surface_snapshots` -- daily IV chain cache for surface animation
+- `conflict_analysis` -- Iran conflict analysis history + infrastructure state
+- `ai_usage` -- persistent daily AI/chat usage counters (prevents refresh bypass)
+- `chat_history` -- persistent chat conversation log
+- `source_credibility` -- news/intel source reliability scores
+- `api_cache` -- Polygon API response cache (TTL-based, ~100ms reads)
+
+**Supabase views:**
+- `signal_composites` -- real-time weighted signal aggregation in SQL
+- `metrics_percentiles` -- pre-computed 252-day percentile ranks (materialized)
+
+**Supabase RPC functions (6):**
+- `increment_tokens` -- atomic token balance update
+- `increment_ai_usage` -- atomic daily usage counter
+- `get_metrics_coverage` -- ticker summary for metrics store
+- `cleanup_expired_cache` -- prune expired API cache entries
+- `cleanup_old_signals` -- prune signals >7 days, chat >90 days
+- `refresh_percentiles` -- refresh materialized view

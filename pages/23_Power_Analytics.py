@@ -9,6 +9,22 @@ from src import ercot_api
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_hour(h):
+    """Safely extract integer hour from ERCOT hourEnding (handles NaN, str, int, float)."""
+    if h is None or (isinstance(h, float) and np.isnan(h)):
+        return 0
+    if isinstance(h, str):
+        try:
+            return int(h.split(":")[0])
+        except (ValueError, IndexError):
+            return 0
+    try:
+        return int(h)
+    except (ValueError, TypeError):
+        return 0
+
+
 setup_page("23_Power_Analytics")
 
 st.title("⚡ Power Analytics")
@@ -204,7 +220,7 @@ with tab1:
         # ERCOT API: actual hourly demand by weather zone — gold standard
         hist_source = "ERCOT API (actual demand)"
         hl = ercot_load_hist.copy()
-        hl["hour"] = hl["hourEnding"].apply(lambda h: int(h.split(":")[0]) if isinstance(h, str) else int(h))
+        hl["hour"] = hl["hourEnding"].apply(_parse_hour)
         hl["date"] = pd.to_datetime(hl["operatingDay"])
         latest = hl["date"].max()
 
@@ -621,7 +637,7 @@ with tab1:
             # DAM price per hour
             dam_hr = ercot_dam_spp.copy()
             dam_hr["hour"] = dam_hr["hourEnding"].apply(
-                lambda h: int(h.split(":")[0]) if isinstance(h, str) else int(h)
+                _parse_hour
             )
             dam_hourly = dam_hr.groupby("hour")["settlementPointPrice"].mean().reset_index()
             dam_hourly.columns = ["hour", "dam_price"]
@@ -1080,7 +1096,7 @@ with tab2:
             if ercot_dam_spp is not None and not ercot_dam_spp.empty:
                 dam_hr_df = ercot_dam_spp.copy()
                 dam_hr_df["hour"] = dam_hr_df["hourEnding"].apply(
-                    lambda h: int(h.split(":")[0]) if isinstance(h, str) else int(h)
+                    _parse_hour
                 )
                 dam_hourly_hr = dam_hr_df.groupby("hour")["settlementPointPrice"].mean().reset_index()
                 dam_hourly_hr.columns = ["hour", "dam_price"]
@@ -1128,7 +1144,7 @@ with tab2:
             if ercot_dam_lambda is not None and not ercot_dam_lambda.empty:
                 dam_lam = ercot_dam_lambda.copy()
                 dam_lam["hour"] = dam_lam["hourEnding"].apply(
-                    lambda h: int(h.split(":")[0]) if isinstance(h, str) else int(h)
+                    _parse_hour
                 )
                 # Map DAM hours onto today's timestamps for overlay
                 # Match SCED Lambda timezone (ERCOT = US/Central)
@@ -1521,7 +1537,7 @@ with tab3:
 
                 dam_sp = ercot_dam_spp.copy()
                 dam_sp["hour"] = dam_sp["hourEnding"].apply(
-                    lambda h: int(h.split(":")[0]) if isinstance(h, str) else int(h)
+                    _parse_hour
                 )
                 dam_hourly_sp = dam_sp.groupby("hour")["settlementPointPrice"].mean().reset_index()
                 dam_hourly_sp.columns = ["hour", "dam_price"]
@@ -2008,7 +2024,7 @@ with tab4:
             df_sd_today["capacity"] = pd.to_numeric(df_sd_today["capacity"], errors="coerce")
             df_sd_today["demand"] = pd.to_numeric(df_sd_today["demand"], errors="coerce")
             df_sd_today["reserves_mw"] = df_sd_today["capacity"] - df_sd_today["demand"]
-            df_sd_today["reserve_pct"] = df_sd_today["reserves_mw"] / df_sd_today["demand"] * 100
+            df_sd_today["reserve_pct"] = df_sd_today["reserves_mw"] / df_sd_today["demand"].replace(0, np.nan) * 100
 
             fig_rm = go.Figure()
             # ERCOT Operating Procedure thresholds (absolute MW)

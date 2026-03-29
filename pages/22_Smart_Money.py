@@ -12,9 +12,10 @@ from src.edgar import (
 )
 from src.market_data import (
     fetch_analyst_estimates, fetch_earnings_history,
-    fetch_institutional_holders, fetch_insider_transactions,
+    fetch_institutional_holders,
     fetch_fred_macro_dashboard, fetch_fred_series, FRED_SERIES,
 )
+from src.data_engine import fetch_insider_transactions
 
 logger = logging.getLogger(__name__)
 

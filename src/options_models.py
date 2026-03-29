@@ -36,6 +36,31 @@ def black_scholes(S, K, T, r, sigma, opt_type="call"):
     return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
 
 
+def implied_vol(price, S, K, T, r, opt_type="call", tol=1e-6, max_iter=50):
+    """Newton-Raphson implied volatility solver. Returns 0 on failure."""
+    if T <= 0 or price <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    intrinsic = max(S - K, 0) if opt_type == "call" else max(K - S, 0)
+    if price < intrinsic:
+        return 0.0
+
+    sigma = 0.3  # initial guess
+    for _ in range(max_iter):
+        bs_price = black_scholes(S, K, T, r, sigma, opt_type)
+        if abs(bs_price - price) < tol:
+            return sigma
+        d1 = (np.log(S / K) + (r + sigma**2 / 2) * T) / (sigma * np.sqrt(T))
+        vega = S * norm.pdf(d1) * np.sqrt(T)
+        if vega < 1e-12:
+            # Vega collapsed — return current sigma if it's in a reasonable range
+            # (deep ITM/OTM options have near-zero vega but valid IV)
+            return sigma if 0.01 < sigma < 5.0 else 0.0
+        sigma -= (bs_price - price) / vega
+        if sigma <= 0.005:
+            sigma = 0.005
+    return sigma if 0.01 < sigma < 5.0 else 0.0
+
+
 def bs_greeks(S, K, T, r, sigma, opt_type="call"):
     """Black-Scholes Greeks."""
     if T <= 0 or sigma <= 0:

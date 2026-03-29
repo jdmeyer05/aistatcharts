@@ -141,6 +141,8 @@ class PrioritizedReplayBuffer:
         n = len(self.buffer)
         probs = self.priorities[:n] / (self.priorities[:n].sum() + 1e-8)
 
+        if n < batch_size:
+            return None
         indices = np.random.choice(n, batch_size, p=probs, replace=False)
 
         # Importance sampling weights
@@ -246,10 +248,11 @@ class TradingEnv:
             if shares * price + cost <= self.cash and shares > 0:
                 self.cash -= shares * price + cost
                 self.position += shares
-                if self.entry_price == 0:
+                old_pos = abs(self.position) - shares
+                if self.entry_price == 0 or old_pos <= 0:
                     self.entry_price = price
                 else:
-                    self.entry_price = (self.entry_price + price) / 2
+                    self.entry_price = (self.entry_price * old_pos + price * shares) / (old_pos + shares)
                 self.trades.append({"step": self.step_idx, "action": "buy", "shares": shares, "price": price})
         elif action in (4, 5, 6):  # sell
             pct = [0, 0, 0, 0, 0.25, 0.50, 1.0][action]
@@ -296,6 +299,7 @@ class TradingEnv:
                 else:
                     self.cash -= abs(self.position) * fp + self._total_cost(abs(self.position), fp)
                 self.position = 0
+                self.entry_price = 0
 
         new_price = self.prices[min(self.step_idx, self.n_steps - 1)]
         new_port = self.cash + self.position * new_price

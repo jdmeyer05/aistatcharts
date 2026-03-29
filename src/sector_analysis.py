@@ -582,11 +582,74 @@ def _render_capex_tab(cfg: SectorConfig, rev_hist, kp):
         cx["date"] = pd.to_datetime(cx["date"])
         cx = cx[cx["date"] >= "2024-01-01"].sort_values(["ticker", "date"])
         cx["year"] = cx["date"].dt.year
-        cx["q_capex"] = cx.groupby(["ticker", "year"])["capex"].diff()
-        mask_first = cx["q_capex"].isna()
-        cx.loc[mask_first, "q_capex"] = cx.loc[mask_first, "capex"]
-        cx = cx.dropna(subset=["q_capex"])
-        cx["q_label"] = cx["date"].dt.strftime("%Y-Q") + ((cx["date"].dt.month - 1) // 3 + 1).astype(str)
+        cx["quarter"] = (cx["date"].dt.month - 1) // 3 + 1
+
+        # XBRL CapEx values are cumulative YTD in 10-Q filings.
+        # 10-K filings report the full-year total.
+        # To get quarterly values:
+        # - For 10-Q: diff consecutive values within the same fiscal year
+        # - For 10-K: Q4 = 10-K value minus the last 10-Q cumulative (Q3)
+        # - If only 10-K exists for a year, it's the annual total (not quarterly)
+        q_rows = []
+        for ticker in cx["ticker"].unique():
+            sub = cx[cx["ticker"] == ticker].sort_values("date")
+            for year in sub["year"].unique():
+                yr_data = sub[sub["year"] == year].sort_values("date")
+                tenq = yr_data[yr_data["form"] == "10-Q"]
+                tenk = yr_data[yr_data["form"] == "10-K"]
+
+                # Extract quarterly values from 10-Q cumulative diffs
+                if len(tenq) > 0:
+                    prev_cum = 0
+                    for _, row in tenq.iterrows():
+                        q_val = row["capex"] - prev_cum
+                        prev_cum = row["capex"]
+                        q_rows.append({
+                            "ticker": row["ticker"],
+                            "company": row["company"],
+                            "date": row["date"],
+                            "q_capex": q_val,
+                            "form": row["form"],
+                            "year": year,
+                            "quarter": int((row["date"].month - 1) // 3 + 1),
+                        })
+
+                    # If 10-K exists, derive Q4 = 10-K - last Q cumulative
+                    if len(tenk) > 0:
+                        annual = tenk.iloc[-1]["capex"]
+                        last_q_cum = tenq.iloc[-1]["capex"]
+                        q4_val = annual - last_q_cum
+                        if q4_val > 0:
+                            q_rows.append({
+                                "ticker": ticker,
+                                "company": tenk.iloc[-1]["company"],
+                                "date": tenk.iloc[-1]["date"],
+                                "q_capex": q4_val,
+                                "form": "10-K",
+                                "year": year,
+                                "quarter": 4,
+                            })
+                elif len(tenk) > 0:
+                    # Only annual data — cannot split into quarters accurately
+                    # Show as Q4 with the full annual value noted
+                    q_rows.append({
+                        "ticker": ticker,
+                        "company": tenk.iloc[-1]["company"],
+                        "date": tenk.iloc[-1]["date"],
+                        "q_capex": tenk.iloc[-1]["capex"],
+                        "form": "10-K (annual)",
+                        "year": year,
+                        "quarter": 4,
+                    })
+
+        if q_rows:
+            cx = pd.DataFrame(q_rows)
+            cx["date"] = pd.to_datetime(cx["date"])
+        else:
+            cx = pd.DataFrame()
+
+        if not cx.empty:
+            cx["q_label"] = cx["year"].astype(str) + "-Q" + cx["quarter"].astype(str)
 
         if not cx.empty:
             # Latest CapEx + Capital Intensity
@@ -1322,23 +1385,87 @@ def _render_risk_tab(cfg: SectorConfig, kp):
 # TAB 6: GUIDANCE & ESTIMATES
 # ─────────────────────────────────────────────────
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_live_estimates(tickers_tuple: tuple) -> dict:
+    """Fetch live analyst estimates from yfinance to overlay on static guidance."""
+    import yfinance as yf
+    result = {}
+    for tk in tickers_tuple:
+        try:
+            info = yf.Ticker(tk).info or {}
+            result[tk] = {
+                "price_target": info.get("targetMeanPrice"),
+                "target_low": info.get("targetLowPrice"),
+                "target_high": info.get("targetHighPrice"),
+                "fwd_pe": info.get("forwardPE"),
+                "trailing_pe": info.get("trailingPE"),
+                "rating": info.get("recommendationKey", "").replace("_", " ").title(),
+                "n_analysts": info.get("numberOfAnalystOpinions"),
+                "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                "fwd_eps": info.get("forwardEps"),
+                "trailing_eps": info.get("trailingEps"),
+                "rev_growth": info.get("revenueGrowth"),
+                "earnings_growth": info.get("earningsGrowth"),
+            }
+        except Exception:
+            pass
+    return result
+
+
 def _render_guidance_tab(cfg: SectorConfig, kp):
     snap = cfg.guidance_snapshot
 
-    st.caption(f"Earnings call guidance (scraped {snap.get('date', 'N/A')}) + live Wall Street consensus.")
+    # Fetch live estimates
+    _tickers = tuple(d["ticker"] for d in snap.get("data", []))
+    live = _fetch_live_estimates(_tickers) if _tickers else {}
 
-    # Guidance table
+    _has_live = len(live) > 0
+    st.caption(
+        f"Earnings call guidance (scraped {snap.get('date', 'N/A')}) "
+        f"{'+ **live Wall Street consensus** (green = updated from API)' if _has_live else '+ analyst consensus'}."
+    )
+
+    # Validate guidance data against recent splits
+    try:
+        from src.data_engine import fetch_stock_splits
+        for d in snap.get("data", []):
+            splits = fetch_stock_splits(d["ticker"])
+            if not splits.empty:
+                recent = splits[splits["execution_date"] >= "2024-01-01"]
+                if not recent.empty:
+                    ratio = recent.iloc[0].get("split_to", 1) / max(recent.iloc[0].get("split_from", 1), 1)
+                    if ratio > 2 and d.get("eps_est_y", 0) > d.get("price_target", 1):
+                        _split_date = recent.iloc[0].get("execution_date", "")
+                        _date_str = _split_date.strftime('%Y-%m-%d') if hasattr(_split_date, 'strftime') else str(_split_date)
+                        st.warning(
+                            f"**{d['ticker']}** had a {int(ratio)}:1 split on {_date_str}. "
+                            f"EPS/price data may need split adjustment."
+                        )
+    except Exception:
+        pass
+
+    # Guidance table — overlay live data where available
     guidance_rows = []
     for d in snap.get("data", []):
+        _live = live.get(d["ticker"], {})
+        # Use live values when available, fall back to static
+        _target = _live.get("price_target") or d.get("price_target", 0)
+        _fwd_pe = _live.get("fwd_pe") or d.get("fwd_pe")
+        _rating = _live.get("rating") or d.get("rating", "")
+        _fwd_eps = _live.get("fwd_eps")
+        _eps_y = _fwd_eps if _fwd_eps else d.get("eps_est_y", 0)
+        _rev_growth = _live.get("rev_growth")
+        _rev_growth_str = f"{_rev_growth*100:+.0f}%" if _rev_growth else d.get("rev_growth", "")
+
         row = {
             "Ticker": d["ticker"], "Company": d["company"],
             "Rev Est (Y)": f"${d['rev_est_y']:.0f}B",
-            "Rev Growth": d["rev_growth"],
-            "EPS (Y)": f"${d['eps_est_y']:.2f}",
+            "Rev Growth": _rev_growth_str,
+            "EPS (Y)": f"${_eps_y:.2f}",
             "EPS (NY)": f"${d['eps_est_ny']:.2f}",
-            "Rating": d["rating"],
-            "Target": f"${d['price_target']:,.0f}",
-            "Fwd P/E": f"{d['fwd_pe']:.1f}",
+            "Rating": _rating if _rating and _rating != "None" else d.get("rating", ""),
+            "Target": f"${_target:,.0f}" if _target else "—",
+            "Fwd P/E": f"{_fwd_pe:.1f}" if _fwd_pe else "—",
         }
         if d.get("capex_guidance"):
             row["CapEx"] = f"${d['capex_guidance']:.1f}B"

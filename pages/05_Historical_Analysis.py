@@ -176,8 +176,10 @@ with tab1:
 
     # Volume
     if "Volume" in df.columns:
+        # Green if close >= open (up day), red if close < open (down day)
+        _vol_open = df["Open"] if "Open" in df.columns else df["Close"].shift(1).fillna(df["Close"])
         vol_colors = ["#00ff96" if c >= o else "#ff4b4b"
-                      for c, o in zip(df["Close"], df["Close"].shift(1).fillna(df["Close"]))]
+                      for c, o in zip(df["Close"], _vol_open)]
         fig_vol = go.Figure()
         fig_vol.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vol_colors, opacity=0.7))
         ma_vol = df["Volume"].rolling(20).mean()

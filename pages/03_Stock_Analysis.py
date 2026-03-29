@@ -87,6 +87,7 @@ def compute_technicals(hist: pd.DataFrame) -> dict:
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.fillna(50)  # flat price = neutral RSI
 
     # MACD
     ema_12 = close.ewm(span=12).mean()
@@ -299,6 +300,54 @@ def build_stock_prompt(ticker: str, fundamentals: dict, technicals: dict,
         lines.append("MACRO CONTEXT (from Scenario Analysis)")
         lines.append("=" * 50)
         lines.append(macro_context)
+
+    # Recent news headlines
+    try:
+        from src.data_engine import fetch_ticker_news, fetch_related_companies
+        _news = fetch_ticker_news(ticker, limit=5)
+        if _news:
+            lines.append("")
+            lines.append("=" * 50)
+            lines.append("RECENT NEWS (last 5 articles)")
+            lines.append("=" * 50)
+            for article in _news:
+                lines.append(f"- [{article['published'][:10]}] {article['title']}")
+        _peers = fetch_related_companies(ticker)
+        if _peers:
+            lines.append(f"\nPEER COMPANIES: {', '.join(_peers[:8])}")
+    except Exception:
+        pass
+
+    # Short interest data
+    try:
+        from src.macro_data import fetch_short_interest
+        _si = fetch_short_interest(ticker)
+        if _si and _si.get("short_ratio"):
+            lines.append("")
+            lines.append("=" * 50)
+            lines.append("SHORT INTEREST")
+            lines.append("=" * 50)
+            if _si.get("short_ratio"):
+                lines.append(f"Days to Cover: {_si['short_ratio']:.1f}")
+            if _si.get("short_pct_float"):
+                lines.append(f"Short % of Float: {_si['short_pct_float']*100:.1f}%")
+            if _si.get("short_shares") and _si.get("short_prior"):
+                chg = _si["short_shares"] - _si["short_prior"]
+                lines.append(f"Shares Short: {_si['short_shares']:,.0f} (change: {chg:+,.0f})")
+    except Exception:
+        pass
+
+    # Cross-page context (from other analysis pages run this session)
+    try:
+        from src.cross_context import build_ai_context
+        _xctx = build_ai_context(ticker=ticker)
+        if _xctx:
+            lines.append("")
+            lines.append("=" * 50)
+            lines.append(_xctx)
+            lines.append("=" * 50)
+    except Exception:
+        pass
 
     return "\n".join(lines)
 
@@ -628,6 +677,36 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
             # Blend results
             blended = blend_model_results(model_results)
 
+            # Track prediction for accuracy measurement
+            try:
+                from src.prediction_tracker import record_prediction
+                _pt = blended.get("price_targets", {})
+                record_prediction(
+                    source="stock_analysis",
+                    ticker=ticker,
+                    prediction={
+                        "direction": blended.get("recommendation", "Hold"),
+                        "score": blended.get("composite_score", 0),
+                        "target": _pt.get("base") or _pt.get("base_target"),
+                        "confidence": blended.get("confidence", 0),
+                    },
+                    spot=fundamentals.get("current_price", 0),
+                    metadata={"n_models": len(model_results)},
+                )
+            except Exception:
+                pass
+
+            # Write signal for unified engine
+            try:
+                from src.signal_engine import write_signal
+                rec = blended.get("recommendation", "Hold").lower()
+                sig_dir = "bull" if "buy" in rec or "strong" in rec else ("bear" if "sell" in rec else "neutral")
+                sig_conv = min(1.0, blended.get("confidence", 0) / 100) if blended.get("confidence", 0) > 1 else blended.get("confidence", 0)
+                write_signal("stock_analysis", ticker, sig_dir, sig_conv,
+                             reasoning=f"{blended.get('recommendation', 'Hold')} — score {blended.get('composite_score', 0):.0f}")
+            except Exception:
+                pass
+
             st.session_state[f"stock_analysis_{ticker}"] = {
                 "stock_data": stock_data,
                 "fundamentals": fundamentals,
@@ -672,6 +751,18 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                            f'{rec}</div>', unsafe_allow_html=True)
                 conf = grok_result.get("confidence", 5)
                 st.caption(f"Confidence: {conf}/10")
+                if rec in ("Strong Buy", "Buy"):
+                    if st.button(f"Add {ticker} to Position Book", key="add_pos_stock"):
+                        try:
+                            from src.position_book import add_position
+                            add_position(
+                                ticker=ticker, type="stock", qty=100,
+                                entry_price=price, source_page="Stock Analysis",
+                                details={"recommendation": rec, "confidence": conf},
+                            )
+                            st.success(f"Added 100 shares of {ticker} @ ${price:.2f}")
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
 
     # Executive summary — blended from all models
     if grok_result and grok_result.get("success"):
@@ -772,13 +863,16 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
 
             pt_cols = st.columns(4)
             pt_cols[0].metric("Current", f"${price:.2f}")
-            pt_cols[1].metric("Bear Target", f"${pt.get('bear', 0):.2f}",
-                             f"{((pt.get('bear', price)/price)-1)*100:+.1f}%",
+            _bear = pt.get('bear') or 0
+            _base = pt.get('base') or 0
+            pt_cols[1].metric("Bear Target", f"${_bear:.2f}",
+                             f"{((_bear/price)-1)*100:+.1f}%" if _bear and price else "",
                              delta_color="inverse")
-            pt_cols[2].metric("Base Target", f"${pt.get('base', 0):.2f}",
-                             f"{((pt.get('base', price)/price)-1)*100:+.1f}%")
-            pt_cols[3].metric("Bull Target", f"${pt.get('bull', 0):.2f}",
-                             f"{((pt.get('bull', price)/price)-1)*100:+.1f}%")
+            _bull = pt.get('bull') or 0
+            pt_cols[2].metric("Base Target", f"${_base:.2f}",
+                             f"{((_base/price)-1)*100:+.1f}%" if _base and price else "")
+            pt_cols[3].metric("Bull Target", f"${_bull:.2f}",
+                             f"{((_bull/price)-1)*100:+.1f}%" if _bull and price else "")
 
             st.caption(f"Probability: Bear {pt.get('bear_prob', 25)}% · "
                       f"Base {pt.get('base_prob', 50)}% · Bull {pt.get('bull_prob', 25)}%")
@@ -974,7 +1068,7 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                     st.metric("Recommendation", rec)
                     st.metric("Confidence", f"{conf}/10")
                     if pt:
-                        st.caption(f"Targets: ${pt.get('bear',0):.0f} / ${pt.get('base',0):.0f} / ${pt.get('bull',0):.0f}")
+                        st.caption(f"Targets: ${pt.get('bear') or 0:.0f} / ${pt.get('base') or 0:.0f} / ${pt.get('bull') or 0:.0f}")
 
             # Consensus column
             with model_cols[-1]:
@@ -984,7 +1078,7 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 st.metric("Confidence", f"{grok_result.get('confidence', 5)}/10")
                 pt = grok_result.get("price_targets", {})
                 if pt:
-                    st.caption(f"Targets: ${pt.get('bear',0):.0f} / ${pt.get('base',0):.0f} / ${pt.get('bull',0):.0f}")
+                    st.caption(f"Targets: ${pt.get('bear') or 0:.0f} / ${pt.get('base') or 0:.0f} / ${pt.get('bull') or 0:.0f}")
 
     st.divider()
 

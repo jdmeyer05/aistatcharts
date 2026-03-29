@@ -47,13 +47,28 @@ def _get_key(name: str):
 
 
 def _check_chat_limit(tier_config: dict) -> bool:
-    """Check if user has chat messages remaining today."""
+    """Check if user has chat messages remaining today. Persistent via Supabase."""
     limit = tier_config["daily_limit"]
     if limit == -1:
         return True
     from datetime import date
     today = date.today().isoformat()
     used = st.session_state.get(f"chat_usage_{today}", 0)
+
+    # Get accurate count from Supabase
+    try:
+        from src.db import get_client
+        db = get_client()
+        if db:
+            user_id = st.session_state.get("user_email", "default")
+            result = db.table("ai_usage").select("chat_count")\
+                .eq("user_id", user_id).eq("date", today).execute()
+            if result.data:
+                used = result.data[0]["chat_count"]
+                st.session_state[f"chat_usage_{today}"] = used
+    except Exception:
+        pass
+
     return used < limit
 
 
@@ -62,6 +77,33 @@ def _increment_chat_usage():
     today = date.today().isoformat()
     key = f"chat_usage_{today}"
     st.session_state[key] = st.session_state.get(key, 0) + 1
+
+    # Persist to Supabase
+    try:
+        from src.db import get_client
+        db = get_client()
+        if db:
+            user_id = st.session_state.get("user_email", "default")
+            db.rpc("increment_ai_usage", {"p_user_id": user_id, "p_field": "chat_count"}).execute()
+    except Exception:
+        pass
+
+
+def _save_chat_message(role: str, content: str, model_used: str = None):
+    """Persist chat message to Supabase."""
+    try:
+        from src.db import get_client, get_user_id
+        db = get_client()
+        if db:
+            db.table("chat_history").insert({
+                "user_id": get_user_id(),
+                "session_id": st.session_state.get("_session_id", ""),
+                "role": role,
+                "content": content[:5000],
+                "model_used": model_used,
+            }).execute()
+    except Exception:
+        pass
 
 
 def run_sidebar_chatbot(context_data=""):
@@ -108,6 +150,7 @@ def run_sidebar_chatbot(context_data=""):
 
         if prompt and send_clicked:
             st.session_state.chat_messages.append({"role": "user", "content": prompt})
+            _save_chat_message("user", prompt)
 
             try:
                 system_content = (
@@ -154,6 +197,7 @@ def run_sidebar_chatbot(context_data=""):
                         response = client.chat.completions.create(**call_kwargs)
                         bot_reply = response.choices[0].message.content
                 st.session_state.chat_messages.append({"role": "assistant", "content": bot_reply})
+                _save_chat_message("assistant", bot_reply, model_used=config.get("model"))
                 _increment_chat_usage()
 
                 # Show the new response immediately without rerunning

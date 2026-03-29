@@ -1565,7 +1565,7 @@ with tab_meta, error_boundary("Meta-Analysis"):
                 st.subheader("6. Regime Breakdown")
                 st.caption("Performance by gas volatility regime. Robust strategies work in ALL regimes.")
 
-                vol_regime = gas_ret_m.rolling(20).std().reindex(strat_df.index).fillna(method="ffill")
+                vol_regime = gas_ret_m.rolling(20).std().reindex(strat_df.index).ffill()
                 vol_q33 = vol_regime.quantile(0.33)
                 vol_q66 = vol_regime.quantile(0.66)
                 regime_labels = np.where(vol_regime <= vol_q33, "Low Vol",

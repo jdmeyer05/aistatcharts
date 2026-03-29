@@ -346,6 +346,82 @@ with tab_regime, error_boundary("Regime Correlations"):
                     for c in ["Calm", "Stress", "Shift"]:
                         bot_shift[c] = bot_shift[c].apply(lambda v: f"{v:+.3f}")
                     st.dataframe(bot_shift, use_container_width=True, hide_index=True)
+            # Drawdown performance — what each asset did during worst equity drops
+            st.markdown("---")
+            st.subheader("Performance During Drawdowns")
+            st.caption("Shows how each asset performed during the 5 worst SPY drawdown periods. "
+                        "Negative correlation during drawdowns = effective hedge.")
+
+            if "SPY" in returns.columns:
+                _spy = returns["SPY"]
+                _spy_cum = (1 + _spy).cumprod()
+                _spy_dd = (_spy_cum / _spy_cum.cummax() - 1)
+
+                # Find the 5 worst drawdown troughs
+                _dd_threshold = _spy_dd.quantile(0.05)  # bottom 5% of drawdowns
+                _in_drawdown = _spy_dd < _dd_threshold
+                _dd_periods = []
+                _start = None
+                for idx, val in _in_drawdown.items():
+                    if val and _start is None:
+                        _start = idx
+                    elif not val and _start is not None:
+                        _dd_periods.append((_start, idx))
+                        _start = None
+                if _start:
+                    _dd_periods.append((_start, _spy_dd.index[-1]))
+
+                # Take up to 5 periods
+                _dd_periods = _dd_periods[:5]
+
+                if _dd_periods:
+                    dd_perf = []
+                    for start, end in _dd_periods:
+                        period_rets = returns.loc[start:end]
+                        if len(period_rets) < 3:
+                            continue
+                        row = {"Period": f"{start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}",
+                               "Days": len(period_rets)}
+                        spy_ret = (1 + period_rets["SPY"]).prod() - 1
+                        row["SPY"] = f"{spy_ret*100:+.1f}%"
+                        for tk in sorted_tickers:
+                            if tk != "SPY" and tk in period_rets.columns:
+                                tk_ret = (1 + period_rets[tk]).prod() - 1
+                                row[tk] = f"{tk_ret*100:+.1f}%"
+                        dd_perf.append(row)
+
+                    if dd_perf:
+                        _dd_df = pd.DataFrame(dd_perf)
+                        st.dataframe(_dd_df, use_container_width=True, hide_index=True)
+
+                        # Find best hedges during drawdowns
+                        _hedge_scores = {}
+                        for tk in sorted_tickers:
+                            if tk == "SPY" or tk not in returns.columns:
+                                continue
+                            _avg_dd_ret = 0
+                            _count = 0
+                            for start, end in _dd_periods:
+                                pr = returns.loc[start:end]
+                                if tk in pr.columns and len(pr) >= 3:
+                                    _avg_dd_ret += (1 + pr[tk]).prod() - 1
+                                    _count += 1
+                            if _count > 0:
+                                _hedge_scores[tk] = _avg_dd_ret / _count
+
+                        if _hedge_scores:
+                            _best = sorted(_hedge_scores.items(), key=lambda x: -x[1])[:3]
+                            _worst = sorted(_hedge_scores.items(), key=lambda x: x[1])[:3]
+                            hc1, hc2 = st.columns(2)
+                            with hc1:
+                                st.markdown("**Best performers during SPY drawdowns:**")
+                                for tk, ret in _best:
+                                    st.caption(f"**{tk}**: avg {ret*100:+.1f}% during drawdowns")
+                            with hc2:
+                                st.markdown("**Worst performers (fall with SPY):**")
+                                for tk, ret in _worst:
+                                    st.caption(f"**{tk}**: avg {ret*100:+.1f}% during drawdowns")
+
     else:
         st.warning("Need VIXY or SPY in selected assets for regime detection.")
 
@@ -403,17 +479,20 @@ with tab_rolling, error_boundary("Rolling Correlation"):
         st.subheader("Correlation Statistics")
         if len(returns) >= 63:
             roll_63 = returns[pair_a].rolling(63).corr(returns[pair_b]).dropna()
-            stat_c1, stat_c2, stat_c3, stat_c4, stat_c5 = st.columns(5)
-            stat_c1.metric("Current (63D)", f"{roll_63.iloc[-1]:.3f}")
-            stat_c2.metric("Mean", f"{roll_63.mean():.3f}")
-            stat_c3.metric("Std Dev", f"{roll_63.std():.3f}")
-            stat_c4.metric("Min", f"{roll_63.min():.3f}")
-            stat_c5.metric("Max", f"{roll_63.max():.3f}")
+            if not roll_63.empty:
+                stat_c1, stat_c2, stat_c3, stat_c4, stat_c5 = st.columns(5)
+                stat_c1.metric("Current (63D)", f"{roll_63.iloc[-1]:.3f}")
+                stat_c2.metric("Mean", f"{roll_63.mean():.3f}")
+                stat_c3.metric("Std Dev", f"{roll_63.std():.3f}")
+                stat_c4.metric("Min", f"{roll_63.min():.3f}")
+                stat_c5.metric("Max", f"{roll_63.max():.3f}")
 
             # Z-score of current correlation
-            z_score = (roll_63.iloc[-1] - roll_63.mean()) / roll_63.std() if roll_63.std() > 0 else 0
-            if abs(z_score) > 2:
-                st.warning(f"Current correlation Z-score: **{z_score:+.1f}** — this is extreme ({'>2' if z_score > 0 else '<-2'} standard deviations from mean).")
+            _last_corr = roll_63.iloc[-1] if len(roll_63) > 0 else np.nan
+            if pd.notna(_last_corr) and roll_63.std() > 0:
+                z_score = (_last_corr - roll_63.mean()) / roll_63.std()
+                if abs(z_score) > 2:
+                    st.warning(f"Current correlation Z-score: **{z_score:+.1f}** — this is extreme ({'>2' if z_score > 0 else '<-2'} standard deviations from mean).")
 
         # Correlation vs returns scatter
         st.subheader("Correlation-Return Relationship")
@@ -567,20 +646,29 @@ with tab_alerts, error_boundary("Breakdown Alerts"):
                 else:
                     z = 0
 
-                if abs(z) >= 1.5:
+                if pd.notna(z) and pd.notna(recent) and abs(z) >= 1.5:
                     alerts.append({
                         "Pair": f"{t1} / {t2}",
                         "Recent (21D)": recent,
                         "Long-Run": long_run,
                         "Shift": shift,
                         "Z-Score": z,
-                        "Signal": "BREAKDOWN" if z < -1.5 else "SPIKE",
+                        "Signal": "BREAKDOWN" if z < -1.5 else ("SPIKE" if z > 1.5 else "SHIFT"),
                         "Class A": ASSET_CLASS_MAP.get(t1, ""),
                         "Class B": ASSET_CLASS_MAP.get(t2, ""),
                     })
 
         if alerts:
             alert_df = pd.DataFrame(alerts).sort_values("Z-Score", key=abs, ascending=False)
+
+            # Write cross-page context
+            try:
+                from src.cross_context import write_context
+                _bd_list = [f"{r['Pair']}: {r['Signal']} (Z={r['Z-Score']:+.1f})"
+                            for _, r in alert_df.head(5).iterrows()]
+                write_context("correlation", {"breakdowns": _bd_list, "n_alerts": len(alert_df)})
+            except Exception:
+                pass
 
             # Summary metrics
             breakdowns = len(alert_df[alert_df["Signal"] == "BREAKDOWN"])

@@ -228,10 +228,16 @@ def fetch_massive_data(symbol: str, days: int) -> pd.DataFrame:
         return None
     try:
         url = f"https://api.polygon.io/v2/aggs/ticker/{formatted_symbol}/range/1/day/{start_date.strftime('%Y-%m-%d')}/{end_date.strftime('%Y-%m-%d')}"
-        res = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50000}, timeout=30)
-        res.raise_for_status()
-        data = res.json()
-        if 'results' in data:
+        params = {"apiKey": api_key, "sort": "asc", "limit": 50000}
+        # Try Supabase cache first (100ms vs 1-2s)
+        try:
+            from src.api_cache import cached_request
+            data = cached_request(url, params, ttl=1800)
+        except Exception:
+            res = requests.get(url, params=params, timeout=30)
+            res.raise_for_status()
+            data = res.json()
+        if data and 'results' in data:
             st.session_state['current_data_source'] = "Massive API (Live Feed)"
             df = pd.DataFrame(data['results'])
             df['Date'] = pd.to_datetime(df['t'], unit='ms')
@@ -690,6 +696,608 @@ def polygon_snapshot_with_fallback(symbol: str) -> dict | None:
     if fred_series:
         return _fred_latest(fred_series)
     return None
+
+
+# ─────────────────────────────────────────────
+# POLYGON TECHNICAL INDICATORS
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_polygon_sma(symbol: str, window: int = 50, timespan: str = "day",
+                       limit: int = 252) -> pd.DataFrame:
+    """Fetch SMA from Polygon Technical Indicators API."""
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        url = f"https://api.polygon.io/v1/indicators/sma/{symbol}"
+        params = {"timespan": timespan, "window": window, "limit": limit,
+                  "order": "desc", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", {}).get("values", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df.set_index("timestamp").sort_index()
+    except Exception as e:
+        logger.warning(f"Polygon SMA failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_polygon_rsi(symbol: str, window: int = 14, timespan: str = "day",
+                       limit: int = 252) -> pd.DataFrame:
+    """Fetch RSI from Polygon Technical Indicators API."""
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        url = f"https://api.polygon.io/v1/indicators/rsi/{symbol}"
+        params = {"timespan": timespan, "window": window, "limit": limit,
+                  "order": "desc", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", {}).get("values", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df.set_index("timestamp").sort_index()
+    except Exception as e:
+        logger.warning(f"Polygon RSI failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_polygon_macd(symbol: str, short_window: int = 12, long_window: int = 26,
+                        signal_window: int = 9, timespan: str = "day",
+                        limit: int = 252) -> pd.DataFrame:
+    """Fetch MACD from Polygon Technical Indicators API."""
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        url = f"https://api.polygon.io/v1/indicators/macd/{symbol}"
+        params = {"timespan": timespan, "short_window": short_window,
+                  "long_window": long_window, "signal_window": signal_window,
+                  "limit": limit, "order": "desc", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", {}).get("values", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df.set_index("timestamp").sort_index()
+    except Exception as e:
+        logger.warning(f"Polygon MACD failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+# ─────────────────────────────────────────────
+# POLYGON CORPORATE ACTIONS
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_stock_splits(symbol: str) -> pd.DataFrame:
+    """Fetch stock split history from Polygon."""
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        url = "https://api.polygon.io/v3/reference/splits"
+        params = {"ticker": symbol, "limit": 50, "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        if "execution_date" in df.columns:
+            df["execution_date"] = pd.to_datetime(df["execution_date"])
+        return df
+    except Exception as e:
+        logger.warning(f"Polygon splits failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_dividends(symbol: str, limit: int = 50) -> pd.DataFrame:
+    """Fetch dividend history from Polygon."""
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        url = "https://api.polygon.io/v3/reference/dividends"
+        params = {"ticker": symbol, "limit": limit, "order": "desc", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        for col in ["ex_dividend_date", "pay_date", "declaration_date"]:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+        return df
+    except Exception as e:
+        logger.warning(f"Polygon dividends failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+# ─────────────────────────────────────────────
+# POLYGON INTRADAY (MINUTE AGGREGATES)
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_minute_bars(symbol: str, days_back: int = 1) -> pd.DataFrame:
+    """Fetch minute-level OHLCV bars from Polygon.
+
+    Returns DataFrame with columns: Open, High, Low, Close, Volume, VWAP.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        end = date.today()
+        start = end - timedelta(days=days_back)
+        url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/minute/{start}/{end}"
+        params = {"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": key}
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        df["timestamp"] = pd.to_datetime(df["t"], unit="ms")
+        df = df.rename(columns={"o": "Open", "h": "High", "l": "Low",
+                                  "c": "Close", "v": "Volume", "vw": "VWAP"})
+        return df.set_index("timestamp")[["Open", "High", "Low", "Close", "Volume", "VWAP"]].sort_index()
+    except Exception as e:
+        logger.warning(f"Polygon minute bars failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+# ─────────────────────────────────────────────
+# POLYGON OPTIONS — HISTORICAL OI
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_options_oi_history(symbol: str, strike: float, expiration: str,
+                              contract_type: str = "call", days: int = 30) -> pd.DataFrame:
+    """Fetch daily open interest history for a specific options contract.
+
+    Uses Polygon options aggregate endpoint to get daily OI over time.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        # Build options ticker: O:AAPL260620C00200000
+        exp_fmt = pd.to_datetime(expiration).strftime("%y%m%d")
+        ct = "C" if contract_type.lower() == "call" else "P"
+        strike_fmt = f"{int(strike * 1000):08d}"
+        options_ticker = f"O:{symbol}{exp_fmt}{ct}{strike_fmt}"
+
+        end = date.today()
+        start = end - timedelta(days=days)
+        url = f"https://api.polygon.io/v2/aggs/ticker/{options_ticker}/range/1/day/{start}/{end}"
+        params = {"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        df["date"] = pd.to_datetime(df["t"], unit="ms")
+        df = df.rename(columns={"o": "open", "h": "high", "l": "low",
+                                  "c": "close", "v": "volume"})
+        return df.set_index("date")[["open", "high", "low", "close", "volume"]].sort_index()
+    except Exception as e:
+        logger.warning(f"Options OI history failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+# ─────────────────────────────────────────────
+# POLYGON OPTIONS — HISTORICAL SURFACE (bulk daily aggs)
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_options_surface_history(symbol: str, days: int = 10, max_contracts: int = 200) -> dict:
+    """Fetch daily close prices for the current options chain over the past N days.
+
+    Returns dict keyed by date string, each value is a list of dicts:
+        [{"strike": 200, "dte": 30, "type": "call", "close": 5.50, "exp": "2026-06-19"}, ...]
+
+    Uses Polygon v3/snapshot for current chain (to get contract list),
+    then v2/aggs for each contract's daily history. Parallelized with ThreadPoolExecutor.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return {}
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    symbol = format_massive_ticker(symbol)
+
+    # Step 1: Get current chain to identify contracts
+    chain = fetch_options_chain(symbol, expiration=None, max_pages=10)
+    if chain is None or chain.empty:
+        return {}
+
+    # Filter to near-the-money contracts with meaningful OI
+    px_df = fetch_massive_data(symbol, 5)
+    spot_now = float(px_df["Close"].iloc[-1]) if px_df is not None and not px_df.empty else None
+    if not spot_now:
+        return {}
+
+    # Filter: ±25% of spot, OI > 10, DTE > 0 and < 180
+    chain = chain[
+        (chain["strike_price"] >= spot_now * 0.80) &
+        (chain["strike_price"] <= spot_now * 1.20) &
+        (chain["open_interest"] > 10)
+    ].copy()
+    chain["dte"] = (pd.to_datetime(chain["expiration_date"]) - pd.Timestamp.now()).dt.days
+    chain = chain[(chain["dte"] > 0) & (chain["dte"] <= 180)]
+
+    # Sample if too many contracts
+    if len(chain) > max_contracts:
+        chain = chain.nlargest(max_contracts, "open_interest")
+
+    # Build Polygon option ticker for each contract
+    def _build_ticker(row):
+        exp_fmt = pd.to_datetime(row["expiration_date"]).strftime("%y%m%d")
+        ct = "C" if str(row["contract_type"]).lower() == "call" else "P"
+        strike_fmt = f"{int(row['strike_price'] * 1000):08d}"
+        return f"O:{symbol}{exp_fmt}{ct}{strike_fmt}"
+
+    chain["opt_ticker"] = chain.apply(_build_ticker, axis=1)
+
+    # Step 2: Fetch daily aggs for each contract in parallel
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days + 5)  # extra buffer for weekends
+
+    def _fetch_one(row):
+        try:
+            url = f"https://api.polygon.io/v2/aggs/ticker/{row['opt_ticker']}/range/1/day/{start_date}/{end_date}"
+            r = requests.get(url, params={"adjusted": "true", "sort": "asc", "limit": 50, "apiKey": key}, timeout=10)
+            if r.status_code != 200:
+                return []
+            results = r.json().get("results", [])
+            out = []
+            for bar in results:
+                bar_date = pd.to_datetime(bar["t"], unit="ms").strftime("%Y-%m-%d")
+                out.append({
+                    "date": bar_date,
+                    "strike": float(row["strike_price"]),
+                    "type": row["contract_type"],
+                    "exp": row["expiration_date"],
+                    "close": bar.get("c", 0),
+                    "volume": bar.get("v", 0),
+                })
+            return out
+        except Exception:
+            return []
+
+    all_bars = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_fetch_one, row): row for _, row in chain.iterrows()}
+        for future in as_completed(futures):
+            all_bars.extend(future.result())
+
+    if not all_bars:
+        return {}
+
+    # Step 3: Group by date
+    df_bars = pd.DataFrame(all_bars)
+    # Get underlying spot for each date
+    spot_hist = fetch_massive_data(symbol, days + 10)
+    spot_by_date = {}
+    if spot_hist is not None and not spot_hist.empty:
+        for d in spot_hist.index:
+            spot_by_date[d.strftime("%Y-%m-%d")] = float(spot_hist.loc[d, "Close"])
+
+    result = {}
+    for dt, group in df_bars.groupby("date"):
+        day_spot = spot_by_date.get(dt)
+        if not day_spot:
+            continue
+        rows = []
+        for _, r in group.iterrows():
+            dte = max((pd.to_datetime(r["exp"]) - pd.to_datetime(dt)).days, 0)
+            if dte <= 0 or r["close"] <= 0:
+                continue
+            rows.append({
+                "strike": r["strike"], "dte": dte, "type": r["type"],
+                "exp": r["exp"], "close": r["close"],
+            })
+        if len(rows) >= 20:
+            result[dt] = {"spot": day_spot, "data": rows}
+
+    return result
+
+
+# ─────────────────────────────────────────────
+# POLYGON — GROUPED DAILY, NEWS, RELATED, FUNDAMENTALS, SNAPSHOTS, EMA
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_grouped_daily(date_str: str) -> pd.DataFrame:
+    """Fetch daily bars for ALL US tickers on a given date (one API call).
+
+    Returns DataFrame with ticker, open, high, low, close, volume, vwap.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        url = f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{date_str}"
+        params = {"adjusted": "true", "apiKey": key}
+        r = requests.get(url, params=params, timeout=20)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        df = df.rename(columns={"T": "ticker", "o": "open", "h": "high", "l": "low",
+                                  "c": "close", "v": "volume", "vw": "vwap"})
+        return df
+    except Exception as e:
+        logger.warning(f"Grouped daily fetch failed for {date_str}: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_ticker_news(ticker: str, limit: int = 10) -> list[dict]:
+    """Fetch recent news articles for a ticker from Polygon.
+
+    Returns list of dicts with: title, author, published_utc, article_url, description.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return []
+    try:
+        ticker = format_massive_ticker(ticker)
+        url = "https://api.polygon.io/v2/reference/news"
+        params = {"ticker": ticker, "limit": limit, "order": "desc",
+                  "sort": "published_utc", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        return [{
+            "title": a.get("title", ""),
+            "author": a.get("author", ""),
+            "published": a.get("published_utc", ""),
+            "url": a.get("article_url", ""),
+            "description": a.get("description", ""),
+            "keywords": a.get("keywords", []),
+        } for a in results]
+    except Exception as e:
+        logger.warning(f"Ticker news failed for {ticker}: {e}")
+        return []
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_related_companies(ticker: str) -> list[str]:
+    """Fetch related/peer company tickers from Polygon."""
+    key = _get_polygon_key()
+    if not key:
+        return []
+    try:
+        ticker = format_massive_ticker(ticker)
+        url = f"https://api.polygon.io/v1/related-companies/{ticker}"
+        params = {"apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        return [c.get("ticker", "") for c in results if c.get("ticker")]
+    except Exception as e:
+        logger.warning(f"Related companies failed for {ticker}: {e}")
+        return []
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_polygon_financials(ticker: str, timeframe: str = "quarterly",
+                              limit: int = 8) -> pd.DataFrame:
+    """Fetch standardized financials from Polygon vX endpoint.
+
+    Returns DataFrame with income statement, balance sheet, cash flow fields.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        ticker = format_massive_ticker(ticker)
+        url = "https://api.polygon.io/vX/reference/financials"
+        params = {"ticker": ticker, "timeframe": timeframe, "limit": limit,
+                  "order": "desc", "sort": "period_of_report_date", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return pd.DataFrame()
+        rows = []
+        for filing in results:
+            row = {
+                "period": filing.get("fiscal_period", ""),
+                "fiscal_year": filing.get("fiscal_year", ""),
+                "filing_date": filing.get("filing_date", ""),
+                "period_date": filing.get("start_date", ""),
+            }
+            # Income statement
+            inc = filing.get("financials", {}).get("income_statement", {})
+            for field in ["revenues", "net_income_loss", "gross_profit",
+                          "operating_income_loss", "basic_earnings_per_share"]:
+                val = inc.get(field, {})
+                row[field] = val.get("value") if isinstance(val, dict) else val
+            # Balance sheet
+            bs = filing.get("financials", {}).get("balance_sheet", {})
+            for field in ["assets", "liabilities", "equity",
+                          "current_assets", "current_liabilities"]:
+                val = bs.get(field, {})
+                row[field] = val.get("value") if isinstance(val, dict) else val
+            # Cash flow
+            cf = filing.get("financials", {}).get("cash_flow_statement", {})
+            for field in ["net_cash_flow", "net_cash_flow_from_operating_activities",
+                          "net_cash_flow_from_investing_activities"]:
+                val = cf.get(field, {})
+                row[field] = val.get("value") if isinstance(val, dict) else val
+            rows.append(row)
+        return pd.DataFrame(rows)
+    except Exception as e:
+        logger.warning(f"Polygon financials failed for {ticker}: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_universal_snapshot(tickers: list[str]) -> pd.DataFrame:
+    """Fetch snapshots for multiple tickers in one API call.
+
+    Returns DataFrame with ticker, price, change, changePercent, volume, vwap.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        formatted = [format_massive_ticker(t) for t in tickers]
+        url = "https://api.polygon.io/v3/snapshot"
+        params = {"ticker.any_of": ",".join(formatted), "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        if not results:
+            return pd.DataFrame()
+        rows = []
+        for snap in results:
+            session = snap.get("session", {})
+            rows.append({
+                "ticker": snap.get("ticker", ""),
+                "price": session.get("close", session.get("price")),
+                "change": session.get("change"),
+                "change_pct": session.get("change_percent"),
+                "volume": session.get("volume"),
+                "vwap": session.get("vwap"),
+                "prev_close": session.get("previous_close"),
+            })
+        return pd.DataFrame(rows)
+    except Exception as e:
+        logger.warning(f"Universal snapshot failed: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_open_close(ticker: str, date_str: str) -> dict:
+    """Fetch open, close, pre-market, after-hours prices for a specific date."""
+    key = _get_polygon_key()
+    if not key:
+        return {}
+    try:
+        ticker = format_massive_ticker(ticker)
+        url = f"https://api.polygon.io/v1/open-close/{ticker}/{date_str}"
+        params = {"adjusted": "true", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        return {
+            "open": data.get("open"),
+            "high": data.get("high"),
+            "low": data.get("low"),
+            "close": data.get("close"),
+            "volume": data.get("volume"),
+            "pre_market": data.get("preMarket"),
+            "after_hours": data.get("afterHours"),
+        }
+    except Exception as e:
+        logger.warning(f"Open/close failed for {ticker} {date_str}: {e}")
+        return {}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_market_status() -> dict:
+    """Fetch current market open/closed status from Polygon."""
+    key = _get_polygon_key()
+    if not key:
+        return {}
+    try:
+        url = "https://api.polygon.io/v1/marketstatus/now"
+        params = {"apiKey": key}
+        r = requests.get(url, params=params, timeout=3)  # fast timeout — header can't block
+        r.raise_for_status()
+        data = r.json()
+        return {
+            "market": data.get("market", "unknown"),
+            "exchanges": data.get("exchanges", {}),
+            "server_time": data.get("serverTime"),
+            "is_open": data.get("market") == "open",
+        }
+    except Exception as e:
+        logger.warning(f"Market status failed: {e}")
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_ticker_details(ticker: str) -> dict:
+    """Fetch company details from Polygon: name, description, sector, logo, etc."""
+    key = _get_polygon_key()
+    if not key:
+        return {}
+    try:
+        ticker = format_massive_ticker(ticker)
+        url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
+        params = {"apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        result = r.json().get("results", {})
+        return {
+            "name": result.get("name"),
+            "description": result.get("description"),
+            "sic_code": result.get("sic_code"),
+            "sic_description": result.get("sic_description"),
+            "market_cap": result.get("market_cap"),
+            "homepage": result.get("homepage_url"),
+            "locale": result.get("locale"),
+            "exchange": result.get("primary_exchange"),
+            "list_date": result.get("list_date"),
+            "shares_outstanding": result.get("weighted_shares_outstanding"),
+            "logo": result.get("branding", {}).get("icon_url"),
+        }
+    except Exception as e:
+        logger.warning(f"Ticker details failed for {ticker}: {e}")
+        return {}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_polygon_ema(symbol: str, window: int = 20, timespan: str = "day",
+                       limit: int = 252) -> pd.DataFrame:
+    """Fetch EMA from Polygon Technical Indicators API."""
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+    try:
+        symbol = format_massive_ticker(symbol)
+        url = f"https://api.polygon.io/v1/indicators/ema/{symbol}"
+        params = {"timespan": timespan, "window": window, "limit": limit,
+                  "order": "desc", "apiKey": key}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", {}).get("values", [])
+        if not results:
+            return pd.DataFrame()
+        df = pd.DataFrame(results)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df.set_index("timestamp").sort_index()
+    except Exception as e:
+        logger.warning(f"Polygon EMA failed for {symbol}: {e}")
+        return pd.DataFrame()
 
 
 def render_data_source_footer():

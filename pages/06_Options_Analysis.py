@@ -233,9 +233,9 @@ if current_px and not calls.empty and not puts.empty:
         p_price = _best_price(atm_put.iloc[0])
         atm_straddle = float(c_price + p_price)
         if atm_straddle <= 0 and atm_iv > 0 and current_px and dte > 0:
-            # Fallback: estimate from IV if no price data
-            atm_straddle = current_px * atm_iv * np.sqrt(max(dte, 1) / 365) * 2 * 0.4  # rough approximation
-        expected_move = atm_straddle * 0.80  # straddle to 1SD: 1/sqrt(2*pi/e) ~ 0.798
+            # Fallback: estimate straddle from IV (BS ATM straddle ≈ S * σ * √T * √(2/π) * 2)
+            atm_straddle = current_px * atm_iv * np.sqrt(max(dte, 1) / 365) * 2 * 0.798
+        expected_move = atm_straddle * 0.798  # straddle to 1SD: 1/sqrt(2*pi/e) ≈ 0.798
         expected_move_pct = (expected_move / current_px) * 100 if current_px else 0
 
 # Total notional (volume × best price × 100)

@@ -128,6 +128,8 @@ def _min_var(cov):
 def _risk_parity(cov):
     n = cov.shape[0]
     w0 = np.full(n, 1 / n)
+    # Scale min weight with universe size so constraints stay feasible
+    min_w = max(0.001, 1 / (n * 5))
     def obj(w):
         pv = np.sqrt(w @ cov @ w)
         if pv == 0: return 0
@@ -136,7 +138,7 @@ def _risk_parity(cov):
         target = pv / n
         return np.sum((rc - target) ** 2)
     cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
-    bounds = [(0.01, 1)] * n
+    bounds = [(min_w, 1)] * n
     r = minimize(obj, w0, method="SLSQP", bounds=bounds, constraints=cons)
     return r.x if r.success else w0
 
@@ -234,8 +236,8 @@ def _portfolio_metrics(daily_returns, name, benchmark_returns=None):
             # Up/down capture
             up_days = b > 0
             down_days = b < 0
-            up_cap = p[up_days].mean() / b[up_days].mean() if up_days.sum() > 5 else 1
-            dn_cap = p[down_days].mean() / b[down_days].mean() if down_days.sum() > 5 else 1
+            up_cap = p[up_days].mean() / b[up_days].mean() if up_days.sum() > 5 and abs(b[up_days].mean()) > 1e-10 else 1
+            dn_cap = p[down_days].mean() / b[down_days].mean() if down_days.sum() > 5 and abs(b[down_days].mean()) > 1e-10 else 1
             result["Info Ratio"] = ir
             result["Tracking Error"] = te
             result["Up Capture"] = up_cap
@@ -384,7 +386,7 @@ def _pbo_cpcv(daily_returns_dict, n_splits=6):
         best_is = max(is_sharpe, key=is_sharpe.get)
         # Rank of best-IS method in OOS
         oos_ranked = sorted(oos_sharpe, key=oos_sharpe.get, reverse=True)
-        oos_rank = oos_ranked.index(best_is)
+        oos_rank = oos_ranked.index(best_is) if best_is in oos_ranked else 0
 
         # Overfit if best IS method ranks in bottom half OOS
         if oos_rank >= len(methods) // 2:
@@ -776,9 +778,13 @@ lookback_map = {"1Y": "1y", "2Y": "2y", "3Y": "3y", "5Y": "5y"}
 def _download_prices(tickers_tuple, period):
     import yfinance as yf
     data = yf.download(list(tickers_tuple), period=period, progress=False, threads=True)
+    if data is None or data.empty:
+        return pd.DataFrame()
     if isinstance(data.columns, pd.MultiIndex):
         return data["Close"]
-    return data[["Close"]].rename(columns={"Close": tickers_tuple[0]})
+    if "Close" in data.columns:
+        return data[["Close"]].rename(columns={"Close": tickers_tuple[0]})
+    return pd.DataFrame()
 
 with st.spinner(f"Loading {len(active_tickers)} assets..."):
     prices = _download_prices(tuple(active_tickers), lookback_map[ma_lookback])
@@ -2528,6 +2534,26 @@ with tab_grid, error_boundary("Universe Grid"):
     )
     st.plotly_chart(fig_dg, use_container_width=True, config=PLOTLY_NOBAR)
 
+    # ── Sortino Heatmap ──
+    st.subheader("Sortino Ratio — Universe x Method")
+    fig_so = go.Figure(data=go.Heatmap(
+        z=sortino_grid.values,
+        x=sortino_grid.columns.tolist(),
+        y=sortino_grid.index.tolist(),
+        colorscale=[[0, "#ff4444"], [0.5, "#1a1a2e"], [1, "#00ff88"]],
+        zmid=0,
+        text=[[f"{v:.2f}" if pd.notna(v) else "" for v in row] for row in sortino_grid.values],
+        texttemplate="%{text}", textfont={"size": 9},
+        colorbar=dict(title="Sortino"),
+    ))
+    fig_so.update_layout(
+        template="plotly_dark",
+        height=max(400, len(groups_with_data) * 28),
+        title=f"Walk-Forward Sortino Ratio ({ma_rebal}, {ma_est_days}D Window)",
+        margin=dict(l=0, r=0, t=40, b=0),
+    )
+    st.plotly_chart(fig_so, use_container_width=True, config=PLOTLY_NOBAR)
+
     # ── Best Combinations Table ──
     st.subheader("Top 15 Universe + Method Combinations")
     combo_rows = []
@@ -2615,6 +2641,67 @@ with tab_grid, error_boundary("Universe Grid"):
     )
     st.plotly_chart(fig_mc, use_container_width=True, config=PLOTLY_NOBAR)
 
+    # ── Cross-Group Correlation ──
+    st.markdown("---")
+    st.subheader("Cross-Group Correlation")
+    st.caption(
+        "Correlation between each group's best method OOS returns. "
+        "Low correlation between groups means combining them adds diversification. "
+        "High correlation means they move together — limited benefit from combining."
+    )
+
+    # Build best-method OOS returns for each group
+    _group_oos_ret = {}
+    for g in groups_with_data:
+        g_tks = [t for t in PRESET_GROUPS[g] if t in available_tickers]
+        if len(g_tks) < 3:
+            continue
+        g_ret = grid_returns[g_tks]
+        g_wf = _run_walkforward(g_ret, ma_est_days, rebal_period, ma_denoise)
+        if g_wf:
+            g_sharpes = {m: _portfolio_metrics(r, m)["Sharpe"] for m, r in g_wf.items()}
+            best_m = max(g_sharpes, key=g_sharpes.get)
+            _group_oos_ret[g] = g_wf[best_m]
+
+    if len(_group_oos_ret) >= 3:
+        _corr_df = pd.DataFrame(_group_oos_ret).corr()
+
+        fig_gc = go.Figure(data=go.Heatmap(
+            z=_corr_df.values,
+            x=_corr_df.columns.tolist(),
+            y=_corr_df.index.tolist(),
+            colorscale=[[0, "#00ff88"], [0.5, "#1a1a2e"], [1, "#ff4444"]],
+            zmid=0.5,
+            text=[[f"{v:.2f}" for v in row] for row in _corr_df.values],
+            texttemplate="%{text}", textfont={"size": 9},
+            colorbar=dict(title="Corr"),
+        ))
+        fig_gc.update_layout(
+            template="plotly_dark",
+            height=max(400, len(_corr_df) * 32),
+            title="Cross-Group Return Correlation (Best Method per Group)",
+            margin=dict(l=0, r=0, t=40, b=0),
+        )
+        st.plotly_chart(fig_gc, use_container_width=True, config=PLOTLY_NOBAR)
+
+        # Most/least correlated pairs
+        _pairs = []
+        for i in range(len(_corr_df)):
+            for j in range(i + 1, len(_corr_df)):
+                _pairs.append({
+                    "Group A": _corr_df.index[i],
+                    "Group B": _corr_df.columns[j],
+                    "Correlation": _corr_df.iloc[i, j],
+                })
+        if _pairs:
+            _pairs_df = pd.DataFrame(_pairs).sort_values("Correlation")
+            st.markdown("**Best diversifiers** (lowest correlation):")
+            for _, p in _pairs_df.head(3).iterrows():
+                st.caption(f"{p['Group A']} / {p['Group B']}: {p['Correlation']:.2f}")
+            st.markdown("**Most redundant** (highest correlation):")
+            for _, p in _pairs_df.tail(3).iterrows():
+                st.caption(f"{p['Group A']} / {p['Group B']}: {p['Correlation']:.2f}")
+
     # ── Incremental Analysis ──
     st.markdown("---")
     st.subheader("Incremental Analysis — Adding Sectors to Multi-Asset")
@@ -2641,12 +2728,18 @@ with tab_grid, error_boundary("Universe Grid"):
             best_base_method = max(base_sharpes, key=base_sharpes.get)
             base_best_sharpe = base_sharpes[best_base_method]
 
+            base_best_metrics = _portfolio_metrics(base_wf[best_base_method], best_base_method)
+
             incr_results.append({
                 "Universe": "Multi-Asset (base)",
                 "Tickers": len(base_tks),
                 "Best Method": best_base_method,
                 "Sharpe": base_best_sharpe,
                 "Delta": 0,
+                "Ann. Return": base_best_metrics["Ann. Return"],
+                "Max DD": base_best_metrics["Max DD"],
+                "Return Delta": 0,
+                "DD Delta": 0,
             })
 
             for sg in sector_groups:
@@ -2660,12 +2753,17 @@ with tab_grid, error_boundary("Universe Grid"):
                     continue
                 c_best_method = max(c_sharpes, key=c_sharpes.get)
                 c_best_sharpe = c_sharpes[c_best_method]
+                c_metrics = _portfolio_metrics(c_wf[c_best_method], c_best_method)
                 incr_results.append({
                     "Universe": f"+ {sg}",
                     "Tickers": len(combined_tks),
                     "Best Method": c_best_method,
                     "Sharpe": c_best_sharpe,
                     "Delta": c_best_sharpe - base_best_sharpe,
+                    "Ann. Return": c_metrics["Ann. Return"],
+                    "Max DD": c_metrics["Max DD"],
+                    "Return Delta": c_metrics["Ann. Return"] - base_best_metrics["Ann. Return"],
+                    "DD Delta": c_metrics["Max DD"] - base_best_metrics["Max DD"],
                 })
 
             if incr_results:
@@ -2694,6 +2792,10 @@ with tab_grid, error_boundary("Universe Grid"):
                 incr_display = incr_df.copy()
                 incr_display["Sharpe"] = incr_display["Sharpe"].apply(lambda v: f"{v:.2f}")
                 incr_display["Delta"] = incr_display["Delta"].apply(lambda v: f"{v:+.2f}" if v != 0 else "—")
+                incr_display["Ann. Return"] = incr_display["Ann. Return"].apply(lambda v: f"{v*100:+.1f}%")
+                incr_display["Max DD"] = incr_display["Max DD"].apply(lambda v: f"{v*100:.1f}%")
+                incr_display["Return Delta"] = incr_display["Return Delta"].apply(lambda v: f"{v*100:+.1f}pp" if v != 0 else "—")
+                incr_display["DD Delta"] = incr_display["DD Delta"].apply(lambda v: f"{v*100:+.1f}pp" if v != 0 else "—")
                 st.dataframe(incr_display, use_container_width=True, hide_index=True)
 
     # ── Two-Layer Hierarchical Allocation ──
@@ -2712,10 +2814,14 @@ with tab_grid, error_boundary("Universe Grid"):
     else:
         incr_for_filter = pd.DataFrame(incr_results)
 
+        _max_sharpe = float(incr_for_filter["Sharpe"].max())
+        _median_sharpe = float(incr_for_filter["Sharpe"].median())
+        # Default to median — includes roughly half the groups for diversification
+        _default_thresh = round(min(_median_sharpe, _max_sharpe * 0.5) / 0.05) * 0.05
         opt_threshold = st.slider(
             "Sharpe threshold (include sectors above this)",
-            0.0, float(incr_for_filter["Sharpe"].max()),
-            2.10, 0.05, key="ma_opt_thresh",
+            0.0, _max_sharpe,
+            max(0.0, _default_thresh), 0.05, key="ma_opt_thresh",
         )
 
         qualifying = incr_for_filter[incr_for_filter["Sharpe"] >= opt_threshold]
@@ -2794,8 +2900,8 @@ with tab_grid, error_boundary("Universe Grid"):
                     st.error("Not enough overlapping data between groups for meta-level optimization. Try a longer lookback.")
                     st.stop()
 
-                # Use shorter est window for meta-level (fewer assets)
-                meta_est = min(126, max(63, len(group_ret_df) // 3))
+                # Estimation window for meta-level: 40% of history, capped at 252 trading days
+                meta_est = min(252, max(63, int(len(group_ret_df) * 0.4)))
 
                 meta_wf = _run_walkforward(group_ret_df, meta_est, rebal_period, ma_denoise)
 
@@ -3051,6 +3157,169 @@ with tab_grid, error_boundary("Universe Grid"):
                         display_dollar["Within Wt %"] = display_dollar["Within Wt %"].apply(lambda v: f"{v:.1f}%")
                         display_dollar["Ticker $"] = display_dollar["Ticker $"].apply(lambda v: f"${v:.2f}")
                         st.dataframe(display_dollar, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FACTOR ATTRIBUTION — Fama-French decomposition of hierarchical portfolio
+    # ══════════════════════════════════════════════════════════════════════════
+    if "meta_wf" in dir() and meta_wf and "meta_best_name" in dir():
+        st.markdown("---")
+        st.subheader("Factor Attribution — Hierarchical Portfolio")
+        st.caption(
+            "Decomposes the hierarchical portfolio's OOS returns into Fama-French "
+            "5 factors + momentum. Shows what's driving performance: is it pure beta, "
+            "value tilt, size exposure, or genuine alpha?"
+        )
+
+        with error_boundary("Factor Attribution"):
+            _hier_ret = meta_wf.get(meta_best_name)
+            if _hier_ret is not None and len(_hier_ret) > 60:
+                # Fetch factor data from Ken French's library
+                @st.cache_data(ttl=86400, show_spinner=False)
+                def _fetch_ff_factors():
+                    try:
+                        import io, zipfile, requests
+                        # Fama-French 5 factors + momentum (daily)
+                        url5 = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_daily_CSV.zip"
+                        urlm = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Momentum_Factor_daily_CSV.zip"
+
+                        r5 = requests.get(url5, timeout=15)
+                        with zipfile.ZipFile(io.BytesIO(r5.content)) as z:
+                            fname = [n for n in z.namelist() if n.endswith('.CSV')][0]
+                            raw = z.read(fname).decode("utf-8")
+                        # Parse: skip header rows, find data start
+                        lines = raw.split("\n")
+                        start = next(i for i, l in enumerate(lines) if l.strip()[:2].isdigit())
+                        data = []
+                        for l in lines[start:]:
+                            parts = l.strip().split(",")
+                            if len(parts) >= 6 and parts[0].strip().isdigit():
+                                data.append([p.strip() for p in parts[:6]])
+                        ff5 = pd.DataFrame(data, columns=["date", "Mkt-RF", "SMB", "HML", "RMW", "CMA"])
+                        ff5["date"] = pd.to_datetime(ff5["date"], format="%Y%m%d")
+                        for c in ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]:
+                            ff5[c] = pd.to_numeric(ff5[c], errors="coerce") / 100
+                        ff5 = ff5.set_index("date")
+
+                        # Momentum factor
+                        rm = requests.get(urlm, timeout=15)
+                        with zipfile.ZipFile(io.BytesIO(rm.content)) as z:
+                            fname = [n for n in z.namelist() if n.endswith('.CSV')][0]
+                            raw_m = z.read(fname).decode("utf-8")
+                        lines_m = raw_m.split("\n")
+                        start_m = next(i for i, l in enumerate(lines_m) if l.strip()[:2].isdigit())
+                        data_m = []
+                        for l in lines_m[start_m:]:
+                            parts = l.strip().split(",")
+                            if len(parts) >= 2 and parts[0].strip().isdigit():
+                                data_m.append([parts[0].strip(), parts[1].strip()])
+                        mom = pd.DataFrame(data_m, columns=["date", "Mom"])
+                        mom["date"] = pd.to_datetime(mom["date"], format="%Y%m%d")
+                        mom["Mom"] = pd.to_numeric(mom["Mom"], errors="coerce") / 100
+                        mom = mom.set_index("date")
+
+                        factors = ff5.join(mom, how="inner")
+                        return factors
+                    except Exception as e:
+                        logger.warning(f"FF factor fetch failed: {e}")
+                        return None
+
+                ff = _fetch_ff_factors()
+                if ff is not None and not ff.empty:
+                    # Align portfolio returns with factor data
+                    port_ret = _hier_ret.copy()
+                    if not isinstance(port_ret.index, pd.DatetimeIndex):
+                        port_ret.index = pd.to_datetime(port_ret.index)
+                    common_idx = port_ret.index.intersection(ff.index)
+
+                    if len(common_idx) > 30:
+                        y = port_ret.loc[common_idx].values
+                        X = ff.loc[common_idx].values
+                        factor_names = list(ff.columns)
+
+                        # OLS regression
+                        X_const = np.column_stack([np.ones(len(X)), X])
+                        try:
+                            betas = np.linalg.lstsq(X_const, y, rcond=None)[0]
+                            alpha_daily = betas[0]
+                            factor_betas = betas[1:]
+
+                            # Predicted returns & R²
+                            y_hat = X_const @ betas
+                            ss_res = np.sum((y - y_hat) ** 2)
+                            ss_tot = np.sum((y - y.mean()) ** 2)
+                            r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+                            alpha_annual = alpha_daily * 252
+
+                            # Factor contributions (annualized)
+                            factor_means = ff.loc[common_idx].mean().values * 252
+                            factor_contribs = factor_betas * factor_means
+
+                            # Display
+                            fa1, fa2, fa3 = st.columns(3)
+                            alpha_color = COLORS["success"] if alpha_annual > 0 else COLORS["danger"]
+                            fa1.metric("Alpha (annualized)", f"{alpha_annual*100:+.2f}%")
+                            fa2.metric("R-squared", f"{r_squared:.1%}")
+                            fa3.metric("Observations", f"{len(common_idx)} days")
+
+                            # Factor exposure table
+                            factor_rows = []
+                            for i, fn in enumerate(factor_names):
+                                factor_rows.append({
+                                    "Factor": fn,
+                                    "Beta": f"{factor_betas[i]:.3f}",
+                                    "Factor Return": f"{factor_means[i]*100:+.1f}%",
+                                    "Contribution": f"{factor_contribs[i]*100:+.2f}%",
+                                })
+                            factor_rows.append({
+                                "Factor": "Alpha",
+                                "Beta": "—",
+                                "Factor Return": "—",
+                                "Contribution": f"{alpha_annual*100:+.2f}%",
+                            })
+                            st.dataframe(pd.DataFrame(factor_rows), use_container_width=True, hide_index=True)
+
+                            # Attribution waterfall chart
+                            wf_labels = factor_names + ["Alpha"]
+                            wf_values = list(factor_contribs * 100) + [alpha_annual * 100]
+
+                            fig_wf = go.Figure(go.Waterfall(
+                                x=wf_labels, y=wf_values,
+                                measure=["relative"] * len(factor_names) + ["total"],
+                                connector=dict(line=dict(color=COLORS["text_muted"], width=1)),
+                                increasing=dict(marker_color=COLORS["success"]),
+                                decreasing=dict(marker_color=COLORS["danger"]),
+                                totals=dict(marker_color=COLORS["accent"]),
+                                text=[f"{v:+.2f}%" for v in wf_values],
+                                textposition="outside",
+                            ))
+                            fig_wf.update_layout(
+                                template="plotly_dark", height=380,
+                                title="Return Attribution Waterfall (Annualized)",
+                                yaxis_title="Contribution (%)",
+                                margin=dict(l=50, r=20, t=40, b=50),
+                            )
+                            st.plotly_chart(fig_wf, use_container_width=True, config={"displayModeBar": False})
+
+                            # Interpretation
+                            mkt_beta = factor_betas[0]
+                            if mkt_beta > 0.8:
+                                st.caption(f"Market beta of {mkt_beta:.2f} — portfolio is mostly equity beta, not diversified alpha.")
+                            elif mkt_beta < 0.3:
+                                st.caption(f"Market beta of {mkt_beta:.2f} — portfolio has low market sensitivity, alpha-oriented.")
+                            if alpha_annual > 0.02:
+                                st.success(f"Positive alpha of {alpha_annual*100:+.2f}% after controlling for 6 factors — genuine skill signal.")
+                            elif alpha_annual < -0.02:
+                                st.warning(f"Negative alpha of {alpha_annual*100:+.2f}% — portfolio underperforms factor exposure.")
+
+                        except Exception as e:
+                            st.warning(f"Factor regression failed: {e}")
+                    else:
+                        st.info(f"Only {len(common_idx)} overlapping days with factor data — need 30+.")
+                else:
+                    st.info("Could not fetch Fama-French factor data.")
+            else:
+                st.info("Need 60+ days of hierarchical portfolio OOS returns for factor attribution.")
 
     st.caption(
         "Backtested results do not guarantee future performance. "

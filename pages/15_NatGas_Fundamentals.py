@@ -43,7 +43,9 @@ if df_storage is not None and not df_storage.empty:
     wow_bcf = latest_report['wow_change']
 
     flow_type = "Injection" if wow_bcf > 0 else "Withdrawal"
-    delta_color = "normal" if wow_bcf > 0 else "inverse"
+    # Withdrawal (negative) = supply decrease = bullish (green/normal)
+    # Injection (positive) = supply increase = bearish (red/inverse)
+    delta_color = "inverse" if wow_bcf > 0 else "normal"
 
     # --- 5-Year Average Calculation ---
     df_storage['week'] = df_storage['period'].dt.isocalendar().week.astype(int)
@@ -61,7 +63,10 @@ if df_storage is not None and not df_storage.empty:
     days_of_supply = None
     if df_consumption is not None and not df_consumption.empty:
         latest_consumption_mmcf = df_consumption['value'].iloc[-1]
-        daily_consumption_bcf = latest_consumption_mmcf / 1000 / 30  # MMcf -> Bcf, monthly -> daily
+        # MMcf/month -> Bcf/day: divide by 1000 (MMcf→Bcf), then by actual days in month
+        _cons_date = pd.to_datetime(df_consumption['period'].iloc[-1])
+        _days_in_month = _cons_date.days_in_month if hasattr(_cons_date, 'days_in_month') else 30
+        daily_consumption_bcf = latest_consumption_mmcf / 1000 / _days_in_month
         if daily_consumption_bcf > 0:
             days_of_supply = storage_bcf / daily_consumption_bcf
 

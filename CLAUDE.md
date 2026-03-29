@@ -62,14 +62,20 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `gdelt_events.py` | GDELT bulk event download & processing, conflict event filtering, parquet cache |
 | `chatbot.py` | Tier-based analyst chat (Gemini 2.5 Flash), inline expander with form input |
 | `gov_data.py` | CFTC COT (multi-contract snapshots for AI context), Treasury yields/auctions, defense contracts |
-| `options_models.py` | Black-Scholes, Merton Jump-Diffusion, BS-MJD blended pricing + Greeks |
+| `options_models.py` | Black-Scholes, Merton Jump-Diffusion, BS-MJD blended pricing + Greeks + implied_vol solver |
 | `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
+| `signal_engine.py` | Unified signal aggregation — 8 pages write signals, weighted composite scoring |
+| `metrics_store.py` | Historical metrics store — daily snapshots, percentile ranks, Supabase + JSON fallback |
+| `position_book.py` | Position lifecycle — Greeks, P&L attribution, alerts, journal, Supabase + JSON fallback |
+| `prediction_tracker.py` | Prediction accuracy — T+30/60/90 evaluation, Supabase + JSON fallback |
+| `api_cache.py` | Polygon API response caching in Supabase (~100ms reads vs ~1.5s) |
+| `db.py` | Shared Supabase client accessor with user ID resolution |
 
-### pages/ — 40 App Pages
+### pages/ — 47 App Pages
 
 | # | File | What It Does |
 |---|------|-------------|
-| 01 | `Summary.py` | Dashboard: market heatmap (5 lists with stock-level drill-in), AI intelligence cards, watchlist, account |
+| 01 | `Summary.py` | Dashboard: market pulse bar, signal composites, vol regime, position book, heatmap, AI intelligence, prediction accuracy, 12 feature cards, watchlist, account |
 | 02 | `Scenario_Analysis.py` | **Flagship** — 7-tab macro scenario engine (see deep dive below) |
 | 03 | `Stock_Analysis.py` | 3-model AI stock scorecard (Grok + Gemini + Claude), EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | 04 | `RL_Trading.py` | Dueling DQN ensemble with prioritized replay, 31 features, 10-tab analysis including walk-forward, bootstrap significance, Monte Carlo robustness, feature redundancy detection, Grok AI assessment |
@@ -147,13 +153,32 @@ Flask server (port 5000) handling Stripe webhook events:
 
 Run: `python webhook_server.py` (separate from Streamlit)
 
-### Supabase Tables
-- `subscriptions` — email, plan_type, status, stripe_customer_id, stripe_price_id, updated_at
-- `user_tokens` — email, balance, updated_at
-- `payment_failures` — email, invoice_id, failed_at, resolved
+### Supabase Tables (14)
+- `subscriptions` — user tier tracking (Stripe webhook-driven)
+- `user_tokens` — AI analysis credit balance
+- `payment_failures` — failed payment flags
+- `signals` — unified signal engine (8 pages → composite scores)
+- `metrics_history` — daily vol/options snapshots per ticker
+- `positions` — position book with JSONB Greeks, alerts, journal
+- `pnl_history` — daily P&L attribution (delta/gamma/theta/vega)
+- `predictions` — prediction tracker (T+30/60/90 outcomes)
+- `iv_surface_snapshots` — daily IV chain cache for animation
+- `conflict_analysis` — geopolitical risk analysis history
+- `ai_usage` — persistent daily AI/chat usage counters
+- `chat_history` — persistent chat conversation log
+- `source_credibility` — news source reliability scores
+- `api_cache` — Polygon API response cache (TTL-based)
 
-### Supabase SQL Functions
-- `increment_tokens(p_email TEXT, p_amount INT)` — atomic token balance increment (used by webhook server)
+### Supabase Views
+- `signal_composites` — real-time weighted signal aggregation
+- `metrics_percentiles` — pre-computed 252-day percentile ranks (materialized)
+
+### Supabase RPC Functions (6)
+- `increment_tokens` — atomic token balance update
+- `increment_ai_usage` — atomic daily usage/chat counter
+- `get_metrics_coverage` — ticker summary
+- `cleanup_expired_cache` / `cleanup_old_signals` — data pruning
+- `refresh_percentiles` — refresh materialized view
 
 ---
 

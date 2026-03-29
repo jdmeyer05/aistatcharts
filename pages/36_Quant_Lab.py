@@ -726,6 +726,8 @@ with tab_barrier, error_boundary("Triple Barrier"):
             bh_start = label_df.index[0] if hasattr(label_df.index, 'min') else label_df.index.min()
             bh_end = label_df.index[-1] if hasattr(label_df.index, 'max') else label_df.index.max()
             bh = close.loc[bh_start:bh_end]
+            if bh.empty:
+                continue
             bh_indexed = bh / bh.iloc[0] * 100
 
             fig_eq = go.Figure()

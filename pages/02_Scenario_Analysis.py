@@ -317,6 +317,41 @@ def save_grok_result(result: dict) -> None:
     history.append(entry)
     save_history(GROK_HISTORY_FILE, history)
 
+    # Write cross-page context
+    try:
+        from src.cross_context import write_context
+        _regimes = result.get("regimes", [])
+        _top = max(_regimes, key=lambda r: r.get("probability", 0)) if _regimes else {}
+        write_context("scenario_analysis", {"top_regime": _top})
+    except Exception:
+        pass
+
+    # Write signal for consensus engine
+    try:
+        from src.signal_engine import write_signal
+        _regimes_s = result.get("regimes", [])
+        if _regimes_s:
+            _top_s = max(_regimes_s, key=lambda r: r.get("probability", 0))
+            _rname = _top_s.get("name", "").lower()
+            _bullish = {"soft landing", "goldilocks", "expansion", "recovery",
+                        "reflation", "growth", "boom", "bull"}
+            _bearish = {"recession", "stagflation", "crisis", "hard landing",
+                        "contraction", "depression", "bust", "bear"}
+            if any(b in _rname for b in _bullish):
+                _dir = "bullish"
+            elif any(b in _rname for b in _bearish):
+                _dir = "bearish"
+            else:
+                _dir = "neutral"
+            _prob = _top_s.get("probability", 50)
+            _conv = min(1.0, _prob / 100.0)
+            _reason = f"Top regime: {_top_s.get('name', '?')} ({_prob}%)"
+            _tickers = ticker_list or ["SPY"]
+            for _tk in _tickers:
+                write_signal("scenario_analysis", _tk, _dir, _conv, reasoning=_reason)
+    except Exception:
+        pass
+
 
 def get_latest_grok_result() -> tuple:
     return _get_latest_history(GROK_HISTORY_FILE, stale_hours=1.0)
@@ -522,6 +557,16 @@ def build_fred_summary(driver_data: dict, fed_drivers: dict, fred_key_ref: str =
     pm_summary = build_polymarket_summary(pm_data)
     if pm_summary:
         lines.append(pm_summary)
+
+    # Cross-page context from other analysis pages
+    try:
+        from src.cross_context import build_ai_context
+        _xctx = build_ai_context()
+        if _xctx:
+            lines.append("")
+            lines.append(_xctx)
+    except Exception:
+        pass
 
     return "\n".join(lines)
 
@@ -777,14 +822,15 @@ if 'scenario_data' in st.session_state:
     # ═══════════════════════════════════════════
     # TAB LAYOUT
     # ═══════════════════════════════════════════
-    tab6, tab5, tab1, tab2, tab3, tab4, tab7 = st.tabs([
+    tab6, tab5, tab1, tab2, tab3, tab4, tab7, tab8 = st.tabs([
         "🌐 Macro Portfolio Scenarios",
         "🏛️ Fed & Macro Drivers",
         "📉 Historical Stress Tests",
         "🎛️ Custom What-If",
         "📊 Bull / Base / Bear",
         "⚡ Event-Driven",
-        "🔧 Model Diagnostics"
+        "🔧 Model Diagnostics",
+        "🎯 Regime Track Record",
     ])
 
     # ═══════════════════════════════════════════
@@ -1682,10 +1728,10 @@ if 'scenario_data' in st.session_state:
                         est = blended.get(regime, {}).get(t, {})
                         detail_rows.append({
                             "Ticker": t,
-                            "Est. Return": f"{est.get('point', 0):+.1f}%",
-                            "80% CI": f"{est.get('lo', 0):+.1f}% to {est.get('hi', 0):+.1f}%",
-                            "Est. P&L": f"${alloc_per * est.get('point', 0) / 100:+,.0f}",
-                            "R²": f"{est.get('r2', 0):.2f}" if est.get('r2', 0) > 0 else "—",
+                            "Est. Return": f"{est.get('point') or 0:+.1f}%",
+                            "80% CI": f"{est.get('lo') or 0:+.1f}% to {est.get('hi') or 0:+.1f}%",
+                            "Est. P&L": f"${alloc_per * (est.get('point') or 0) / 100:+,.0f}",
+                            "R²": f"{est.get('r2') or 0:.2f}" if (est.get('r2') or 0) > 0 else "—",
                             "Source": est.get("source", "—"),
                         })
                     st.dataframe(pd.DataFrame(detail_rows).set_index("Ticker"), use_container_width=True)
@@ -1873,10 +1919,10 @@ if 'scenario_data' in st.session_state:
                     diag_rows.append({
                         "Ticker": t,
                         "R²": f"{fb['r2']:.3f}",
-                        "Beta Stability": f"{fb.get('beta_stability', 0):.2f}",
+                        "Beta Stability": f"{fb.get('beta_stability') or 0:.2f}",
                         "Observations": fb.get("n_obs", 0),
-                        "Residual Std (daily)": f"{fb['residual_std']:.4f}",
-                        "Stressed Std": f"{fb.get('stressed_residual_std', fb['residual_std']):.4f}",
+                        "Residual Std (daily)": f"{fb.get('residual_std') or 0:.4f}",
+                        "Stressed Std": f"{fb.get('stressed_residual_std') or fb.get('residual_std') or 0:.4f}",
                         "Sector": SECTOR_MAP.get(t, "Unknown"),
                     })
                 else:
@@ -2134,6 +2180,122 @@ if 'scenario_data' in st.session_state:
                     for f1, f2, c in high_corr_pairs:
                         st.warning(f"High correlation: **{f1}** and **{f2}** = {c:.2f} — "
                                   f"may cause unstable beta estimates for these factors.")
+
+    # ─────────────────────────────────────────────
+    # TAB 8: REGIME TRACK RECORD
+    # ─────────────────────────────────────────────
+    with tab8, error_boundary("Regime Track Record"):
+        st.subheader("Regime Prediction Track Record")
+        with st.expander("What this shows"):
+            st.markdown("""
+**How accurate have the Grok regime predictions been?**
+
+Each time the macro scenario engine runs, it assigns probabilities to regimes
+(Soft Landing, Stagflation, Recession, etc.). This tab compares those predictions
+to what the market actually did over the following 30 days.
+
+A regime prediction is "correct" if the highest-probability regime's expected
+market direction matched the actual SPY return direction. For example, if Grok
+predicted "Soft Landing" at 45% (bullish), and SPY was up 30 days later, that's correct.
+""")
+
+        history = load_grok_history()
+
+        if len(history) < 2:
+            st.info("Need at least 2 regime analyses to evaluate accuracy. Run more analyses over time.")
+        else:
+            import yfinance as yf
+
+            # For each historical prediction, check what SPY did afterwards
+            eval_rows = []
+            _spy_hist = None
+            try:
+                _spy_hist = yf.download("SPY", period="1y", progress=False)
+            except Exception:
+                pass
+
+            if _spy_hist is not None and not _spy_hist.empty:
+                for entry in history:
+                    ts = pd.to_datetime(entry["timestamp"])
+                    age_days = (pd.Timestamp.now() - ts).days
+                    if age_days < 30:
+                        continue  # too recent to evaluate
+
+                    regimes = entry.get("regimes", [])
+                    if not regimes:
+                        continue
+
+                    # Find top regime
+                    top_regime = max(regimes, key=lambda r: r.get("probability", 0))
+                    regime_name = top_regime.get("name", "?")
+                    regime_prob = top_regime.get("probability", 0)
+
+                    # Determine expected direction from regime name
+                    bullish_regimes = {"soft landing", "goldilocks", "expansion", "recovery",
+                                       "reflation", "bull", "risk-on"}
+                    bearish_regimes = {"recession", "stagflation", "crisis", "hard landing",
+                                       "contraction", "bear", "risk-off"}
+                    _rname_lower = regime_name.lower()
+                    if any(b in _rname_lower for b in bullish_regimes):
+                        expected_dir = "Bullish"
+                    elif any(b in _rname_lower for b in bearish_regimes):
+                        expected_dir = "Bearish"
+                    else:
+                        expected_dir = "Neutral"
+
+                    # Get SPY return over next 30 days
+                    target_date = ts + pd.Timedelta(days=30)
+                    _after = _spy_hist[_spy_hist.index >= ts.tz_localize(None) if ts.tzinfo else ts]
+                    _after_30 = _after.head(22)  # ~30 calendar days ≈ 22 trading days
+
+                    if len(_after_30) >= 10:
+                        spy_start = float(_after_30["Close"].iloc[0])
+                        spy_end = float(_after_30["Close"].iloc[-1])
+                        spy_ret = (spy_end / spy_start - 1) * 100
+
+                        actual_dir = "Bullish" if spy_ret > 0 else "Bearish"
+                        correct = (expected_dir == actual_dir) if expected_dir != "Neutral" else None
+
+                        eval_rows.append({
+                            "Date": ts.strftime("%Y-%m-%d %H:%M"),
+                            "Top Regime": regime_name,
+                            "Probability": f"{regime_prob}%",
+                            "Expected": expected_dir,
+                            "SPY 30d": f"{spy_ret:+.1f}%",
+                            "Actual": actual_dir,
+                            "Correct": "Yes" if correct is True else ("No" if correct is False else "—"),
+                        })
+
+                if eval_rows:
+                    eval_df = pd.DataFrame(eval_rows)
+
+                    # Accuracy metrics
+                    _directional = [r for r in eval_rows if r["Correct"] in ("Yes", "No")]
+                    _correct = [r for r in _directional if r["Correct"] == "Yes"]
+                    accuracy = len(_correct) / len(_directional) if _directional else None
+
+                    ec1, ec2, ec3 = st.columns(3)
+                    ec1.metric("Regime Calls Evaluated", len(eval_rows))
+                    ec2.metric("Directional Predictions", len(_directional))
+                    if accuracy is not None:
+                        _acc_color = COLORS["success"] if accuracy > 0.55 else (COLORS["warning"] if accuracy > 0.50 else COLORS["danger"])
+                        ec3.metric("30-Day Accuracy", f"{accuracy*100:.0f}%")
+                    else:
+                        ec3.metric("30-Day Accuracy", "—")
+
+                    st.dataframe(eval_df, use_container_width=True, hide_index=True)
+
+                    if accuracy is not None:
+                        if accuracy > 0.6:
+                            st.success(f"Regime predictions are {accuracy*100:.0f}% accurate — strong track record.")
+                        elif accuracy > 0.5:
+                            st.info(f"Regime predictions are {accuracy*100:.0f}% accurate — slightly better than random.")
+                        else:
+                            st.warning(f"Regime predictions are {accuracy*100:.0f}% accurate — below random. Consider adjusting parameters.")
+                else:
+                    st.info("No evaluable predictions yet (need predictions older than 30 days with SPY data).")
+            else:
+                st.warning("Could not fetch SPY history for evaluation.")
 
     # ─────────────────────────────────────────────
     # CHATBOT

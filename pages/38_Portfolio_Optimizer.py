@@ -688,6 +688,22 @@ with tab_weights, error_boundary("Optimal Weights"):
                   help="Reliability: A — pure weight math")
         st.metric("Largest Position", f"{wf_sorted.iloc[0]:.1%} ({wf_sorted.index[0]})")
 
+    # ── Cross-page alerts ──
+    try:
+        from src.cross_context import read_context
+        _corr_ctx = read_context("correlation")
+        if _corr_ctx and _corr_ctx.get("n_alerts", 0) > 0:
+            st.warning(
+                f"**Correlation Alert:** {_corr_ctx['n_alerts']} correlation breakdown(s) detected on the "
+                f"Correlation page. Current weights may be stale if asset relationships have shifted. "
+                f"Top alerts: {'; '.join(_corr_ctx.get('breakdowns', [])[:3])}"
+            )
+        _me_ctx = read_context("market_expectations")
+        if _me_ctx and _me_ctx.get("regime"):
+            st.info(f"**Market Vol Regime** (from Market Expectations): {_me_ctx['regime']}")
+    except Exception:
+        pass
+
     # ── Realized vs Expected + Bootstrap Sharpe + Stress Test ──
     st.markdown("---")
     st.subheader("Reality Check")
@@ -700,6 +716,9 @@ with tab_weights, error_boundary("Optimal Weights"):
         split = int(len(returns) * 0.75)
         oos_ret = returns.iloc[split:]
         if len(oos_ret) > 20:
+            # Use weights estimated on training data only (avoid look-ahead bias)
+            # Note: w_focus estimated on full period — this OOS test is approximate.
+            # For true OOS, use the walk-forward backtest on Meta Analysis page.
             oos_port = (oos_ret.values @ w_focus)
             realized_ann = np.mean(oos_port) * 252 * 100
             realized_vol = np.std(oos_port) * np.sqrt(252) * 100
@@ -1263,6 +1282,7 @@ with tab_views, error_boundary("Black-Litterman"):
         # Omega: uncertainty of views — scaled by per-view confidence
         base_omega = np.diag(np.diag(tau * P @ ann_cov @ P.T))
         conf_scales = np.array(views_conf)
+        conf_scales = np.clip(conf_scales, 0.01, None)  # prevent singular omega from zero confidence
         omega = base_omega * np.diag(conf_scales)
 
         # ── Step 3: BL Posterior ──

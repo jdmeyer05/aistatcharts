@@ -3,7 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from src.data_engine import fetch_massive_data, format_massive_ticker, render_data_source_footer
+from src.data_engine import (
+    fetch_massive_data, format_massive_ticker, render_data_source_footer,
+    fetch_polygon_sma, fetch_polygon_rsi, fetch_polygon_macd,
+)
 from src.chatbot import run_sidebar_chatbot
 
 from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
@@ -50,8 +53,8 @@ if submit or 'tech_df' not in st.session_state or st.session_state.get('tech_tic
         delta = df['Close'].diff()
         gain = delta.where(delta > 0, 0.0).ewm(alpha=1/rsi_period, adjust=False).mean()
         loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/rsi_period, adjust=False).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
+        rs = gain / loss.replace(0, np.nan)
+        df['RSI'] = (100 - (100 / (1 + rs))).fillna(50)
         
         # 3. MACD (Trend/Momentum)
         ema_fast = df['Close'].ewm(span=macd_fast, adjust=False).mean()
@@ -143,5 +146,131 @@ if 'tech_df' in st.session_state:
     ctx = (f"Technical Scan for {ticker}. Spot: ${current_px:.2f}. "
            f"RSI: {latest_rsi:.1f}. MACD Cross: {macd_cross}. Short-Term Trend (EMA20 vs EMA50): {ema_trend}.")
     run_sidebar_chatbot(ctx)
+
+
+# ═══════════════════════════════════════════════
+# UNIVERSE SCAN — rank multiple tickers by technical quality
+# ═══════════════════════════════════════════════
+
+st.markdown("---")
+st.subheader("Universe Technical Scan")
+with st.expander("How the scan works"):
+    st.markdown("""
+Scans a universe of tickers and ranks them by technical setup quality.
+A **bullish alignment** means EMA trend, RSI, and MACD all agree.
+
+**Scores:**
+- EMA Trend: +1 if EMA20 > EMA50 (bullish), -1 if bearish
+- RSI Signal: +1 if 40-70 (healthy momentum), -1 if <30 (oversold) or >70 (overbought)
+- MACD Cross: +1 if MACD > Signal (bullish), -1 if bearish
+- **Total Score**: -3 (max bearish) to +3 (max bullish)
+""")
+
+scan_universe = st.text_input(
+    "Tickers (comma-separated)",
+    value="SPY, QQQ, AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA, AMD, "
+          "XLE, XLF, XLK, XLV, XLI, XLC, XLY, XLP, XLU, XLB, XLRE, "
+          "TLT, GLD, USO, IWM, EEM",
+    key="scan_universe_input",
+)
+
+if st.button("Run Universe Scan", type="primary", use_container_width=True, key="run_universe_scan"):
+    scan_tickers = [format_massive_ticker(t.strip()) for t in scan_universe.split(",") if t.strip()]
+
+    scan_rows = []
+    progress = st.progress(0, text="Scanning...")
+    for idx, stk in enumerate(scan_tickers):
+        progress.progress((idx + 1) / len(scan_tickers), text=f"Scanning {stk}...")
+        try:
+            sdf = fetch_massive_data(stk, 252)
+            if sdf is None or sdf.empty or len(sdf) < 60:
+                continue
+
+            sc = sdf["Close"]
+            spot = float(sc.iloc[-1])
+
+            # EMA trend
+            ema20 = sc.ewm(span=20).mean()
+            ema50 = sc.ewm(span=50).mean()
+            ema_bull = 1 if float(ema20.iloc[-1]) > float(ema50.iloc[-1]) else -1
+
+            # RSI
+            _delta = sc.diff()
+            _gain = _delta.where(_delta > 0, 0.0).ewm(alpha=1/14, adjust=False).mean()
+            _loss = (-_delta.where(_delta < 0, 0.0)).ewm(alpha=1/14, adjust=False).mean()
+            _rs = _gain / _loss.replace(0, np.nan)
+            rsi_val = float((100 - (100 / (1 + _rs))).fillna(50).iloc[-1])
+            rsi_score = 1 if 40 <= rsi_val <= 70 else (-1 if rsi_val < 30 or rsi_val > 70 else 0)
+
+            # MACD
+            _e12 = sc.ewm(span=12).mean()
+            _e26 = sc.ewm(span=26).mean()
+            _macd = _e12 - _e26
+            _sig = _macd.ewm(span=9).mean()
+            macd_bull = 1 if float(_macd.iloc[-1]) > float(_sig.iloc[-1]) else -1
+
+            total_score = ema_bull + rsi_score + macd_bull
+            alignment = "Bullish" if total_score >= 2 else ("Bearish" if total_score <= -2 else "Mixed")
+
+            # 20-day performance
+            ret_20 = (spot / float(sc.iloc[-20]) - 1) * 100 if len(sc) > 20 else 0
+
+            scan_rows.append({
+                "Ticker": stk,
+                "Price": round(spot, 2),
+                "20d Return": round(ret_20, 1),
+                "EMA Trend": "Bull" if ema_bull > 0 else "Bear",
+                "RSI": round(rsi_val, 1),
+                "MACD": "Bull" if macd_bull > 0 else "Bear",
+                "Score": total_score,
+                "Alignment": alignment,
+            })
+        except Exception:
+            continue
+
+    progress.empty()
+
+    if scan_rows:
+        scan_df = pd.DataFrame(scan_rows).sort_values("Score", ascending=False)
+
+        # Write signals for aligned tickers
+        try:
+            from src.signal_engine import write_signal
+            for _, _sr in scan_df.iterrows():
+                if _sr["Score"] >= 2:
+                    write_signal("tech_screener", _sr["Ticker"], "bull", 0.7,
+                                 reasoning=f"Score {_sr['Score']}/3 — EMA/RSI/MACD aligned bullish")
+                elif _sr["Score"] <= -2:
+                    write_signal("tech_screener", _sr["Ticker"], "bear", 0.7,
+                                 reasoning=f"Score {_sr['Score']}/3 — EMA/RSI/MACD aligned bearish")
+        except Exception:
+            pass
+        st.dataframe(
+            scan_df.style.apply(
+                lambda row: ["background-color: rgba(0,255,150,0.1)"] * len(row)
+                if row["Score"] >= 2 else (
+                    ["background-color: rgba(255,68,68,0.1)"] * len(row)
+                    if row["Score"] <= -2 else [""] * len(row)
+                ), axis=1,
+            ),
+            use_container_width=True, hide_index=True,
+        )
+
+        bull_count = (scan_df["Score"] >= 2).sum()
+        bear_count = (scan_df["Score"] <= -2).sum()
+        st.caption(
+            f"**{bull_count}** tickers in bullish alignment | "
+            f"**{bear_count}** bearish | "
+            f"**{len(scan_df) - bull_count - bear_count}** mixed"
+        )
+
+        if bull_count > len(scan_df) * 0.6:
+            st.success("Broad bullish alignment — most tickers confirm uptrend across all indicators.")
+        elif bear_count > len(scan_df) * 0.6:
+            st.error("Broad bearish alignment — most tickers confirm downtrend.")
+        else:
+            st.info("Mixed signals — no clear market-wide direction. Focus on individual setups.")
+    else:
+        st.warning("No data returned. Check tickers and try again.")
 
 render_data_source_footer()

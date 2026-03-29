@@ -91,11 +91,12 @@ spot = st.session_state["lab_spot"]
 ticker_display = st.session_state["lab_ticker"]
 px_df = st.session_state["lab_px"]
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Volatility Surface",
     "Earnings Move Analyzer",
     "Strategy P&L Modeler",
     "BS Pricing & Greeks",
+    "Strategy Optimizer",
 ])
 
 
@@ -179,6 +180,15 @@ with tab1:
                 hovermode="x unified",
             )
             st.plotly_chart(fig_skew, use_container_width=True)
+            # ── Note about daily animation ──
+            st.divider()
+            st.caption(
+                "For a **daily IV surface replay** with real historical snapshots, "
+                "use the **Vol Surface** page (Surface Animation tab). "
+                "Each time you load that page a snapshot is saved — "
+                "after 2+ days you'll see the surface change day-over-day."
+            )
+
         else:
             st.warning("Not enough data points for surface plot.")
     else:
@@ -579,3 +589,299 @@ with tab4:
         st.plotly_chart(fig_decay, use_container_width=True)
     else:
         st.warning("Option has expired. Set a future expiration date.")
+
+
+# ---- TAB 5: Strategy Optimizer ----
+with tab5:
+    st.subheader("Strategy Optimizer — Live Chain Pricing")
+    st.markdown(
+        "Select a strategy type and target expiration. The optimizer scans the **live options chain** "
+        "to find the best strikes by risk/reward, using actual market prices and IV skew."
+    )
+
+    if spot and not df_all.empty:
+        so1, so2, so3 = st.columns(3)
+        with so1:
+            opt_strategy = st.selectbox("Strategy", [
+                "Bull Call Spread", "Bear Put Spread", "Iron Condor",
+                "Long Straddle", "Long Strangle", "Butterfly",
+            ], key="opt_strat")
+        with so2:
+            opt_exps = sorted(df_all["expiration"].unique())
+            opt_exp = st.selectbox("Expiration", opt_exps, key="opt_exp")
+        with so3:
+            max_risk = st.number_input("Max Risk per Contract ($)", value=500, step=50, key="opt_max_risk")
+
+        if st.button("Find Optimal Strikes", type="primary", use_container_width=True, key="run_optimizer"):
+            exp_chain = df_all[df_all["expiration"] == opt_exp].copy()
+            exp_calls = exp_chain[exp_chain["type"] == "call"].sort_values("strike").reset_index(drop=True)
+            exp_puts = exp_chain[exp_chain["type"] == "put"].sort_values("strike").reset_index(drop=True)
+
+            dte = max((pd.to_datetime(opt_exp) - pd.Timestamp.now()).days, 1)
+
+            results = []
+
+            if opt_strategy == "Bull Call Spread" and len(exp_calls) > 2:
+                # Buy lower strike call, sell higher strike call
+                atm_idx = (exp_calls["strike"] - spot).abs().argsort().iloc[0]
+                search_range = exp_calls.iloc[max(0, atm_idx - 5):min(len(exp_calls), atm_idx + 10)]
+
+                for i, long_row in search_range.iterrows():
+                    for j, short_row in search_range.iterrows():
+                        if short_row["strike"] <= long_row["strike"]:
+                            continue
+                        debit = long_row["close"] - short_row["close"]
+                        if debit <= 0:
+                            continue
+                        max_profit = (short_row["strike"] - long_row["strike"]) * 100 - debit * 100
+                        max_loss = debit * 100
+                        if max_loss > max_risk or max_loss <= 0:
+                            continue
+                        rr = max_profit / max_loss
+                        breakeven = long_row["strike"] + debit
+                        # Probability of profit (rough: use delta of short strike)
+                        pop = (1 - abs(short_row.get("delta", 0.5))) * 100 if "delta" in short_row.index else 50
+
+                        results.append({
+                            "Long Strike": long_row["strike"],
+                            "Short Strike": short_row["strike"],
+                            "Debit": debit,
+                            "Max Profit": max_profit,
+                            "Max Loss": max_loss,
+                            "R:R Ratio": rr,
+                            "Breakeven": breakeven,
+                            "Est. PoP (%)": pop,
+                            "Long IV": long_row.get("iv", 0),
+                            "Short IV": short_row.get("iv", 0),
+                        })
+
+            elif opt_strategy == "Bear Put Spread" and len(exp_puts) > 2:
+                atm_idx = (exp_puts["strike"] - spot).abs().argsort().iloc[0]
+                search_range = exp_puts.iloc[max(0, atm_idx - 10):min(len(exp_puts), atm_idx + 5)]
+
+                for i, long_row in search_range.iterrows():
+                    for j, short_row in search_range.iterrows():
+                        if short_row["strike"] >= long_row["strike"]:
+                            continue
+                        debit = long_row["close"] - short_row["close"]
+                        if debit <= 0:
+                            continue
+                        max_profit = (long_row["strike"] - short_row["strike"]) * 100 - debit * 100
+                        max_loss = debit * 100
+                        if max_loss > max_risk or max_loss <= 0:
+                            continue
+                        rr = max_profit / max_loss
+                        breakeven = long_row["strike"] - debit
+
+                        results.append({
+                            "Long Strike": long_row["strike"],
+                            "Short Strike": short_row["strike"],
+                            "Debit": debit,
+                            "Max Profit": max_profit,
+                            "Max Loss": max_loss,
+                            "R:R Ratio": rr,
+                            "Breakeven": breakeven,
+                            "Est. PoP (%)": abs(short_row.get("delta", 0.5)) * 100,
+                            "Long IV": long_row.get("iv", 0),
+                            "Short IV": short_row.get("iv", 0),
+                        })
+
+            elif opt_strategy == "Iron Condor" and len(exp_calls) > 2 and len(exp_puts) > 2:
+                # Sell OTM call spread + sell OTM put spread
+                otm_calls = exp_calls[exp_calls["strike"] > spot * 1.01].head(8)
+                otm_puts = exp_puts[exp_puts["strike"] < spot * 0.99].tail(8)
+
+                for _, sc in otm_calls.iterrows():
+                    lc_row = exp_calls[exp_calls["strike"] == sc["strike"] + 5]
+                    if lc_row.empty:
+                        lc_candidates = exp_calls[exp_calls["strike"] > sc["strike"]]
+                        if lc_candidates.empty:
+                            continue
+                        lc_row = lc_candidates.iloc[:1]
+                    lc = lc_row.iloc[0]
+
+                    for _, sp_row in otm_puts.iterrows():
+                        lp_candidates = exp_puts[exp_puts["strike"] < sp_row["strike"]]
+                        if lp_candidates.empty:
+                            continue
+                        lp = lp_candidates.iloc[-1]
+
+                        credit = (sc["close"] - lc["close"]) + (sp_row["close"] - lp["close"])
+                        if credit <= 0:
+                            continue
+
+                        call_width = lc["strike"] - sc["strike"]
+                        put_width = sp_row["strike"] - lp["strike"]
+                        max_width = max(call_width, put_width)
+                        max_loss = (max_width - credit) * 100
+                        max_profit = credit * 100
+
+                        if max_loss > max_risk or max_loss <= 0:
+                            continue
+
+                        results.append({
+                            "Put Wing": f"${lp['strike']}/{sp_row['strike']}",
+                            "Call Wing": f"${sc['strike']}/{lc['strike']}",
+                            "Credit": credit,
+                            "Max Profit": max_profit,
+                            "Max Loss": max_loss,
+                            "R:R Ratio": max_profit / max_loss if max_loss > 0 else 0,
+                            "Breakeven Low": sp_row["strike"] - credit,
+                            "Breakeven High": sc["strike"] + credit,
+                            "Width": max_width,
+                        })
+
+            elif opt_strategy == "Long Straddle" and len(exp_calls) > 0 and len(exp_puts) > 0:
+                atm_calls = exp_calls.iloc[(exp_calls["strike"] - spot).abs().argsort()[:5]]
+                for _, c in atm_calls.iterrows():
+                    p_match = exp_puts[exp_puts["strike"] == c["strike"]]
+                    if p_match.empty:
+                        continue
+                    p = p_match.iloc[0]
+                    cost = (c["close"] + p["close"]) * 100
+                    if cost > max_risk or cost <= 0:
+                        continue
+                    breakeven_up = c["strike"] + c["close"] + p["close"]
+                    breakeven_down = c["strike"] - c["close"] - p["close"]
+                    move_needed = (c["close"] + p["close"]) / spot * 100
+
+                    results.append({
+                        "Strike": c["strike"],
+                        "Call Price": c["close"],
+                        "Put Price": p["close"],
+                        "Total Cost": cost,
+                        "Move Needed (%)": move_needed,
+                        "Breakeven Up": breakeven_up,
+                        "Breakeven Down": breakeven_down,
+                        "Avg IV": (c.get("iv", 0) + p.get("iv", 0)) / 2,
+                    })
+
+            elif opt_strategy == "Long Strangle" and len(exp_calls) > 0 and len(exp_puts) > 0:
+                otm_calls = exp_calls[exp_calls["strike"] > spot * 1.01].head(5)
+                otm_puts = exp_puts[exp_puts["strike"] < spot * 0.99].tail(5)
+                for _, c in otm_calls.iterrows():
+                    for _, p in otm_puts.iterrows():
+                        cost = (c["close"] + p["close"]) * 100
+                        if cost > max_risk or cost <= 0:
+                            continue
+                        breakeven_up = c["strike"] + c["close"] + p["close"]
+                        breakeven_down = p["strike"] - c["close"] - p["close"]
+                        move_needed = max(
+                            (breakeven_up / spot - 1) * 100,
+                            (1 - breakeven_down / spot) * 100,
+                        )
+                        results.append({
+                            "Call Strike": c["strike"],
+                            "Put Strike": p["strike"],
+                            "Call Price": c["close"],
+                            "Put Price": p["close"],
+                            "Total Cost": cost,
+                            "Move Needed (%)": move_needed,
+                            "Breakeven Up": breakeven_up,
+                            "Breakeven Down": breakeven_down,
+                        })
+
+            elif opt_strategy == "Butterfly" and len(exp_calls) > 4:
+                atm_idx = (exp_calls["strike"] - spot).abs().argsort().iloc[0]
+                center_range = exp_calls.iloc[max(0, atm_idx - 3):min(len(exp_calls), atm_idx + 4)]
+
+                for _, center in center_range.iterrows():
+                    wings = exp_calls[exp_calls["strike"] != center["strike"]]
+                    lower_wings = wings[wings["strike"] < center["strike"]].tail(3)
+                    upper_wings = wings[wings["strike"] > center["strike"]].head(3)
+
+                    for _, lw in lower_wings.iterrows():
+                        width = center["strike"] - lw["strike"]
+                        uw_match = upper_wings[(upper_wings["strike"] - center["strike"]).abs() < width * 1.5]
+                        if uw_match.empty:
+                            continue
+                        uw = uw_match.iloc[0]
+                        actual_width_up = uw["strike"] - center["strike"]
+
+                        cost = (lw["close"] - 2 * center["close"] + uw["close"]) * 100
+                        if cost <= 0 or cost > max_risk:
+                            continue
+                        max_profit = min(width, actual_width_up) * 100 - cost
+
+                        results.append({
+                            "Lower Wing": lw["strike"],
+                            "Center": center["strike"],
+                            "Upper Wing": uw["strike"],
+                            "Net Debit": cost,
+                            "Max Profit": max_profit,
+                            "R:R Ratio": max_profit / cost if cost > 0 else 0,
+                            "Center IV": center.get("iv", 0),
+                        })
+
+            if results:
+                res_df = pd.DataFrame(results)
+                # Sort by risk/reward
+                sort_col = "R:R Ratio" if "R:R Ratio" in res_df.columns else "Move Needed (%)"
+                ascending = sort_col == "Move Needed (%)"
+                res_df = res_df.sort_values(sort_col, ascending=ascending).head(15)
+
+                st.success(f"Found **{len(res_df)}** {opt_strategy} setups within ${max_risk} risk budget.")
+
+                # Format for display
+                display_df = res_df.copy()
+                for col in display_df.columns:
+                    if "Price" in col or "Debit" in col or "Credit" in col or "Cost" in col:
+                        display_df[col] = display_df[col].apply(lambda x: f"${x:.2f}" if isinstance(x, (int, float)) else x)
+                    elif "Profit" in col or "Loss" in col:
+                        display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}" if isinstance(x, (int, float)) else x)
+                    elif "R:R" in col:
+                        display_df[col] = display_df[col].apply(lambda x: f"{x:.2f}x" if isinstance(x, (int, float)) else x)
+                    elif "Breakeven" in col:
+                        display_df[col] = display_df[col].apply(lambda x: f"${x:.1f}" if isinstance(x, (int, float)) else x)
+                    elif "IV" in col:
+                        display_df[col] = display_df[col].apply(lambda x: f"{x:.1%}" if isinstance(x, (int, float)) else x)
+                    elif "%" in col:
+                        display_df[col] = display_df[col].apply(lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else x)
+
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+                # Skew context
+                st.divider()
+                st.subheader("IV Skew Context for Selected Expiration")
+                exp_calls_plot = exp_calls[(exp_calls["strike"] >= spot * 0.85) & (exp_calls["strike"] <= spot * 1.15)]
+                exp_puts_plot = exp_puts[(exp_puts["strike"] >= spot * 0.85) & (exp_puts["strike"] <= spot * 1.15)]
+
+                if "iv" in exp_calls_plot.columns:
+                    fig_skew = go.Figure()
+                    if not exp_calls_plot.empty:
+                        fig_skew.add_trace(go.Scatter(
+                            x=exp_calls_plot["strike"], y=exp_calls_plot["iv"],
+                            mode="lines+markers", name="Call IV",
+                            line=dict(color="#00ff96", width=2),
+                        ))
+                    if not exp_puts_plot.empty:
+                        fig_skew.add_trace(go.Scatter(
+                            x=exp_puts_plot["strike"], y=exp_puts_plot["iv"],
+                            mode="lines+markers", name="Put IV",
+                            line=dict(color="#ff4b4b", width=2),
+                        ))
+                    fig_skew.add_vline(x=spot, line_dash="dot", line_color="#ffaa00",
+                                        annotation_text="Spot")
+                    fig_skew.update_layout(
+                        template="plotly_dark", height=350, margin=dict(t=10, b=0, l=0, r=0),
+                        xaxis_title="Strike", yaxis_title="Implied Volatility",
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_skew, use_container_width=True)
+
+                    # Skew metrics
+                    if not exp_puts_plot.empty and not exp_calls_plot.empty:
+                        atm_iv = exp_calls_plot.iloc[(exp_calls_plot["strike"] - spot).abs().argsort()[:1]]["iv"].values[0]
+                        otm_put_iv = exp_puts_plot[exp_puts_plot["strike"] < spot * 0.95]["iv"].mean()
+                        otm_call_iv = exp_calls_plot[exp_calls_plot["strike"] > spot * 1.05]["iv"].mean()
+
+                        sk1, sk2, sk3 = st.columns(3)
+                        sk1.metric("ATM IV", f"{atm_iv:.1%}" if pd.notna(atm_iv) else "N/A")
+                        sk2.metric("25Δ Put Skew", f"{(otm_put_iv - atm_iv):.1%}" if pd.notna(otm_put_iv) else "N/A",
+                                    help="Positive = puts are more expensive (crash demand)")
+                        sk3.metric("25Δ Call Skew", f"{(otm_call_iv - atm_iv):.1%}" if pd.notna(otm_call_iv) else "N/A",
+                                    help="Positive = calls are more expensive (rally demand)")
+            else:
+                st.warning(f"No {opt_strategy} setups found within the ${max_risk} risk budget. Try increasing the limit.")
+    else:
+        st.warning("Load data first to use the strategy optimizer.")
