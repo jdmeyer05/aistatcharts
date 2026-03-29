@@ -1473,6 +1473,143 @@ with tab_simday, error_boundary("Similar Day Forecast"):
                             if _confidence == "Low":
                                 st.warning("**Low confidence:** Similar days had widely varying prices. Use this forecast as a rough guide only.")
 
+                            # ── Hourly breakdown table ──
+                            st.divider()
+                            st.markdown("#### Hourly Price Forecast")
+                            _tbl_rows = []
+                            for h in range(24):
+                                _pk = "Peak" if 6 <= h < 22 else "Off-Peak"
+                                _tbl_rows.append({
+                                    "HE": h + 1,
+                                    "Forecast": f"${_wt_mean[h]:.2f}",
+                                    "Low": f"${_min_prof[h]:.2f}",
+                                    "High": f"${_max_prof[h]:.2f}",
+                                    "Spread": f"${_max_prof[h] - _min_prof[h]:.2f}",
+                                    "Period": _pk,
+                                })
+                            st.dataframe(pd.DataFrame(_tbl_rows), use_container_width=True, hide_index=True, height=300)
+
+                            # ── Spark spread overlay ──
+                            st.divider()
+                            st.markdown("#### Implied Spark Spread")
+                            st.caption("Power price minus fuel cost at average heat rate. Positive = generation profitable.")
+                            _heat_rate = 7.0  # MMBtu/MWh typical gas plant
+                            if _gas_today and _gas_today > 0:
+                                # Approximate gas cost per MWh
+                                _fuel_cost = _gas_today * _heat_rate / 10  # rough $/MWh from UNG ETF price
+                                _spark = _wt_mean - _fuel_cost
+
+                                fig_spark_sd = go.Figure()
+                                _spark_colors = [COLORS["success"] if v > 0 else COLORS["danger"] for v in _spark]
+                                fig_spark_sd.add_trace(go.Bar(
+                                    x=_hrs, y=_spark, marker_color=_spark_colors, name="Spark Spread",
+                                ))
+                                fig_spark_sd.add_hline(y=0, line_color="white", line_width=0.5)
+                                fig_spark_sd.update_layout(
+                                    template="plotly_dark", height=250,
+                                    margin=dict(t=10, b=0, l=0, r=0),
+                                    xaxis_title="Hour Ending", yaxis_title="Spark Spread ($/MWh)",
+                                    hovermode="x unified",
+                                )
+                                st.plotly_chart(fig_spark_sd, use_container_width=True, config={"displayModeBar": False})
+
+                                _pos_hours = sum(1 for v in _spark if v > 0)
+                                st.caption(f"Fuel cost: ~${_fuel_cost:.2f}/MWh (UNG ${_gas_today:.2f} × {_heat_rate} HR). "
+                                           f"**{_pos_hours}/24 hours** profitable for gas generation.")
+                            else:
+                                st.info("Gas price unavailable — cannot compute spark spread.")
+
+                            # ── ERCOT load context ──
+                            if _has_api:
+                                st.divider()
+                                st.markdown("#### ERCOT Load Context")
+                                try:
+                                    # Get yesterday's actual load for comparison
+                                    _yesterday_str = (_date_cls.today() - _td(days=1)).isoformat()
+                                    _yday_load = ercot_api.fetch_actual_load(_yesterday_str)
+                                    if _yday_load is not None and not _yday_load.empty:
+                                        _total_col = "total" if "total" in _yday_load.columns else None
+                                        if _total_col:
+                                            _peak_load = float(_yday_load[_total_col].max())
+                                            _avg_load = float(_yday_load[_total_col].mean())
+                                            lc1, lc2 = st.columns(2)
+                                            lc1.metric("Yesterday Peak Load", f"{_peak_load:,.0f} MW")
+                                            lc2.metric("Yesterday Avg Load", f"{_avg_load:,.0f} MW")
+                                            if _hi_high > 95 and _peak_load < 60000:
+                                                st.warning(f"Tomorrow's heat index ({_hi_high:.0f}°F) is higher than yesterday — "
+                                                           f"expect load to exceed {_peak_load:,.0f} MW peak.")
+                                except Exception:
+                                    pass
+
+                            # ── Yesterday's forecast accuracy ──
+                            st.divider()
+                            st.markdown("#### Forecast Accuracy (Yesterday)")
+                            try:
+                                from src.db import get_client
+                                _db_acc = get_client()
+                                _yesterday = _date_cls.today() - _td(days=1)
+                                if _db_acc:
+                                    import json as _jacc
+                                    _prev_fc = _db_acc.table("ai_response_cache").select("response")\
+                                        .eq("input_hash", f"simday_{_yesterday.isoformat()}_{_hub}").limit(1).execute()
+                                    if _prev_fc.data:
+                                        _prev_data = _prev_fc.data[0]["response"]
+                                        if isinstance(_prev_data, str):
+                                            _prev_data = _jacc.loads(_prev_data)
+                                        _prev_forecast = _prev_data.get("forecast", [])
+
+                                        if _prev_forecast and _has_api:
+                                            # Fetch yesterday's actual DAM prices
+                                            _yday_dam = ercot_api.fetch_dam_spp(_yesterday.isoformat(), settlement_point=_hub)
+                                            if _yday_dam is not None and not _yday_dam.empty:
+                                                _pc = next((c for c in _yday_dam.columns if "price" in c.lower() or "spp" in c.lower()), None)
+                                                if _pc:
+                                                    _actual = pd.to_numeric(_yday_dam[_pc], errors="coerce").dropna().values
+                                                    if len(_actual) >= 20:
+                                                        if len(_actual) > 24:
+                                                            _actual = _actual[:24]
+                                                        elif len(_actual) < 24:
+                                                            _actual = _np.pad(_actual, (0, 24 - len(_actual)), mode="edge")
+                                                        _prev_fc_arr = _np.array(_prev_forecast[:24])
+                                                        if len(_prev_fc_arr) == 24:
+                                                            _errors = _np.abs(_actual - _prev_fc_arr)
+                                                            _mape = float(_np.mean(_errors / (_np.abs(_actual) + 1)) * 100)
+                                                            _mae = float(_np.mean(_errors))
+
+                                                            # Accuracy chart
+                                                            fig_acc = go.Figure()
+                                                            fig_acc.add_trace(go.Scatter(x=_hrs, y=_actual, mode="lines+markers",
+                                                                                         name="Actual", line=dict(color=COLORS["success"], width=2)))
+                                                            fig_acc.add_trace(go.Scatter(x=_hrs, y=_prev_fc_arr, mode="lines+markers",
+                                                                                         name="Forecast", line=dict(color=COLORS["accent"], width=2, dash="dash")))
+                                                            fig_acc.update_layout(template="plotly_dark", height=300,
+                                                                                   margin=dict(t=10, b=0, l=0, r=0),
+                                                                                   xaxis_title="Hour Ending", yaxis_title="$/MWh",
+                                                                                   hovermode="x unified")
+                                                            st.plotly_chart(fig_acc, use_container_width=True, config={"displayModeBar": False})
+
+                                                            ac1, ac2, ac3 = st.columns(3)
+                                                            _mape_color = COLORS["success"] if _mape < 15 else (COLORS["warning"] if _mape < 30 else COLORS["danger"])
+                                                            ac1.metric("MAPE", f"{_mape:.1f}%",
+                                                                       help="Mean Absolute Percentage Error. <15% = good, >30% = poor")
+                                                            ac2.metric("MAE", f"${_mae:.2f}/MWh")
+                                                            ac3.markdown(
+                                                                f'<div style="text-align:center;padding:8px;border:1px solid {_mape_color};border-radius:6px;">'
+                                                                f'<div style="font-size:0.65rem;color:#888;">ACCURACY</div>'
+                                                                f'<div style="font-size:1.1rem;font-weight:700;color:{_mape_color};">'
+                                                                f'{"Good" if _mape < 15 else "Fair" if _mape < 30 else "Poor"}</div>'
+                                                                f'</div>', unsafe_allow_html=True)
+                                                        else:
+                                                            st.caption("Yesterday's forecast had different length — cannot compare.")
+                                            else:
+                                                st.caption("Could not fetch yesterday's actual prices for comparison.")
+                                        else:
+                                            st.caption("Yesterday's forecast found but no ERCOT data to compare against.")
+                                    else:
+                                        st.caption("No forecast was saved for yesterday. Accuracy tracking starts after the first forecast.")
+                            except Exception:
+                                st.caption("Accuracy tracking unavailable.")
+
                             # ── Save forecast to Supabase for tracking ──
                             try:
                                 from src.db import get_client
