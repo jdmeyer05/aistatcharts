@@ -727,21 +727,22 @@ with tab_barrier, error_boundary("Triple Barrier"):
             bh_end = label_df.index[-1] if hasattr(label_df.index, 'max') else label_df.index.max()
             bh = close.loc[bh_start:bh_end]
             if bh.empty:
-                continue
-            bh_indexed = bh / bh.iloc[0] * 100
+                st.caption("Buy & hold benchmark unavailable for this date range.")
+            else:
+                bh_indexed = bh / bh.iloc[0] * 100
 
-            fig_eq = go.Figure()
-            fig_eq.add_trace(go.Scatter(x=cum_strat.index, y=cum_strat, mode="lines",
-                                        name=f"Triple Barrier ({eq_mode})", line=dict(color="#00d1ff", width=2)))
-            fig_eq.add_trace(go.Scatter(x=bh_indexed.index, y=bh_indexed, mode="lines",
-                                        name="Buy & Hold", line=dict(color="#555", width=1)))
-            fig_eq.add_hline(y=100, line_dash="dash", line_color="#333")
-            fig_eq.update_layout(template="plotly_dark", height=380,
-                                 title="Strategy Equity Curve vs Buy & Hold (base=100)",
-                                 yaxis_title="Portfolio Value",
-                                 legend=dict(orientation="h", y=-0.12),
-                                 margin=dict(l=0, r=0, t=40, b=0))
-            st.plotly_chart(fig_eq, use_container_width=True, config=PLOTLY_NOBAR)
+                fig_eq = go.Figure()
+                fig_eq.add_trace(go.Scatter(x=cum_strat.index, y=cum_strat, mode="lines",
+                                            name=f"Triple Barrier ({eq_mode})", line=dict(color="#00d1ff", width=2)))
+                fig_eq.add_trace(go.Scatter(x=bh_indexed.index, y=bh_indexed, mode="lines",
+                                            name="Buy & Hold", line=dict(color="#555", width=1)))
+                fig_eq.add_hline(y=100, line_dash="dash", line_color="#333")
+                fig_eq.update_layout(template="plotly_dark", height=380,
+                                     title="Strategy Equity Curve vs Buy & Hold (base=100)",
+                                     yaxis_title="Portfolio Value",
+                                     legend=dict(orientation="h", y=-0.12),
+                                     margin=dict(l=0, r=0, t=40, b=0))
+                st.plotly_chart(fig_eq, use_container_width=True, config=PLOTLY_NOBAR)
 
             # Strategy metrics
             strat_ann_ret = strat_df["return"].mean() * 252 * 100

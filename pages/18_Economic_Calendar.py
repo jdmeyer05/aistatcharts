@@ -8,6 +8,7 @@ import logging
 from datetime import date, timedelta, datetime
 from src.layout import setup_page, error_boundary, fun_loader
 from src.styles import COLORS
+from src.economic_calendar import FOMC_DATES
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +50,8 @@ FRED_RELEASES = {
     83: {"name": "Consumer Confidence (CB)", "series": "CSCICP03USM665S", "impact": "Medium", "category": "Consumer"},
 }
 
-# Actual FOMC meeting decision dates (FRED only tracks minutes/data publication dates)
-FOMC_MEETINGS_2026 = [
-    "2026-01-29", "2026-03-19", "2026-05-07", "2026-06-18",
-    "2026-07-30", "2026-09-17", "2026-10-29", "2026-12-10",
-]
+# Use centralized FOMC dates (single source of truth)
+FOMC_MEETINGS_2026 = FOMC_DATES  # from src.economic_calendar
 
 YIELD_TENORS = [
     ("DGS1MO", "1M"), ("DGS3MO", "3M"), ("DGS6MO", "6M"), ("DGS1", "1Y"),

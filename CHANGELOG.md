@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-29 (cont.) — Similar Day Forecast v4, Track Record Rewrite, Bug Sweep
+
+### Similar Day Price Forecast v4 (page 40) — 12 Improvements
+- **Hourly temperature profile matching** — Correlation-based curve shape similarity (0-1 score) replaces daily-aggregate-only matching. Catches days with similar stats but different intraday patterns.
+- **Demand-based matching** — ERCOT historical load profiles via `fetch_load_history()`. "Load Shape" match mode weights load correlation at 60%.
+- **Hub basis adjustment** — Computes historical DAM spread vs HUBAVG for non-HUBAVG hubs (congestion premium/discount).
+- **Spike-robust estimator** — `_robust_weighted_mean()` uses trimmed mean (drops top/bottom 20%) for hours >$150/MWh or negative. Prevents single ORDC event distortion.
+- **Bootstrap 80%/95% confidence intervals** — 500-iteration weighted resampling replaces raw min/max range. Displayed on forecast chart and hourly table.
+- **Rolling 7/30-day MAPE tracker** — Daily MAPE saved to Supabase, plotted as rolling averages with Good/Poor threshold lines.
+- **Weighted humidity blend** — Now uses 5 weather nodes (Houston, Dallas, San Antonio, Austin, Corpus Christi) with normalized population weights for humidity.
+- **DAM-RT basis forecast** — Fetches both DAM and RT prices for similar days, computes hourly RT-DAM spread.
+- **Rolling marginal heat rate** — Linear regression of recent power prices on gas prices (up to 60 days). Replaces flat 7.0 HR with market-implied HR (bounded 4.0-15.0).
+- **ERCOT reserve margin context** — Pulls `supply-demand` dashboard for capacity, demand, reserves. Alerts at <3 GW (ORDC) and <5 GW.
+- **Block-level product view** — 5 blocks (On-Peak, Off-Peak, Super-Peak, Evening Ramp, Overnight) with 80% CI and P&L scenario table.
+- **Multi-node weather visualization** — 5 ERCOT demand centers with individual station detail, spatial divergence chart, high-spread alerts.
+
+### Track Record (page 47) — Complete Rewrite (187 → 870 lines, 5 tabs)
+- **Platform Scorecard** — Hero accuracy metrics, accuracy-by-tool bar chart, predicted vs actual calibration scatter, rolling 20-prediction accuracy trend (overall + per-tool), win/loss streaks.
+- **Tool Breakdown** — Expandable per-source analysis with confusion matrix (TP/FP/TN/FN), precision/recall/F1, return distribution histogram, best & worst calls.
+- **Signal Engine** — Source weight visualization, current top trade ideas, conviction vs accuracy binned analysis.
+- **Position Performance** — Closed position P&L distribution, win rate, profit factor, avg win/loss, full closed positions table.
+- **Prediction Log** — Filterable (tool, status, direction) table of every prediction with outcomes.
+
+### Sector Guidance Staleness Warning
+- `src/sector_analysis.py`: Dynamic warning when guidance snapshot is >30 days old (caption) or >90 days old (warning). Applies to all 11 sector pages.
+
+### FOMC Dates Consolidation
+- `pages/18_Economic_Calendar.py`: Removed duplicate `FOMC_MEETINGS_2026` list (had incorrect dates), now imports from centralized `src/economic_calendar.py`.
+
+### Bug Fixes
+- Fixed `continue` outside loop in `pages/36_Quant_Lab.py` line 730 (replaced with if/else).
+- Fixed 6 division-by-zero risks in `pages/40_Power_Strategies.py`: `_robust_weighted_mean`, `_bootstrap_confidence`, weather node blending, forecast weight normalization.
+- Fixed KeyError risks in `pages/47_Track_Record.py`: `p["timestamp"]`, `p["source"]`, `pos["ticker"]` → safe `.get()` access.
+- Fixed overconfidence detection logic in Track Record (now handles negative predictions correctly).
+- Removed dead variable `_streak = 0` in Track Record.
+
+---
+
 ## 2026-03-29 — Background Worker, AI Caching, Fed Macro Expansion
 
 ### Background Worker (`worker.py`)

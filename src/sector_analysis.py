@@ -1420,10 +1420,22 @@ def _render_guidance_tab(cfg: SectorConfig, kp):
     live = _fetch_live_estimates(_tickers) if _tickers else {}
 
     _has_live = len(live) > 0
+    _snap_date_str = snap.get("date", "N/A")
     st.caption(
-        f"Earnings call guidance (scraped {snap.get('date', 'N/A')}) "
+        f"Earnings call guidance (scraped {_snap_date_str}) "
         f"{'+ **live Wall Street consensus** (green = updated from API)' if _has_live else '+ analyst consensus'}."
     )
+    # Staleness warning
+    try:
+        from datetime import datetime as _dt_snap
+        _snap_dt = _dt_snap.strptime(_snap_date_str, "%Y-%m-%d").date()
+        _days_old = (_dt_snap.now().date() - _snap_dt).days
+        if _days_old > 90:
+            st.warning(f"Guidance snapshot is **{_days_old} days old**. Data may not reflect recent earnings or guidance updates.")
+        elif _days_old > 30:
+            st.caption(f"Snapshot is {_days_old} days old — consider refreshing after next earnings season.")
+    except Exception:
+        pass
 
     # Validate guidance data against recent splits
     try:

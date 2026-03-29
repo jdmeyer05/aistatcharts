@@ -521,3 +521,40 @@ Mar 26, 2026 (cont.) — Power Strategies, Portfolio Optimizer Upgrades, Factor 
   - Fixed walk-forward rebalance date alignment
   - Fixed Power Strategies boolean indexing crash, ERCOT peak hour definition,
     $0 price handling, fuel type column name detection
+
+Mar 28-29, 2026 — Major Platform Upgrade + Similar Day Forecast v4:
+
+  SIMILAR DAY PRICE FORECAST (page 40, tab 8):
+  - No AI prompts used — pure quantitative weather/price matching
+  - 5-node population-weighted weather (Houston 35%, Dallas 30%, San Antonio 15%,
+    Austin 10%, Corpus Christi 10%)
+  - Three match modes: Weather + Hourly Curve, Weather Only, Load Shape
+  - Hourly temperature curve correlation (not just daily aggregates)
+  - ERCOT historical load profile matching via fetch_load_history()
+  - Bootstrap 80%/95% confidence intervals (500 iterations)
+  - Spike-robust estimation (trimmed mean for hours >$150/MWh)
+  - Rolling marginal heat rate via 60-day power-on-gas regression
+  - Hub basis adjustment for non-HUBAVG settlement points
+  - DAM-RT basis spread forecast from similar day RT/DAM differentials
+  - ERCOT reserve margin + grid frequency from supply-demand dashboard
+  - Block-level products (Peak, Off-Peak, Super-Peak, Evening Ramp, Overnight)
+  - P&L scenarios at 6 entry price levels
+  - Rolling 7/30-day MAPE accuracy tracking persisted to Supabase
+  - 3-day price heatmap using extended Open-Meteo forecast
+
+  TRACK RECORD (page 47) — Complete Rewrite:
+  - No AI prompts — evaluates predictions from other pages
+  - 5 tabs: Platform Scorecard, Tool Breakdown, Signal Engine, Position
+    Performance, Prediction Log
+  - Confusion matrix (TP/FP/TN/FN), precision/recall/F1 per source
+  - Rolling 20-prediction accuracy trend (overall + per-tool)
+  - Conviction vs accuracy binned analysis
+  - Position P&L distribution, win rate, profit factor
+  - Filterable prediction log (tool, status, direction)
+
+  BUG FIXES:
+  - Fixed `continue` outside loop in Quant Lab (page 36, line 730)
+  - Fixed 6 division-by-zero risks in Power Strategies
+  - Fixed KeyError risks in Track Record (unsafe dict access)
+  - Fixed FOMC date duplication (page 18 had wrong dates vs centralized module)
+  - Added guidance staleness warning to sector pages (>30 days caption, >90 days alert)

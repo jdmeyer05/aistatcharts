@@ -18,7 +18,7 @@ Opens at **http://localhost:8501** (or next available port).
 - **Unified Signal Engine** -- aggregates signals from 8+ analysis pages into weighted composite scores per ticker
 - **Historical Metrics Store** -- daily vol/options snapshots with 252-day percentile ranks
 - **Position Lifecycle Manager** -- Greek tracking, P&L attribution (delta/gamma/theta/vega), alerts, trade journal
-- **14-table Supabase backend** -- signals, metrics, positions, predictions, chat history, API cache, AI usage tracking
+- **18-table Supabase backend** -- signals, metrics, positions, predictions, chat history, API cache, AI response cache, price history, user preferences, conflict timeline, AI usage tracking
 - **API response caching** -- Polygon responses cached in Supabase (~100ms vs ~1.5s on cache hit)
 - **AI response caching** -- Gemini/Grok/Claude responses cached by input hash, shared across users
 - **Hourly background worker** -- GitHub Actions cron updates conflict analysis, briefings, timeline, metrics 24/7
@@ -72,11 +72,11 @@ Opens at **http://localhost:8501** (or next available port).
 | **Portfolio Optimizer** | 9 allocation methods head-to-head: tangency, robust Sharpe, min variance, risk parity, max diversification, HRP (Ward), HERC (CVaR), HCAA (1/N), Black-Litterman. Ledoit-Wolf covariance denoising. Walk-forward OOS backtest. Dendrogram visualization. |
 | **Signal Scanner** | 8-tab institutional scanner: momentum (12-1, acceleration, risk-adjusted), mean reversion (RSI/BB/Z-score, confluence), value & quality (PE/PB/ROE/margins), earnings & sentiment (EPS revisions, insider buying), regime & microstructure (VPIN, entropy), factor correlation (redundancy, eigenvalue decomposition), composite ranking (configurable weights). |
 | **Meta Analysis** | 9-tab cross-method portfolio comparison engine: walk-forward equity curves, allocations with rebalance history, forward return estimates (analyst/EPS/valuation/macro), performance ranking, institutional analytics (net-of-cost, regime analysis, capture ratios, stress tests, capacity), de Prado statistical tests (DSR, PBO, sequential bootstrap, min track record), drawdown duration, rolling analysis, universe grid with hierarchical two-layer allocation. SPY benchmark. CSV export. |
-| **Power Strategies** | Spark spreads, heat rate trades, peak/off-peak, RT vs DAM arb, renewable curtailment, congestion analysis. Live intraday charts. De Prado-style strategy backtester with walk-forward, sequential bootstrap, DSR. Multi-strategy meta-analysis with HRP/risk parity blending. |
+| **Power Strategies** | Spark spreads, heat rate trades, peak/off-peak, RT vs DAM arb, renewable curtailment, congestion analysis. Live intraday charts. **Similar Day Price Forecast v4**: 5-node weather matching (Houston/Dallas/SA/Austin/CC), hourly temperature curve correlation, ERCOT load shape matching, bootstrap 80%/95% CI, spike-robust estimation, rolling marginal heat rate regression, hub basis adjustment, DAM-RT basis forecast, reserve margin alerts, block product P&L scenarios, 3-day heatmap, rolling 7/30-day MAPE tracker. De Prado-style strategy backtester with walk-forward, sequential bootstrap, DSR. |
 | **Calendar Spreads** | 8-tab calendar spread suite: builder, term structure, scanner with VIX regime, P&L simulator, roll optimizer, risk analysis, backtest, AI assessment |
 | **Vol Surface** | 9-tab: 3D surface, IV skew, term structure, dislocations, skew metrics, gamma scalping (with P&L backtest), surface animation (real historical data), surface comparison (date/call-put/cross-ticker), Gemini 2.5 Pro AI trade ideas |
 | **Portfolio Greeks** | Position entry (imports from Position Book), aggregate dollar Greeks, risk scenario heatmap, Greeks by expiration, Greeks over time, delta hedging calculator with gamma scalping P&L projection |
-| **Track Record** | Prediction accuracy dashboard — evaluates T+30/60/90 outcomes for every AI signal |
+| **Track Record** | 5-tab institutional accountability dashboard: platform scorecard (rolling accuracy, calibration curve, win/loss streaks), tool breakdown (confusion matrix, precision/recall/F1, return distributions, best/worst calls), signal engine performance (conviction vs accuracy, source weights), position P&L (win rate, profit factor, closed position analytics), full prediction log with filters |
 | **Universe Portfolio** | 15-group universe scan, cross-group correlation, hierarchical two-layer allocation, walk-forward backtest, statistical tests |
 | **Market Expectations** | Cross-asset options intelligence: vol dashboard, term structure comparison, skew landscape, PCA, implied correlation, VRP, trade synthesis |
 | **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
@@ -251,7 +251,7 @@ pages/
   18_Economic_Calendar.py FRED releases, yield curve, earnings, auctions
   19_Iran_Conflict.py     AI-powered conflict intelligence (3 models)
   20_Futures.py           Multi-asset futures dashboard
-  21_Fed_Macro_Drivers.py Fed policy dashboard (4 tabs)
+  21_Fed_Macro_Drivers.py Fed policy dashboard (8 tabs)
   22_Smart_Money.py       13F holdings, congressional trades, activist investors
   23_Power_Analytics.py   Duck curve, heat rates, spark spreads, stack analysis
   24-34                   Sector analysis (all 11 SPDR sectors: XLE-XLRE)
@@ -260,14 +260,14 @@ pages/
   37_Factor_Decomposition.py  Fama-French 5-factor + momentum decomposition
   38_Portfolio_Optimizer.py    6 allocation methods + Black-Litterman
   39_Signal_Scanner.py    Systematic signal scanner (momentum, mean reversion, composite)
-  40_Power_Strategies.py  Power trading strategies (9 tabs: charts, spark, heat rate, peak/off-peak, RT/DAM, curtailment, congestion, backtest, meta)
+  40_Power_Strategies.py  Power trading strategies (10 tabs: charts, spark, heat rate, peak/off-peak, RT/DAM, curtailment, congestion, similar day forecast v4, backtest, meta)
   41_Meta_Analysis.py     9-tab cross-method portfolio comparison engine with hierarchical allocation
   42_Calendar_Spreads.py  8-tab calendar spread suite with scanner, backtest, AI assessment
   43_Vol_Surface.py       9-tab vol surface: 3D, skew, term structure, dislocations, metrics, gamma scalp, animation, comparison, Gemini AI trade ideas
   44_Portfolio_Greeks.py   Position-level Greeks with delta hedging calculator
   45_Universe_Portfolio.py 7-tab multi-group portfolio construction engine
   46_Market_Expectations.py 8-tab cross-asset options intelligence with trade synthesis
-  47_Track_Record.py      Prediction accuracy dashboard
+  47_Track_Record.py      5-tab institutional track record (scorecard, tool breakdown, signals, positions, log)
   99_Login.py             Standalone login/register page (accessible via Settings popover)
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)
@@ -328,7 +328,7 @@ Payment links in `src/auth.py` -> `STRIPE_LINKS`. Tier detection: price metadata
 
 **Webhook:** dashboard.stripe.com/webhooks -> endpoint `/stripe/webhook` -> events: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed`
 
-**Supabase tables (14):**
+**Supabase tables (18):**
 - `subscriptions` -- email, plan_type, status, stripe_customer_id, stripe_price_id
 - `user_tokens` -- email, balance
 - `payment_failures` -- email, invoice_id, failed_at, resolved
@@ -343,6 +343,10 @@ Payment links in `src/auth.py` -> `STRIPE_LINKS`. Tier detection: price metadata
 - `chat_history` -- persistent chat conversation log
 - `source_credibility` -- news/intel source reliability scores
 - `api_cache` -- Polygon API response cache (TTL-based, ~100ms reads)
+- `ai_response_cache` -- AI model response cache with TTL (Gemini/Grok/Claude + Similar Day forecasts)
+- `price_history` -- daily OHLCV cache (fetch once from Polygon, append daily)
+- `user_preferences` -- persistent user settings (active ticker, watchlist, theme, heatmap defaults)
+- `conflict_timeline` -- Grok-discovered conflict events with auto-update
 
 **Supabase views:**
 - `signal_composites` -- real-time weighted signal aggregation in SQL
