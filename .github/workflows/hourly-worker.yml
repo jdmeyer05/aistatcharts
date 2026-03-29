@@ -2,10 +2,13 @@ name: Hourly Worker
 
 on:
   schedule:
-    # Run every hour at minute 5 (avoid exact :00 when GitHub is busiest)
-    - cron: '5 * * * *'
+    # Market hours (Mon-Fri 9am-5pm ET = 13:00-21:00 UTC): every hour
+    - cron: '5 13-21 * * 1-5'
+    # Off-hours (Mon-Fri before/after market): every 4 hours
+    - cron: '5 1,5,9 * * 1-5'
+    # Weekends: every 4 hours (conflict doesn't stop on weekends)
+    - cron: '5 1,5,9,13,17,21 * * 0,6'
   workflow_dispatch:
-    # Allow manual trigger from GitHub Actions tab
     inputs:
       task:
         description: 'Task to run'
