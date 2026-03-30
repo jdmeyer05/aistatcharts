@@ -21,7 +21,7 @@ TIERS = {
             "13_Power_Risk_VaR", "14_Oil_Fundamentals", "15_NatGas_Fundamentals",
             "16_ERCOT_Power", "17_ERCOT_Capacity", "18_Economic_Calendar",
             "19_Iran_Conflict", "20_Futures", "21_Fed_Macro_Drivers",
-            "22_Smart_Money", "23_Power_Analytics", "24_Energy_Sector",
+            "22_Smart_Money", "23_Power_Analytics", "24_Sector_Analysis",
             "42_Calendar_Spreads", "43_Vol_Surface", "44_Portfolio_Greeks",
             "45_Universe_Portfolio", "46_Market_Expectations", "47_Track_Record",
         ],

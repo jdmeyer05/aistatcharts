@@ -15,6 +15,17 @@ from src.auth import check_auth, check_page_access, render_upgrade_prompt, rende
 
 logger = logging.getLogger(__name__)
 
+# ── Pages disabled from nav and access (code preserved, toggle back by removing from set) ──
+DISABLED_PAGES = {
+    "05_Historical_Analysis",   # Redundant — Stock Analysis covers price history
+    "07_Options_Flow",          # Redundant — Options Analysis covers flow
+    "09_ML_Stock_Predictor",    # Redundant — overlaps with RL Trading + Stock Analysis AI
+    "10_Tech_Screener",         # Redundant — Signal Scanner is far superior
+    "12_Monte_Carlo",           # Low-impact — lightweight niche tool
+    "13_Power_Risk_VaR",        # Low-impact — very basic VaR
+    "40_Power_Strategies",      # Merged into 23_Power_Analytics
+}
+
 # Base64-encode logo once at import time
 _LOGO_B64 = ""
 try:
@@ -51,17 +62,7 @@ PAGE_CONFIG = {
     "21_Fed_Macro_Drivers":  ("Fed & Macro Drivers | AI Statcharts", "🏦"),
     "22_Smart_Money":        ("Smart Money | AI Statcharts", "🏛️"),
     "23_Power_Analytics":    ("Power Analytics | AI Statcharts", "⚡"),
-    "24_Energy_Sector":      ("Energy Sector | AI Statcharts", "🛢️"),
-    "25_Financials_Sector":  ("Financials Sector | AI Statcharts", "🏦"),
-    "26_Tech_Sector":        ("Tech Sector | AI Statcharts", "💻"),
-    "27_Healthcare_Sector":  ("Healthcare Sector | AI Statcharts", "💊"),
-    "28_Industrials_Sector": ("Industrials Sector | AI Statcharts", "🏗️"),
-    "29_Comms_Sector":       ("Comms Sector | AI Statcharts", "📡"),
-    "30_ConsDisc_Sector":    ("Consumer Disc Sector | AI Statcharts", "🛒"),
-    "31_ConsStaples_Sector": ("Consumer Staples Sector | AI Statcharts", "🧴"),
-    "32_Utilities_Sector":   ("Utilities Sector | AI Statcharts", "⚡"),
-    "33_Materials_Sector":   ("Materials Sector | AI Statcharts", "⛏️"),
-    "34_RealEstate_Sector":  ("Real Estate Sector | AI Statcharts", "🏠"),
+    "24_Sector_Analysis":    ("Sector Analysis | AI Statcharts", "📊"),
     "35_Correlation":        ("Cross-Asset Correlation | AI Statcharts", "🔗"),
     "36_Quant_Lab":          ("Quant Lab | AI Statcharts", "🔬"),
     "37_Factor_Decomposition": ("Factor Decomposition | AI Statcharts", "🧬"),
@@ -93,6 +94,11 @@ def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collap
     _inject_mobile_session_guard()
     _inject_footer()
     render_background_notifications()
+
+    # Block disabled pages (even via direct URL)
+    if page_key in DISABLED_PAGES:
+        st.info("This page is currently unavailable.")
+        st.stop()
 
     # Tier-based page access gating
     if not check_page_access(page_key):
@@ -251,19 +257,7 @@ def render_header(current_page: str):
             ("46_Market_Expectations", "Market Expectations", "pages/46_Market_Expectations.py"),
             ("47_Track_Record", "Track Record", "pages/47_Track_Record.py"),
         ]),
-        ("Sectors", [
-            ("24_Energy_Sector", "Energy", "pages/24_Energy_Sector.py"),
-            ("25_Financials_Sector", "Financials", "pages/25_Financials_Sector.py"),
-            ("26_Tech_Sector", "Technology", "pages/26_Tech_Sector.py"),
-            ("27_Healthcare_Sector", "Healthcare", "pages/27_Healthcare_Sector.py"),
-            ("28_Industrials_Sector", "Industrials", "pages/28_Industrials_Sector.py"),
-            ("29_Comms_Sector", "Communication", "pages/29_Comms_Sector.py"),
-            ("30_ConsDisc_Sector", "Consumer Disc", "pages/30_ConsDisc_Sector.py"),
-            ("31_ConsStaples_Sector", "Consumer Staples", "pages/31_ConsStaples_Sector.py"),
-            ("32_Utilities_Sector", "Utilities", "pages/32_Utilities_Sector.py"),
-            ("33_Materials_Sector", "Materials", "pages/33_Materials_Sector.py"),
-            ("34_RealEstate_Sector", "Real Estate", "pages/34_RealEstate_Sector.py"),
-        ]),
+        ("Sectors", [("24_Sector_Analysis", "Sector Analysis", "pages/24_Sector_Analysis.py")]),
         ("Energy", [
             ("14_Oil_Fundamentals", "Oil", "pages/14_Oil_Fundamentals.py"),
             ("15_NatGas_Fundamentals", "Natural Gas", "pages/15_NatGas_Fundamentals.py"),
@@ -279,6 +273,13 @@ def render_header(current_page: str):
             ("22_Smart_Money", "Smart Money", "pages/22_Smart_Money.py"),
         ]),
     ]
+
+    # Filter out disabled pages from nav
+    nav_groups = [
+        (group_name, [p for p in pages if p[0] not in DISABLED_PAGES])
+        for group_name, pages in nav_groups
+    ]
+    nav_groups = [(g, p) for g, p in nav_groups if p]  # Drop empty groups
 
     nav_cols = st.columns(len(nav_groups) + 1)
     for col, (group_name, pages) in zip(nav_cols, nav_groups):

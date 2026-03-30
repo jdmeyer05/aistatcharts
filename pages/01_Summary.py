@@ -592,7 +592,7 @@ with fc2:
         _feature_card("🌊", "Vol Surface", "3D IV surface, skew, Gemini trade ideas", "pages/43_Vol_Surface.py")
 with fc3:
     with st.container(border=True):
-        _feature_card("🎯", "ML Predictor", "Random forest multi-horizon forecasts", "pages/09_ML_Stock_Predictor.py")
+        _feature_card("🎖️", "Iran Conflict", "3-model AI war analysis & OSINT", "pages/19_Iran_Conflict.py")
 with fc4:
     with st.container(border=True):
         _feature_card("📡", "Signal Scanner", "Multi-factor cross-asset ranking", "pages/39_Signal_Scanner.py")
@@ -600,7 +600,7 @@ with fc4:
 fc5, fc6, fc7, fc8 = st.columns(4)
 with fc5:
     with st.container(border=True):
-        _feature_card("💧", "Options Flow", "GEX, P/C ratio, block trades", "pages/07_Options_Flow.py")
+        _feature_card("🏦", "Fed & Macro", "FOMC diff, inflation, yield curve", "pages/21_Fed_Macro_Drivers.py")
 with fc6:
     with st.container(border=True):
         _feature_card("🏗️", "Backtester", "Walk-forward algo strategy testing", "pages/11_Algo_Backtester.py")
@@ -620,7 +620,7 @@ with fc10:
         _feature_card("📅", "Economic Calendar", "FRED releases, earnings, Treasury auctions", "pages/18_Economic_Calendar.py")
 with fc11:
     with st.container(border=True):
-        _feature_card("🎲", "Monte Carlo", "GBM, Student-t, bootstrap simulation", "pages/12_Monte_Carlo.py")
+        _feature_card("🎯", "Track Record", "Prediction accuracy & accountability", "pages/47_Track_Record.py")
 with fc12:
     with st.container(border=True):
         _feature_card("📈", "Calendar Spreads", "Term structure trades, roll optimization", "pages/42_Calendar_Spreads.py")
