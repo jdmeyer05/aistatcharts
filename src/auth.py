@@ -15,10 +15,8 @@ TIERS = {
     "free": {
         "name": "Free",
         "pages": [
-            "01_Summary", "05_Historical_Analysis", "06_Options_Analysis",
-            "07_Options_Flow", "08_Options_Lab", "09_ML_Stock_Predictor",
-            "10_Tech_Screener", "11_Algo_Backtester", "12_Monte_Carlo",
-            "13_Power_Risk_VaR", "14_Oil_Fundamentals", "15_NatGas_Fundamentals",
+            "01_Summary", "06_Options_Analysis", "08_Options_Lab",
+            "11_Algo_Backtester", "14_Oil_Fundamentals", "15_NatGas_Fundamentals",
             "16_ERCOT_Power", "17_ERCOT_Capacity", "18_Economic_Calendar",
             "19_Iran_Conflict", "20_Futures", "21_Fed_Macro_Drivers",
             "22_Smart_Money", "23_Power_Analytics", "24_Sector_Analysis",
@@ -538,13 +536,13 @@ def render_pricing_cards(current_tier: str = "free"):
     return
     plans = [
         {"key": "pro", "name": "Pro", "price": "$12", "period": "/mo",
-         "features": ["All 20 pages", "5 AI analyses/day", "3 AI models", "Unlimited chat (Gemini)"],
+         "features": ["All 30 pages", "5 AI analyses/day", "3 AI models", "Unlimited chat (Gemini)"],
          "color": "#00d1ff"},
         {"key": "premium", "name": "Premium", "price": "$29", "period": "/mo",
-         "features": ["All 20 pages", "20 AI analyses/day", "3 AI models", "RL Trading", "Unlimited chat"],
+         "features": ["All 30 pages", "20 AI analyses/day", "3 AI models", "RL Trading", "Unlimited chat"],
          "color": "#ffaa00"},
         {"key": "platinum", "name": "Platinum", "price": "$79", "period": "/mo",
-         "features": ["All 20 pages", "50 AI analyses/day", "3 AI models + Claude Opus", "RL Trading", "Unlimited chat"],
+         "features": ["All 30 pages", "50 AI analyses/day", "3 AI models + Claude Opus", "RL Trading", "Unlimited chat"],
          "color": "#00ff96"},
     ]
 

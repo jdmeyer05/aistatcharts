@@ -73,7 +73,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `ai_cache.py` | AI response caching — eliminates redundant Gemini/Grok/Claude calls across users |
 | `user_prefs.py` | Persistent user preferences via Supabase (active ticker, watchlist, settings) |
 
-### pages/ — 47 App Pages
+### pages/ — 30 Active Pages (7 disabled, 11 sectors consolidated into 1)
 
 | # | File | What It Does |
 |---|------|-------------|
@@ -81,15 +81,9 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 02 | `Scenario_Analysis.py` | **Flagship** — 7-tab macro scenario engine (see deep dive below) |
 | 03 | `Stock_Analysis.py` | 3-model AI stock scorecard (Grok + Gemini + Claude), EDGAR insider scoring, 8-K events, XBRL financial ratios |
 | 04 | `RL_Trading.py` | Dueling DQN ensemble with prioritized replay, 31 features, 10-tab analysis including walk-forward, bootstrap significance, Monte Carlo robustness, feature redundancy detection, Grok AI assessment |
-| 05 | `Historical_Analysis.py` | Multi-year price history, seasonal decomposition, volatility, drawdown |
 | 06 | `Options_Analysis.py` | IV skew, open interest walls, Greek exposures |
-| 07 | `Options_Flow.py` | Unusual activity scanner, put/call ratios, GEX |
 | 08 | `Options_Lab.py` | Vol surface, earnings analyzer, multi-leg strategy modeler |
-| 09 | `ML_Stock_Predictor.py` | 30-day Random Forest forecast |
-| 10 | `Tech_Screener.py` | EMA, RSI, MACD, Bollinger Bands |
 | 11 | `Algo_Backtester.py` | 13 strategies, 9 tabs: equity curve, drawdown, trade log (DSR + PBO + bootstrap), monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. De Prado: Deflated Sharpe, PBO (purged CPCV), Triple Barrier, bet sizing, fracdiff, sequential bootstrap |
-| 12 | `Monte_Carlo.py` | Student-t, empirical block bootstrap, and GBM simulation with fat-tail warnings |
-| 13 | `Power_Risk_VaR.py` | Portfolio VaR/CVaR |
 | 14 | `Oil_Fundamentals.py` | EIA crude data |
 | 15 | `NatGas_Fundamentals.py` | EIA storage & supply |
 | 16 | `ERCOT_Power.py` | Real-time TX grid |
@@ -97,18 +91,26 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 18 | `Economic_Calendar.py` | FRED releases, yield curve |
 | 19 | `Iran_Conflict.py` | **AI-Powered Conflict Intelligence** — 3 specialized models, self-updating infrastructure, Polymarket, oil term structure |
 | 20 | `Futures.py` | Multi-asset futures snapshot |
-| 21 | `Fed_Macro_Drivers.py` | Fed policy dashboard (4 tabs) |
+| 21 | `Fed_Macro_Drivers.py` | Fed policy dashboard (8 tabs) |
 | 22 | `Smart_Money.py` | 13F institutional holdings, congressional trades, activist investors, 8-K events |
-| 23 | `Power_Analytics.py` | Duck curve, implied heat rates, spark spreads, generation stack merit order (ERCOT + EIA) |
-| 24 | `Energy_Sector.py` | Energy sector analysis (XLE) — 8-tab template via `sector_analysis.py` |
-| 25-34 | `*_Sector.py` | Financials, Tech, Healthcare, Industrials, Comms, ConsDisc, ConsStaples, Utilities, Materials, Real Estate |
+| 23 | `Power_Analytics.py` | Consolidated 7-tab power page: duck curve, spark spreads, stack analysis, peak/off-peak, RT/DAM arb, similar day forecast v4, strategy backtest |
+| 24 | `Sector_Analysis.py` | Dynamic sector page — all 11 SPDR sectors via dropdown (replaces 24-34) |
 | 35 | `Correlation.py` | Cross-asset correlation matrix, regime analysis, hierarchical clustering, PCA, breakdown alerts |
 | 36 | `Quant_Lab.py` | De Prado AFML: frac diff, CUSUM, SADF, triple barrier, meta-labeling, sequential bootstrap, MDI/MDA/SFI/SHAP, HRP, microstructure, entropy |
 | 37 | `Factor_Decomposition.py` | Fama-French 5+Mom: factor returns, exposure betas, alpha attribution, rolling style drift, risk decomposition |
 | 38 | `Portfolio_Optimizer.py` | 9 methods: tangency, robust Sharpe, min-var, risk parity, max diversification, HRP (Ward), HERC (CVaR), HCAA (1/N), Black-Litterman. Ledoit-Wolf denoising. Walk-forward backtest. Dendrogram. |
 | 39 | `Signal_Scanner.py` | 8-tab institutional scanner: momentum, mean reversion, value & quality, earnings & sentiment, regime & microstructure (VPIN/entropy), factor correlation, composite ranking |
-| 40 | `Power_Strategies.py` | Power trading: live charts (NG/CL/XLE/XLU + ERCOT system), spark spreads, heat rate, peak/off-peak, RT/DAM arb, curtailment, congestion, de Prado backtester, multi-strategy meta-analysis |
 | 41 | `Meta_Analysis.py` | 9-tab cross-method portfolio engine: walk-forward equity curves, allocations, forward estimates, institutional analytics (net-of-cost, regime, capture ratios, stress, capacity), de Prado stats (DSR, PBO, bootstrap), universe grid, hierarchical two-layer allocation, SPY benchmark, CSV export |
+| 42 | `Calendar_Spreads.py` | 8-tab calendar spread suite with scanner, backtest, AI assessment |
+| 43 | `Vol_Surface.py` | 9-tab vol surface with Gemini AI trade ideas |
+| 44 | `Portfolio_Greeks.py` | Position-level Greeks with delta hedging calculator |
+| 45 | `Universe_Portfolio.py` | 7-tab multi-group portfolio construction |
+| 46 | `Market_Expectations.py` | 8-tab cross-asset options intelligence |
+| 47 | `Track_Record.py` | 5-tab institutional track record |
+| 99 | `Login.py` | Standalone login/register page |
+
+**Disabled pages** (code preserved, toggle via `DISABLED_PAGES` in `src/layout.py`):
+05 Historical Analysis, 07 Options Flow, 09 ML Predictor, 10 Tech Screener, 12 Monte Carlo, 13 VaR, 40 Power Strategies (merged into 23)
 
 ---
 
@@ -118,10 +120,10 @@ Defined in `src/auth.py`. Enforced by `setup_page()` in `src/layout.py`. Stripe 
 
 | Tier | Pages | AI Models | Daily Analyses | RL Trading | Analyst Chat | Price |
 |------|-------|-----------|---------------|------------|-------------|-------|
-| **Free** | 17 (no 02, 03, 04) | None | 0 | No | Gemini Flash (5/day) | $0 |
-| **Pro** | All 22 | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 5/day | No | Gemini Flash (unlimited) | $12/mo |
-| **Premium** | All 22 | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 20/day | Yes | Gemini Flash (unlimited) | $29/mo |
-| **Platinum** | All 22 | 3 + Claude Opus upgrade | 50/day | Yes | Gemini Flash (unlimited) | $79/mo |
+| **Free** | 21 (no 02, 03, 04) | None | 0 | No | Gemini Flash (5/day) | $0 |
+| **Pro** | All 30 | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 5/day | No | Gemini Flash (unlimited) | $12/mo |
+| **Premium** | All 30 | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 20/day | Yes | Gemini Flash (unlimited) | $29/mo |
+| **Platinum** | All 30 | 3 + Claude Opus upgrade | 50/day | Yes | Gemini Flash (unlimited) | $79/mo |
 
 Admin emails (`jdmeyer05@gmail.com`, `local-dev@preview`) always get Platinum.
 

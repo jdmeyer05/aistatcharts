@@ -43,7 +43,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 | | Free | Pro ($12/mo) | Premium ($29/mo) | Platinum ($79/mo) |
 |---|---|---|---|---|
-| **Pages** | 18 | All 23 | All 23 | All 23 |
+| **Pages** | 21 | All 30 | All 30 | All 30 |
 | **AI Analyses/day** | 0 | 5 | 20 | 50 |
 | **AI Models** | None | 3 (Grok 4, Gemini 3.1 Pro, Claude Sonnet) | 3 | 3 + Claude Opus upgrade |
 | **RL Trading** | No | No | Yes | Yes |

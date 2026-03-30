@@ -36,32 +36,26 @@ PLOTLY_NOBAR = {"displayModeBar": False}
 
 SOURCE_LABELS = {
     "stock_analysis": "Stock Analysis (AI)",
-    "ml_predictor": "ML Tactical Forecast",
     "signal_scanner": "Signal Scanner",
     "scenario_analysis": "Scenario Analysis",
     "calendar_scanner": "Calendar Spread",
     "rl_trading": "RL Trading Agent",
     "analyst_consensus": "Analyst Consensus",
     "vol_surface": "Vol Surface",
-    "options_flow": "Options Flow",
     "market_expectations": "Market Expectations",
     "correlation": "Cross-Asset Corr",
-    "tech_screener": "Tech Screener",
 }
 
 SOURCE_COLORS = {
     "stock_analysis": "#00d1ff",
-    "ml_predictor": "#ff6b35",
     "signal_scanner": "#00ff88",
     "scenario_analysis": "#ff2277",
     "calendar_scanner": "#ffdd00",
     "rl_trading": "#a855f7",
     "analyst_consensus": "#06b6d4",
     "vol_surface": "#f97316",
-    "options_flow": "#22c55e",
     "market_expectations": "#eab308",
     "correlation": "#8b5cf6",
-    "tech_screener": "#64748b",
 }
 
 # ═══════════════════════════════════════════════
