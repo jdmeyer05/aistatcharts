@@ -16,3 +16,4 @@ openpyxl>=3.1.0
 flask>=3.0.0
 statsmodels
 shap
+yfinance>=0.2.36
