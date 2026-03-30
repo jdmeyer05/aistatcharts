@@ -1,6 +1,6 @@
 AI STATCHARTS — PROMPT HISTORY
 ================================
-Last updated: March 27, 2026
+Last updated: March 29, 2026
 
 This file documents all AI prompts used in the platform, their purpose,
 and the evolution of key changes. Organized by feature.
@@ -558,3 +558,40 @@ Mar 28-29, 2026 — Major Platform Upgrade + Similar Day Forecast v4:
   - Fixed KeyError risks in Track Record (unsafe dict access)
   - Fixed FOMC date duplication (page 18 had wrong dates vs centralized module)
   - Added guidance staleness warning to sector pages (>30 days caption, >90 days alert)
+
+
+================================================================================
+MARCH 29, 2026 — PLATFORM TRIM (47 → 30 ACTIVE PAGES)
+================================================================================
+No AI prompt changes. Structural consolidation only.
+
+  SECTOR CONSOLIDATION (11 → 1):
+  - New pages/24_Sector_Analysis.py: dropdown selector for all 11 SPDR sectors
+  - All SectorConfig definitions (companies, guidance, subsectors, macro overlays,
+    factor proxies, COT commodities) consolidated into single SECTORS dict
+  - Uses same render_sector_page() template — no functional change to sector content
+  - Original files (25-34) preserved, removed from nav
+
+  POWER PAGE MERGE (2 → 1, 7 tabs):
+  - Consolidated 23_Power_Analytics (4 tabs) + 40_Power_Strategies (10 tabs)
+  - Kept: Duck Curve, Spark Spread, Stack Analysis (from 23),
+    Peak/Off-Peak, RT vs DAM, Similar Day Forecast, Strategy Backtest (from 40)
+  - Dropped: Heat Rate (subsumed by Spark Spread), Live Charts,
+    Renewable Curtailment, Congestion, Meta-Analysis
+  - Unified data loading section (merged ERCOT API + EIA + gas/oil fetches)
+  - Similar Day Forecast (1,310 lines) and Strategy Backtest (228 lines) ported
+    with all helper functions, Supabase MAPE tracking, and de Prado methods intact
+
+  DISABLED PAGES (7) via DISABLED_PAGES set in src/layout.py:
+  - 05_Historical_Analysis, 07_Options_Flow, 09_ML_Stock_Predictor,
+    10_Tech_Screener, 12_Monte_Carlo, 13_Power_Risk_VaR, 40_Power_Strategies
+  - Nav filtering removes from dropdown; setup_page() blocks direct URL access
+  - All code preserved — remove from set to re-enable
+
+  BUG FIXES:
+  - Spark spread fuel cost: removed /10 on rolling marginal heat rate
+    (_rolling_hr is MMBtu/MWh, not BTU/kWh — no conversion needed)
+  - Operator precedence: (not _prev_fc.data) if _db_acc else True
+  - Added yfinance, pdfplumber, toml to requirements.txt
+  - Added build-essential to Dockerfile
+  - Worker now uses requirements.txt instead of hardcoded pip install

@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-03-29 — Platform Trim: 47 → 30 Active Pages
+
+### Sector Consolidation (11 pages → 1 dynamic page)
+- New `pages/24_Sector_Analysis.py` with dropdown selector for all 11 SPDR sectors (XLE through XLRE)
+- All sector configs (companies, guidance snapshots, subsectors, macro overlays) consolidated into single `SECTORS` dict
+- Original 11 individual sector files (25-34) preserved but removed from nav
+- `src/auth.py` free tier page list updated
+
+### Power Page Merge (2 pages → 1, 7 tabs)
+- Consolidated `23_Power_Analytics.py` (4 tabs) + `40_Power_Strategies.py` (10 tabs) into single 7-tab page:
+  1. Duck Curve (from 23) — net load profile, ramp analysis, over-gen risk, storage arb, forecast vs actual, multi-ISO comparison
+  2. Spark Spread (from 23) — VOM-adjusted margins, hourly profitability, System Lambda
+  3. Stack Analysis (from 23) — merit order dispatch, fuel mix, inframarginal rent
+  4. Peak/Off-Peak (from 40) — on-peak vs off-peak spread, calendar arb
+  5. RT vs DAM (from 40) — real-time vs day-ahead convergence
+  6. Similar Day Forecast (from 40) — weather-matched analog, bootstrap CI, MAPE tracker
+  7. Strategy Backtest (from 40) — de Prado walk-forward, sequential bootstrap, DSR
+- Dropped: Heat Rate (subsumed by Spark Spread), Live Charts, Renewable Curtailment, Congestion, Meta-Analysis
+
+### Pages Disabled (7) via `DISABLED_PAGES` in `src/layout.py`
+- `05_Historical_Analysis` — redundant with Stock Analysis
+- `07_Options_Flow` — covered by Options Analysis
+- `09_ML_Stock_Predictor` — overlaps with RL Trading + Stock Analysis AI
+- `10_Tech_Screener` — Signal Scanner is far superior
+- `12_Monte_Carlo` — lightweight niche tool
+- `13_Power_Risk_VaR` — very basic VaR
+- `40_Power_Strategies` — merged into Power Analytics
+
+### Bug Fixes
+- Fixed spark spread fuel cost calculation: removed erroneous `/10` divisor on rolling marginal heat rate (was making fuel costs 10x too low)
+- Fixed operator precedence in Similar Day Forecast accuracy tracker (`not x if y else z` → `(not x) if y else z`)
+- Removed dead variable `gas_price_float`
+
+### Summary Page Updates
+- Replaced 3 feature cards that linked to disabled pages (ML Predictor → Iran Conflict, Options Flow → Fed & Macro, Monte Carlo → Track Record)
+
+### Production Dependency Fixes
+- Added `yfinance>=0.2.36` to `requirements.txt` (used in 30+ files, missing from Docker build)
+- Added `pdfplumber>=0.10.0` to `requirements.txt` (Congressional trades PDF parsing)
+- Added `toml>=0.10.0` to `requirements.txt`
+- Added `build-essential` to Dockerfile `apt-get` for C extension compilation
+- GitHub Actions worker now installs from `requirements.txt` instead of hardcoded list
+
+---
+
 ## 2026-03-29 (cont.) — Similar Day Forecast v4, Track Record Rewrite, Bug Sweep
 
 ### Similar Day Price Forecast v4 (page 40) — 12 Improvements

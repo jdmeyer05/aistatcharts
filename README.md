@@ -13,7 +13,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **47 pages** of quantitative analysis tools + automated hourly background worker (incl. 11 sector pages, 6 quant research pages, power trading strategies, meta portfolio analysis, calendar spreads, vol surface with Gemini AI trade ideas, portfolio Greeks with delta hedging, universe portfolio, market expectations engine)
+- **30 active pages** (47 total, 7 disabled, 11 sectors consolidated into 1 dynamic page, 2 power pages merged into 1) + automated hourly background worker
 - **4 AI models**: Grok 4, Gemini 2.5 Pro, Claude Sonnet/Opus, Gemini 2.5 Flash (chat)
 - **Unified Signal Engine** -- aggregates signals from 8+ analysis pages into weighted composite scores per ticker
 - **Historical Metrics Store** -- daily vol/options snapshots with 252-day percentile ranks
@@ -63,23 +63,22 @@ Opens at **http://localhost:8501** (or next available port).
 | **Smart Money** | 13F institutional holdings, congressional trades, activist investors (13D), 8-K event search |
 | **Economic Calendar** | Today's events + countdown, week view, yield curve, inflation, labor, earnings, auctions |
 | **Algo Backtester** | 13 strategies, 9-tab analysis: equity curve, drawdown, trade log, monthly heatmap, return distribution, position chart, walk-forward (9 window combos), regime analysis, strategy comparison. López de Prado methods: Deflated Sharpe, PBO (CPCV), Triple Barrier exits, bet sizing, fractional differentiation, sequential bootstrap. |
-| **Monte Carlo** | Student-t (fat tails), empirical block bootstrap, and GBM simulation. Warns when normal assumptions don't fit. |
-| **Power Analytics** | Institutional-grade ERCOT power market analysis: duck curve (historical overlay, flexibility metrics, over-gen risk, storage arbitrage, forecast vs actual, multi-ISO comparison), implied heat rates (hourly curve, System Lambda, heat rate vs load scatter, duration curve), spark spreads (VOM-adjusted margins, hourly profitability, DAM vs RT, System Lambda vs fuel cost, duration curve), generation stack (gas fleet disaggregation, inframarginal rent, fuel mix area chart, belly vs peak, reserve margin). Data: ERCOT Public API (NP6-345, NP4-737, NP4-732, NP6-905, NP4-190, NP6-322, NP4-523), EIA Hourly Grid Monitor, yfinance NG/CL futures, ERCOT dashboard real-time. |
-| **Sector Analysis (11)** | All 11 SPDR sectors (XLE-XLRE): 8-tab template with revenue, CapEx, valuation, alpha signals, risk, guidance, macro overlay, pairs correlation. Shared via `src/sector_analysis.py`. |
+| **Power Analytics** | 7-tab consolidated power page: duck curve (historical overlay, flexibility metrics, over-gen risk, storage arbitrage, forecast vs actual, multi-ISO comparison), spark spreads (VOM-adjusted margins, hourly profitability, DAM vs RT), generation stack (gas fleet disaggregation, inframarginal rent, fuel mix, reserve margin), peak/off-peak spreads, RT vs DAM arb, Similar Day Price Forecast v4 (5-node weather matching, bootstrap CI, spike-robust estimation, rolling heat rate, MAPE tracker), strategy backtester (de Prado walk-forward, sequential bootstrap, DSR). Data: ERCOT Public API, EIA Hourly Grid Monitor, yfinance NG/CL futures, ERCOT dashboard. |
+| **Sector Analysis** | Dynamic single page with dropdown for all 11 SPDR sectors (XLE-XLRE): 8-tab template with revenue, CapEx, valuation, alpha signals, risk, guidance, macro overlay, pairs correlation. |
 | **Correlation** | Cross-asset correlation matrix, regime correlations (calm/normal/stress), rolling correlation, hierarchical clustering, breakdown alerts, PCA factor structure |
 | **Quant Lab** | Lopez de Prado methods: fractional differentiation, CUSUM filter, SADF bubble detection, triple barrier labeling, meta-labeling, sequential bootstrap, feature importance (MDI/MDA/SFI/SHAP), HRP, microstructure (VPIN/Kyle's Lambda/Amihud), entropy |
 | **Factor Decomposition** | Fama-French 5-factor + momentum decomposition: factor returns, exposure betas, alpha attribution waterfall, rolling style drift detection, risk decomposition pie |
 | **Portfolio Optimizer** | 9 allocation methods head-to-head: tangency, robust Sharpe, min variance, risk parity, max diversification, HRP (Ward), HERC (CVaR), HCAA (1/N), Black-Litterman. Ledoit-Wolf covariance denoising. Walk-forward OOS backtest. Dendrogram visualization. |
 | **Signal Scanner** | 8-tab institutional scanner: momentum (12-1, acceleration, risk-adjusted), mean reversion (RSI/BB/Z-score, confluence), value & quality (PE/PB/ROE/margins), earnings & sentiment (EPS revisions, insider buying), regime & microstructure (VPIN, entropy), factor correlation (redundancy, eigenvalue decomposition), composite ranking (configurable weights). |
 | **Meta Analysis** | 9-tab cross-method portfolio comparison engine: walk-forward equity curves, allocations with rebalance history, forward return estimates (analyst/EPS/valuation/macro), performance ranking, institutional analytics (net-of-cost, regime analysis, capture ratios, stress tests, capacity), de Prado statistical tests (DSR, PBO, sequential bootstrap, min track record), drawdown duration, rolling analysis, universe grid with hierarchical two-layer allocation. SPY benchmark. CSV export. |
-| **Power Strategies** | Spark spreads, heat rate trades, peak/off-peak, RT vs DAM arb, renewable curtailment, congestion analysis. Live intraday charts. **Similar Day Price Forecast v4**: 5-node weather matching (Houston/Dallas/SA/Austin/CC), hourly temperature curve correlation, ERCOT load shape matching, bootstrap 80%/95% CI, spike-robust estimation, rolling marginal heat rate regression, hub basis adjustment, DAM-RT basis forecast, reserve margin alerts, block product P&L scenarios, 3-day heatmap, rolling 7/30-day MAPE tracker. De Prado-style strategy backtester with walk-forward, sequential bootstrap, DSR. |
 | **Calendar Spreads** | 8-tab calendar spread suite: builder, term structure, scanner with VIX regime, P&L simulator, roll optimizer, risk analysis, backtest, AI assessment |
 | **Vol Surface** | 9-tab: 3D surface, IV skew, term structure, dislocations, skew metrics, gamma scalping (with P&L backtest), surface animation (real historical data), surface comparison (date/call-put/cross-ticker), Gemini 2.5 Pro AI trade ideas |
 | **Portfolio Greeks** | Position entry (imports from Position Book), aggregate dollar Greeks, risk scenario heatmap, Greeks by expiration, Greeks over time, delta hedging calculator with gamma scalping P&L projection |
 | **Track Record** | 5-tab institutional accountability dashboard: platform scorecard (rolling accuracy, calibration curve, win/loss streaks), tool breakdown (confusion matrix, precision/recall/F1, return distributions, best/worst calls), signal engine performance (conviction vs accuracy, source weights), position P&L (win rate, profit factor, closed position analytics), full prediction log with filters |
 | **Universe Portfolio** | 15-group universe scan, cross-group correlation, hierarchical two-layer allocation, walk-forward backtest, statistical tests |
 | **Market Expectations** | Cross-asset options intelligence: vol dashboard, term structure comparison, skew landscape, PCA, implied correlation, VRP, trade synthesis |
-| **+ 11 more** | Historical analysis, options (3 pages), ML predictor, screener, VaR, oil, natgas, ERCOT (2), futures |
+| **+ 6 more** | Options (2 active), oil, natgas, ERCOT (2), futures |
+| **Disabled (7)** | Historical Analysis, Options Flow, ML Predictor, Tech Screener, Monte Carlo, VaR, Power Strategies (merged into Power Analytics) |
 
 ## AI Models
 
@@ -246,29 +245,38 @@ pages/
   02_Scenario_Analysis.py Macro scenario engine (7 tabs)
   03_Stock_Analysis.py    AI stock analysis + EDGAR insider/8-K/XBRL
   04_RL_Trading.py        Reinforcement learning trading
-  05-13                   Historical, options (3), ML predictor, screener, backtester, Monte Carlo, VaR
+  05_Historical_Analysis.py  [DISABLED] — price history (covered by Stock Analysis)
+  06_Options_Analysis.py  Options chain analysis, IV skew, Greek exposures
+  07_Options_Flow.py      [DISABLED] — flow analysis (covered by Options Analysis)
+  08_Options_Lab.py       Strategy modeler, BS-MJD pricing, Greeks lab
+  09_ML_Stock_Predictor.py [DISABLED] — ML forecast (covered by RL Trading + Stock AI)
+  10_Tech_Screener.py     [DISABLED] — EMA/RSI scanner (covered by Signal Scanner)
+  11_Algo_Backtester.py   13 strategies, de Prado methods (DSR, PBO, triple barrier)
+  12_Monte_Carlo.py       [DISABLED] — simulation (niche, lightweight)
+  13_Power_Risk_VaR.py    [DISABLED] — basic VaR
   14-17                   Oil, NatGas, ERCOT Power, ERCOT Capacity
   18_Economic_Calendar.py FRED releases, yield curve, earnings, auctions
   19_Iran_Conflict.py     AI-powered conflict intelligence (3 models)
   20_Futures.py           Multi-asset futures dashboard
   21_Fed_Macro_Drivers.py Fed policy dashboard (8 tabs)
   22_Smart_Money.py       13F holdings, congressional trades, activist investors
-  23_Power_Analytics.py   Duck curve, heat rates, spark spreads, stack analysis
-  24-34                   Sector analysis (all 11 SPDR sectors: XLE-XLRE)
+  23_Power_Analytics.py   Consolidated 7-tab power page (duck curve, spark, stack, peak/off-peak, RT/DAM, similar day forecast, backtest)
+  24_Sector_Analysis.py   Dynamic sector page — all 11 SPDR sectors via dropdown
+  25-34                   [DISABLED] — individual sector pages (replaced by 24)
   35_Correlation.py       Cross-asset correlation, regime analysis, PCA
-  36_Quant_Lab.py         De Prado methods (8 tabs: frac diff, CUSUM, triple barrier, HRP, etc.)
-  37_Factor_Decomposition.py  Fama-French 5-factor + momentum decomposition
-  38_Portfolio_Optimizer.py    6 allocation methods + Black-Litterman
-  39_Signal_Scanner.py    Systematic signal scanner (momentum, mean reversion, composite)
-  40_Power_Strategies.py  Power trading strategies (10 tabs: charts, spark, heat rate, peak/off-peak, RT/DAM, curtailment, congestion, similar day forecast v4, backtest, meta)
-  41_Meta_Analysis.py     9-tab cross-method portfolio comparison engine with hierarchical allocation
-  42_Calendar_Spreads.py  8-tab calendar spread suite with scanner, backtest, AI assessment
-  43_Vol_Surface.py       9-tab vol surface: 3D, skew, term structure, dislocations, metrics, gamma scalp, animation, comparison, Gemini AI trade ideas
-  44_Portfolio_Greeks.py   Position-level Greeks with delta hedging calculator
-  45_Universe_Portfolio.py 7-tab multi-group portfolio construction engine
-  46_Market_Expectations.py 8-tab cross-asset options intelligence with trade synthesis
-  47_Track_Record.py      5-tab institutional track record (scorecard, tool breakdown, signals, positions, log)
-  99_Login.py             Standalone login/register page (accessible via Settings popover)
+  36_Quant_Lab.py         De Prado methods (8 tabs)
+  37_Factor_Decomposition.py  Fama-French 5-factor + momentum
+  38_Portfolio_Optimizer.py    9 allocation methods + Black-Litterman
+  39_Signal_Scanner.py    8-tab institutional signal scanner
+  40_Power_Strategies.py  [DISABLED] — merged into 23_Power_Analytics
+  41_Meta_Analysis.py     9-tab cross-method portfolio comparison engine
+  42_Calendar_Spreads.py  8-tab calendar spread suite
+  43_Vol_Surface.py       9-tab vol surface with Gemini AI trade ideas
+  44_Portfolio_Greeks.py   Position-level Greeks with delta hedging
+  45_Universe_Portfolio.py 7-tab multi-group portfolio construction
+  46_Market_Expectations.py 8-tab cross-asset options intelligence
+  47_Track_Record.py      5-tab institutional track record
+  99_Login.py             Standalone login/register page
 data/
   gdelt_events/           Cached GDELT daily event files (gitignored)
   signals/                Signal engine JSON fallback (gitignored)
