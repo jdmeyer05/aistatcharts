@@ -39,7 +39,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install supabase openai anthropic google-genai requests toml
+          pip install -r requirements.txt
 
       - name: Run worker
         env:
