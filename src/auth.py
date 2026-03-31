@@ -15,7 +15,7 @@ TIERS = {
     "free": {
         "name": "Free",
         "pages": [
-            "01_Summary", "06_Options_Analysis", "08_Options_Lab",
+            "00_Daily_Briefing", "01_Summary", "06_Options_Analysis", "08_Options_Lab",
             "11_Algo_Backtester", "14_Oil_Fundamentals", "15_NatGas_Fundamentals",
             "16_ERCOT_Power", "17_ERCOT_Capacity", "18_Economic_Calendar",
             "19_Iran_Conflict", "20_Futures", "21_Fed_Macro_Drivers",

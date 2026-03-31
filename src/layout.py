@@ -39,6 +39,7 @@ except Exception:
 
 # Page registry: filename key → (title, icon)
 PAGE_CONFIG = {
+    "00_Daily_Briefing":     ("Daily Briefing | AI Statcharts", "📋"),
     "01_Summary":            ("Summary | AI Statcharts", "🎯"),
     "02_Scenario_Analysis":  ("Scenario Analysis | AI Statcharts", "🔮"),
     "03_Stock_Analysis":     ("Stock Analysis | AI Statcharts", "🧠"),
@@ -227,7 +228,10 @@ def render_header(current_page: str):
 
     # ── Row 2: Nav dropdowns (Streamlit widgets for working links) ──
     nav_groups = [
-        ("Summary", [("01_Summary", "Summary", "pages/01_Summary.py")]),
+        ("Summary", [
+            ("00_Daily_Briefing", "Daily Briefing", "pages/00_Daily_Briefing.py"),
+            ("01_Summary", "Dashboard", "pages/01_Summary.py"),
+        ]),
         ("AI Analysis", [
             ("02_Scenario_Analysis", "Scenario Analysis", "pages/02_Scenario_Analysis.py"),
             ("03_Stock_Analysis", "Stock Analysis", "pages/03_Stock_Analysis.py"),
