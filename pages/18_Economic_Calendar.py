@@ -167,9 +167,14 @@ now = datetime.now()
 week_end = today + timedelta(days=30)
 
 with fun_loader("data"):
-    df_econ = fetch_fred_calendar(fred_key) if fred_key else pd.DataFrame()
-    df_earnings = fetch_earnings_calendar(finnhub_key, today.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")) if finnhub_key else pd.DataFrame()
-    df_auctions = fetch_treasury_auctions()
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as _ex:
+        _f_econ = _ex.submit(fetch_fred_calendar, fred_key) if fred_key else None
+        _f_earn = _ex.submit(fetch_earnings_calendar, finnhub_key, today.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")) if finnhub_key else None
+        _f_auct = _ex.submit(fetch_treasury_auctions)
+    df_econ = _f_econ.result() if _f_econ else pd.DataFrame()
+    df_earnings = _f_earn.result() if _f_earn else pd.DataFrame()
+    df_auctions = _f_auct.result()
 
 
 # ============================

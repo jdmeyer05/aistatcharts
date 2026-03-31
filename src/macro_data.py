@@ -62,9 +62,13 @@ def fetch_growth_proxies() -> dict:
     result = {}
     try:
         import yfinance as yf
-        # Copper/Gold ratio
-        cu = yf.download("HG=F", period="60d", progress=False)
-        au = yf.download("GC=F", period="60d", progress=False)
+        from concurrent.futures import ThreadPoolExecutor
+        # Copper/Gold ratio — parallel fetch
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            _f_cu = _ex.submit(yf.download, "HG=F", period="60d", progress=False)
+            _f_au = _ex.submit(yf.download, "GC=F", period="60d", progress=False)
+        cu = _f_cu.result()
+        au = _f_au.result()
         if cu is not None and au is not None and not cu.empty and not au.empty:
             _cu_close = cu["Close"].iloc[-1]
             _au_close = au["Close"].iloc[-1]
@@ -224,14 +228,21 @@ def fetch_fed_balance_sheet() -> pd.DataFrame:
         if not fred_key:
             return pd.DataFrame()
 
-        rows = {}
-        for sid, label in FED_BALANCE_SERIES.items():
+        from concurrent.futures import ThreadPoolExecutor
+        def _fetch_bs(item):
+            sid, label = item
             try:
-                df = fetch_fred_series(sid, periods=104)  # ~2 years weekly
+                df = fetch_fred_series(sid, periods=104)
                 if not df.empty:
-                    rows[label] = df.set_index("date")["value"]
+                    return label, df.set_index("date")["value"]
             except Exception:
                 pass
+            return None, None
+        rows = {}
+        with ThreadPoolExecutor(max_workers=6) as _ex:
+            for label, series in _ex.map(_fetch_bs, FED_BALANCE_SERIES.items()):
+                if label and series is not None:
+                    rows[label] = series
 
         if rows:
             result = pd.DataFrame(rows)

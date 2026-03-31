@@ -15,12 +15,18 @@ st.markdown("Live grid conditions, generation mix, load forecasts, and reserve d
 from src.ercot_api import fetch_dashboard as fetch_ercot
 
 
-# --- FETCH ALL DATA ---
+# --- FETCH ALL DATA (parallelized) ---
 with fun_loader("data"):
-    fuel_mix = fetch_ercot("fuel-mix")
-    supply_demand = fetch_ercot("supply-demand")
-    load_forecast = fetch_ercot("loadForecastVsActual")
-    ancillary = fetch_ercot("ancillary-services")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as _ex:
+        _f_fuel = _ex.submit(fetch_ercot, "fuel-mix")
+        _f_sd = _ex.submit(fetch_ercot, "supply-demand")
+        _f_lf = _ex.submit(fetch_ercot, "loadForecastVsActual")
+        _f_anc = _ex.submit(fetch_ercot, "ancillary-services")
+    fuel_mix = _f_fuel.result()
+    supply_demand = _f_sd.result()
+    load_forecast = _f_lf.result()
+    ancillary = _f_anc.result()
 
 if not fuel_mix or not supply_demand:
     st.error("Failed to connect to ERCOT. The dashboard API may be temporarily unavailable.")

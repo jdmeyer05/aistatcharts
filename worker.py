@@ -448,7 +448,95 @@ def _update_ticker_metrics(db, ticker: str, api_key: str, today: str):
         logger.warning(f"Metrics update failed for {ticker}: {e}")
 
 
-# ─── TASK 5: CACHE CLEANUP ────────────────────────────────────
+# ─── TASK 5: OPTIONS CHAIN PRE-WARM ────────────────────────────
+
+def prewarm_options_chains(db):
+    """Pre-fetch options chains for popular tickers into api_cache.
+    Pages read from api_cache first (~100ms) instead of hitting Polygon (~2-5s)."""
+    import requests
+
+    api_key = os.environ.get("MASSIVE_API_KEY")
+    if not api_key:
+        logger.warning("MASSIVE_API_KEY not set, skipping options prewarm")
+        return
+
+    OPTIONS_TICKERS = ["SPY", "QQQ", "AAPL"]
+
+    for ticker in OPTIONS_TICKERS:
+        try:
+            # Fetch full chain snapshot from Polygon
+            url = f"https://api.polygon.io/v3/snapshot/options/{ticker}"
+            params = {"limit": 250, "apiKey": api_key}
+            all_results = []
+            next_url = None
+
+            for _ in range(10):  # max 10 pages
+                if next_url:
+                    r = requests.get(next_url, params={"apiKey": api_key}, timeout=15)
+                else:
+                    r = requests.get(url, params=params, timeout=15)
+                data = r.json()
+                results = data.get("results", [])
+                all_results.extend(results)
+                next_url = data.get("next_url")
+                if not next_url:
+                    break
+
+            if not all_results:
+                continue
+
+            # Process raw Polygon results into same format as fetch_options_chain
+            rows = []
+            for r in all_results:
+                d = r.get('details', {})
+                g = r.get('greeks', {})
+                day = r.get('day', {})
+                quote = r.get('last_quote', {})
+                bid = quote.get('bid') or 0
+                ask = quote.get('ask') or 0
+                day_close = day.get('close', 0) or 0
+                day_vwap = day.get('vwap', 0) or 0
+                if bid == 0 and day_close > 0:
+                    bid = day_close * 0.99
+                if ask == 0 and day_close > 0:
+                    ask = day_close * 1.01
+                rows.append({
+                    'strike_price': d.get('strike_price'),
+                    'contract_type': d.get('contract_type'),
+                    'expiration_date': d.get('expiration_date'),
+                    'bid': bid, 'ask': ask,
+                    'last_price': day_close or day_vwap or 0,
+                    'volume': day.get('volume', 0),
+                    'open_interest': r.get('open_interest', 0),
+                    'implied_volatility': r.get('implied_volatility', 0),
+                    'delta': g.get('delta', 0), 'gamma': g.get('gamma', 0),
+                    'theta': g.get('theta', 0), 'vega': g.get('vega', 0),
+                    'rho': g.get('rho', 0),
+                    'day_open': day.get('open', 0) or 0,
+                    'day_high': day.get('high', 0) or 0,
+                    'day_low': day.get('low', 0) or 0,
+                    'day_vwap': day_vwap,
+                    'trade_count': day.get('trade_count', 0) or 0,
+                })
+
+            # Store in api_cache with 2h TTL (same key+format as fetch_options_chain)
+            cache_key = f"chain_{ticker}_all"
+            db.table("api_cache").upsert({
+                "cache_key": cache_key,
+                "response": rows,
+                "endpoint": f"/v3/snapshot/options/{ticker}",
+                "symbol": ticker,
+                "ttl_seconds": 7200,
+                "created_at": datetime.now().isoformat(),
+                "expires_at": (datetime.now() + timedelta(hours=2)).isoformat(),
+            }, on_conflict="cache_key").execute()
+
+            logger.info(f"Options prewarm: {ticker} — {len(rows)} contracts cached")
+        except Exception as e:
+            logger.warning(f"Options prewarm failed for {ticker}: {e}")
+
+
+# ─── TASK 6: CACHE CLEANUP ────────────────────────────────────
 
 def cleanup_caches(db):
     """Remove expired cache entries and prune old data."""
@@ -488,7 +576,7 @@ def cleanup_caches(db):
 def main():
     parser = argparse.ArgumentParser(description="AI Statcharts hourly worker")
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
-                                            "metrics", "cleanup", "prewarm"],
+                                            "metrics", "cleanup", "prewarm", "options"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -507,6 +595,9 @@ def main():
 
     if args.task in ("all", "metrics", "prewarm"):
         update_metrics_snapshots(db)
+
+    if args.task in ("all", "options", "prewarm"):
+        prewarm_options_chains(db)
 
     if args.task in ("all", "cleanup"):
         cleanup_caches(db)

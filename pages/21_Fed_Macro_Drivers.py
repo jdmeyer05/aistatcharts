@@ -109,10 +109,14 @@ FED_DRIVERS = {
 # ════════════════════════════════════════
 driver_data = {}
 with fun_loader("data"):
-    for sid in FED_DRIVERS:
+    from concurrent.futures import ThreadPoolExecutor
+    def _fetch_one(sid):
         df = fetch_fred_series(fred_key, sid, limit=60)
-        if not df.empty:
-            driver_data[sid] = df
+        return (sid, df)
+    with ThreadPoolExecutor(max_workers=10) as _ex:
+        for sid, df in _ex.map(_fetch_one, FED_DRIVERS):
+            if not df.empty:
+                driver_data[sid] = df
 
 if not driver_data:
     st.error("No FRED data loaded. Check your API key.")

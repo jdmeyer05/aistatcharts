@@ -112,22 +112,42 @@ def fetch_ercot_spp_timeseries() -> pd.DataFrame | None:
     return None
 
 
-# ── FETCH ALL DATA ──
+# ── FETCH ALL DATA (parallelized — 12 independent API calls) ──
 with fun_loader("data"):
-    fuel_mix = fetch_ercot("fuel-mix")
-    supply_demand = fetch_ercot("supply-demand")
-    load_forecast = fetch_ercot("loadForecastVsActual")
-    sys_prices = fetch_ercot("systemWidePrices")
-    gas_price = fetch_henry_hub()
-    gas_price_daily = fetch_henry_hub_daily(days_back=30)
-    gas_futures = fetch_gas_futures()
-    oil_price = fetch_oil_futures()
-    power_price = fetch_ercot_spp()
-    spp_timeseries = fetch_ercot_spp_timeseries()
-    eia_hourly = fetch_eia_hourly_grid("ERCO", days_back=31)
+    from concurrent.futures import ThreadPoolExecutor
+
+    _fetchers = {
+        "fuel_mix": lambda: fetch_ercot("fuel-mix"),
+        "supply_demand": lambda: fetch_ercot("supply-demand"),
+        "load_forecast": lambda: fetch_ercot("loadForecastVsActual"),
+        "sys_prices": lambda: fetch_ercot("systemWidePrices"),
+        "gas_price": fetch_henry_hub,
+        "gas_price_daily": lambda: fetch_henry_hub_daily(days_back=30),
+        "gas_futures": fetch_gas_futures,
+        "oil_price": fetch_oil_futures,
+        "power_price": fetch_ercot_spp,
+        "spp_timeseries": fetch_ercot_spp_timeseries,
+        "eia_hourly": lambda: fetch_eia_hourly_grid("ERCO", days_back=31),
+        "gas_data_3mo": fetch_gas_futures_3mo,
+    }
+    with ThreadPoolExecutor(max_workers=8) as _ex:
+        _results = {k: _ex.submit(fn) for k, fn in _fetchers.items()}
+        _data = {k: fut.result() for k, fut in _results.items()}
+
+    fuel_mix = _data["fuel_mix"]
+    supply_demand = _data["supply_demand"]
+    load_forecast = _data["load_forecast"]
+    sys_prices = _data["sys_prices"]
+    gas_price = _data["gas_price"]
+    gas_price_daily = _data["gas_price_daily"]
+    gas_futures = _data["gas_futures"]
+    oil_price = _data["oil_price"]
+    power_price = _data["power_price"]
+    spp_timeseries = _data["spp_timeseries"]
+    eia_hourly = _data["eia_hourly"]
 
     # Gas data for page-40 tabs (3mo history for backtest)
-    gas_data_3mo = fetch_gas_futures_3mo()
+    gas_data_3mo = _data["gas_data_3mo"]
     gas_history = gas_data_3mo["history"] if gas_data_3mo else None
 
     # RT data from dashboard for page-40 tabs
