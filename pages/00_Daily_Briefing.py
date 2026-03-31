@@ -2,7 +2,7 @@
 
 import streamlit as st
 import pandas as pd
-import numpy as np
+import html as _html
 import os
 import json
 import logging
@@ -11,10 +11,10 @@ from datetime import datetime, date, timedelta
 from src.layout import setup_page, error_boundary
 from src.styles import COLORS
 from src.data_engine import polygon_batch_snapshot
-from src.signal_engine import get_signal_summary, get_top_trade_ideas, get_signals, compute_composite
+from src.signal_engine import get_signal_summary, get_top_trade_ideas
 from src.metrics_store import get_latest_snapshot, percentile_ranks_all
 from src.position_book import get_portfolio_summary, get_portfolio_greeks
-from src.prediction_tracker import get_track_record, get_recent_predictions, get_all_sources
+from src.prediction_tracker import get_track_record, get_all_sources
 from src.economic_calendar import get_upcoming_fomc, is_fomc_week, find_events_near_date
 
 logger = logging.getLogger(__name__)
@@ -143,6 +143,10 @@ st.markdown(
 
 _section_header("Market Snapshot", "")
 
+# Module-level defaults so later sections can safely reference these
+spy_metrics = None
+spy_pctiles = None
+
 with error_boundary("Market Snapshot"):
     @st.cache_data(ttl=300)
     def _fetch_briefing_snapshot():
@@ -243,16 +247,17 @@ with error_boundary("Positions"):
         mc[0].metric("Positions", n_pos)
         mc[1].metric("Total P&L", f"${total_pnl:+,.0f}")
         mc[2].metric("Net Delta $", f"${net_delta:+,.0f}")
-        mc[3].metric("Alerts", len(alerts) if alerts else "0")
+        mc[3].metric("Alerts", len(alerts) if alerts else 0)
 
         # Show alerts first (most urgent)
         if alerts:
             for alert in alerts[:3]:
-                a_color = COLORS["danger"] if "breach" in str(alert).lower() else COLORS["warning"]
+                alert_str = _html.escape(str(alert))
+                a_color = COLORS["danger"] if "breach" in alert_str.lower() else COLORS["warning"]
                 st.markdown(
                     f'<div style="font-size:0.78rem;color:{a_color};padding:4px 10px;'
                     f'background:rgba({",".join(str(int(a_color.lstrip("#")[i:i+2], 16)) for i in (0,2,4))},0.08);'
-                    f'border-left:3px solid {a_color};border-radius:4px;margin:3px 0;">{alert}</div>',
+                    f'border-left:3px solid {a_color};border-radius:4px;margin:3px 0;">{alert_str}</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -266,13 +271,13 @@ with error_boundary("Positions"):
                 pnl_pct = p.get("pnl_pct", 0)
                 qty = p.get("qty", 0)
                 ptype = p.get("type", "stock")
-                pc = COLORS["success"] if pnl > 0 else COLORS["danger"] if pnl < 0 else COLORS["text_muted"]
+                pnl_c = COLORS["success"] if pnl > 0 else COLORS["danger"] if pnl < 0 else COLORS["text_muted"]
                 rows_html += (
                     f'<div style="display:flex;justify-content:space-between;align-items:center;'
                     f'padding:4px 0;border-bottom:1px solid {COLORS["card_border"]};">'
                     f'<span style="font-size:0.82rem;font-weight:600;">{tk}</span>'
                     f'<span style="font-size:0.72rem;color:{COLORS["text_muted"]};">{qty} {ptype}</span>'
-                    f'<span style="font-size:0.82rem;font-weight:600;color:{pc};">${pnl:+,.0f} ({pnl_pct:+.1f}%)</span>'
+                    f'<span style="font-size:0.82rem;font-weight:600;color:{pnl_c};">${pnl:+,.0f} ({pnl_pct:+.1f}%)</span>'
                     f'</div>'
                 )
             st.markdown(
@@ -383,7 +388,7 @@ with rc1:
                 oil = blended.get("oil_impact", {})
                 if oil.get("price_range"):
                     st.markdown(f'<div style="font-size:0.72rem;">Oil: **{oil["price_range"]}**</div>')
-                situation = blended.get("situation_summary", "")
+                situation = _html.escape(blended.get("situation_summary", ""))
                 if situation:
                     st.caption(situation[:150] + ("..." if len(situation) > 150 else ""))
             else:
@@ -430,9 +435,9 @@ with rc3:
     with st.container(border=True):
         with error_boundary("Vol Snapshot"):
             st.markdown(f'<div style="font-size:0.68rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Vol Snapshot</div>', unsafe_allow_html=True)
-            # Use metrics already loaded above (or reload if section 1 failed)
-            _spy = spy_metrics if 'spy_metrics' in dir() and spy_metrics else get_latest_snapshot("SPY")
-            _pctiles = spy_pctiles if 'spy_pctiles' in dir() and spy_pctiles else percentile_ranks_all("SPY")
+            # Reuse metrics from section 1 if available, otherwise reload
+            _spy = spy_metrics if spy_metrics else get_latest_snapshot("SPY")
+            _pctiles = spy_pctiles if spy_pctiles else percentile_ranks_all("SPY")
 
             if _spy:
                 metrics_display = [
