@@ -528,16 +528,18 @@ def error_boundary(section_name: str):
     try:
         yield
     except Exception as e:
+        import traceback, html
         logger.error(f"Error in {section_name}: {e}", exc_info=True)
+        tb_str = html.escape(traceback.format_exc())
         st.markdown(
             f'<div class="error-card">'
             f'<h4>Unable to load: {section_name}</h4>'
-            f'<p>Something went wrong loading this section. The error has been logged. '
-            f'Try refreshing the page.</p>'
-            f'<p style="font-family:monospace;font-size:0.75rem;color:#666;margin-top:8px;">{type(e).__name__}: {str(e)[:200]}</p>'
+            f'<p>Something went wrong loading this section. Try refreshing the page.</p>'
             f'</div>',
             unsafe_allow_html=True,
         )
+        with st.expander("Error details", expanded=False):
+            st.code(traceback.format_exc(), language="python")
 
 
 _LOADING_QUIPS = [
@@ -700,13 +702,16 @@ def page_error_boundary(page_name: str):
     try:
         yield
     except Exception as e:
+        import traceback, html
         logger.error(f"Page error in {page_name}: {e}", exc_info=True)
+        tb_str = html.escape(traceback.format_exc())
         st.markdown(
-            f'<div class="error-card">'
+            f'<div class="error-card" style="margin-top:24px;">'
             f'<h4>Something went wrong on this page</h4>'
             f'<p>An unexpected error occurred while loading <strong>{page_name}</strong>. '
             f'Try refreshing the page or navigating to a different section.</p>'
-            f'<p style="font-family:monospace;font-size:0.75rem;color:#666;margin-top:8px;">{type(e).__name__}: {str(e)[:200]}</p>'
             f'</div>',
             unsafe_allow_html=True,
         )
+        with st.expander("Error details", expanded=False):
+            st.code(traceback.format_exc(), language="python")

@@ -8,6 +8,7 @@ font = "sans serif"
 [client]
 toolbarMode = "minimal"
 showSidebarNavigation = false
+showErrorDetails = false
 
 [server]
 fileWatcherType = "poll"

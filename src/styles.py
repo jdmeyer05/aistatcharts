@@ -165,6 +165,25 @@ def inject_global_css():
         font-size: 0.85rem;
     }}
 
+    /* ── Streamlit built-in error override (SyntaxError, compile-time) ── */
+    .stException {{
+        background: rgba(255, 68, 68, 0.06) !important;
+        border: 1px solid {COLORS['danger']} !important;
+        border-radius: 10px !important;
+        padding: 28px 24px !important;
+        max-width: 620px;
+        margin: 60px auto !important;
+    }}
+    .stException [data-testid="stMarkdownContainer"] p {{
+        font-size: 0.95rem !important;
+        color: {COLORS['text_muted']} !important;
+    }}
+    .stException [data-testid="stMarkdownContainer"] p:first-child {{
+        font-size: 1.05rem !important;
+        color: {COLORS['danger']} !important;
+        font-weight: 600;
+    }}
+
     /* ── Dataframe text wrap ── */
     [data-testid="stDataFrame"] td div[data-testid="stMarkdownContainer"] p,
     [data-testid="stDataFrame"] td {{
