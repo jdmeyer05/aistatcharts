@@ -60,9 +60,14 @@ if not api_key:
 # --- FETCH & STORE ---
 if submit:
     with fun_loader("data"):
-        expirations = fetch_all_expirations(ticker, api_key)
-        df_chain = fetch_full_chain(ticker, api_key)
-        px_df = fetch_massive_data(ticker, 5)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=3) as _ex:
+            _f_exps = _ex.submit(fetch_all_expirations, ticker, api_key)
+            _f_chain = _ex.submit(fetch_full_chain, ticker, api_key)
+            _f_px = _ex.submit(fetch_massive_data, ticker, 5)
+        expirations = _f_exps.result()
+        df_chain = _f_chain.result()
+        px_df = _f_px.result()
         spot = px_df["Close"].iloc[-1] if px_df is not None and not px_df.empty else None
 
         if not df_chain.empty:

@@ -62,22 +62,32 @@ if submit:
         px_df = fetch_massive_data(ticker, 5)
         current_px = float(px_df['Close'].iloc[-1]) if px_df is not None and not px_df.empty else None
 
-        # Pre-fetch nearest 8 expirations for surface/term structure
+        # Pre-fetch nearest 8 expirations in parallel
         term_data = {}
         prefetch_exps = expirations[:8]
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        def _fetch_exp_chain(texp):
+            try:
+                tdf = fetch_options_chain(ticker, texp)
+                if tdf is not None and not tdf.empty:
+                    if current_px:
+                        tdf = fill_missing_options_data(tdf, current_px, risk_free_rate=_rfr)
+                    return texp, tdf
+            except Exception:
+                pass
+            return texp, None
         _progress_container = st.container()
         with _progress_container:
             progress = st.progress(0, text="Loading options chain...")
-            for i, texp in enumerate(prefetch_exps):
-                try:
-                    tdf = fetch_options_chain(ticker, texp)
-                    if tdf is not None and not tdf.empty:
-                        if current_px:
-                            tdf = fill_missing_options_data(tdf, current_px, risk_free_rate=_rfr)
+            with ThreadPoolExecutor(max_workers=5) as _ex:
+                futures = {_ex.submit(_fetch_exp_chain, e): e for e in prefetch_exps}
+                done = 0
+                for fut in as_completed(futures):
+                    texp, tdf = fut.result()
+                    if tdf is not None:
                         term_data[texp] = tdf
-                except Exception:
-                    pass
-                progress.progress((i + 1) / len(prefetch_exps), text=f"Loading {texp}...")
+                    done += 1
+                    progress.progress(done / len(prefetch_exps), text=f"Loaded {done}/{len(prefetch_exps)} chains...")
             progress.empty()
 
         if term_data:

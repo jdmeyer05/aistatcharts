@@ -80,51 +80,76 @@ try:
         with st.expander("Import from Position Book", expanded=True):
             st.caption(f"Found **{len(book_positions)}** open positions in your Position Book.")
             if st.button("Import All Positions", type="secondary", key="pg_import"):
+                from concurrent.futures import ThreadPoolExecutor
+
+                # Collect unique tickers and expirations to fetch
+                _parsed = []
                 for bp in book_positions:
                     pos_type_map = {"stock": "Stock", "call": "Call", "put": "Put"}
                     bp_type = pos_type_map.get(bp.get("type", "stock").lower(), "Stock")
                     bp_ticker = format_massive_ticker(bp.get("ticker", ""))
+                    bp_details = bp.get("details", {})
+                    _parsed.append({
+                        "bp": bp, "type": bp_type, "ticker": bp_ticker,
+                        "strike": bp_details.get("strike"), "exp": bp_details.get("expiration"),
+                    })
+
+                # Parallel pre-fetch: spot prices + option chains for all unique tickers
+                _unique_tickers = list({p["ticker"] for p in _parsed})
+                _unique_chains = list({(p["ticker"], p["exp"]) for p in _parsed if p["exp"] and p["strike"]})
+
+                def _fetch_spot(tk):
+                    try:
+                        px = fetch_massive_data(tk, 5)
+                        if px is not None and not px.empty:
+                            return tk, float(px["Close"].iloc[-1])
+                    except Exception:
+                        pass
+                    return tk, None
+
+                def _fetch_chain(args):
+                    tk, exp = args
+                    try:
+                        return (tk, exp), fetch_options_chain(tk, exp)
+                    except Exception:
+                        return (tk, exp), None
+
+                with ThreadPoolExecutor(max_workers=6) as _ex:
+                    spot_futures = {tk: _ex.submit(_fetch_spot, tk) for tk in _unique_tickers}
+                    chain_futures = {key: _ex.submit(_fetch_chain, key) for key in _unique_chains}
+
+                _spots = {tk: fut.result()[1] for tk, fut in spot_futures.items()}
+                _chains = {key: fut.result()[1] for key, fut in chain_futures.items()}
+
+                # Process positions using pre-fetched data
+                for p in _parsed:
+                    bp = p["bp"]
+                    bp_type, bp_ticker = p["type"], p["ticker"]
+                    bp_strike, bp_exp = p["strike"], p["exp"]
                     bp_qty = bp.get("qty", 0)
                     bp_entry = bp.get("entry_price", 0)
-                    bp_details = bp.get("details", {})
-                    bp_strike = bp_details.get("strike")
-                    bp_exp = bp_details.get("expiration")
-
                     delta = gamma = theta = vega = rho = iv = 0.0
                     cur_price = bp_entry
 
                     if bp_type == "Stock":
                         delta = 1.0
-                        try:
-                            px = fetch_massive_data(bp_ticker, 5)
-                            if px is not None and not px.empty:
-                                cur_price = float(px["Close"].iloc[-1])
-                        except Exception:
-                            pass
+                        if _spots.get(bp_ticker) is not None:
+                            cur_price = _spots[bp_ticker]
                     elif bp_strike and bp_exp:
-                        try:
-                            chain = fetch_options_chain(bp_ticker, bp_exp)
-                            if chain is not None and not chain.empty:
-                                spot_px = bp_strike
-                                try:
-                                    _fp = fetch_massive_data(bp_ticker, 5)
-                                    if _fp is not None and not _fp.empty:
-                                        spot_px = float(_fp["Close"].iloc[-1])
-                                except Exception:
-                                    pass
-                                if spot_px > 0:
-                                    chain = fill_missing_options_data(chain, spot_px, risk_free_rate=rfr)
-                                row = _get_contract(chain, bp_strike, bp_type.lower())
-                                if row is not None:
-                                    cur_price = _mid(row)
-                                    delta = row.get("delta", 0) or 0
-                                    gamma = row.get("gamma", 0) or 0
-                                    theta = row.get("theta", 0) or 0
-                                    vega = row.get("vega", 0) or 0
-                                    rho = row.get("rho", 0) or 0
-                                    iv = row.get("implied_volatility", 0) or 0
-                        except Exception:
-                            pass
+                        chain = _chains.get((bp_ticker, bp_exp))
+                        if chain is not None and not chain.empty:
+                            spot_px = _spots.get(bp_ticker) or bp_strike
+                            if spot_px > 0:
+                                chain = fill_missing_options_data(chain, spot_px, risk_free_rate=rfr)
+                            row = _get_contract(chain, bp_strike, bp_type.lower())
+                            if row is not None:
+                                cur_price = _mid(row)
+                                delta = row.get("delta", 0) or 0
+                                gamma = row.get("gamma", 0) or 0
+                                theta = row.get("theta", 0) or 0
+                                vega = row.get("vega", 0) or 0
+                                rho = row.get("rho", 0) or 0
+                                iv = row.get("implied_volatility", 0) or 0
 
                     positions.append({
                         "ticker": bp_ticker, "type": bp_type, "qty": bp_qty,

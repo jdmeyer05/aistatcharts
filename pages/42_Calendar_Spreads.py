@@ -291,16 +291,26 @@ if submit:
             prefetch = all_valid[:12]
 
         term_data = {}
-        progress = st.progress(0, text="Loading options chains...")
-        for i, exp in enumerate(prefetch):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        def _fetch_exp(exp):
             try:
                 tdf = fetch_options_chain(ticker, exp)
                 if tdf is not None and not tdf.empty:
                     tdf = fill_missing_options_data(tdf, spot, risk_free_rate=rfr)
-                    term_data[exp] = tdf
+                    return exp, tdf
             except Exception:
                 pass
-            progress.progress((i + 1) / len(prefetch), text=f"Loading {exp}...")
+            return exp, None
+        progress = st.progress(0, text="Loading options chains...")
+        with ThreadPoolExecutor(max_workers=5) as _ex:
+            futures = {_ex.submit(_fetch_exp, exp): exp for exp in prefetch}
+            done = 0
+            for fut in as_completed(futures):
+                exp, tdf = fut.result()
+                if tdf is not None:
+                    term_data[exp] = tdf
+                done += 1
+                progress.progress(done / len(prefetch), text=f"Loaded {done}/{len(prefetch)} chains...")
         progress.empty()
 
         if len(term_data) < 2:
