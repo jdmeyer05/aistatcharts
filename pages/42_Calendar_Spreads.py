@@ -331,7 +331,7 @@ ticker_display = st.session_state["cal_ticker"]
 rfr = st.session_state["cal_rfr"]
 px_df = st.session_state["cal_px"]
 # All available expirations (for dropdowns) vs pre-fetched (for scanner/term structure)
-all_expirations = st.session_state.get("cal_all_expirations", st.session_state["cal_expirations"])
+all_expirations = st.session_state.get("cal_all_expirations", st.session_state.get("cal_expirations", []))
 expirations = st.session_state["cal_expirations"]  # pre-fetched only
 
 # ─── TABS ──────────────────────────────────────────────────────────────────────

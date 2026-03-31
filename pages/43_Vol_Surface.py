@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import logging
+from datetime import datetime
 
 from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader
 from src.styles import COLORS

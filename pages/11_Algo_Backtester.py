@@ -1206,7 +1206,7 @@ with tab4:
     ms1.metric("Best Month", f"{monthly_vals.max():.2f}%")
     ms2.metric("Worst Month", f"{monthly_vals.min():.2f}%")
     ms3.metric("Avg Month", f"{monthly_vals.mean():.2f}%")
-    ms4.metric("% Positive Months", f"{(monthly_vals > 0).sum() / len(monthly_vals) * 100:.0f}%")
+    ms4.metric("% Positive Months", f"{(monthly_vals > 0).sum() / max(len(monthly_vals), 1) * 100:.0f}%")
 
 
 # ---- TAB 5: Return Distribution ----

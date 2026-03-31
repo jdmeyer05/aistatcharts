@@ -68,7 +68,7 @@ if submit:
     with fun_loader("data"):
         df_all = fetch_chain_all_exps(ticker, api_key)
         px_df = fetch_massive_data(ticker, 252)
-        spot = px_df["Close"].iloc[-1] if px_df is not None else None
+        spot = px_df["Close"].iloc[-1] if px_df is not None and not px_df.empty else None
 
         if not df_all.empty:
             st.session_state["lab_chain"] = df_all

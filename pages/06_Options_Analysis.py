@@ -160,8 +160,8 @@ if current_px is not None:
     x_min = current_px * (1 - x_range_pct)
     x_max = current_px * (1 + x_range_pct)
 else:
-    x_min = exp_df['strike_price'].min()
-    x_max = exp_df['strike_price'].max()
+    x_min = exp_df['strike_price'].min() if not exp_df.empty else 0
+    x_max = exp_df['strike_price'].max() if not exp_df.empty else 100
 
 # Filter to visible range
 calls = calls_raw[(calls_raw['strike_price'] >= x_min) & (calls_raw['strike_price'] <= x_max)].copy()

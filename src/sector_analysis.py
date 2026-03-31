@@ -615,7 +615,7 @@ def _render_capex_tab(cfg: SectorConfig, rev_hist, kp):
                         })
 
                     # If 10-K exists, derive Q4 = 10-K - last Q cumulative
-                    if len(tenk) > 0:
+                    if len(tenk) > 0 and len(tenq) > 0:
                         annual = tenk.iloc[-1]["capex"]
                         last_q_cum = tenq.iloc[-1]["capex"]
                         q4_val = annual - last_q_cum

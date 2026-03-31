@@ -15,7 +15,8 @@ from src.auth import check_auth
 
 logger = logging.getLogger(__name__)
 
-from src.layout import setup_page, page_error_boundary, fun_loader
+from src.layout import setup_page, page_error_boundary, error_boundary, fun_loader
+from src.styles import COLORS
 setup_page("02_Scenario_Analysis")
 
 st.title("🔮 Scenario Analysis Engine")

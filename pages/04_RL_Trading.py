@@ -670,6 +670,8 @@ def train_ensemble(env_factory, n_agents=5, **train_kwargs):
 
 def ensemble_predict(agents, state):
     """Average Q-values from multiple agents."""
+    if not agents:
+        return np.zeros(8)
     q_sum = None
     for agent in agents:
         q = agent.predict(state)
@@ -1352,11 +1354,12 @@ if train_btn or f"rl_results_{ticker}" in st.session_state:
         if grok_key:
             with fun_loader("ai"):
                 actions_arr = np.array(test_bt["actions"])
+                _n_act = max(len(actions_arr), 1)
                 act_pcts = {
-                    "buy": np.isin(actions_arr, [1, 2, 3]).sum() / len(actions_arr) * 100,
-                    "sell": np.isin(actions_arr, [4, 5, 6]).sum() / len(actions_arr) * 100,
-                    "hold": (actions_arr == 0).sum() / len(actions_arr) * 100,
-                    "short": (actions_arr == 7).sum() / len(actions_arr) * 100,
+                    "buy": np.isin(actions_arr, [1, 2, 3]).sum() / _n_act * 100,
+                    "sell": np.isin(actions_arr, [4, 5, 6]).sum() / _n_act * 100,
+                    "hold": (actions_arr == 0).sum() / _n_act * 100,
+                    "short": (actions_arr == 7).sum() / _n_act * 100,
                 }
                 grok_strat = grok_analyze_strategy(
                     grok_key, ticker, train_bt, test_bt, feat_imp, wf_results,
@@ -1886,10 +1889,11 @@ to produce different strategy styles.
 
             # Action patterns
             actions_arr = np.array(test_bt["actions"])
-            buy_pct = np.isin(actions_arr, [1, 2, 3]).sum() / len(actions_arr) * 100
-            sell_pct = np.isin(actions_arr, [4, 5, 6]).sum() / len(actions_arr) * 100
-            hold_pct = (actions_arr == 0).sum() / len(actions_arr) * 100
-            short_pct = (actions_arr == 7).sum() / len(actions_arr) * 100
+            _n_act2 = max(len(actions_arr), 1)
+            buy_pct = np.isin(actions_arr, [1, 2, 3]).sum() / _n_act2 * 100
+            sell_pct = np.isin(actions_arr, [4, 5, 6]).sum() / _n_act2 * 100
+            hold_pct = (actions_arr == 0).sum() / _n_act2 * 100
+            short_pct = (actions_arr == 7).sum() / _n_act2 * 100
 
             pc = st.columns(4)
             pc[0].metric("Buy %", f"{buy_pct:.0f}%")
