@@ -2463,7 +2463,7 @@ with tab7:
                         ))
                         fig_d.update_layout(
                             template="plotly_dark", height=300, margin=dict(t=30, b=0, l=0, r=0),
-                            title=f"IV Change: {_cl.split(' \u2014')[0]} \u2192 {_lbl.split(' \u2014')[0]}",
+                            title=f"IV Change: {_cl.split(' —')[0]} → {_lbl.split(' —')[0]}",
                             xaxis_title="Strike ($)", yaxis_title="DTE",
                         )
                         st.plotly_chart(fig_d, use_container_width=True, config=PLOTLY_NOBAR)

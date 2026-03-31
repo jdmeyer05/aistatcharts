@@ -767,7 +767,7 @@ the spread is entering at a historically cheap or rich level.
                     f'<div style="font-size:0.82rem;color:{_ts_rc};font-weight:600;">5-Day Context</div>'
                     f'<div style="font-size:0.78rem;color:{COLORS["text_muted"]};">'
                     f'Current avg ATM IV: {_current_iv:.1%} vs 5-day avg: {_avg_hist_iv:.1%} ({_chg:+.1f}%). '
-                    f'{"IV is elevated vs recent history \u2014 calendars are more expensive to enter." if _chg > 10 else ("IV has compressed \u2014 calendars are cheaper." if _chg < -10 else "IV is near recent average.")}'
+                    f'{"IV is elevated vs recent history — calendars are more expensive to enter." if _chg > 10 else ("IV has compressed — calendars are cheaper." if _chg < -10 else "IV is near recent average.")}'
                     f'</div></div>', unsafe_allow_html=True)
         except Exception:
             pass
