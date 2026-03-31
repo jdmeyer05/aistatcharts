@@ -339,75 +339,148 @@ Provide your assessment as JSON:
 # ─── TASK 4: METRICS SNAPSHOTS ─────────────────────────────────
 
 def update_metrics_snapshots(db):
-    """Save daily metrics for key tickers."""
+    """Save daily metrics and pre-warm price_history for popular tickers."""
     import requests
+    import math
 
     api_key = os.environ.get("MASSIVE_API_KEY")
     if not api_key:
         logger.warning("MASSIVE_API_KEY not set, skipping metrics")
         return
 
-    tickers = ["SPY", "QQQ", "IWM", "TLT", "GLD", "USO", "XLE", "XLF", "AAPL", "MSFT"]
+    # Core tickers for metrics snapshots (HV20 computed)
+    METRICS_TICKERS = ["SPY", "QQQ", "IWM", "TLT", "GLD", "USO", "XLE", "XLF", "AAPL", "MSFT"]
+
+    # Extended pre-warm list — popular tickers users load on first visit
+    PREWARM_TICKERS = [
+        "SPY", "QQQ", "IWM", "TLT", "GLD", "USO", "XLE", "XLF", "AAPL", "MSFT",
+        "NVDA", "TSLA", "AMZN", "GOOGL", "META", "JPM", "V", "UNH", "XLK", "XLV",
+        "DIA", "EEM", "HYG", "LQD", "SLV",
+    ]
+
     today = datetime.now().strftime("%Y-%m-%d")
 
-    for ticker in tickers:
+    for ticker in PREWARM_TICKERS:
         try:
-            # Fetch latest price
-            end = datetime.now().strftime("%Y-%m-%d")
-            start = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}"
-            r = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50}, timeout=15)
+            # Check if price_history already has recent data
+            try:
+                check = db.table("price_history").select("date")\
+                    .eq("ticker", ticker).order("date", desc=True).limit(1).execute()
+                if check.data:
+                    last_date = check.data[0]["date"]
+                    days_stale = (datetime.now().date() - datetime.strptime(last_date, "%Y-%m-%d").date()).days
+                    if days_stale <= 1:
+                        # Already current — just update metrics if needed
+                        if ticker in METRICS_TICKERS:
+                            _update_ticker_metrics(db, ticker, api_key, today)
+                        continue
+                    # Stale — only fetch the gap
+                    gap_start = (datetime.strptime(last_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                    fetch_start = gap_start
+                else:
+                    # Cold start — fetch 3 years (756 trading days)
+                    fetch_start = (datetime.now() - timedelta(days=1100)).strftime("%Y-%m-%d")
+            except Exception:
+                fetch_start = (datetime.now() - timedelta(days=1100)).strftime("%Y-%m-%d")
+
+            # Fetch from Polygon
+            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{fetch_start}/{today}"
+            r = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50000}, timeout=30)
             data = r.json()
             results = data.get("results", [])
             if not results:
                 continue
 
-            closes = [bar["c"] for bar in results]
-            spot = closes[-1]
-
-            # Compute HV20
-            import math
-            if len(closes) >= 21:
-                rets = [math.log(closes[i] / closes[i-1]) for i in range(1, len(closes))]
-                hv20 = (sum(r**2 for r in rets[-20:]) / 20) ** 0.5 * (252 ** 0.5)
-            else:
-                hv20 = None
-
-            # Save to price_history
+            # Save to price_history in batches
+            rows = []
             for bar in results:
                 bar_date = datetime.fromtimestamp(bar["t"] / 1000).strftime("%Y-%m-%d")
+                rows.append({"ticker": ticker, "date": bar_date, "close": bar["c"]})
+            for i in range(0, len(rows), 100):
                 try:
-                    db.table("price_history").upsert({
-                        "ticker": ticker, "date": bar_date, "close": bar["c"],
-                    }, on_conflict="ticker,date").execute()
+                    db.table("price_history").upsert(
+                        rows[i:i+100], on_conflict="ticker,date"
+                    ).execute()
                 except Exception:
                     pass
 
-            # Save metrics snapshot
-            db.table("metrics_history").upsert({
-                "user_id": "worker",
-                "ticker": ticker,
-                "date": today,
-                "spot": spot,
-                "hv20": hv20,
-            }, on_conflict="user_id,ticker,date").execute()
+            logger.info(f"Price history: {ticker} — {len(rows)} bars saved")
 
-            logger.info(f"Metrics updated: {ticker} ${spot:.2f}")
+            # Update metrics for core tickers
+            if ticker in METRICS_TICKERS:
+                _update_ticker_metrics(db, ticker, api_key, today)
+
         except Exception as e:
-            logger.warning(f"Metrics failed for {ticker}: {e}")
+            logger.warning(f"Pre-warm failed for {ticker}: {e}")
+
+
+def _update_ticker_metrics(db, ticker: str, api_key: str, today: str):
+    """Compute and save HV20 metrics for a single ticker."""
+    import requests
+    import math
+
+    try:
+        start = (datetime.now() - timedelta(days=35)).strftime("%Y-%m-%d")
+        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{today}"
+        r = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50}, timeout=15)
+        results = r.json().get("results", [])
+        if not results:
+            return
+
+        closes = [bar["c"] for bar in results]
+        spot = closes[-1]
+
+        hv20 = None
+        if len(closes) >= 21:
+            rets = [math.log(closes[i] / closes[i-1]) for i in range(1, len(closes))]
+            hv20 = (sum(r**2 for r in rets[-20:]) / 20) ** 0.5 * (252 ** 0.5)
+
+        db.table("metrics_history").upsert({
+            "user_id": "worker",
+            "ticker": ticker,
+            "date": today,
+            "spot": spot,
+            "hv20": hv20,
+        }, on_conflict="user_id,ticker,date").execute()
+
+        logger.info(f"Metrics updated: {ticker} ${spot:.2f}")
+    except Exception as e:
+        logger.warning(f"Metrics update failed for {ticker}: {e}")
 
 
 # ─── TASK 5: CACHE CLEANUP ────────────────────────────────────
 
 def cleanup_caches(db):
-    """Remove expired cache entries."""
+    """Remove expired cache entries and prune old data."""
     try:
         db.rpc("cleanup_expired_cache").execute()
         db.rpc("cleanup_expired_ai_cache").execute()
         db.rpc("cleanup_old_signals").execute()
-        logger.info("Cache cleanup complete")
+        logger.info("RPC cache cleanup complete")
     except Exception as e:
-        logger.warning(f"Cleanup failed: {e}")
+        logger.warning(f"RPC cleanup failed: {e}")
+
+    # Prune iv_surface_snapshots older than 30 days (unbounded growth)
+    try:
+        cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        result = db.table("iv_surface_snapshots").delete()\
+            .lt("date", cutoff).execute()
+        n = len(result.data) if result.data else 0
+        if n > 0:
+            logger.info(f"IV surface snapshots: pruned {n} rows older than {cutoff}")
+    except Exception as e:
+        logger.warning(f"IV surface cleanup failed: {e}")
+
+    # Prune price_history older than 3 years (keep storage bounded)
+    try:
+        cutoff = (datetime.now() - timedelta(days=1100)).strftime("%Y-%m-%d")
+        result = db.table("price_history").delete()\
+            .lt("date", cutoff).execute()
+        n = len(result.data) if result.data else 0
+        if n > 0:
+            logger.info(f"Price history: pruned {n} rows older than {cutoff}")
+    except Exception as e:
+        logger.warning(f"Price history cleanup failed: {e}")
 
 
 # ─── MAIN ─────────────────────────────────────────────────────
@@ -415,7 +488,7 @@ def cleanup_caches(db):
 def main():
     parser = argparse.ArgumentParser(description="AI Statcharts hourly worker")
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
-                                            "metrics", "cleanup"],
+                                            "metrics", "cleanup", "prewarm"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -432,7 +505,7 @@ def main():
     if args.task in ("all", "conflict"):
         update_conflict_analysis(db)
 
-    if args.task in ("all", "metrics"):
+    if args.task in ("all", "metrics", "prewarm"):
         update_metrics_snapshots(db)
 
     if args.task in ("all", "cleanup"):

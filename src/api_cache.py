@@ -41,8 +41,9 @@ def cached_request(url: str, params: dict = None, ttl: int = 300,
         ttl: Cache TTL in seconds (default 5 min)
         timeout: Request timeout in seconds
     """
-    # Build cache key (exclude apiKey from key so different users share cache)
-    cache_params = {k: v for k, v in (params or {}).items() if k != "apiKey"}
+    # Build cache key (exclude API keys so different users share cache)
+    _key_excludes = {"apiKey", "api_key"}
+    cache_params = {k: v for k, v in (params or {}).items() if k not in _key_excludes}
     key = _make_key(url.split("?")[0], cache_params)
 
     # Try cache first

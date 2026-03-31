@@ -16,18 +16,21 @@ def _get_eia_key() -> str | None:
 
 @st.cache_data(ttl=3600)
 def fetch_eia_data(series_id: str, tail_rows: int = 156) -> pd.DataFrame:
-    """Fetches timeseries data from the EIA API v2 (seriesid endpoint)."""
+    """Fetches timeseries data from the EIA API v2. Uses Supabase cache (4h TTL)."""
+    from src.api_cache import cached_request
+
     api_key = _get_eia_key()
     if not api_key:
         logger.warning("EIA API key not found in env vars or secrets.")
         return None
 
-    url = f"https://api.eia.gov/v2/seriesid/{series_id}?api_key={api_key}"
-
     try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+        data = cached_request(
+            f"https://api.eia.gov/v2/seriesid/{series_id}",
+            params={"api_key": api_key}, ttl=14400, timeout=30,  # 4h Supabase TTL
+        )
+        if not data:
+            return None
 
         raw_data = data['response']['data']
         df = pd.DataFrame(raw_data)
@@ -44,18 +47,21 @@ def fetch_eia_data(series_id: str, tail_rows: int = 156) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_henry_hub_spot() -> float | None:
-    """Fetch latest Henry Hub spot price (weekly, NG.RNGWHHD.W)."""
+    """Fetch latest Henry Hub spot price (weekly, NG.RNGWHHD.W). Supabase cached 4h."""
+    from src.api_cache import cached_request
     api_key = _get_eia_key()
     if not api_key:
         return None
     try:
-        url = f"https://api.eia.gov/v2/seriesid/NG.RNGWHHD.W?api_key={api_key}"
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()["response"]["data"]
-        if data:
-            df = pd.DataFrame(data).sort_values("period")
-            return float(df["value"].iloc[-1])
+        raw = cached_request(
+            "https://api.eia.gov/v2/seriesid/NG.RNGWHHD.W",
+            params={"api_key": api_key}, ttl=14400, timeout=15,
+        )
+        if raw:
+            data = raw.get("response", {}).get("data", [])
+            if data:
+                df = pd.DataFrame(data).sort_values("period")
+                return float(df["value"].iloc[-1])
     except Exception as e:
         logger.error(f"EIA Henry Hub fetch failed: {e}")
     return None
@@ -63,20 +69,23 @@ def fetch_henry_hub_spot() -> float | None:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_henry_hub_daily(days_back: int = 30) -> pd.DataFrame | None:
-    """Fetch daily Henry Hub spot prices (NG.RNGWHHD.D)."""
+    """Fetch daily Henry Hub spot prices (NG.RNGWHHD.D). Supabase cached 4h."""
+    from src.api_cache import cached_request
     api_key = _get_eia_key()
     if not api_key:
         return None
     try:
-        url = f"https://api.eia.gov/v2/seriesid/NG.RNGWHHD.D?api_key={api_key}"
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()["response"]["data"]
-        if data:
-            df = pd.DataFrame(data).sort_values("period")
-            df["period"] = pd.to_datetime(df["period"])
-            df["value"] = pd.to_numeric(df["value"], errors="coerce")
-            return df.tail(days_back)
+        raw = cached_request(
+            "https://api.eia.gov/v2/seriesid/NG.RNGWHHD.D",
+            params={"api_key": api_key}, ttl=14400, timeout=15,
+        )
+        if raw:
+            data = raw.get("response", {}).get("data", [])
+            if data:
+                df = pd.DataFrame(data).sort_values("period")
+                df["period"] = pd.to_datetime(df["period"])
+                df["value"] = pd.to_numeric(df["value"], errors="coerce")
+                return df.tail(days_back)
     except Exception as e:
         logger.error(f"EIA daily Henry Hub fetch failed: {e}")
     return None

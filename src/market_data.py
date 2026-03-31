@@ -499,28 +499,28 @@ FRED_SERIES = {
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_fred_series(series_id: str, periods: int = 252) -> pd.DataFrame:
-    """Fetch a FRED time series."""
-    import requests
+    """Fetch a FRED time series. Uses Supabase cache (4h TTL) then session cache (1h)."""
     from src.api_keys import get_secret
+    from src.api_cache import cached_request
 
     key = get_secret("FRED_API_KEY")
     if not key:
         return pd.DataFrame()
 
     try:
-        r = requests.get(
+        params = {
+            "series_id": series_id, "api_key": key,
+            "file_type": "json", "sort_order": "desc",
+            "limit": str(periods),
+        }
+        data = cached_request(
             "https://api.stlouisfed.org/fred/series/observations",
-            params={
-                "series_id": series_id, "api_key": key,
-                "file_type": "json", "sort_order": "desc",
-                "limit": str(periods),
-            },
-            timeout=15,
+            params=params, ttl=14400, timeout=15,  # 4h Supabase TTL
         )
-        if r.status_code != 200:
+        if not data:
             return pd.DataFrame()
 
-        obs = r.json().get("observations", [])
+        obs = data.get("observations", [])
         if not obs:
             return pd.DataFrame()
 
@@ -557,8 +557,8 @@ def fetch_fred_macro_dashboard() -> dict[str, pd.DataFrame]:
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def fetch_eia_series(series_id: str, periods: int = 104) -> pd.DataFrame:
-    """Fetch an EIA time series (v2 API)."""
-    import requests
+    """Fetch an EIA time series (v2 API). Uses Supabase cache (12h TTL)."""
+    from src.api_cache import cached_request
     from src.api_keys import get_secret
 
     key = get_secret("EIA_API_KEY")
@@ -566,14 +566,14 @@ def fetch_eia_series(series_id: str, periods: int = 104) -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        r = requests.get(
+        raw = cached_request(
             f"https://api.eia.gov/v2/seriesid/{series_id}",
             params={"api_key": key, "length": str(periods)},
-            timeout=15,
+            ttl=43200, timeout=15,  # 12h Supabase TTL
         )
-        if r.status_code != 200:
+        if not raw:
             return pd.DataFrame()
-        data = r.json().get("response", {}).get("data", [])
+        data = raw.get("response", {}).get("data", [])
         if not data:
             return pd.DataFrame()
         df = pd.DataFrame(data)
