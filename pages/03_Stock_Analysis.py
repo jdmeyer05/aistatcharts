@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src.data_engine import polygon_history, polygon_ticker_details, polygon_snapshot, polygon_financials, fetch_insider_transactions, fetch_analyst_recommendations
 from src.edgar import calculate_financial_ratios, get_ratio_history, fetch_recent_8k, score_insider_transactions
-import os
 import logging
 import json
 from datetime import datetime, timedelta
@@ -23,42 +22,43 @@ logger = logging.getLogger(__name__)
 from src.api_keys import get_secret as _get_key
 
 grok_key = _get_key("GROK_API_KEY")
-fred_key = _get_key("FRED_API_KEY")
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_stock_data(ticker: str) -> dict:
-    """Fetch stock data from Polygon API."""
+    """Fetch stock data from Polygon API — parallelized."""
+    from concurrent.futures import ThreadPoolExecutor
     try:
-        info = polygon_ticker_details(ticker) or {}
-        # Add current price to info
-        snap = polygon_snapshot(ticker)
+        # Parallel batch: all independent API calls at once
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            f_info = pool.submit(polygon_ticker_details, ticker)
+            f_snap = pool.submit(polygon_snapshot, ticker)
+            f_1y = pool.submit(polygon_history, ticker, 365)
+            f_5y = pool.submit(polygon_history, ticker, 1825)
+            f_fins = pool.submit(polygon_financials, ticker, "annual", 4)
+            f_recs = pool.submit(fetch_analyst_recommendations, ticker)
+            f_ins = pool.submit(fetch_insider_transactions, ticker)
+
+        info = f_info.result() or {}
+        snap = f_snap.result()
         if snap:
             info["currentPrice"] = snap.get("price", 0)
             info["previousClose"] = snap.get("prev_close", 0)
 
-        hist_1y = polygon_history(ticker, 365)
-        hist_3m = polygon_history(ticker, 90)
-        hist_5y = polygon_history(ticker, 1825)
-
-        # Financials from Polygon Stocks Starter
-        fins = polygon_financials(ticker, timeframe="annual", limit=4)
+        fins = f_fins.result()
         income = fins.get("income", pd.DataFrame())
         balance = fins.get("balance", pd.DataFrame())
         cashflow = fins.get("cashflow", pd.DataFrame())
-        recommendations = fetch_analyst_recommendations(ticker)
-        insider = fetch_insider_transactions(ticker)
 
         return {
             "info": info,
-            "hist_1y": hist_1y,
-            "hist_3m": hist_3m,
-            "hist_5y": hist_5y,
+            "hist_1y": f_1y.result(),
+            "hist_5y": f_5y.result(),
             "income": income,
             "balance": balance,
             "cashflow": cashflow,
-            "recommendations": recommendations,
-            "insider": insider,
+            "recommendations": f_recs.result(),
+            "insider": f_ins.result(),
             "success": True,
         }
     except Exception as e:
@@ -66,8 +66,12 @@ def fetch_stock_data(ticker: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
-def compute_technicals(hist: pd.DataFrame) -> dict:
-    """Compute technical indicators from price history."""
+def compute_technicals(hist: pd.DataFrame, hist_full: pd.DataFrame = None) -> dict:
+    """Compute technical indicators from price history.
+
+    hist: primary history (1Y) for indicator calculation.
+    hist_full: optional longer history (5Y) for timeframe toggle.
+    """
     if hist.empty or len(hist) < 20:
         return {}
 
@@ -148,7 +152,9 @@ def compute_technicals(hist: pd.DataFrame) -> dict:
         "atr_pct": atr.iloc[-1] / current * 100,
         "vol_ratio": vol_ratio.iloc[-1],
         "trend_signals": trend_signals,
-        # Raw series for plotting
+        # Raw OHLCV for candlestick plotting
+        "ohlc": hist[["Open", "High", "Low", "Close", "Volume"]].copy(),
+        "ohlc_full": hist_full[["Open", "High", "Low", "Close", "Volume"]].copy() if hist_full is not None and not hist_full.empty else None,
         "close": close,
         "ema_20_series": ema_20,
         "ema_50_series": ema_50,
@@ -301,10 +307,118 @@ def build_stock_prompt(ticker: str, fundamentals: dict, technicals: dict,
         lines.append("=" * 50)
         lines.append(macro_context)
 
+    # ── Parallel fetch: earnings, IV, news, short interest, cross-context ──
+    from concurrent.futures import ThreadPoolExecutor
+    def _fetch_earnings():
+        from src.market_data import fetch_analyst_estimates, fetch_earnings_history
+        return {"est": fetch_analyst_estimates(ticker), "hist": fetch_earnings_history(ticker)}
+    def _fetch_iv():
+        from src.metrics_store import percentile_ranks_all, load_history
+        return {"pctiles": percentile_ranks_all(ticker), "mhist": load_history(ticker, days=5)}
+    def _fetch_news():
+        from src.data_engine import fetch_ticker_news, fetch_related_companies
+        return {"news": fetch_ticker_news(ticker, limit=5), "peers": fetch_related_companies(ticker)}
+    def _fetch_short():
+        from src.macro_data import fetch_short_interest
+        return fetch_short_interest(ticker)
+    def _fetch_xctx():
+        from src.cross_context import build_ai_context
+        return build_ai_context(ticker=ticker)
+
+    with ThreadPoolExecutor(max_workers=5) as _pool:
+        _f_earn = _pool.submit(_fetch_earnings)
+        _f_iv = _pool.submit(_fetch_iv)
+        _f_news = _pool.submit(_fetch_news)
+        _f_short = _pool.submit(_fetch_short)
+        _f_xctx = _pool.submit(_fetch_xctx)
+
+    # Earnings data
+    try:
+        _earn = _f_earn.result()
+        _est = _earn.get("est")
+        if _est:
+            lines.append("")
+            lines.append("=" * 50)
+            lines.append("EARNINGS & ESTIMATES")
+            lines.append("=" * 50)
+            if _est.get("forward_eps"):
+                lines.append(f"Forward EPS: ${_est['forward_eps']:.2f} | Trailing EPS: ${_est.get('trailing_eps', 0):.2f}")
+            if _est.get("eps_est_current_q"):
+                lines.append(f"EPS Est (Current Q): ${_est['eps_est_current_q']:.2f} | Next Q: ${_est.get('eps_est_next_q', 0):.2f}")
+            if _est.get("rev_est_current_q"):
+                lines.append(f"Rev Est (Current Q): ${_est['rev_est_current_q']/1e9:.2f}B" if _est['rev_est_current_q'] > 1e9 else f"Rev Est (Current Q): ${_est['rev_est_current_q']/1e6:.0f}M")
+            if _est.get("rev_growth_current_y"):
+                lines.append(f"Revenue Growth Est (Current Y): {_est['rev_growth_current_y']*100:.1f}%")
+
+        _eh = _earn.get("hist")
+        if _eh is not None and not _eh.empty:
+            lines.append("Recent Earnings Surprises:")
+            for _, row in _eh.head(4).iterrows():
+                _q = row.get("quarter", "")
+                _act = row.get("actual", 0)
+                _est_v = row.get("estimate", 0)
+                _surp = row.get("surprise_pct", 0)
+                _beat = "BEAT" if _surp > 0 else "MISS"
+                lines.append(f"  {_q}: ${_act:.2f} vs ${_est_v:.2f} ({_beat} {abs(_surp):.1f}%)")
+    except Exception:
+        pass
+
+    # Options / IV context
+    try:
+        _iv = _f_iv.result()
+        _pctiles = _iv.get("pctiles")
+        if _pctiles:
+            lines.append("")
+            lines.append("=" * 50)
+            lines.append("OPTIONS / VOLATILITY CONTEXT")
+            lines.append("=" * 50)
+            # Try proper historical IV percentile first
+            try:
+                from src.options_history import get_iv_summary
+                # Use ATM IV from metrics store if available, else skip
+                _current_atm_iv = None
+                _mhist = _iv.get("mhist")
+                if _mhist is not None and not _mhist.empty and _mhist.iloc[-1].get("atm_iv"):
+                    _current_atm_iv = _mhist.iloc[-1]["atm_iv"]
+                _iv_sum = get_iv_summary(ticker, _current_atm_iv or 0.25, days=10) if _current_atm_iv else None
+                if _iv_sum:
+                    if _iv_sum.get("percentile") is not None:
+                        lines.append(f"IV Percentile (10d history): {_iv_sum['percentile']:.0f}th")
+                    lines.append(f"IV vs 10d avg: {_iv_sum['vs_avg_pct']:+.0f}% (range {_iv_sum['iv_low']:.1%} - {_iv_sum['iv_high']:.1%})")
+                    lines.append(f"Skew trend: {_iv_sum['skew_direction']} (change {_iv_sum['skew_change']:+.3f})")
+            except Exception:
+                pass
+            if _pctiles.get("atm_iv") is not None:
+                lines.append(f"ATM IV Percentile (252d metrics): {_pctiles['atm_iv']:.0f}th")
+            if _pctiles.get("put_skew") is not None:
+                lines.append(f"Put Skew Percentile: {_pctiles['put_skew']:.0f}th")
+            if _pctiles.get("vrp") is not None:
+                lines.append(f"Vol Risk Premium Percentile: {_pctiles['vrp']:.0f}th")
+            if _pctiles.get("iv_hv_ratio") is not None:
+                lines.append(f"IV/HV Ratio Percentile: {_pctiles['iv_hv_ratio']:.0f}th")
+            if _pctiles.get("hv20") is not None:
+                lines.append(f"HV20 Percentile: {_pctiles['hv20']:.0f}th")
+        _mhist = _iv.get("mhist")
+        if _mhist is not None and not _mhist.empty:
+            _latest = _mhist.iloc[-1]
+            _parts = []
+            if _latest.get("atm_iv"):
+                _parts.append(f"ATM IV: {_latest['atm_iv']*100:.1f}%")
+            if _latest.get("pc_ratio"):
+                _parts.append(f"P/C Ratio: {_latest['pc_ratio']:.2f}")
+            if _latest.get("hv20"):
+                _parts.append(f"HV20: {_latest['hv20']*100:.1f}%")
+            if _latest.get("vrp"):
+                _parts.append(f"VRP: {_latest['vrp']*100:.1f}%")
+            if _parts:
+                lines.append(" | ".join(_parts))
+    except Exception:
+        pass
+
     # Recent news headlines
     try:
-        from src.data_engine import fetch_ticker_news, fetch_related_companies
-        _news = fetch_ticker_news(ticker, limit=5)
+        _nd = _f_news.result()
+        _news = _nd.get("news")
         if _news:
             lines.append("")
             lines.append("=" * 50)
@@ -312,7 +426,7 @@ def build_stock_prompt(ticker: str, fundamentals: dict, technicals: dict,
             lines.append("=" * 50)
             for article in _news:
                 lines.append(f"- [{article['published'][:10]}] {article['title']}")
-        _peers = fetch_related_companies(ticker)
+        _peers = _nd.get("peers")
         if _peers:
             lines.append(f"\nPEER COMPANIES: {', '.join(_peers[:8])}")
     except Exception:
@@ -320,8 +434,7 @@ def build_stock_prompt(ticker: str, fundamentals: dict, technicals: dict,
 
     # Short interest data
     try:
-        from src.macro_data import fetch_short_interest
-        _si = fetch_short_interest(ticker)
+        _si = _f_short.result()
         if _si and _si.get("short_ratio"):
             lines.append("")
             lines.append("=" * 50)
@@ -337,10 +450,9 @@ def build_stock_prompt(ticker: str, fundamentals: dict, technicals: dict,
     except Exception:
         pass
 
-    # Cross-page context (from other analysis pages run this session)
+    # Cross-page context
     try:
-        from src.cross_context import build_ai_context
-        _xctx = build_ai_context(ticker=ticker)
+        _xctx = _f_xctx.result()
         if _xctx:
             lines.append("")
             lines.append("=" * 50)
@@ -477,9 +589,9 @@ MODEL_CONFIGS = {
         "color": "#ff4444",
     },
     "gemini": {
-        "name": "Gemini 3 Pro",
+        "name": "Gemini 3.1 Pro",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "model": "gemini-3-pro-preview",
+        "model": "gemini-3.1-pro-preview",
         "key_name": "GEMINI_API_KEY",
         "extra_instructions": "Use your knowledge to assess the latest market conditions, analyst consensus, and any recent news for this ticker.",
         "color": "#4285f4",
@@ -500,10 +612,14 @@ def run_model_stock_analysis(model_key: str, api_key: str, stock_prompt: str, ti
     """Call a single AI model for stock analysis. Handles OpenAI-compatible APIs and Claude."""
     config = MODEL_CONFIGS[model_key]
 
+    from src.ai_validation import ACCURACY_CHECK
     user_prompt = f"""{stock_prompt}
 
 {config['extra_instructions']}
-Produce your complete analysis for {ticker}. JSON only."""
+
+{ACCURACY_CHECK}
+
+Produce your complete analysis for {ticker}. Respond with ONLY valid JSON."""
 
     try:
         if config["base_url"] == "anthropic":
@@ -568,40 +684,45 @@ def blend_model_results(results: dict) -> dict:
 
     n = len(successful)
 
-    # Blend scores (simple average)
+    # Confidence-weighted blending: models with higher self-reported confidence get more weight
+    raw_weights = {k: max(1, v.get("confidence", 5)) for k, v in successful.items()}
+    w_total = sum(raw_weights.values())
+    weights = {k: w / w_total for k, w in raw_weights.items()}
+
+    # Blend scores (confidence-weighted)
     blended_scores = {}
     for dim in ["technical", "fundamental", "sentiment", "macro", "valuation"]:
-        vals = [v.get("scores", {}).get(dim, 5) for v in successful.values()]
-        blended_scores[dim] = round(sum(vals) / len(vals), 1)
+        blended_scores[dim] = round(
+            sum(v.get("scores", {}).get(dim, 5) * weights[k] for k, v in successful.items()), 1)
 
     composite = round(sum(blended_scores.values()) / len(blended_scores), 1)
 
-    # Blend price targets (average)
+    # Blend price targets (confidence-weighted)
     pt_keys = ["bull", "base", "bear", "bull_prob", "base_prob", "bear_prob"]
     blended_pt = {}
-    for k in pt_keys:
-        vals = [v.get("price_targets", {}).get(k, 0) for v in successful.values()]
-        blended_pt[k] = round(sum(vals) / len(vals), 1)
+    for pk in pt_keys:
+        blended_pt[pk] = round(
+            sum(v.get("price_targets", {}).get(pk, 0) * weights[k] for k, v in successful.items()), 1)
     # Normalize probabilities
     prob_total = blended_pt.get("bull_prob", 25) + blended_pt.get("base_prob", 50) + blended_pt.get("bear_prob", 25)
     if prob_total > 0:
         for pk in ["bull_prob", "base_prob", "bear_prob"]:
             blended_pt[pk] = round(blended_pt[pk] / prob_total * 100)
 
-    # Blend recommendation (majority vote, fallback to most conservative)
+    # Blend recommendation (confidence-weighted)
     rec_order = ["Strong Sell", "Sell", "Hold", "Buy", "Strong Buy"]
-    rec_scores = []
-    for v in successful.values():
+    rec_scores = {}
+    for k, v in successful.items():
         rec = v.get("recommendation", "Hold")
-        rec_scores.append(rec_order.index(rec) if rec in rec_order else 2)
-    avg_rec_score = sum(rec_scores) / len(rec_scores)
+        rec_scores[k] = rec_order.index(rec) if rec in rec_order else 2
+    avg_rec_score = sum(rec_scores[k] * weights[k] for k in successful)
     blended_rec = rec_order[round(avg_rec_score)]
 
     # Blend confidence (average, penalize disagreement)
     confidences = [v.get("confidence", 5) for v in successful.values()]
     avg_conf = sum(confidences) / len(confidences)
     # Score divergence penalty: if models disagree on recommendation, lower confidence
-    rec_spread = max(rec_scores) - min(rec_scores)
+    rec_spread = max(rec_scores.values()) - min(rec_scores.values())
     conf_penalty = min(2, rec_spread * 0.5)
     blended_conf = max(1, round(avg_conf - conf_penalty))
 
@@ -669,8 +790,9 @@ def blend_model_results(results: dict) -> dict:
 # ─────────────────────────────────────────────
 # PAGE
 # ─────────────────────────────────────────────
-st.title("🧠 Stock Analysis & Recommendation")
-st.markdown("AI-powered institutional-grade equity research. Multi-dimensional scoring with quantitative backing.")
+st.markdown(f'<div style="font-size:1.6rem;font-weight:800;color:#e6edf3;margin-bottom:2px;">Stock Analysis & Recommendation</div>'
+            f'<div style="font-size:0.85rem;color:{COLORS["text_muted"]};margin-bottom:16px;">Multi-model AI equity research with quantitative scoring</div>',
+            unsafe_allow_html=True)
 
 # Controls
 _ctrl1, _ctrl2 = st.columns([2, 1])
@@ -691,7 +813,7 @@ set_active_ticker(ticker)
 if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
     if analyze_btn:
         st.session_state["_ai_running"] = True
-        with fun_loader("data"):
+        with fun_loader("ai"):
             stock_data = fetch_stock_data(ticker)
             if not stock_data.get("success"):
                 st.error(f"Failed to load data for {ticker}: {stock_data.get('error', 'Unknown error')}")
@@ -701,7 +823,7 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 stock_data["info"], stock_data["income"],
                 stock_data["balance"], stock_data["cashflow"]
             )
-            technicals = compute_technicals(stock_data["hist_1y"])
+            technicals = compute_technicals(stock_data["hist_1y"], stock_data["hist_5y"])
             sentiment = fetch_stocktwits_ticker(ticker)
 
             # Macro context from scenario analysis + conflict data
@@ -767,12 +889,19 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                         _cached_stock = None
 
                 if not _cached_stock:
-                    model_names = ", ".join(MODEL_CONFIGS[m]["name"] for m in active_models)
-                    with fun_loader("ai"):
-                        for model_key in active_models:
-                            key = api_keys[model_key]
-                            if key:
-                                model_results[model_key] = run_model_stock_analysis(model_key, key, prompt, ticker)
+                    # Run all models in parallel
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    def _call_model(mk):
+                        return mk, run_model_stock_analysis(mk, api_keys[mk], prompt, ticker)
+                    with ThreadPoolExecutor(max_workers=len(active_models)) as executor:
+                        futures = {executor.submit(_call_model, mk): mk for mk in active_models}
+                        for fut in as_completed(futures):
+                            try:
+                                mk, result = fut.result()
+                                model_results[mk] = result
+                            except Exception as e:
+                                mk = futures[fut]
+                                model_results[mk] = {"success": False, "error": str(e), "model_name": MODEL_CONFIGS[mk]["name"]}
 
                     # Cache the combined results for 2 hours
                     # Round-trip safe: serialize then deserialize to strip non-JSON types
@@ -816,8 +945,8 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
             try:
                 from src.signal_engine import write_signal
                 rec = blended.get("recommendation", "Hold").lower()
-                sig_dir = "bull" if "buy" in rec or "strong" in rec else ("bear" if "sell" in rec else "neutral")
-                sig_conv = min(1.0, blended.get("confidence", 0) / 100) if blended.get("confidence", 0) > 1 else blended.get("confidence", 0)
+                sig_dir = "bull" if "buy" in rec else ("bear" if "sell" in rec else "neutral")
+                sig_conv = min(1.0, blended.get("confidence", 0) / 10)
                 write_signal("stock_analysis", ticker, sig_dir, sig_conv,
                              reasoning=f"{blended.get('recommendation', 'Hold')} — score {blended.get('composite_score', 0):.0f}")
             except Exception:
@@ -830,6 +959,7 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 "sentiment": sentiment,
                 "blended": blended,
                 "model_results": model_results,
+                "prompt": prompt,
             }
             st.session_state["_ai_running"] = False
 
@@ -845,40 +975,62 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
     grok_result = cached["blended"]
     model_results = cached.get("model_results", {})
 
+    # Card style helper
+    _card = (f'background:{COLORS["card_bg"]};border:1px solid {COLORS["card_border"]};'
+             f'border-radius:10px;padding:16px 20px;margin-bottom:12px;')
+    _card_sm = (f'background:{COLORS["card_bg"]};border:1px solid {COLORS["card_border"]};'
+                f'border-radius:8px;padding:10px 14px;text-align:center;')
+
     # ═══════════════════════════════════════════
     # HEADER: Company Info + Recommendation
     # ═══════════════════════════════════════════
     with error_boundary("Company Header"):
-        h1, h2, h3 = st.columns([2, 1, 1])
-        with h1:
-            st.markdown(f"## {fundamentals['name']} ({ticker})")
-            st.caption(f"{fundamentals['sector']} · {fundamentals['industry']}")
-        with h2:
-            price = fundamentals["current_price"]
-            st.metric("Price", f"${price:.2f}")
-        with h3:
-            if grok_result and grok_result.get("success"):
-                from html import escape as _esc
-                rec = _esc(str(grok_result.get("recommendation", "Hold")))
-                rec_colors = {"Strong Buy": "#00ff96", "Buy": "#00cc66", "Hold": "#ffaa00",
-                             "Sell": "#ff6644", "Strong Sell": "#ff4444"}
-                st.markdown(f'<div style="background:{rec_colors.get(rec, "#888")};color:#000;'
-                           f'padding:12px;border-radius:8px;text-align:center;font-weight:700;font-size:1.2rem;">'
-                           f'{rec}</div>', unsafe_allow_html=True)
-                conf = grok_result.get("confidence", 5)
-                st.caption(f"Confidence: {conf}/10")
-                if rec in ("Strong Buy", "Buy"):
-                    if st.button(f"Add {ticker} to Position Book", key="add_pos_stock"):
-                        try:
-                            from src.position_book import add_position
-                            add_position(
-                                ticker=ticker, type="stock", qty=100,
-                                entry_price=price, source_page="Stock Analysis",
-                                details={"recommendation": rec, "confidence": conf},
-                            )
-                            st.success(f"Added 100 shares of {ticker} @ ${price:.2f}")
-                        except Exception as e:
-                            st.error(f"Failed: {e}")
+        price = fundamentals["current_price"]
+        _mkt_cap = fundamentals.get("market_cap", 0)
+        _mkt_str = f"${_mkt_cap/1e12:.2f}T" if _mkt_cap >= 1e12 else (f"${_mkt_cap/1e9:.1f}B" if _mkt_cap >= 1e9 else f"${_mkt_cap/1e6:.0f}M")
+
+        if grok_result and grok_result.get("success"):
+            from html import escape as _esc
+            rec = _esc(str(grok_result.get("recommendation", "Hold")))
+            conf = grok_result.get("confidence", 5)
+            rec_colors = {"Strong Buy": "#00ff96", "Buy": "#00cc66", "Hold": "#ffaa00",
+                         "Sell": "#ff6644", "Strong Sell": "#ff4444"}
+            _rc = rec_colors.get(rec, "#888")
+
+            st.markdown(
+                f'<div style="{_card}display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">'
+                f'  <div>'
+                f'    <div style="font-size:1.5rem;font-weight:800;color:#e6edf3;">{fundamentals["name"]}</div>'
+                f'    <div style="font-size:0.85rem;color:{COLORS["text_muted"]};">{ticker} &middot; {fundamentals["sector"]} &middot; {fundamentals["industry"]} &middot; {_mkt_str}</div>'
+                f'  </div>'
+                f'  <div style="display:flex;align-items:center;gap:16px;">'
+                f'    <div style="text-align:right;">'
+                f'      <div style="font-size:1.6rem;font-weight:700;color:#e6edf3;">${price:.2f}</div>'
+                f'    </div>'
+                f'    <div style="background:{_rc};color:#000;padding:8px 18px;border-radius:8px;text-align:center;">'
+                f'      <div style="font-size:1.1rem;font-weight:800;">{rec}</div>'
+                f'      <div style="font-size:0.7rem;opacity:0.7;">Confidence {conf}/10</div>'
+                f'    </div>'
+                f'  </div>'
+                f'</div>', unsafe_allow_html=True)
+
+            if rec in ("Strong Buy", "Buy"):
+                if st.button(f"Add {ticker} to Position Book", key="add_pos_stock"):
+                    try:
+                        from src.position_book import add_position
+                        add_position(ticker=ticker, type="stock", qty=100,
+                                     entry_price=price, source_page="Stock Analysis",
+                                     details={"recommendation": rec, "confidence": conf})
+                        st.success(f"Added 100 shares of {ticker} @ ${price:.2f}")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+        else:
+            st.markdown(
+                f'<div style="{_card}">'
+                f'  <div style="font-size:1.5rem;font-weight:800;color:#e6edf3;">{fundamentals["name"]} ({ticker})</div>'
+                f'  <div style="font-size:0.85rem;color:{COLORS["text_muted"]};">{fundamentals["sector"]} &middot; {fundamentals["industry"]} &middot; {_mkt_str}</div>'
+                f'  <div style="font-size:1.6rem;font-weight:700;color:#e6edf3;margin-top:8px;">${price:.2f}</div>'
+                f'</div>', unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════
     # WALL STREET ANALYST CONSENSUS
@@ -888,47 +1040,59 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
             from src.market_data import fetch_analyst_estimates
             _analyst = fetch_analyst_estimates(ticker)
             if _analyst and _analyst.get("num_analysts"):
-                st.markdown("#### Wall Street Consensus")
+                st.markdown(f'<div style="font-size:1.15rem;font-weight:700;color:#e6edf3;margin-bottom:10px;">'
+                            f'<span style="color:#ffaa00;">Wall Street</span> Analyst Consensus</div>', unsafe_allow_html=True)
 
-                _ac1, _ac2, _ac3, _ac4, _ac5 = st.columns(5)
-
-                # Rating
-                _rec = (_analyst.get("recommendation") or "").title()
+                _rec = (_analyst.get("recommendation") or "").replace("_", " ").title()
                 _rec_score = _analyst.get("rec_mean_score") or 3.0
                 _rec_colors = {"Strong Buy": "#00ff96", "Buy": "#00cc66",
                               "Outperform": "#00cc66", "Hold": "#ffaa00",
                               "Underperform": "#ff6644", "Sell": "#ff4444"}
                 _rc = _rec_colors.get(_rec, "#ffaa00")
-                _ac1.markdown(
-                    f'<div style="text-align:center;padding:8px;border:1px solid {_rc};border-radius:6px;">'
-                    f'<div style="font-size:0.65rem;color:#888;">CONSENSUS</div>'
-                    f'<div style="font-size:1.1rem;font-weight:800;color:{_rc};">{_rec}</div>'
-                    f'<div style="font-size:0.65rem;color:#888;">{_rec_score:.1f}/5 ({_analyst["num_analysts"]} analysts)</div>'
-                    f'</div>', unsafe_allow_html=True)
 
-                # Price target
                 _pt_mean = _analyst.get("price_target_mean")
                 _pt_low = _analyst.get("price_target_low")
                 _pt_high = _analyst.get("price_target_high")
-                if _pt_mean:
-                    _cur_price = fundamentals.get("current_price", 0) or 0
-                    _upside = (_pt_mean / _cur_price - 1) * 100 if _cur_price > 0 else 0
-                    _up_color = "#00ff96" if _upside > 0 else "#ff4444"
-                    _ac2.metric("Target", f"${_pt_mean:.0f}", f"{_upside:+.0f}%")
-                if _pt_low and _pt_high:
-                    _ac3.metric("Range", f"${_pt_low:.0f} — ${_pt_high:.0f}")
+                _cur_price = fundamentals.get("current_price", 0) or 0
+                _upside = (_pt_mean / _cur_price - 1) * 100 if _cur_price > 0 and _pt_mean else 0
+                _up_color = "#00ff96" if _upside > 0 else "#ff4444"
 
-                # Rating breakdown
                 _sb = _analyst.get("rec_strong_buy", 0)
                 _b = _analyst.get("rec_buy", 0)
                 _h = _analyst.get("rec_hold", 0)
                 _s = _analyst.get("rec_sell", 0)
                 _ss = _analyst.get("rec_strong_sell", 0)
                 _total = _sb + _b + _h + _s + _ss
+                _bull_pct = (_sb + _b) / _total * 100 if _total > 0 else 0
+
+                _ws_html = f'<div style="{_card}display:flex;gap:10px;flex-wrap:wrap;align-items:center;">'
+                # Consensus badge
+                _ws_html += (f'<div style="{_card_sm}min-width:110px;border-color:{_rc};">'
+                             f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">CONSENSUS</div>'
+                             f'<div style="font-size:1.1rem;font-weight:800;color:{_rc};">{_rec}</div>'
+                             f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">{_rec_score:.1f}/5 &middot; {_analyst["num_analysts"]} analysts</div></div>')
+                # Target
+                if _pt_mean:
+                    _ws_html += (f'<div style="{_card_sm}min-width:90px;">'
+                                 f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">TARGET</div>'
+                                 f'<div style="font-size:1.1rem;font-weight:700;color:#e6edf3;">${_pt_mean:.0f}</div>'
+                                 f'<div style="font-size:0.75rem;color:{_up_color};font-weight:600;">{_upside:+.0f}%</div></div>')
+                # Range
+                if _pt_low and _pt_high:
+                    _ws_html += (f'<div style="{_card_sm}min-width:110px;">'
+                                 f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">RANGE</div>'
+                                 f'<div style="font-size:1.1rem;font-weight:700;color:#e6edf3;">${_pt_low:.0f} &ndash; ${_pt_high:.0f}</div></div>')
+                # Bulls / Bears
                 if _total > 0:
-                    _bull_pct = (_sb + _b) / _total * 100
-                    _ac4.metric("Bulls", f"{_sb + _b}/{_total}", f"{_bull_pct:.0f}%")
-                    _ac5.metric("Bears", f"{_s + _ss}/{_total}")
+                    _ws_html += (f'<div style="{_card_sm}min-width:80px;">'
+                                 f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">BULLS</div>'
+                                 f'<div style="font-size:1.1rem;font-weight:700;color:#00ff96;">{_sb + _b}/{_total}</div>'
+                                 f'<div style="font-size:0.75rem;color:#00ff96;">{_bull_pct:.0f}%</div></div>')
+                    _ws_html += (f'<div style="{_card_sm}min-width:80px;">'
+                                 f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">BEARS</div>'
+                                 f'<div style="font-size:1.1rem;font-weight:700;color:#ff4444;">{_s + _ss}/{_total}</div></div>')
+                _ws_html += '</div>'
+                st.markdown(_ws_html, unsafe_allow_html=True)
 
                 # Recent upgrades/downgrades
                 _ud = _analyst.get("upgrades_downgrades", [])
@@ -937,17 +1101,16 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                         for _action in _ud[:8]:
                             _firm = _action.get("Firm", "")
                             _grade = _action.get("ToGrade", "")
-                            _from = _action.get("FromGrade", "")
                             _act_type = _action.get("Action", "")
-                            _pt_act = _action.get("priceTargetAction", "")
                             _pt_cur = _action.get("currentPriceTarget", 0)
                             _date = str(_action.get("GradeDate", ""))[:10]
-
-                            _act_icon = "⬆️" if _act_type in ("up", "init") else ("⬇️" if _act_type == "down" else "➡️")
-                            _pt_str = f" → ${_pt_cur:.0f}" if _pt_cur else ""
+                            _act_color = "#00ff96" if _act_type in ("up", "init") else ("#ff4444" if _act_type == "down" else "#888")
+                            _pt_str = f" &rarr; ${_pt_cur:.0f}" if _pt_cur else ""
                             st.markdown(
-                                f'{_act_icon} **{_firm}** {_grade}{_pt_str} '
-                                f'<span style="color:#888;font-size:0.75rem;">({_date})</span>',
+                                f'<div style="padding:3px 0;font-size:0.85rem;border-bottom:1px solid {COLORS["card_border"]};">'
+                                f'<span style="color:{_act_color};font-weight:600;">{_firm}</span> '
+                                f'<span style="color:#ccc;">{_grade}{_pt_str}</span> '
+                                f'<span style="color:{COLORS["text_muted"]};font-size:0.75rem;">{_date}</span></div>',
                                 unsafe_allow_html=True)
 
                 # Write analyst signal to signal engine
@@ -969,46 +1132,43 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
 
     # Executive summary — blended from all models
     if grok_result and grok_result.get("success"):
-        # Collect all model summaries
-        all_summaries = []
-        all_pulses = []
         individual = grok_result.get("model_results", {})
-        for k, v in individual.items():
-            if v.get("success"):
-                name = v.get("model_name", k)
-                s = v.get("summary", "")
-                p = v.get("sentiment_pulse", "")
-                if s:
-                    all_summaries.append(f"**{name}:** {s}")
-                if p:
-                    all_pulses.append(f"**{name}:** {p}")
-
-        # Show blended summary block
         agreement = grok_result.get("agreement", "")
-        blend_note = grok_result.get("blend_note", "")
+        # Clean markdown artifacts from agreement string
+        _clean_agreement = agreement.replace("**", "")
 
-        st.markdown("### Executive Summary")
-        if agreement:
-            st.markdown(f"**Model Consensus:** {agreement}")
+        st.markdown(f'<div style="font-size:1.15rem;font-weight:700;color:#e6edf3;margin-bottom:10px;">Executive Summary</div>',
+                    unsafe_allow_html=True)
 
-        if all_summaries:
-            for s in all_summaries:
-                st.markdown(s)
-        elif grok_result.get("summary"):
-            st.info(grok_result["summary"])
+        if _clean_agreement:
+            st.markdown(f'<div style="font-size:0.9rem;color:#ccc;margin-bottom:12px;">'
+                        f'<strong style="color:#e6edf3;">Model Consensus:</strong> {_clean_agreement}</div>',
+                        unsafe_allow_html=True)
 
-        if all_pulses:
-            st.divider()
-            st.caption("**Sentiment Pulse**")
-            for p in all_pulses:
-                st.caption(p)
+        # Per-model summaries as expandable cards with model color accent
+        _has_summaries = False
+        for k, v in individual.items():
+            if v.get("success") and v.get("summary"):
+                _has_summaries = True
+                _mname = v.get("model_name", k)
+                _mcolor = MODEL_CONFIGS.get(k, {}).get("color", "#888")
+                _mrec = v.get("recommendation", "Hold")
+                _mconf = v.get("confidence", 5)
+                _msummary = v.get("summary", "")
+                with st.expander(f"{_mname} — {_mrec} (Confidence {_mconf}/10)", expanded=False):
+                    st.markdown(f'<div style="font-size:0.88rem;color:#ccc;line-height:1.5;border-left:3px solid {_mcolor};padding-left:12px;">'
+                                f'{_msummary}</div>', unsafe_allow_html=True)
+
+        if not _has_summaries and grok_result.get("summary"):
+            st.markdown(f'<div style="{_card}font-size:0.88rem;color:#ccc;line-height:1.5;">{grok_result["summary"]}</div>',
+                        unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════
     # SCORECARD
     # ═══════════════════════════════════════════
     if grok_result and grok_result.get("success"):
         with error_boundary("Scorecard"):
-            st.markdown("### Multi-Dimensional Scorecard")
+            st.markdown(f'<div style="font-size:1.15rem;font-weight:700;color:#e6edf3;margin-bottom:10px;">Multi-Dimensional Scorecard</div>', unsafe_allow_html=True)
             scores = grok_result.get("scores", {})
             composite = grok_result.get("composite_score", 5)
 
@@ -1024,34 +1184,56 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
             for col, (label, score) in zip(score_cols, score_items):
                 score = float(score)
                 color = COLORS["success"] if score >= 7 else COLORS["warning"] if score >= 4 else COLORS["danger"]
+                _is_comp = label == "Composite"
+                _bw = "2px" if _is_comp else "1px"
+                _bg = f"rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},0.08)" if _is_comp else COLORS["card_bg"]
                 with col:
                     st.markdown(
-                        f'<div style="text-align:center;padding:8px;border:2px solid {color};border-radius:8px;">'
-                        f'<div style="font-size:1.8rem;font-weight:700;color:{color}">{score:.0f}</div>'
-                        f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]}">{label}</div></div>',
+                        f'<div style="text-align:center;padding:10px 6px;border:{_bw} solid {color};'
+                        f'border-radius:8px;background:{_bg};">'
+                        f'<div style="font-size:1.8rem;font-weight:800;color:{color};">{score:.0f}</div>'
+                        f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{label}</div></div>',
                         unsafe_allow_html=True,
                     )
 
-            # Radar chart
+            # Radar chart — overlay each model's scores + blended consensus
             categories = ["Technical", "Fundamental", "Sentiment", "Macro", "Valuation"]
-            values = [scores.get(c.lower(), 5) for c in categories]
-            values.append(values[0])  # close the polygon
-
             fig_radar = go.Figure()
+
+            # Individual model traces (translucent)
+            _individual = grok_result.get("model_results", {})
+            for _mk, _mv in _individual.items():
+                if _mv.get("success") and _mv.get("scores"):
+                    _mscores = _mv["scores"]
+                    _mvals = [_mscores.get(c.lower(), 5) for c in categories]
+                    _mvals.append(_mvals[0])
+                    _mcolor = MODEL_CONFIGS.get(_mk, {}).get("color", "#888")
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=_mvals, theta=categories + [categories[0]],
+                        fill="toself", fillcolor=f"rgba({int(_mcolor[1:3],16)},{int(_mcolor[3:5],16)},{int(_mcolor[5:7],16)},0.05)",
+                        line=dict(color=_mcolor, width=1, dash="dot"),
+                        name=_mv.get("model_name", _mk),
+                    ))
+
+            # Blended consensus trace (solid, on top)
+            values = [scores.get(c.lower(), 5) for c in categories]
+            values.append(values[0])
             fig_radar.add_trace(go.Scatterpolar(
                 r=values, theta=categories + [categories[0]],
                 fill="toself", fillcolor="rgba(0,209,255,0.15)",
-                line=dict(color=COLORS["accent"], width=2),
+                line=dict(color=COLORS["accent"], width=2.5),
                 marker=dict(size=6),
+                name="Consensus",
             ))
+
             fig_radar.update_layout(
                 polar=dict(
                     radialaxis=dict(visible=True, range=[0, 10], gridcolor="#30363d"),
                     angularaxis=dict(gridcolor="#30363d"),
                     bgcolor="#161b22",
                 ),
-                template="plotly_dark", height=350, margin=dict(t=30, b=30, l=60, r=60),
-                showlegend=False,
+                template="plotly_dark", height=380, margin=dict(t=30, b=30, l=60, r=60),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
             )
             st.plotly_chart(fig_radar, use_container_width=True)
 
@@ -1060,43 +1242,89 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
     # ═══════════════════════════════════════════
     if grok_result and grok_result.get("success"):
         with error_boundary("Price Targets"):
-            st.markdown("### Price Targets (12-Month)")
+            st.markdown(f'<div style="font-size:1.15rem;font-weight:700;color:#e6edf3;margin-bottom:10px;">'
+                        f'<span style="color:#00d1ff;">AI</span> Price Targets (12-Month)</div>', unsafe_allow_html=True)
             pt = grok_result.get("price_targets", {})
             price = fundamentals["current_price"]
-
-            pt_cols = st.columns(4)
-            pt_cols[0].metric("Current", f"${price:.2f}")
             _bear = pt.get('bear') or 0
             _base = pt.get('base') or 0
-            pt_cols[1].metric("Bear Target", f"${_bear:.2f}",
-                             f"{((_bear/price)-1)*100:+.1f}%" if _bear and price else "",
-                             delta_color="inverse")
             _bull = pt.get('bull') or 0
-            pt_cols[2].metric("Base Target", f"${_base:.2f}",
-                             f"{((_base/price)-1)*100:+.1f}%" if _base and price else "")
-            pt_cols[3].metric("Bull Target", f"${_bull:.2f}",
-                             f"{((_bull/price)-1)*100:+.1f}%" if _bull and price else "")
 
+            _pt_html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+            for _ptl, _ptv, _ptc, _ptchg in [
+                ("Current", price, "#e6edf3", ""),
+                ("Bear", _bear, "#ff4444", f"{((_bear/price)-1)*100:+.1f}%" if _bear and price else ""),
+                ("Base", _base, "#00d1ff", f"{((_base/price)-1)*100:+.1f}%" if _base and price else ""),
+                ("Bull", _bull, "#00ff96", f"{((_bull/price)-1)*100:+.1f}%" if _bull and price else ""),
+            ]:
+                _chg_html = f'<div style="font-size:0.7rem;color:{_ptc};">{_ptchg}</div>' if _ptchg else ""
+                _pt_html += (f'<div style="{_card_sm}flex:1;min-width:100px;">'
+                             f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{_ptl}</div>'
+                             f'<div style="font-size:1.2rem;font-weight:700;color:{_ptc};">${_ptv:.2f}</div>'
+                             f'{_chg_html}</div>')
+            _pt_html += '</div>'
+            st.markdown(_pt_html, unsafe_allow_html=True)
             st.caption(f"Probability: Bear {pt.get('bear_prob', 25)}% · "
                       f"Base {pt.get('base_prob', 50)}% · Bull {pt.get('bull_prob', 25)}%")
 
-            # Price target range visualization
+            # Probability-weighted price distribution
+            bear_p = pt.get("bear", price * 0.8) or price * 0.8
+            base_p = pt.get("base", price) or price
+            bull_p = pt.get("bull", price * 1.2) or price * 1.2
+            bear_prob = pt.get("bear_prob", 25)
+            base_prob = pt.get("base_prob", 50)
+            bull_prob = pt.get("bull_prob", 25)
+
+            # Build smooth distribution from three scenario peaks
+            from scipy.stats import norm
+            _x_range = np.linspace(bear_p * 0.9, bull_p * 1.1, 300)
+            _spread = max(0.01, (bull_p - bear_p) / 6)  # width of each scenario bell, floor at 0.01
+            _dist = (bear_prob / 100 * norm.pdf(_x_range, bear_p, _spread) +
+                     base_prob / 100 * norm.pdf(_x_range, base_p, max(0.01, _spread * 0.7)) +
+                     bull_prob / 100 * norm.pdf(_x_range, bull_p, _spread))
+            _dist_max = _dist.max()
+            _dist = _dist / _dist_max if _dist_max > 0 else _dist  # normalize peak to 1
+
             fig_pt = go.Figure()
-            bear_p = pt.get("bear", price * 0.8)
-            base_p = pt.get("base", price)
-            bull_p = pt.get("bull", price * 1.2)
+            # Shaded regions
+            _bear_mask = _x_range <= (bear_p + base_p) / 2
+            _bull_mask = _x_range >= (base_p + bull_p) / 2
+            _base_mask = ~_bear_mask & ~_bull_mask
 
             fig_pt.add_trace(go.Scatter(
-                x=[bear_p, base_p, bull_p], y=["Target", "Target", "Target"],
-                mode="markers+text",
-                marker=dict(size=[20, 25, 20], color=[COLORS["danger"], COLORS["accent"], COLORS["success"]]),
-                text=[f"${bear_p:.0f}", f"${base_p:.0f}", f"${bull_p:.0f}"],
-                textposition="top center",
-            ))
-            fig_pt.add_vline(x=price, line_dash="dash", line_color="white",
-                            annotation_text=f"Current ${price:.2f}")
+                x=_x_range[_bear_mask], y=_dist[_bear_mask],
+                fill="tozeroy", fillcolor="rgba(255,68,68,0.2)",
+                line=dict(color="#ff4444", width=0), showlegend=False))
+            fig_pt.add_trace(go.Scatter(
+                x=_x_range[_base_mask], y=_dist[_base_mask],
+                fill="tozeroy", fillcolor="rgba(0,209,255,0.2)",
+                line=dict(color="#00d1ff", width=0), showlegend=False))
+            fig_pt.add_trace(go.Scatter(
+                x=_x_range[_bull_mask], y=_dist[_bull_mask],
+                fill="tozeroy", fillcolor="rgba(0,255,150,0.2)",
+                line=dict(color="#00ff96", width=0), showlegend=False))
+            # Full distribution outline
+            fig_pt.add_trace(go.Scatter(
+                x=_x_range, y=_dist, mode="lines",
+                line=dict(color="white", width=1.5), showlegend=False))
+
+            # Scenario markers
+            for _sp, _sl, _sc, _sprob in [
+                (bear_p, "Bear", "#ff4444", bear_prob),
+                (base_p, "Base", "#00d1ff", base_prob),
+                (bull_p, "Bull", "#00ff96", bull_prob),
+            ]:
+                fig_pt.add_vline(x=_sp, line_dash="dot", line_color=_sc, line_width=1)
+                fig_pt.add_annotation(x=_sp, y=1.05, text=f"${_sp:.0f}<br>{_sprob}%",
+                                      showarrow=False, font=dict(color=_sc, size=11))
+
+            # Current price
+            fig_pt.add_vline(x=price, line_dash="dash", line_color="white", line_width=2)
+            fig_pt.add_annotation(x=price, y=1.15, text=f"<b>Current ${price:.2f}</b>",
+                                  showarrow=False, font=dict(color="white", size=11))
+
             fig_pt.update_layout(
-                template="plotly_dark", height=120, margin=dict(t=30, b=10, l=0, r=0),
+                template="plotly_dark", height=200, margin=dict(t=40, b=10, l=0, r=0),
                 xaxis_title="Price ($)", yaxis=dict(visible=False), showlegend=False,
             )
             st.plotly_chart(fig_pt, use_container_width=True)
@@ -1108,55 +1336,106 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
         with error_boundary("Technical Analysis"):
             st.markdown("### Technical Analysis")
 
-            fig_tech = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                                    row_heights=[0.6, 0.2, 0.2],
-                                    vertical_spacing=0.03)
+            # Timeframe selector
+            _tf_col1, _tf_col2 = st.columns([3, 1])
+            with _tf_col2:
+                _timeframe = st.radio("Timeframe", ["3M", "1Y", "5Y"], index=1, horizontal=True, key="tech_tf")
 
+            # Select OHLC data based on timeframe
+            ohlc = technicals["ohlc"]
+            if _timeframe == "3M":
+                _cutoff = ohlc.index.max() - pd.Timedelta(days=90)
+                ohlc = ohlc[ohlc.index >= _cutoff]
+            elif _timeframe == "5Y" and technicals.get("ohlc_full") is not None:
+                ohlc = technicals["ohlc_full"]
+
+            fig_tech = make_subplots(rows=4, cols=1, shared_xaxes=True,
+                                    row_heights=[0.5, 0.15, 0.15, 0.2],
+                                    vertical_spacing=0.02)
+
+            # Candlestick chart
+            fig_tech.add_trace(go.Candlestick(
+                x=ohlc.index, open=ohlc["Open"], high=ohlc["High"],
+                low=ohlc["Low"], close=ohlc["Close"],
+                increasing_line_color="#00ff96", decreasing_line_color="#ff4444",
+                increasing_fillcolor="#00ff96", decreasing_fillcolor="#ff4444",
+                name="Price", showlegend=False,
+            ), row=1, col=1)
+
+            # EMAs + Bollinger (only on 1Y/3M where indicators are computed)
             close = technicals["close"]
-            # Price + EMAs + Bollinger
-            fig_tech.add_trace(go.Scatter(x=close.index, y=close, mode="lines",
-                                         line=dict(color="white", width=1.5), name="Price"), row=1, col=1)
-            fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["ema_20_series"],
-                                         mode="lines", line=dict(color="#00d1ff", width=1), name="EMA 20"), row=1, col=1)
-            fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["ema_50_series"],
-                                         mode="lines", line=dict(color="#ffaa00", width=1), name="EMA 50"), row=1, col=1)
-            if len(technicals["ema_200_series"]) > 0:
-                fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["ema_200_series"],
-                                             mode="lines", line=dict(color="#ff4444", width=1), name="EMA 200"), row=1, col=1)
-            fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["bb_upper_series"],
-                                         mode="lines", line=dict(color="#555", width=0.5, dash="dot"), name="BB Upper", showlegend=False), row=1, col=1)
-            fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["bb_lower_series"],
-                                         mode="lines", line=dict(color="#555", width=0.5, dash="dot"), name="BB Lower",
-                                         fill="tonexty", fillcolor="rgba(85,85,85,0.1)", showlegend=False), row=1, col=1)
+            if _timeframe != "5Y":
+                _ema_idx = close.index
+                fig_tech.add_trace(go.Scatter(x=_ema_idx, y=technicals["ema_20_series"],
+                                             mode="lines", line=dict(color="#00d1ff", width=1), name="EMA 20"), row=1, col=1)
+                fig_tech.add_trace(go.Scatter(x=_ema_idx, y=technicals["ema_50_series"],
+                                             mode="lines", line=dict(color="#ffaa00", width=1), name="EMA 50"), row=1, col=1)
+                if len(technicals["ema_200_series"]) > 0:
+                    fig_tech.add_trace(go.Scatter(x=_ema_idx, y=technicals["ema_200_series"],
+                                                 mode="lines", line=dict(color="#ff4444", width=1), name="EMA 200"), row=1, col=1)
+                fig_tech.add_trace(go.Scatter(x=_ema_idx, y=technicals["bb_upper_series"],
+                                             mode="lines", line=dict(color="#555", width=0.5, dash="dot"), name="BB Upper", showlegend=False), row=1, col=1)
+                fig_tech.add_trace(go.Scatter(x=_ema_idx, y=technicals["bb_lower_series"],
+                                             mode="lines", line=dict(color="#555", width=0.5, dash="dot"), name="BB Lower",
+                                             fill="tonexty", fillcolor="rgba(85,85,85,0.1)", showlegend=False), row=1, col=1)
+
+            # Volume bars (colored by price direction)
+            _vol_colors = ["#00ff96" if c >= o else "#ff4444"
+                           for c, o in zip(ohlc["Close"], ohlc["Open"])]
+            fig_tech.add_trace(go.Bar(x=ohlc.index, y=ohlc["Volume"], marker_color=_vol_colors,
+                                     opacity=0.5, name="Volume", showlegend=False), row=2, col=1)
 
             # RSI
-            rsi = technicals["rsi_series"]
-            fig_tech.add_trace(go.Scatter(x=rsi.index, y=rsi, mode="lines",
-                                         line=dict(color="#ad7fff", width=1.5), name="RSI"), row=2, col=1)
-            fig_tech.add_hline(y=70, line_dash="dot", line_color="#ff4444", row=2, col=1)
-            fig_tech.add_hline(y=30, line_dash="dot", line_color="#00ff96", row=2, col=1)
+            if _timeframe != "5Y":
+                rsi = technicals["rsi_series"]
+                fig_tech.add_trace(go.Scatter(x=rsi.index, y=rsi, mode="lines",
+                                             line=dict(color="#ad7fff", width=1.5), name="RSI"), row=3, col=1)
+                fig_tech.add_hline(y=70, line_dash="dot", line_color="#ff4444", row=3, col=1)
+                fig_tech.add_hline(y=30, line_dash="dot", line_color="#00ff96", row=3, col=1)
 
-            # MACD
-            macd_h = technicals["macd_hist_series"]
-            colors = [COLORS["success"] if v >= 0 else COLORS["danger"] for v in macd_h]
-            fig_tech.add_trace(go.Bar(x=macd_h.index, y=macd_h, marker_color=colors,
-                                     name="MACD Hist", showlegend=False), row=3, col=1)
-            fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["macd_line_series"],
-                                         mode="lines", line=dict(color="#00d1ff", width=1), name="MACD"), row=3, col=1)
-            fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["macd_signal_series"],
-                                         mode="lines", line=dict(color="#ffaa00", width=1), name="Signal"), row=3, col=1)
+                # MACD
+                macd_h = technicals["macd_hist_series"]
+                colors = [COLORS["success"] if v >= 0 else COLORS["danger"] for v in macd_h]
+                fig_tech.add_trace(go.Bar(x=macd_h.index, y=macd_h, marker_color=colors,
+                                         name="MACD Hist", showlegend=False), row=4, col=1)
+                fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["macd_line_series"],
+                                             mode="lines", line=dict(color="#00d1ff", width=1), name="MACD"), row=4, col=1)
+                fig_tech.add_trace(go.Scatter(x=close.index, y=technicals["macd_signal_series"],
+                                             mode="lines", line=dict(color="#ffaa00", width=1), name="Signal"), row=4, col=1)
 
-            fig_tech.update_layout(template="plotly_dark", height=600, margin=dict(t=10, b=0, l=0, r=0),
-                                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            fig_tech.update_layout(
+                template="plotly_dark", height=700, margin=dict(t=10, b=0, l=0, r=0),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis_rangeslider_visible=False,
+                xaxis2_rangeslider_visible=False,
+                xaxis3_rangeslider_visible=False,
+                xaxis4_rangeslider_visible=False,
+            )
+            fig_tech.update_yaxes(title_text="Volume", row=2, col=1)
+            fig_tech.update_yaxes(title_text="RSI", row=3, col=1)
+            fig_tech.update_yaxes(title_text="MACD", row=4, col=1)
             st.plotly_chart(fig_tech, use_container_width=True)
 
-            # Technical metrics row
-            tc = st.columns(5)
-            tc[0].metric("RSI", f"{technicals['rsi']:.1f}")
-            tc[1].metric("MACD", "Bullish" if technicals["macd_bullish"] else "Bearish")
-            tc[2].metric("Bollinger %B", f"{technicals['bb_pct']:.2f}")
-            tc[3].metric("ATR", f"{technicals['atr_pct']:.1f}%")
-            tc[4].metric("Trend", f"{technicals['trend_signals']}/4")
+            # Technical metrics row — styled cards
+            _rsi_v = technicals['rsi']
+            _rsi_c = "#ff4444" if _rsi_v > 70 else "#00ff96" if _rsi_v < 30 else "#e6edf3"
+            _macd_v = "Bullish" if technicals["macd_bullish"] else "Bearish"
+            _macd_c = "#00ff96" if technicals["macd_bullish"] else "#ff4444"
+            _trend_v = technicals['trend_signals']
+            _trend_c = "#00ff96" if _trend_v >= 3 else "#ff4444" if _trend_v <= 1 else "#ffaa00"
+            _tech_html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">'
+            for _tl, _tv, _tc in [
+                ("RSI (14)", f"{_rsi_v:.1f}", _rsi_c),
+                ("MACD", _macd_v, _macd_c),
+                ("BB %B", f"{technicals['bb_pct']:.2f}", "#e6edf3"),
+                ("ATR", f"{technicals['atr_pct']:.1f}%", "#e6edf3"),
+                ("Trend", f"{_trend_v}/4", _trend_c),
+            ]:
+                _tech_html += (f'<div style="{_card_sm}flex:1;min-width:90px;">'
+                               f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{_tl}</div>'
+                               f'<div style="font-size:1.1rem;font-weight:700;color:{_tc};">{_tv}</div></div>')
+            _tech_html += '</div>'
+            st.markdown(_tech_html, unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════
     # FUNDAMENTALS
@@ -1165,32 +1444,45 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
         st.markdown("### Fundamental Profile")
         f = fundamentals
 
-        fc = st.columns(5)
-        fc[0].metric("P/E", f"{f['pe']:.1f}" if f['pe'] else "N/A")
-        fc[1].metric("P/S", f"{f['ps']:.1f}" if f['ps'] else "N/A")
-        fc[2].metric("Debt/Equity", f"{f['de']:.0f}%")
-        fc[3].metric("FCF Yield", f"{f['fcf_yield']:.1f}%")
-        fc[4].metric("Beta", f"{f['beta']:.2f}")
-
-        fc2 = st.columns(5)
-        fc2[0].metric("Rev Growth", f"{f['rev_growth']*100:+.1f}%" if f['rev_growth'] else "N/A")
-        fc2[1].metric("Earnings Growth", f"{f['earnings_growth']*100:+.1f}%" if f['earnings_growth'] else "N/A")
-        fc2[2].metric("Profit Margin", f"{f['margin']*100:.1f}%" if f['margin'] else "N/A")
-        fc2[3].metric("Short Interest", f"{f['short_pct']*100:.1f}%" if f['short_pct'] else "N/A")
-        fc2[4].metric("Div Yield", f"{f['dividend_yield']*100:.1f}%" if f['dividend_yield'] else "N/A")
-
-        # Analyst targets
-        if f["target_mean"] > 0:
-            st.caption(f"Analyst Targets: ${f['target_low']:.0f} (Low) / "
-                      f"${f['target_mean']:.0f} (Mean) / ${f['target_high']:.0f} (High) — "
-                      f"Upside: {f['upside']:+.1f}% | Consensus: {f['rec']}")
+        # Row 1: Valuation metrics
+        _fund_items_1 = [
+            ("P/E", f"{f['pe']:.1f}" if f['pe'] else "N/A"),
+            ("P/S", f"{f['ps']:.1f}" if f['ps'] else "N/A"),
+            ("P/B", f"{f['pb']:.1f}" if f['pb'] else "N/A"),
+            ("D/E", f"{f['de']:.0f}%" if f['de'] else "N/A"),
+            ("FCF Yield", f"{f['fcf_yield']:.1f}%"),
+        ]
+        _fund_items_2 = [
+            ("Rev Growth", f"{f['rev_growth']*100:+.1f}%" if f['rev_growth'] else "N/A"),
+            ("EPS Growth", f"{f['earnings_growth']*100:+.1f}%" if f['earnings_growth'] else "N/A"),
+            ("Margin", f"{f['margin']*100:.1f}%" if f['margin'] else "N/A"),
+            ("Short %", f"{f['short_pct']*100:.1f}%" if f['short_pct'] else "N/A"),
+            ("Div Yield", f"{f['dividend_yield']*100:.1f}%" if f['dividend_yield'] else "N/A"),
+        ]
+        _fund_html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+        for _label, _val in _fund_items_1:
+            _fund_html += (f'<div style="{_card_sm}flex:1;min-width:100px;">'
+                           f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{_label}</div>'
+                           f'<div style="font-size:1.1rem;font-weight:700;color:#e6edf3;">{_val}</div></div>')
+        _fund_html += '</div><div style="display:flex;gap:8px;flex-wrap:wrap;">'
+        for _label, _val in _fund_items_2:
+            _is_pos = _val.startswith("+") if _val != "N/A" else False
+            _is_neg = _val.startswith("-") if _val != "N/A" else False
+            _vc = "#00ff96" if _is_pos else ("#ff4444" if _is_neg else "#e6edf3")
+            _fund_html += (f'<div style="{_card_sm}flex:1;min-width:100px;">'
+                           f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{_label}</div>'
+                           f'<div style="font-size:1.1rem;font-weight:700;color:{_vc};">{_val}</div></div>')
+        _fund_html += '</div>'
+        st.markdown(_fund_html, unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════
     # DETAILED AI ANALYSIS
     # ═══════════════════════════════════════════
     if grok_result and grok_result.get("success"):
         with error_boundary("AI Analysis"):
-            st.markdown("### Detailed Analysis")
+            st.markdown(f'<div style="font-size:1.15rem;font-weight:700;color:#e6edf3;">AI Detailed Analysis</div>'
+                        f'<div style="font-size:0.78rem;color:{COLORS["text_muted"]};margin-bottom:10px;">Multi-model AI assessment &mdash; expand each dimension for detail</div>',
+                        unsafe_allow_html=True)
             analysis = grok_result.get("analysis", {})
 
             for dimension in ["technical", "fundamental", "sentiment", "macro", "valuation"]:
@@ -1198,200 +1490,332 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 if text:
                     score = grok_result.get("scores", {}).get(dimension, 5)
                     color = COLORS["success"] if score >= 7 else COLORS["warning"] if score >= 4 else COLORS["danger"]
-                    st.markdown(f'**{dimension.title()}** — <span style="color:{color};font-weight:700;">{score}/10</span>',
-                                unsafe_allow_html=True)
-                    st.caption(text)
-
-            st.divider()
+                    with st.expander(f"{dimension.title()} — {score}/10", expanded=False):
+                        st.markdown(text)
 
             # Risks and Catalysts side by side
             rc = st.columns(2)
             with rc[0]:
-                st.markdown("**Key Risks**")
+                _risks_html = f'<div style="font-size:0.85rem;font-weight:700;color:#ff4444;margin-bottom:6px;">KEY RISKS</div>'
                 for risk in grok_result.get("risks", []):
-                    st.markdown(f"- {risk}")
+                    _risks_html += f'<div style="padding:4px 0;font-size:0.85rem;color:#ccc;border-bottom:1px solid {COLORS["card_border"]};">&#x2022; {risk}</div>'
+                st.markdown(f'<div style="{_card}">{_risks_html}</div>', unsafe_allow_html=True)
             with rc[1]:
-                st.markdown("**Key Catalysts**")
+                _cats_html = f'<div style="font-size:0.85rem;font-weight:700;color:#00ff96;margin-bottom:6px;">KEY CATALYSTS</div>'
                 for cat in grok_result.get("catalysts", []):
-                    st.markdown(f"- {cat}")
+                    _cats_html += f'<div style="padding:4px 0;font-size:0.85rem;color:#ccc;border-bottom:1px solid {COLORS["card_border"]};">&#x2022; {cat}</div>'
+                st.markdown(f'<div style="{_card}">{_cats_html}</div>', unsafe_allow_html=True)
+
 
     # ═══════════════════════════════════════════
-    # SENTIMENT
+    # DEEP DIVE TABS
     # ═══════════════════════════════════════════
-    with error_boundary("Sentiment"):
-        st.markdown("### Sentiment")
-        s = sentiment
-        sc = st.columns(3)
-        sc[0].metric("StockTwits Bull Ratio", f"{s['bull_ratio']:.0f}%",
-                    f"{s['bull']}B / {s['bear']}Be")
-        sc[1].metric("Posts Analyzed", s["total"])
-        sc[2].metric("Signal", "Bullish" if s["bull_ratio"] > 60 else "Bearish" if s["bull_ratio"] < 40 else "Neutral")
-
-    # ═══════════════════════════════════════════
-    # INDIVIDUAL MODEL COMPARISON
-    # ═══════════════════════════════════════════
-    successful_models = {k: v for k, v in model_results.items() if v.get("success")}
-    if len(successful_models) > 1:
-        with error_boundary("Model Comparison"):
-            st.divider()
-            st.markdown("### Individual Model Views")
-            st.caption("Side-by-side comparison of each AI model's independent assessment.")
-
-            # Score comparison table
-            score_rows = []
-            for dim in ["technical", "fundamental", "sentiment", "macro", "valuation", "composite_score"]:
-                row = {"Dimension": dim.replace("_", " ").title()}
-                for k, v in successful_models.items():
-                    name = v.get("model_name", k)
-                    if dim == "composite_score":
-                        row[name] = v.get("composite_score", "—")
-                    else:
-                        row[name] = v.get("scores", {}).get(dim, "—")
-                # Add blended
-                if dim == "composite_score":
-                    row["Consensus"] = grok_result.get("composite_score", "—")
-                else:
-                    row["Consensus"] = grok_result.get("scores", {}).get(dim, "—")
-                score_rows.append(row)
-
-            st.dataframe(pd.DataFrame(score_rows).set_index("Dimension"), use_container_width=True)
-
-            # Recommendation + targets comparison
-            model_cols = st.columns(len(successful_models) + 1)
-            for idx, (k, v) in enumerate(successful_models.items()):
-                with model_cols[idx]:
-                    name = v.get("model_name", k)
-                    rec = v.get("recommendation", "Hold")
-                    conf = v.get("confidence", 5)
-                    pt = v.get("price_targets", {})
-                    color = MODEL_CONFIGS.get(k, {}).get("color", "#888")
-
-                    st.markdown(f'<div style="border-left:3px solid {color};padding-left:10px;">'
-                               f'<strong>{name}</strong></div>', unsafe_allow_html=True)
-                    st.metric("Recommendation", rec)
-                    st.metric("Confidence", f"{conf}/10")
-                    if pt:
-                        st.caption(f"Targets: ${pt.get('bear') or 0:.0f} / ${pt.get('base') or 0:.0f} / ${pt.get('bull') or 0:.0f}")
-
-            # Consensus column
-            with model_cols[-1]:
-                st.markdown(f'<div style="border-left:3px solid {COLORS["accent"]};padding-left:10px;">'
-                           f'<strong>Consensus</strong></div>', unsafe_allow_html=True)
-                st.metric("Recommendation", grok_result.get("recommendation", "Hold"))
-                st.metric("Confidence", f"{grok_result.get('confidence', 5)}/10")
-                pt = grok_result.get("price_targets", {})
-                if pt:
-                    st.caption(f"Targets: ${pt.get('bear') or 0:.0f} / ${pt.get('base') or 0:.0f} / ${pt.get('bull') or 0:.0f}")
-
     st.divider()
+    successful_models = {k: v for k, v in model_results.items() if v.get("success")}
+    failed_models = {k: v for k, v in model_results.items() if not v.get("success")}
 
-    # ── EDGAR: Insider Score ──
-    with error_boundary("Insider Score"):
-        insider_data = fetch_insider_transactions(ticker)
-        if not insider_data.empty:
-            insider_score = score_insider_transactions(insider_data)
-            sc = insider_score["score"]
-            sig = insider_score["signal"]
-            bd = insider_score["breakdown"]
-            sc_color = "#00ff96" if sc >= 60 else "#ff4444" if sc <= 40 else "#ffaa00"
+    _tab_sentiment, _tab_models, _tab_edgar, _tab_financials, _tab_peers = st.tabs([
+        "Sentiment & News", "Model Comparison", "EDGAR / Insider", "Financials", "Peer Comparison"
+    ])
 
-            st.markdown("#### Insider Activity Score")
-            _is1, _is2 = st.columns([1, 3])
-            with _is1:
-                st.markdown(
-                    f'<div style="text-align:center;padding:16px;border:2px solid {sc_color};border-radius:10px;">'
-                    f'<div style="font-size:36px;font-weight:bold;color:{sc_color};">{sc}</div>'
-                    f'<div style="color:{sc_color};font-weight:600;font-size:14px;">{sig}</div>'
-                    f'<div style="color:#888;font-size:11px;">Insider Score (0-100)</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with _is2:
-                bd_items = []
-                bd_items.append(f"Buys: {bd.get('buys', 0)} | Sells: {bd.get('sells', 0)}")
-                if bd.get("csuite_buys"):
-                    bd_items.append(f"C-Suite buys: {bd['csuite_buys']} (strong signal)")
-                if bd.get("cluster_buy"):
-                    bd_items.append("Cluster buying detected (3+ insiders within 7 days)")
-                if bd.get("large_buys"):
-                    bd_items.append(f"Large buys (>$100K): {bd['large_buys']}")
-                for item in bd_items:
-                    st.markdown(f"- {item}")
-
-                # Show recent transactions table
-                if len(insider_data) > 0:
-                    display_cols = [c for c in ["Date", "Insider", "Title", "Transaction", "Shares", "Value"] if c in insider_data.columns]
-                    if display_cols:
-                        st.dataframe(insider_data[display_cols].head(10), use_container_width=True, hide_index=True)
-            st.divider()
-
-    # ── EDGAR: 8-K Material Events ──
-    with error_boundary("8-K Events"):
-        events_8k = fetch_recent_8k(ticker, days=90)
-        if events_8k:
-            st.markdown("#### Recent Material Events (8-K)")
-            for evt in events_8k[:8]:
-                filed = evt.get("filed", "")
-                company = evt.get("company", "")
-                form = evt.get("form", "8-K")
-                st.markdown(
-                    f'<div style="padding:6px 10px;border-left:2px solid #00d1ff;margin-bottom:4px;'
-                    f'background:rgba(255,255,255,0.02);border-radius:0 4px 4px 0;">'
-                    f'<span style="color:#888;font-size:0.78rem;">{filed}</span> &nbsp;'
-                    f'<span style="color:#00d1ff;font-weight:600;">{form}</span> &nbsp;'
-                    f'<span style="color:#ccc;">{company}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            st.divider()
-
-    # ── EDGAR: XBRL Financial Ratios ──
-    with error_boundary("Financial Ratios"):
-        ratios = calculate_financial_ratios(ticker)
-        if ratios:
-            st.markdown("#### Financial Ratios (SEC XBRL)")
-            _r1, _r2, _r3, _r4, _r5, _r6 = st.columns(6)
-            ratio_display = [
-                (_r1, "Net Margin", ratios.get("net_margin"), "%"),
-                (_r2, "Op. Margin", ratios.get("operating_margin"), "%"),
-                (_r3, "ROE", ratios.get("roe"), "%"),
-                (_r4, "ROA", ratios.get("roa"), "%"),
-                (_r5, "D/E", ratios.get("debt_to_equity"), "x"),
-                (_r6, "Current", ratios.get("current_ratio"), "x"),
-            ]
-            for col, label, val, suffix in ratio_display:
-                if val is not None:
-                    col.metric(label, f"{val}{suffix}")
+    # ── Tab 1: Sentiment & News ──
+    with _tab_sentiment:
+        with error_boundary("Sentiment"):
+            s = sentiment
+            _sent_c1, _sent_c2 = st.columns([1, 2])
+            with _sent_c1:
+                _bull_r = s["bull_ratio"]
+                _gauge_color = "#00ff96" if _bull_r > 60 else "#ff4444" if _bull_r < 40 else "#ffaa00"
+                _signal_text = "Bullish" if _bull_r > 60 else "Bearish" if _bull_r < 40 else "Neutral"
+                fig_gauge = go.Figure(go.Indicator(
+                    mode="gauge+number", value=_bull_r,
+                    number=dict(suffix="%", font=dict(size=28)),
+                    title=dict(text=f"StockTwits: {_signal_text}", font=dict(size=14)),
+                    gauge=dict(
+                        axis=dict(range=[0, 100], tickwidth=1), bar=dict(color=_gauge_color),
+                        steps=[dict(range=[0, 40], color="rgba(255,68,68,0.15)"),
+                               dict(range=[40, 60], color="rgba(255,170,0,0.15)"),
+                               dict(range=[60, 100], color="rgba(0,255,150,0.15)")],
+                        threshold=dict(line=dict(color="white", width=2), value=_bull_r)),
+                ))
+                fig_gauge.update_layout(template="plotly_dark", height=200, margin=dict(t=40, b=0, l=30, r=30))
+                st.plotly_chart(fig_gauge, use_container_width=True, config={"displayModeBar": False})
+                st.caption(f"{s['bull']} bullish / {s['bear']} bearish of {s['total']} posts")
+            with _sent_c2:
+                _posts = s.get("recent_posts", [])
+                if _posts:
+                    st.markdown("**Recent Posts**")
+                    for _p in _posts[:5]:
+                        _ps_label = _p.get("sentiment", "\u2014")
+                        _ps_color = "#00ff96" if _ps_label == "Bullish" else "#ff4444" if _ps_label == "Bearish" else "#888"
+                        _ps_body = _p.get("body", "")[:140]
+                        st.markdown(
+                            f'<div style="padding:4px 8px;margin-bottom:3px;border-left:2px solid {_ps_color};'
+                            f'background:rgba(255,255,255,0.02);border-radius:0 4px 4px 0;font-size:0.8rem;">'
+                            f'<span style="color:{_ps_color};font-weight:600;">{_ps_label}</span> '
+                            f'<span style="color:#ccc;">{_ps_body}</span></div>', unsafe_allow_html=True)
                 else:
-                    col.metric(label, "N/A")
+                    st.caption("No recent StockTwits posts found.")
+            try:
+                from src.data_engine import fetch_ticker_news
+                _news_display = fetch_ticker_news(ticker, limit=5)
+                if _news_display:
+                    st.markdown("**Recent News**")
+                    for _art in _news_display:
+                        st.markdown(
+                            f'<span style="color:#888;font-size:0.78rem;">{_art.get("published","")[:10]}</span> \u2014 '
+                            f'<span style="color:#ccc;">{_art.get("title","")}</span>', unsafe_allow_html=True)
+            except Exception:
+                pass
 
-            # Revenue and EPS history charts
-            rev_hist = get_ratio_history(ticker, "Revenues")
-            if rev_hist.empty:
-                rev_hist = get_ratio_history(ticker, "RevenueFromContractWithCustomerExcludingAssessedTax")
-            ni_hist = get_ratio_history(ticker, "NetIncomeLoss")
+    # ── Tab 2: Model Comparison ──
+    with _tab_models:
+        with error_boundary("Model Comparison"):
+            if len(successful_models) > 1:
+                score_rows = []
+                for dim in ["technical", "fundamental", "sentiment", "macro", "valuation", "composite_score"]:
+                    row = {"Dimension": dim.replace("_", " ").title()}
+                    for k, v in successful_models.items():
+                        name = v.get("model_name", k)
+                        row[name] = v.get("composite_score", "\u2014") if dim == "composite_score" else v.get("scores", {}).get(dim, "\u2014")
+                    row["Consensus"] = grok_result.get("composite_score", "\u2014") if dim == "composite_score" else grok_result.get("scores", {}).get(dim, "\u2014")
+                    score_rows.append(row)
+                st.dataframe(pd.DataFrame(score_rows).set_index("Dimension"), use_container_width=True)
 
-            if not rev_hist.empty or not ni_hist.empty:
-                import plotly.graph_objects as go
-                _rc1, _rc2 = st.columns(2)
-                if not rev_hist.empty:
-                    with _rc1:
-                        fig = go.Figure()
-                        fig.add_trace(go.Bar(x=rev_hist["end"], y=rev_hist["val"] / 1e6,
-                                            marker_color="#00d1ff", name="Revenue"))
-                        fig.update_layout(template="plotly_dark", height=250, title="Revenue ($M)",
-                                         margin=dict(l=0, r=0, t=30, b=0))
-                        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-                if not ni_hist.empty:
-                    with _rc2:
-                        colors = ["#00ff96" if v >= 0 else "#ff4444" for v in ni_hist["val"]]
-                        fig = go.Figure()
-                        fig.add_trace(go.Bar(x=ni_hist["end"], y=ni_hist["val"] / 1e6,
-                                            marker_color=colors, name="Net Income"))
-                        fig.update_layout(template="plotly_dark", height=250, title="Net Income ($M)",
-                                         margin=dict(l=0, r=0, t=30, b=0))
-                        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            _n_cols = len(successful_models) + (1 if len(successful_models) > 1 else 0) + len(failed_models)
+            if _n_cols > 0:
+                model_cols = st.columns(max(1, _n_cols))
+                _col_idx = 0
+                for k, v in successful_models.items():
+                    with model_cols[_col_idx]:
+                        color = MODEL_CONFIGS.get(k, {}).get("color", "#888")
+                        st.markdown(f'<div style="border-left:3px solid {color};padding-left:10px;"><strong>{v.get("model_name", k)}</strong></div>', unsafe_allow_html=True)
+                        st.metric("Recommendation", v.get("recommendation", "Hold"))
+                        st.metric("Confidence", f"{v.get('confidence', 5)}/10")
+                        pt = v.get("price_targets", {})
+                        if pt:
+                            st.caption(f"Targets: ${pt.get('bear') or 0:.0f} / ${pt.get('base') or 0:.0f} / ${pt.get('bull') or 0:.0f}")
+                    _col_idx += 1
+
+                if len(successful_models) > 1:
+                    with model_cols[_col_idx]:
+                        st.markdown(f'<div style="border-left:3px solid {COLORS["accent"]};padding-left:10px;"><strong>Consensus</strong></div>', unsafe_allow_html=True)
+                        st.metric("Recommendation", grok_result.get("recommendation", "Hold"))
+                        st.metric("Confidence", f"{grok_result.get('confidence', 5)}/10")
+                        pt = grok_result.get("price_targets", {})
+                        if pt:
+                            st.caption(f"Targets: ${pt.get('bear') or 0:.0f} / ${pt.get('base') or 0:.0f} / ${pt.get('bull') or 0:.0f}")
+                    _col_idx += 1
+
+                for k, v in failed_models.items():
+                    with model_cols[min(_col_idx, len(model_cols) - 1)]:
+                        _fname = MODEL_CONFIGS.get(k, {}).get("name", k)
+                        _fcolor = MODEL_CONFIGS.get(k, {}).get("color", "#888")
+                        st.markdown(f'<div style="border-left:3px solid {_fcolor};padding-left:10px;"><strong>{_fname}</strong></div>', unsafe_allow_html=True)
+                        st.error(f"Failed: {v.get('error', 'Unknown')[:80]}")
+                        if st.button(f"Retry {_fname}", key=f"retry_{k}"):
+                            _rkey = _get_key(MODEL_CONFIGS.get(k, {}).get("key_name", ""))
+                            _cached_prompt = cached.get("prompt", "")
+                            if _rkey and _cached_prompt:
+                                try:
+                                    run_model_stock_analysis.clear()
+                                except Exception:
+                                    pass
+                                _retry = run_model_stock_analysis(k, _rkey, _cached_prompt, ticker)
+                                model_results[k] = _retry
+                                cached_state = st.session_state.get(f"stock_analysis_{ticker}", {})
+                                cached_state["model_results"] = model_results
+                                cached_state["blended"] = blend_model_results(model_results)
+                                st.session_state[f"stock_analysis_{ticker}"] = cached_state
+                                st.rerun()
+                            else:
+                                st.warning("Re-run full analysis to retry this model.")
+                    _col_idx += 1
+            else:
+                st.info("No model results available.")
+
+    # ── Tab 3: EDGAR / Insider ──
+    with _tab_edgar:
+        with error_boundary("Insider Score"):
+            insider_data = stock_data.get("insider") or pd.DataFrame()
+            if isinstance(insider_data, pd.DataFrame) and not insider_data.empty:
+                insider_score = score_insider_transactions(insider_data)
+                sc = insider_score["score"]
+                sig = insider_score["signal"]
+                bd = insider_score["breakdown"]
+                sc_color = "#00ff96" if sc >= 60 else "#ff4444" if sc <= 40 else "#ffaa00"
+                st.markdown("#### Insider Activity Score")
+                _is1, _is2 = st.columns([1, 3])
+                with _is1:
+                    st.markdown(
+                        f'<div style="text-align:center;padding:16px;border:2px solid {sc_color};border-radius:10px;">'
+                        f'<div style="font-size:36px;font-weight:bold;color:{sc_color};">{sc}</div>'
+                        f'<div style="color:{sc_color};font-weight:600;font-size:14px;">{sig}</div>'
+                        f'<div style="color:#888;font-size:11px;">Insider Score (0-100)</div></div>', unsafe_allow_html=True)
+                with _is2:
+                    st.markdown(f"- Buys: {bd.get('buys', 0)} | Sells: {bd.get('sells', 0)}")
+                    if bd.get("csuite_buys"):
+                        st.markdown(f"- C-Suite buys: {bd['csuite_buys']} (strong signal)")
+                    if bd.get("cluster_buy"):
+                        st.markdown("- Cluster buying detected (3+ insiders within 7 days)")
+                    if bd.get("large_buys"):
+                        st.markdown(f"- Large buys (>$100K): {bd['large_buys']}")
+                    if len(insider_data) > 0:
+                        display_cols = [c for c in ["Date", "Insider", "Title", "Transaction", "Shares", "Value"] if c in insider_data.columns]
+                        if display_cols:
+                            st.dataframe(insider_data[display_cols].head(10), use_container_width=True, hide_index=True)
+                st.divider()
+        with error_boundary("8-K Events"):
+            events_8k = fetch_recent_8k(ticker, days=90)
+            if events_8k:
+                st.markdown("#### Recent Material Events (8-K)")
+                for evt in events_8k[:8]:
+                    st.markdown(
+                        f'<div style="padding:6px 10px;border-left:2px solid #00d1ff;margin-bottom:4px;'
+                        f'background:rgba(255,255,255,0.02);border-radius:0 4px 4px 0;">'
+                        f'<span style="color:#888;font-size:0.78rem;">{evt.get("filed","")}</span> &nbsp;'
+                        f'<span style="color:#00d1ff;font-weight:600;">{evt.get("form","8-K")}</span> &nbsp;'
+                        f'<span style="color:#ccc;">{evt.get("company","")}</span></div>', unsafe_allow_html=True)
+
+    # ── Tab 4: Financials ──
+    with _tab_financials:
+        with error_boundary("Financial Ratios"):
+            ratios = calculate_financial_ratios(ticker)
+            if ratios:
+                _r1, _r2, _r3, _r4, _r5, _r6 = st.columns(6)
+                for col, label, val, suffix in [
+                    (_r1, "Net Margin", ratios.get("net_margin"), "%"),
+                    (_r2, "Op. Margin", ratios.get("operating_margin"), "%"),
+                    (_r3, "ROE", ratios.get("roe"), "%"),
+                    (_r4, "ROA", ratios.get("roa"), "%"),
+                    (_r5, "D/E", ratios.get("debt_to_equity"), "x"),
+                    (_r6, "Current", ratios.get("current_ratio"), "x"),
+                ]:
+                    col.metric(label, f"{val}{suffix}" if val is not None else "N/A")
+
+                rev_hist = get_ratio_history(ticker, "Revenues")
+                if rev_hist.empty:
+                    rev_hist = get_ratio_history(ticker, "RevenueFromContractWithCustomerExcludingAssessedTax")
+                ni_hist = get_ratio_history(ticker, "NetIncomeLoss")
+                op_hist = get_ratio_history(ticker, "OperatingIncomeLoss")
+                eps_hist_xbrl = get_ratio_history(ticker, "EarningsPerShareDiluted")
+
+                if not rev_hist.empty or not ni_hist.empty:
+                    _rc1, _rc2 = st.columns(2)
+                    if not rev_hist.empty:
+                        with _rc1:
+                            fig = go.Figure()
+                            fig.add_trace(go.Bar(x=rev_hist["end"], y=rev_hist["val"] / 1e6, marker_color="#00d1ff"))
+                            fig.update_layout(template="plotly_dark", height=250, title="Revenue ($M)", margin=dict(l=0, r=0, t=30, b=0))
+                            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    if not ni_hist.empty:
+                        with _rc2:
+                            fig = go.Figure()
+                            fig.add_trace(go.Bar(x=ni_hist["end"], y=ni_hist["val"] / 1e6,
+                                                 marker_color=["#00ff96" if v >= 0 else "#ff4444" for v in ni_hist["val"]]))
+                            fig.update_layout(template="plotly_dark", height=250, title="Net Income ($M)", margin=dict(l=0, r=0, t=30, b=0))
+                            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+                _show_margin = not op_hist.empty and not rev_hist.empty
+                _show_eps = not eps_hist_xbrl.empty
+                if _show_margin or _show_eps:
+                    _rc3, _rc4 = st.columns(2)
+                    if _show_margin:
+                        with _rc3:
+                            _merged = pd.merge(rev_hist[["end", "val"]], op_hist[["end", "val"]], on="end", suffixes=("_rev", "_op"))
+                            if not _merged.empty:
+                                _merged["margin"] = (_merged["val_op"] / _merged["val_rev"].replace(0, np.nan) * 100)
+                                fig = go.Figure()
+                                fig.add_trace(go.Scatter(x=_merged["end"], y=_merged["margin"], mode="lines+markers",
+                                                         line=dict(color="#ffaa00", width=2), marker=dict(size=8)))
+                                fig.update_layout(template="plotly_dark", height=250, title="Operating Margin (%)", margin=dict(l=0, r=0, t=30, b=0))
+                                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    if _show_eps:
+                        with _rc4:
+                            fig = go.Figure()
+                            fig.add_trace(go.Bar(x=eps_hist_xbrl["end"], y=eps_hist_xbrl["val"],
+                                                 marker_color=["#00ff96" if v >= 0 else "#ff4444" for v in eps_hist_xbrl["val"]]))
+                            fig.update_layout(template="plotly_dark", height=250, title="Diluted EPS ($)", margin=dict(l=0, r=0, t=30, b=0))
+                            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            else:
+                st.caption("No XBRL financial data available for this ticker.")
+
+    # ── Tab 5: Peer Comparison ──
+    with _tab_peers:
+        with error_boundary("Peer Comparison"):
+            try:
+                from src.data_engine import fetch_related_companies
+                _peers = fetch_related_companies(ticker)
+                if _peers and len(_peers) >= 2:
+                    _peer_list = [ticker] + [p for p in _peers[:5] if p != ticker]
+                    _peer_rows = []
+                    for _pt in _peer_list:
+                        try:
+                            _pi = polygon_ticker_details(_pt) or {}
+                            _ps = polygon_snapshot(_pt)
+                            _price = _ps.get("price", 0) if _ps else 0
+                            _pe = _pi.get("trailingPE") or _pi.get("forwardPE") or 0
+                            _pb = _pi.get("priceToBook") or 0
+                            _mc = _pi.get("marketCap") or 0
+                            _rg = _pi.get("revenueGrowth") or 0
+                            _pm = _pi.get("profitMargins") or 0
+                            _peer_rows.append({
+                                "Ticker": _pt,
+                                "Price": f"${_price:.2f}" if _price else "\u2014",
+                                "Mkt Cap": f"${_mc/1e9:.1f}B" if _mc > 1e9 else (f"${_mc/1e6:.0f}M" if _mc else "\u2014"),
+                                "P/E": f"{_pe:.1f}" if _pe else "\u2014",
+                                "P/B": f"{_pb:.1f}" if _pb else "\u2014",
+                                "Rev Growth": f"{_rg*100:+.1f}%" if _rg else "\u2014",
+                                "Margin": f"{_pm*100:.1f}%" if _pm else "\u2014",
+                            })
+                        except Exception:
+                            continue
+                    if len(_peer_rows) > 1:
+                        _pdf = pd.DataFrame(_peer_rows)
+                        st.dataframe(_pdf.set_index("Ticker").style.apply(
+                            lambda row: ["font-weight: bold; color: #00d1ff" if row.name == ticker else "" for _ in row],
+                            axis=1), use_container_width=True)
+                    else:
+                        st.caption("Could not load peer data.")
+                else:
+                    st.caption("No peer companies found.")
+            except Exception:
+                st.caption("Peer comparison unavailable.")
+
+    # ── Export + Disclaimer ──
+    with error_boundary("Export"):
+        if grok_result and grok_result.get("success"):
             st.divider()
+            _exp = [f"# {fundamentals['name']} ({ticker}) \u2014 AI Stock Analysis Report",
+                    f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                    f"Models: {', '.join(v.get('model_name', k) for k, v in (model_results or {}).items() if v.get('success'))}", "",
+                    f"## Recommendation: {grok_result.get('recommendation', 'N/A')}",
+                    f"Confidence: {grok_result.get('confidence', 'N/A')}/10"]
+            if grok_result.get("agreement"):
+                _exp.append(f"Model Agreement: {grok_result['agreement']}")
+            _exp.append("\n## Scores")
+            for _dim in ["technical", "fundamental", "sentiment", "macro", "valuation"]:
+                _exp.append(f"- {_dim.title()}: {grok_result.get('scores', {}).get(_dim, 'N/A')}/10")
+            _exp.append(f"- Composite: {grok_result.get('composite_score', 'N/A')}/10")
+            _ept = grok_result.get("price_targets", {})
+            _exp += ["", "## Price Targets", f"- Current: ${fundamentals['current_price']:.2f}",
+                     f"- Bear: ${_ept.get('bear', 0):.2f} ({_ept.get('bear_prob', 25)}%)",
+                     f"- Base: ${_ept.get('base', 0):.2f} ({_ept.get('base_prob', 50)}%)",
+                     f"- Bull: ${_ept.get('bull', 0):.2f} ({_ept.get('bull_prob', 25)}%)", "", "## Analysis"]
+            for _dim in ["technical", "fundamental", "sentiment", "macro", "valuation"]:
+                _text = grok_result.get("analysis", {}).get(_dim, "")
+                if _text:
+                    _exp += [f"### {_dim.title()}", _text, ""]
+            _exp.append("## Key Risks")
+            for _r in grok_result.get("risks", []):
+                _exp.append(f"- {_r}")
+            _exp.append("\n## Key Catalysts")
+            for _c in grok_result.get("catalysts", []):
+                _exp.append(f"- {_c}")
+            _exp.append("\n---\n*AI-generated analysis. Not financial advice.*")
+            st.download_button("Download Report", data="\n".join(_exp),
+                file_name=f"{ticker}_analysis_{datetime.now().strftime('%Y%m%d')}.md",
+                mime="text/markdown", key="download_report")
 
     n_models = len(successful_models) if successful_models else 0
     model_names = ", ".join(v.get("model_name", k) for k, v in successful_models.items()) if successful_models else "none"
@@ -1401,4 +1825,4 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
               f"Not financial advice. Always conduct your own due diligence.")
 
 else:
-    st.info("Enter a ticker in the sidebar and click **Run Analysis** to begin.")
+    st.info("Enter a ticker and click **Run Analysis** to begin.")

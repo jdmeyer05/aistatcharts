@@ -348,6 +348,7 @@ def fetch_intermarket(period="3y"):
     symbols = [
         ("^VIX", "vix"), ("^TNX", "tnx"), ("DX-Y.NYB", "dxy"),
         ("GLD", "gold"), ("USO", "oil"),  # cross-asset momentum
+        ("SPY", "spy"),  # for relative strength computation
     ]
     days_map = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
     days = days_map.get(period, 1095)
@@ -525,11 +526,21 @@ def compute_features(df, intermarket=None, stock_extras=None, sector_df=None):
     else:
         features.append(np.zeros(n))
 
-    # Also add relative strength vs SPY
-    if intermarket and "spy" not in intermarket:
-        # Use gold as proxy check — if we have intermarket we can compute
-        pass
-    features.append(np.zeros(n))  # placeholder for SPY relative strength
+    # Relative strength vs SPY
+    if intermarket and "spy" in intermarket:
+        spy_close = intermarket["spy"].reindex(df.index, method="ffill").values.astype(float)
+        spy_close = np.nan_to_num(spy_close, nan=0)
+        if len(spy_close) == n and np.any(spy_close > 0):
+            stock_ret20_spy = np.zeros(n)
+            spy_ret20 = np.zeros(n)
+            if n > 20:
+                stock_ret20_spy[20:] = close[20:] / close[:-20] - 1
+                spy_ret20[20:] = spy_close[20:] / (spy_close[:-20] + 1e-8) - 1
+            features.append(np.clip(stock_ret20_spy - spy_ret20, -3, 3))
+        else:
+            features.append(np.zeros(n))
+    else:
+        features.append(np.zeros(n))
 
     # ── Fundamental/Alternative Data Features (static, broadcast) ──
     if stock_extras:

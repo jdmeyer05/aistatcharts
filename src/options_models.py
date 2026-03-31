@@ -84,6 +84,126 @@ def bs_greeks(S, K, T, r, sigma, opt_type="call"):
     return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega}
 
 
+def bs_higher_greeks(S, K, T, r, sigma, opt_type="call"):
+    """Second and third order Black-Scholes Greeks (closed-form).
+
+    Returns dict with: vanna, volga, charm, veta, speed, zomma, color, ultima.
+
+    Conventions:
+    - Vanna: dDelta/dSigma (vol units, not %)
+    - Volga: dVega/dSigma (per 1% IV, squared)
+    - Charm: dDelta/dt (per calendar day)
+    - Veta: dVega/dt (per calendar day)
+    - Speed: dGamma/dS
+    - Zomma: dGamma/dSigma
+    - Color: dGamma/dt (per calendar day)
+    - Ultima: d³P/dSigma³
+    """
+    _zero = {"vanna": 0, "volga": 0, "charm": 0, "veta": 0,
+             "speed": 0, "zomma": 0, "color": 0, "ultima": 0}
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return _zero
+
+    sqrtT = np.sqrt(T)
+    d1 = (np.log(S / K) + (r + sigma**2 / 2) * T) / (sigma * sqrtT)
+    d2 = d1 - sigma * sqrtT
+    n_d1 = norm.pdf(d1)
+
+    # Second order
+    vanna = -n_d1 * d2 / sigma
+    volga = S * sqrtT * n_d1 * d1 * d2 / sigma
+    charm = -n_d1 * (2 * r * T - d2 * sigma * sqrtT) / (2 * T * sigma * sqrtT) / 365
+    veta = -S * n_d1 * sqrtT * (r * d1 / (sigma * sqrtT) - (1 + d1 * d2) / (2 * T)) / 365
+
+    # Third order
+    gamma = n_d1 / (S * sigma * sqrtT)
+    speed = -gamma / S * (d1 / (sigma * sqrtT) + 1)
+    zomma = gamma * (d1 * d2 - 1) / sigma
+    color = -n_d1 / (2 * S * T * sigma * sqrtT) * (
+        1 + d1 * (2 * r * T - d2 * sigma * sqrtT) / (sigma * sqrtT)) / 365
+    ultima = -S * sqrtT * n_d1 / (sigma**2) * (
+        d1 * d2 * (1 - d1 * d2) + d1**2 + d2**2)
+
+    return {"vanna": vanna, "volga": volga, "charm": charm, "veta": veta,
+            "speed": speed, "zomma": zomma, "color": color, "ultima": ultima}
+
+
+def bs_all_greeks(S, K, T, r, sigma, opt_type="call"):
+    """All 12 Greeks (first + second + third order) in a single pass.
+
+    Avoids redundant d1/d2/norm.pdf computation. Use for chain-wide batch computation.
+    """
+    _zero = {"delta": 1.0 if opt_type == "call" else -1.0,
+             "gamma": 0, "theta": 0, "vega": 0,
+             "vanna": 0, "volga": 0, "charm": 0, "veta": 0,
+             "speed": 0, "zomma": 0, "color": 0, "ultima": 0}
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return _zero
+
+    sqrtT = np.sqrt(T)
+    d1 = (np.log(S / K) + (r + sigma**2 / 2) * T) / (sigma * sqrtT)
+    d2 = d1 - sigma * sqrtT
+    n_d1 = norm.pdf(d1)
+    N_d1 = norm.cdf(d1)
+    N_d2 = norm.cdf(d2)
+    exp_rT = np.exp(-r * T)
+
+    # First order
+    delta = N_d1 if opt_type == "call" else N_d1 - 1
+    gamma = n_d1 / (S * sigma * sqrtT)
+    common_theta = -(S * sigma * n_d1) / (2 * sqrtT)
+    if opt_type == "call":
+        theta = (common_theta - r * K * exp_rT * N_d2) / 365
+    else:
+        theta = (common_theta + r * K * exp_rT * norm.cdf(-d2)) / 365
+    vega = S * sqrtT * n_d1 / 100
+
+    # Second order
+    vanna = -n_d1 * d2 / sigma
+    volga = S * sqrtT * n_d1 * d1 * d2 / sigma
+    charm = -n_d1 * (2 * r * T - d2 * sigma * sqrtT) / (2 * T * sigma * sqrtT) / 365
+    veta = -S * n_d1 * sqrtT * (r * d1 / (sigma * sqrtT) - (1 + d1 * d2) / (2 * T)) / 365
+
+    # Third order
+    speed = -gamma / S * (d1 / (sigma * sqrtT) + 1)
+    zomma = gamma * (d1 * d2 - 1) / sigma
+    color = -n_d1 / (2 * S * T * sigma * sqrtT) * (
+        1 + d1 * (2 * r * T - d2 * sigma * sqrtT) / (sigma * sqrtT)) / 365
+    ultima = -S * sqrtT * n_d1 / (sigma**2) * (
+        d1 * d2 * (1 - d1 * d2) + d1**2 + d2**2)
+
+    return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega,
+            "vanna": vanna, "volga": volga, "charm": charm, "veta": veta,
+            "speed": speed, "zomma": zomma, "color": color, "ultima": ultima}
+
+
+def vanna_volga_decomposition(S, K, T, r, sigma_atm, sigma_k, opt_type="call"):
+    """Decompose option price into BS base + vanna cost + volga cost (smile premium).
+
+    Args:
+        sigma_atm: ATM implied volatility
+        sigma_k: IV at strike K (market-observed skew)
+
+    Returns dict: {bs_price, vanna_cost, volga_cost, vv_price, smile_premium_pct}
+    """
+    bs_base = black_scholes(S, K, T, r, sigma_atm, opt_type)
+    if bs_base <= 0 or T <= 0 or sigma_atm <= 0:
+        return {"bs_price": bs_base, "vanna_cost": 0, "volga_cost": 0,
+                "vv_price": bs_base, "smile_premium_pct": 0}
+
+    hg = bs_higher_greeks(S, K, T, r, sigma_atm, opt_type)
+    d_sigma = sigma_k - sigma_atm
+
+    vanna_cost = hg["vanna"] * d_sigma * S * 0.01  # approximate
+    volga_cost = 0.5 * hg["volga"] * d_sigma**2
+
+    vv_price = bs_base + vanna_cost + volga_cost
+    smile_prem = ((vv_price / bs_base - 1) * 100) if bs_base > 0 else 0
+
+    return {"bs_price": bs_base, "vanna_cost": vanna_cost, "volga_cost": volga_cost,
+            "vv_price": vv_price, "smile_premium_pct": smile_prem}
+
+
 def merton_jump_diffusion(S, K, T, r, sigma, lam=0.1, mu_j=-0.1, sigma_j=0.15,
                           opt_type="call", n_terms=10):
     """Merton Jump-Diffusion option price.

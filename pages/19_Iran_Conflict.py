@@ -1126,10 +1126,14 @@ def run_single_conflict_model(model_key: str, api_key: str, context_prompt: str,
     config = model_config or MODEL_CONFIGS.get(model_key, {})
     model_max_tokens = config.get("max_tokens", 3000)
 
+    from src.ai_validation import ACCURACY_CHECK_LIGHT
     user_prompt = f"""{context_prompt}
 
 {config['extra_instructions']}
-Produce your complete analysis. JSON only."""
+
+{ACCURACY_CHECK_LIGHT}
+
+Produce your complete analysis. Respond with ONLY valid JSON."""
 
     try:
         if config["base_url"] == "gemini_native":

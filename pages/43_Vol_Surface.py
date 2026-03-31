@@ -168,11 +168,16 @@ def _atm_iv(chain, spot, opt_type="call"):
 
 
 def _find_delta_strike(chain, spot, target_delta, opt_type):
-    """Find the strike closest to a target delta."""
+    """Find the strike closest to a target delta. Prefers contracts with OI > 0."""
     sub = chain[chain["contract_type"] == opt_type].copy()
     sub = sub[sub["implied_volatility"] > 0]
     if sub.empty:
         return None, None
+    # Prefer contracts with open interest (filter out 0-OI noise)
+    if "open_interest" in sub.columns:
+        sub_liquid = sub[sub["open_interest"].fillna(0) > 0]
+        if len(sub_liquid) >= 3:
+            sub = sub_liquid
     sub["delta_abs"] = sub["delta"].abs()
     sub["delta_dist"] = (sub["delta_abs"] - abs(target_delta)).abs()
     sub = sub.dropna(subset=["delta_dist"])
@@ -196,58 +201,55 @@ with _c2:
 # ─── FETCH ─────────────────────────────────────────────────────────────────────
 
 if submit:
-    with fun_loader("data"):
-        all_exps = get_expiration_dates(ticker)
-        today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
-        year_end = f"{pd.Timestamp.now().year}-12-31"
-        valid_exps = [e for e in (all_exps or []) if today_str <= e <= year_end]
-        if len(valid_exps) < 4:
-            valid_exps = [e for e in (all_exps or []) if e >= today_str]
+    _load_container = st.container()
+    with _load_container:
+        with fun_loader("data"):
+            all_exps = get_expiration_dates(ticker)
+            today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+            year_end = f"{pd.Timestamp.now().year}-12-31"
+            valid_exps = [e for e in (all_exps or []) if today_str <= e <= year_end]
+            if len(valid_exps) < 4:
+                valid_exps = [e for e in (all_exps or []) if e >= today_str]
 
-        # Monthly (3rd Friday) + nearest 6 weeklies
-        monthly = [e for e in valid_exps
-                   if 15 <= pd.to_datetime(e).day <= 21 and pd.to_datetime(e).weekday() == 4]
-        weekly = [e for e in valid_exps if e not in monthly][:6]
-        prefetch = sorted(set(monthly + weekly))
-        if len(prefetch) < 4:
-            prefetch = valid_exps[:12]
+            # Monthly (3rd Friday) + nearest 6 weeklies
+            monthly = [e for e in valid_exps
+                       if 15 <= pd.to_datetime(e).day <= 21 and pd.to_datetime(e).weekday() == 4]
+            weekly = [e for e in valid_exps if e not in monthly][:6]
+            prefetch = sorted(set(monthly + weekly))
+            if len(prefetch) < 4:
+                prefetch = valid_exps[:12]
 
-        px_df = fetch_massive_data(ticker, 252)
-        if px_df is None or px_df.empty:
-            st.error("Could not fetch price data.")
-            st.stop()
-        spot = float(px_df["Close"].iloc[-1])
-        if pd.isna(spot) or spot <= 0:
-            st.error("Invalid price data — last close is missing or zero.")
-            st.stop()
-        rfr = _get_rfr()
+            px_df = fetch_massive_data(ticker, 252)
+            if px_df is None or px_df.empty:
+                st.error("Could not fetch price data.")
+                st.stop()
+            spot = float(px_df["Close"].iloc[-1])
+            if pd.isna(spot) or spot <= 0:
+                st.error("Invalid price data — last close is missing or zero.")
+                st.stop()
+            rfr = _get_rfr()
 
-        term_data = {}
-        progress = st.progress(0, text="Loading vol surface...")
+            term_data = {}
 
-        # Parallelize chain fetches — 3-5x faster than sequential
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+            # Parallelize chain fetches — 3-5x faster than sequential
+            from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        def _fetch_exp(exp):
-            try:
-                tdf = fetch_options_chain(ticker, exp)
-                if tdf is not None and not tdf.empty:
-                    tdf = fill_missing_options_data(tdf, spot, risk_free_rate=rfr)
-                    return exp, tdf
-            except Exception:
-                pass
-            return exp, None
+            def _fetch_exp(exp):
+                try:
+                    tdf = fetch_options_chain(ticker, exp)
+                    if tdf is not None and not tdf.empty:
+                        tdf = fill_missing_options_data(tdf, spot, risk_free_rate=rfr)
+                        return exp, tdf
+                except Exception:
+                    pass
+                return exp, None
 
-        completed = 0
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(_fetch_exp, exp): exp for exp in prefetch}
-            for future in as_completed(futures):
-                completed += 1
-                exp, tdf = future.result()
-                if tdf is not None:
-                    term_data[exp] = tdf
-                progress.progress(completed / len(prefetch), text=f"Loaded {completed}/{len(prefetch)} expirations...")
-        progress.empty()
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(_fetch_exp, exp): exp for exp in prefetch}
+                for future in as_completed(futures):
+                    exp, tdf = future.result()
+                    if tdf is not None:
+                        term_data[exp] = tdf
 
         if len(term_data) < 2:
             st.error("Could not load enough expiration data.")
@@ -380,28 +382,336 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
 ])
 
 
+# ── Shared AI context builder (used by tab1 narrator and tab9 trade ideas) ──
+def _build_surface_context():
+    """Collect all surface metrics into a text block for the LLM."""
+    lines = [f"Ticker: {ticker_display}", f"Spot: ${spot:.2f}"]
+
+    # Vol regime summary
+    lines.append(f"\n--- VOL REGIME ---")
+    lines.append(f"Vol Level: {_vol_level} (front ATM IV: {_front_atm:.1%})")
+    lines.append(f"VRP: {_vrp_regime} ({_vrp:+.1%})")
+    lines.append(f"Skew: {_skew_regime} (put skew {_put_skew_ratio:.2f}x ATM)")
+    lines.append(f"Term Structure: {_ts_shape}")
+
+    # Historical percentile context
+    if _pctiles and any(v is not None for v in _pctiles.values()):
+        lines.append("\n--- HISTORICAL PERCENTILE (252-day) ---")
+        for key, label in [("atm_iv", "ATM IV"), ("put_skew", "Put Skew"), ("vrp", "VRP"),
+                           ("iv_hv_ratio", "IV/HV Ratio"), ("hv20", "HV20")]:
+            p = _pctiles.get(key)
+            if p is not None:
+                extremity = "EXTREME HIGH" if p > 90 else ("HIGH" if p > 75 else ("LOW" if p < 25 else ("EXTREME LOW" if p < 10 else "NORMAL")))
+                lines.append(f"  {label}: {p:.0f}th percentile ({extremity})")
+
+    if current_hv20 is not None:
+        lines.append(f"20-Day HV: {current_hv20:.1%}")
+    if current_hv60 is not None:
+        lines.append(f"60-Day HV: {current_hv60:.1%}")
+
+    # ATM IV by expiration
+    lines.append("\n--- ATM IV Term Structure ---")
+    for exp in expirations[:8]:
+        dte = _dte(exp)
+        if dte <= 0:
+            continue
+        atm = _atm_iv_cache.get(exp, 0)
+        if atm > 0:
+            lines.append(f"  {exp} ({dte}d): IV={atm:.1%}")
+
+    # Skew metrics per expiration
+    lines.append("\n--- Skew Profile ---")
+    for exp in expirations[:6]:
+        chain = term_data[exp]
+        dte = _dte(exp)
+        if dte <= 0:
+            continue
+        atm = _atm_iv_cache.get(exp, 0)
+        if atm <= 0:
+            continue
+        p25_strike, p25_iv = _find_delta_strike(chain, spot, 0.25, "put")
+        c25_strike, c25_iv = _find_delta_strike(chain, spot, 0.25, "call")
+        skew_str = ""
+        if p25_iv and atm > 0:
+            skew_str += f"25\u0394 put skew={((p25_iv/atm)-1)*100:+.0f}% "
+        if c25_iv and atm > 0:
+            skew_str += f"25\u0394 call skew={((c25_iv/atm)-1)*100:+.0f}%"
+        lines.append(f"  {exp} ({dte}d): ATM={atm:.1%} {skew_str}")
+
+    # Butterfly & Risk Reversal per expiration
+    _has_fly = False
+    for exp in expirations[:6]:
+        chain = term_data[exp]
+        dte = _dte(exp)
+        if dte <= 0:
+            continue
+        atm = _atm_iv_cache.get(exp, 0)
+        if atm <= 0:
+            continue
+        p25_strike, p25_iv = _find_delta_strike(chain, spot, 0.25, "put")
+        c25_strike, c25_iv = _find_delta_strike(chain, spot, 0.25, "call")
+        if p25_iv and c25_iv and atm > 0:
+            if not _has_fly:
+                lines.append("\n--- BUTTERFLY & RISK REVERSAL ---")
+                _has_fly = True
+            _fly = (p25_iv + c25_iv - 2 * atm) * 100
+            _rr = (c25_iv - p25_iv) * 100
+            _fly_read = "fat tails priced" if _fly > 2 else ("thin tails" if _fly < -1 else "normal")
+            _rr_read = "calls richer (unusual)" if _rr > 1 else ("puts richer (normal)" if _rr < -1 else "balanced")
+            lines.append(f"  {exp} ({dte}d): Butterfly={_fly:+.1f}bps ({_fly_read}) | RiskRev={_rr:+.1f}bps ({_rr_read})")
+    if not _has_fly:
+        lines.append("\n--- BUTTERFLY & RISK REVERSAL ---")
+        lines.append("  [Insufficient delta data to compute]")
+
+    # Variance risk premium
+    if current_hv20 is not None and current_hv20 > 0 and _front_atm > 0:
+        lines.append(f"\n--- VARIANCE RISK PREMIUM ---")
+        lines.append(f"Front IV - HV20: {_vrp:+.1%} ({_vrp_regime})")
+        lines.append(f"IV/HV Ratio: {_front_atm / current_hv20:.2f}x {'(cheap gamma)' if _front_atm < current_hv20 else ('(expensive gamma)' if _front_atm / current_hv20 > 1.3 else '(fair)')}")
+    else:
+        lines.append(f"\n--- VARIANCE RISK PREMIUM ---")
+        lines.append("  [HV20 unavailable]")
+
+    # Term structure shape
+    if len(expirations) >= 2:
+        front_iv = _front_atm
+        back_iv = _back_atm
+        if front_iv > 0 and back_iv > 0:
+            shape = "Backwardation (front > back)" if front_iv > back_iv else "Contango (front < back)"
+            lines.append(f"\nTerm Structure: {shape}")
+            lines.append(f"  Front ({expirations[0]}): {front_iv:.1%}")
+            lines.append(f"  Back ({expirations[-1]}): {back_iv:.1%}")
+        else:
+            lines.append(f"\nTerm Structure: [Insufficient IV data]")
+    else:
+        lines.append(f"\nTerm Structure: [Only 1 expiration loaded]")
+
+    # Gamma scalping metrics
+    lines.append(f"\n--- GAMMA SCALP METRICS ---")
+    try:
+        _gs_exp = expirations[0]
+        _gs_chain = term_data[_gs_exp]
+        _gs_atm_iv = _atm_iv_cache.get(_gs_exp, 0)
+        if _gs_atm_iv > 0 and current_hv20 is not None and current_hv20 > 0:
+            _gs_iv_hv = _gs_atm_iv / current_hv20
+            _gs_calls = _gs_chain[(_gs_chain["contract_type"] == "call") & (_gs_chain["implied_volatility"] > 0)].reset_index(drop=True)
+            _gs_puts = _gs_chain[(_gs_chain["contract_type"] == "put") & (_gs_chain["implied_volatility"] > 0)].reset_index(drop=True)
+            if "open_interest" in _gs_calls.columns:
+                _gs_calls_liq = _gs_calls[_gs_calls["open_interest"].fillna(0) > 0]
+                if len(_gs_calls_liq) >= 1:
+                    _gs_calls = _gs_calls_liq.reset_index(drop=True)
+            if "open_interest" in _gs_puts.columns:
+                _gs_puts_liq = _gs_puts[_gs_puts["open_interest"].fillna(0) > 0]
+                if len(_gs_puts_liq) >= 1:
+                    _gs_puts = _gs_puts_liq.reset_index(drop=True)
+            if not _gs_calls.empty and not _gs_puts.empty:
+                _gs_call = _gs_calls.loc[(_gs_calls["strike_price"] - spot).abs().idxmin()]
+                _gs_put = _gs_puts.loc[(_gs_puts["strike_price"] - spot).abs().idxmin()]
+                _gs_gamma = (_gs_call.get("gamma", 0) or 0) + (_gs_put.get("gamma", 0) or 0)
+                _gs_theta = (_gs_call.get("theta", 0) or 0) + (_gs_put.get("theta", 0) or 0)
+                _gs_d_gamma = _gs_gamma * 100
+                _gs_d_theta = _gs_theta * 100
+                lines.append(f"  IV/HV Ratio: {_gs_iv_hv:.2f}x {'— CHEAP gamma (buy)' if _gs_iv_hv < 1.0 else ('— EXPENSIVE gamma (sell)' if _gs_iv_hv > 1.3 else '— fair')}")
+                if _gs_gamma > 0 and _gs_theta != 0:
+                    _gs_be = np.sqrt(2 * abs(_gs_theta) / _gs_gamma)
+                    _gs_be_pct = _gs_be / spot * 100
+                    _gs_ratio = abs(_gs_d_gamma / _gs_d_theta) if _gs_d_theta != 0 else 0
+                    lines.append(f"  Dollar Gamma: ${_gs_d_gamma:.2f}/1% move | Dollar Theta: ${_gs_d_theta:.2f}/day")
+                    lines.append(f"  Break-Even Daily Move: ${_gs_be:.2f} ({_gs_be_pct:.1f}%)")
+                    lines.append(f"  Gamma/Theta Ratio: {_gs_ratio:.2f}x {'— scalp profitable if realized > implied' if _gs_ratio > 1 else ''}")
+                else:
+                    lines.append("  [Greeks unavailable for gamma scalp calc]")
+            else:
+                lines.append(f"  IV/HV: {_gs_iv_hv:.2f}x | [No ATM contracts for Greeks]")
+        else:
+            lines.append("  [ATM IV or HV20 unavailable]")
+    except Exception:
+        lines.append("  [Gamma scalp data unavailable]")
+
+    # Surface dislocations
+    lines.append(f"\n--- SURFACE DISLOCATIONS (Richest/Cheapest vs Baseline) ---")
+    try:
+        _disl_rows = []
+        for exp in expirations[:6]:
+            chain = term_data[exp]
+            dte = _dte(exp)
+            if dte <= 0:
+                continue
+            theo_iv = _atm_iv_cache.get(exp, 0)
+            if not theo_iv or theo_iv <= 0:
+                continue
+            for _, row in chain.iterrows():
+                iv = row.get("implied_volatility", 0) or 0
+                oi = row.get("open_interest", 0) or 0
+                if iv > 0 and oi > 0:
+                    disl = (iv - theo_iv) * 100
+                    _disl_rows.append({"strike": row["strike_price"], "type": row["contract_type"],
+                                       "exp": exp, "dte": dte, "iv": iv * 100, "disl": disl, "oi": oi})
+        if _disl_rows:
+            _disl_sorted = sorted(_disl_rows, key=lambda x: x["disl"])
+            lines.append("  CHEAPEST (most underpriced vs baseline):")
+            for _d in _disl_sorted[:3]:
+                _liq = "HIGH" if _d["oi"] > 5000 else ("MED" if _d["oi"] > 500 else "LOW")
+                lines.append(f"    ${_d['strike']:.0f} {_d['type']} {_d['exp']} ({_d['dte']}d): IV={_d['iv']:.1f}% disl={_d['disl']:+.1f}bps OI={_d['oi']:,} ({_liq})")
+            lines.append("  RICHEST (most overpriced vs baseline):")
+            for _d in _disl_sorted[-3:]:
+                _liq = "HIGH" if _d["oi"] > 5000 else ("MED" if _d["oi"] > 500 else "LOW")
+                lines.append(f"    ${_d['strike']:.0f} {_d['type']} {_d['exp']} ({_d['dte']}d): IV={_d['iv']:.1f}% disl={_d['disl']:+.1f}bps OI={_d['oi']:,} ({_liq})")
+            _avg_disl = sum(d["disl"] for d in _disl_rows) / len(_disl_rows)
+            _rich_count = sum(1 for d in _disl_rows if d["disl"] > 2)
+            _cheap_count = sum(1 for d in _disl_rows if d["disl"] < -2)
+            lines.append(f"  Surface avg dislocation: {_avg_disl:+.1f}bps | {_rich_count} rich / {_cheap_count} cheap contracts")
+        else:
+            lines.append("  [No dislocation data — baseline IV unavailable]")
+    except Exception:
+        lines.append("  [Dislocation computation failed]")
+
+    # Earnings date context
+    try:
+        import yfinance as _yf_earn
+        from datetime import datetime as _dt_earn
+        _yf_info = _yf_earn.Ticker(ticker_display).info or {}
+        _earn_ts = _yf_info.get("earningsTimestampStart")
+        if _earn_ts and _earn_ts > 0:
+            _ed_date = _dt_earn.utcfromtimestamp(_earn_ts).date()
+            _ed_days = (_ed_date - _dt_earn.now().date()).days
+            if 0 < _ed_days <= 60:
+                lines.append(f"\n--- EARNINGS ---")
+                lines.append(f"  Next earnings: {_ed_date.isoformat()} ({_ed_days} days)")
+                lines.append(f"  WARNING: Options expiring after this date carry earnings vol premium.")
+                for _eexp in expirations[:8]:
+                    try:
+                        _eexp_date = _dt_earn.strptime(_eexp, "%Y-%m-%d").date()
+                        if _eexp_date >= _ed_date:
+                            lines.append(f"  {_eexp} expiration INCLUDES earnings risk")
+                            break
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+    # Recent price action
+    if len(_returns) >= 5:
+        ret_5d = float(px_df["Close"].iloc[-1] / px_df["Close"].iloc[-6] - 1) * 100 if len(px_df) > 5 else 0
+        ret_20d = float(px_df["Close"].iloc[-1] / px_df["Close"].iloc[-21] - 1) * 100 if len(px_df) > 20 else 0
+        lines.append(f"\n--- Recent Price Action ---")
+        lines.append(f"5-Day Return: {ret_5d:+.1f}%")
+        lines.append(f"20-Day Return: {ret_20d:+.1f}%")
+        recent_realized = float(_returns.tail(5).std() * np.sqrt(252) * 100)
+        lines.append(f"5-Day Realized Vol: {recent_realized:.0f}%")
+    else:
+        lines.append(f"\n--- Recent Price Action ---")
+        lines.append("  [Insufficient price history]")
+
+    # Historical surface if available
+    try:
+        hist = st.session_state.get("vs_hist_surface", {})
+        if hist:
+            dates = sorted(hist.keys())
+            if len(dates) >= 2:
+                old_spot = hist[dates[0]].get("spot", 0)
+                if old_spot > 0:
+                    lines.append(f"\n--- 10-Day Context ---")
+                    lines.append(f"Spot {dates[0]}: ${old_spot:.2f} -> Today: ${spot:.2f} ({(spot/old_spot-1)*100:+.1f}%)")
+    except Exception:
+        pass
+
+    # Cross-page signal composite
+    try:
+        from src.signal_engine import compute_composite
+        comp = compute_composite(ticker_display)
+        if comp and comp["n_signals"] >= 2:
+            lines.append(f"\n--- CROSS-PAGE SIGNAL COMPOSITE ---")
+            lines.append(f"Direction: {comp['overall_direction'].upper()} (conviction {comp['overall_conviction']:.0%})")
+            lines.append(f"Vol View: {comp.get('vol_regime', 'N/A')}")
+            lines.append(f"Sources: {comp['n_signals']} ({comp['signal_agreement']:.0%} agreement)")
+            for s in comp["signals"][:5]:
+                lines.append(f"  - {s['source']}: {s['direction']} ({s['conviction']:.0%}) — {s.get('reasoning', '')[:80]}")
+    except Exception:
+        pass
+
+    # Liquidity map
+    lines.append(f"\n--- LIQUIDITY MAP (Open Interest by Strike) ---")
+    try:
+        front_chain = term_data[expirations[0]]
+        _oi_data = front_chain[front_chain["open_interest"] > 0]\
+            .groupby("strike_price")["open_interest"].sum()\
+            .sort_values(ascending=False).head(15)
+        if len(_oi_data) > 0:
+            for strike, oi in _oi_data.items():
+                liq = "HIGH" if oi > 5000 else ("MEDIUM" if oi > 500 else "LOW")
+                lines.append(f"  ${strike:.0f}: OI={oi:,} ({liq})")
+        else:
+            lines.append("  [No open interest data — exercise caution on fills]")
+    except Exception:
+        lines.append("  [Liquidity data unavailable — exercise caution on fills]")
+
+    # Iran war context for energy/defense tickers
+    _energy_syms = {"USO", "XLE", "XOP", "OIH", "CL", "BZ", "CVX", "XOM", "COP",
+                    "GLD", "GC", "SLV", "SI", "UNG", "NG", "LMT", "RTX", "NOC", "GD",
+                    "HAL", "MPC", "VLO", "PSX", "OXY", "EOG", "DVN", "FANG",
+                    "ITA", "XAR", "PPA", "DFEN", "HII", "LHX", "TDG", "BA"}
+    _tk_check = ticker_display.upper().replace("=F", "")
+    if _tk_check in _energy_syms:
+        try:
+            from src.db import get_client
+            _db_ctx = get_client()
+            if _db_ctx:
+                _ca = _db_ctx.table("conflict_analysis").select("situation_summary, escalation_risk")\
+                    .eq("region", "iran").order("timestamp", desc=True).limit(1).execute()
+                if _ca.data:
+                    import json as _jctx
+                    _esc = _ca.data[0].get("escalation_risk", {})
+                    if isinstance(_esc, str):
+                        _esc = _jctx.loads(_esc)
+                    _score = _esc.get("score", "?")
+                    _level = _esc.get("level", "unknown")
+                    _summ = _ca.data[0].get("situation_summary", "")
+                    lines.append(f"\n--- CRITICAL: ACTIVE GEOPOLITICAL CONFLICT ---")
+                    lines.append(f"Escalation: {_score}/10 ({_level})")
+                    lines.append(f"This asset is DIRECTLY affected by the ongoing conflict.")
+                    if _summ:
+                        lines.append(f"Latest assessment: {_summ[:400]}")
+                    else:
+                        lines.append("No detailed assessment available.")
+        except Exception:
+            pass
+
+    return "\n".join(lines)
+
+
+# Pre-build context once (shared between narrator and trade ideas)
+if "vs_surface_context" not in st.session_state or st.session_state.get("vs_context_ticker") != ticker_display:
+    st.session_state["vs_surface_context"] = _build_surface_context()
+    st.session_state["vs_context_ticker"] = ticker_display
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — 3D IV SURFACE
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab1:
     with error_boundary("3D Surface"):
-        st.subheader("Implied Volatility Surface")
-        with st.expander("Why this matters for your trading"):
-            st.markdown("""
-**What you're looking at:** Every option on this stock, plotted as a landscape. Height = implied volatility.
-Peaks are expensive options, valleys are cheap ones.
+        st.markdown(
+            f'<div style="font-size:1.15rem;font-weight:700;color:#e6edf3;">Implied Volatility Surface</div>'
+            f'<div style="font-size:0.85rem;color:{COLORS["text_muted"]};margin-bottom:12px;">'
+            f'Every option on {ticker_display} plotted as a 3D landscape. Height = implied volatility. '
+            f'Peaks are expensive options, valleys are cheap ones. The <span style="color:#ffaa00;">yellow line</span> marks the current stock price.</div>',
+            unsafe_allow_html=True)
 
-**How to use it:**
-- **Rotate the surface** (click and drag) to see it from different angles. Look for bumps and ridges.
-- A **ridge at a specific expiration** (horizontal bump) means the market is pricing in an event at that date — probably earnings.
-- A **steep left slope** (higher on the left/put side) is normal — investors pay more for downside protection.
-- **Switch to Delta view** to see where options have the most directional exposure, or **Gamma** to find where dealer hedging concentrates.
-
-**Real-world example:** If you see a spike at 30 DTE on the put side, the market expects a move before that date. If it's flatter than usual, the market is complacent — that might be a buying opportunity for protection.
-
-**The yellow line** is where the stock trades right now. The IV at that line is the ATM vol — your baseline for whether options are cheap or expensive.
-""")
+        with st.expander("How to read this surface", expanded=False):
+            st.markdown(
+                f'<div style="font-size:0.85rem;color:#ccc;line-height:1.6;">'
+                f'<b>Rotate</b> (click + drag) to explore. Look for bumps, ridges, and asymmetries.<br><br>'
+                f'<b>Left slope (puts)</b> — Steeper = market paying more for downside protection. This is normal for equities. '
+                f'A very steep slope signals fear; a flat slope signals complacency.<br><br>'
+                f'<b>Ridges at specific expirations</b> — A horizontal bump means the market is pricing an event at that date '
+                f'(earnings, FOMC, ex-div). Options before vs after this date will have very different IV levels.<br><br>'
+                f'<b>Metric selector</b> — Switch to <b>Delta</b> for directional exposure, <b>Gamma</b> for where dealer hedging concentrates '
+                f'(high gamma = potential pin risk), or <b>Vega</b> for vol sensitivity.<br><br>'
+                f'<b>Date slider</b> — Scrub backward in time to see how the surface has changed. '
+                f'If IV has collapsed over the past week, short vol may be late; if it has expanded, long vol may be expensive.</div>',
+                unsafe_allow_html=True)
 
 
         # ── Key surface metrics at a glance ──
@@ -414,31 +724,43 @@ Peaks are expensive options, valleys are cheap ones.
         p25_s, p25_iv = _p25_s, _p25_iv
         c25_s, c25_iv = _find_delta_strike(front_chain, spot, 0.25, "call")
 
-        sm1, sm2, sm3, sm4, sm5 = st.columns(5)
-        sm1.metric("Spot", f"${spot:,.2f}")
-        sm2.metric(f"ATM IV ({front_dte}d)", f"{front_atm_iv:.1%}",
-                   help="Front-month at-the-money implied volatility.")
-        if current_hv20 and current_hv20 > 0:
-            vrp = front_atm_iv - current_hv20
-            vrp_label = "Rich" if vrp > 0.03 else ("Cheap" if vrp < -0.02 else "Fair")
-            sm3.metric("VRP (IV − HV20)", f"{vrp:+.1%}", vrp_label,
-                       delta_color="inverse" if vrp > 0.03 else "normal")
-        else:
-            sm3.metric("HV20", "N/A")
-        if p25_iv and front_atm_iv > 0:
-            put_skew_ratio = p25_iv / front_atm_iv
-            sm4.metric("Put Skew (25Δ)", f"{put_skew_ratio:.2f}x",
-                       help="25-delta put IV / ATM IV. >1.10 = elevated fear premium.")
-        else:
-            sm4.metric("Put Skew", "N/A")
-        if len(expirations) >= 2:
-            back_atm = _atm_iv(term_data[expirations[-1]], spot, "call")
-            ts_shape = "Backwardation" if front_atm_iv > back_atm else "Contango"
-            sm5.metric("Term Structure", ts_shape,
-                       f"{(front_atm_iv - back_atm):+.1%}",
-                       delta_color="inverse" if ts_shape == "Backwardation" else "normal")
-        else:
-            sm5.metric("Term Structure", "N/A")
+        # Key surface metrics — styled card row
+        _card_sm_vs = (f'background:{COLORS["card_bg"]};border:1px solid {COLORS["card_border"]};'
+                       f'border-radius:8px;padding:10px 14px;text-align:center;')
+        _vrp_val = front_atm_iv - current_hv20 if current_hv20 and current_hv20 > 0 else None
+        _vrp_label = "Rich" if _vrp_val and _vrp_val > 0.03 else ("Cheap" if _vrp_val and _vrp_val < -0.02 else "Fair")
+        _vrp_color = "#ff4444" if _vrp_val and _vrp_val > 0.03 else ("#00ff96" if _vrp_val and _vrp_val < -0.02 else "#e6edf3")
+        _skew_ratio = p25_iv / front_atm_iv if p25_iv and front_atm_iv > 0 else None
+        _skew_color = "#ff4444" if _skew_ratio and _skew_ratio > 1.10 else ("#00ff96" if _skew_ratio and _skew_ratio < 1.02 else "#e6edf3")
+        _back_atm_val = _atm_iv(term_data[expirations[-1]], spot, "call") if len(expirations) >= 2 else None
+        _ts_shape = "Backwardation" if _back_atm_val and front_atm_iv > _back_atm_val else ("Contango" if _back_atm_val else "N/A")
+        _ts_color = "#ff4444" if _ts_shape == "Backwardation" else ("#00ff96" if _ts_shape == "Contango" else "#888")
+
+        # Activity metrics from new fields
+        _total_trades = int(front_chain["trade_count"].sum()) if "trade_count" in front_chain.columns else 0
+        _total_vol = int(front_chain["volume"].sum()) if "volume" in front_chain.columns else 0
+        _avg_trade_size = round(_total_vol / max(_total_trades, 1)) if _total_trades > 0 else 0
+
+        _sm_items = [
+            ("SPOT", f"${spot:,.2f}", "#e6edf3", ""),
+            (f"ATM IV ({front_dte}d)", f"{front_atm_iv:.1%}", "#e6edf3", "Front-month at-the-money"),
+            ("VRP (IV-HV20)", f"{_vrp_val:+.1%}" if _vrp_val is not None else "N/A", _vrp_color, _vrp_label),
+            ("PUT SKEW (25\u0394)", f"{_skew_ratio:.2f}x" if _skew_ratio else "N/A", _skew_color,
+             "Fear premium" if _skew_ratio and _skew_ratio > 1.10 else ("Complacent" if _skew_ratio and _skew_ratio < 1.02 else "")),
+            ("TERM STRUCTURE", _ts_shape, _ts_color,
+             f"{(front_atm_iv - _back_atm_val):+.1%}" if _back_atm_val else ""),
+            ("TRADES", f"{_total_trades:,}" if _total_trades > 0 else "N/A", "#e6edf3",
+             f"Avg {_avg_trade_size} contracts" if _avg_trade_size > 0 else ""),
+        ]
+        _sm_html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+        for _sl, _sv, _sc, _ssub in _sm_items:
+            _sub_html = f'<div style="font-size:0.65rem;color:{_sc};">{_ssub}</div>' if _ssub else ""
+            _sm_html += (f'<div style="{_card_sm_vs}flex:1;min-width:100px;">'
+                         f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{_sl}</div>'
+                         f'<div style="font-size:1.1rem;font-weight:700;color:{_sc};">{_sv}</div>'
+                         f'{_sub_html}</div>')
+        _sm_html += '</div>'
+        st.markdown(_sm_html, unsafe_allow_html=True)
 
         metric_sel = st.selectbox("Surface metric", ["IV", "Delta", "Gamma", "Vega"], key="vs_metric")
 
@@ -483,7 +805,7 @@ Peaks are expensive options, valleys are cheap ones.
                     delta = r.get("delta", 0)
                     gamma = r.get("gamma", 0)
                     vega = gamma * _snap_spot * 0.01 if gamma else 0  # approximate vega
-                    val_map = {"implied_volatility": iv, "delta": delta, "gamma": gamma, "vega": vega}
+                    val_map = {"implied_volatility": iv, "delta": abs(delta) if delta else 0, "gamma": gamma, "vega": vega}
                     val = val_map.get(field, iv)
                     if val != 0 and dte > 0 and 0.70 * _snap_spot <= k <= 1.30 * _snap_spot:
                         _snap_surface_rows.append({
@@ -501,12 +823,17 @@ Peaks are expensive options, valleys are cheap ones.
             for exp in expirations:
                 chain = term_data[exp]
                 dte = _dte(exp)
-                calls = chain[(chain["contract_type"] == "call") & (chain["strike_price"] >= spot * 0.98)]
-                puts = chain[(chain["contract_type"] == "put") & (chain["strike_price"] < spot * 0.98)]
+                # Use OTM options for each side: puts below ATM, calls at/above ATM
+                # Meet at spot (no gap) — both sides include ATM for smooth interpolation
+                calls = chain[(chain["contract_type"] == "call") & (chain["strike_price"] >= spot)]
+                puts = chain[(chain["contract_type"] == "put") & (chain["strike_price"] <= spot)]
                 for _, row in pd.concat([calls, puts]).iterrows():
                     k = row["strike_price"]
                     val = row.get(field, 0) or 0
                     iv = row.get("implied_volatility", 0) or 0
+                    # For delta: use absolute value so surface is continuous (no sign flip at ATM)
+                    if field == "delta":
+                        val = abs(val) if val else 0
                     if strike_lo <= k <= strike_hi and val != 0 and iv > 0:
                         surface_rows.append({"strike": k, "expiration": exp, "dte": dte, field: val})
 
@@ -550,6 +877,7 @@ Peaks are expensive options, valleys are cheap ones.
             fig_3d.update_layout(
                 template="plotly_dark", height=600,
                 margin=dict(t=10, b=10, l=10, r=10),
+                uirevision="main_surface",  # preserves camera position
                 scene=dict(
                     xaxis=dict(title="Strike ($)", backgroundcolor="rgba(14,17,23,0.8)",
                                gridcolor="rgba(48,54,61,0.4)", showbackground=True),
@@ -564,6 +892,183 @@ Peaks are expensive options, valleys are cheap ones.
                 legend=dict(x=0, y=1, bgcolor="rgba(0,0,0,0.5)"),
             )
             st.plotly_chart(fig_3d, use_container_width=True)
+
+            # ── Surface Analysis: What does this mean for your trading? ──
+            st.markdown(f'<div style="font-size:1rem;font-weight:700;color:#e6edf3;margin-top:16px;margin-bottom:8px;">Surface Reading</div>',
+                        unsafe_allow_html=True)
+
+            _readings = []
+            # VRP reading
+            if _vrp_val is not None:
+                if _vrp_val > 0.05:
+                    _readings.append(("VRP is significantly rich", f"Options are pricing {abs(_vrp_val)*100:.0f}% more vol than realized. Premium sellers have an edge — consider selling straddles, strangles, or iron condors.", "#ff4444"))
+                elif _vrp_val > 0.02:
+                    _readings.append(("VRP is mildly rich", f"IV exceeds realized by {abs(_vrp_val)*100:.1f}%. Slight edge for premium sellers, but not extreme. Credit spreads preferred over naked short vol.", "#ffaa00"))
+                elif _vrp_val < -0.05:
+                    _readings.append(("VRP is deeply cheap", f"Realized vol exceeds IV by {abs(_vrp_val)*100:.0f}%. Options are underpriced. Long vol via straddles or ratio backspreads is attractive. Gamma buyers have the edge.", "#00ff96"))
+                elif _vrp_val < -0.02:
+                    _readings.append(("VRP is cheap", f"IV is below realized by {abs(_vrp_val)*100:.1f}%. Gamma is cheap to own — consider buying protection or long straddles.", "#00ff96"))
+                else:
+                    _readings.append(("VRP is fair", "No clear edge from the variance risk premium alone. Look to skew and term structure for trade ideas.", "#e6edf3"))
+
+            # Skew reading
+            if _skew_ratio is not None:
+                if _skew_ratio > 1.15:
+                    _readings.append(("Put skew is steep", f"25\u0394 puts trade at {_skew_ratio:.2f}x ATM — the market is paying a heavy fear premium. Consider put spreads (buy ATM, sell OTM) to capture skew, or sell the expensive wing.", "#ff4444"))
+                elif _skew_ratio > 1.05:
+                    _readings.append(("Put skew is normal", f"25\u0394 put skew at {_skew_ratio:.2f}x is typical. No unusual fear or complacency in the skew.", "#e6edf3"))
+                elif _skew_ratio < 1.02:
+                    _readings.append(("Put skew is flat", f"25\u0394 puts at only {_skew_ratio:.2f}x ATM — the market is complacent about downside risk. Cheap to buy puts or put spreads here.", "#00ff96"))
+
+            # Term structure reading
+            if _back_atm_val and front_atm_iv > 0:
+                if _ts_shape == "Backwardation":
+                    _spread = (front_atm_iv - _back_atm_val) * 100
+                    _readings.append(("Term structure is inverted", f"Front IV is {_spread:.1f}% above back months — the market is bracing for a near-term event. Calendar spreads (sell front, buy back) capture this premium. Avoid selling front-month naked.", "#ff4444"))
+                else:
+                    _spread = (_back_atm_val - front_atm_iv) * 100
+                    if _spread > 5:
+                        _readings.append(("Steep contango", f"Back months are {_spread:.1f}% above front. No near-term event premium. Front-month credit spreads are relatively safe. LEAPS are expensive.", "#e6edf3"))
+                    else:
+                        _readings.append(("Normal contango", "Term structure is gently upward-sloping — normal market conditions. No unusual event pricing visible.", "#e6edf3"))
+
+            if _readings:
+                _read_html = ""
+                for _rtitle, _rdesc, _rcolor in _readings:
+                    _read_html += (
+                        f'<div style="padding:10px 14px;margin-bottom:8px;border-left:3px solid {_rcolor};'
+                        f'background:{COLORS["card_bg"]};border-radius:0 8px 8px 0;">'
+                        f'<div style="font-size:0.85rem;font-weight:700;color:{_rcolor};">{_rtitle}</div>'
+                        f'<div style="font-size:0.82rem;color:#ccc;margin-top:2px;">{_rdesc}</div></div>')
+                st.markdown(_read_html, unsafe_allow_html=True)
+
+            # ── Higher-Order Greeks Summary ──
+            st.divider()
+            st.markdown(f'<div style="font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:4px;">Higher-Order Greeks Snapshot</div>'
+                        f'<div style="font-size:0.72rem;color:{COLORS["text_muted"]};margin-bottom:8px;">'
+                        f'ATM front-month vanna, charm, speed from the loaded surface.</div>',
+                        unsafe_allow_html=True)
+            try:
+                from src.options_models import bs_higher_greeks as _hg_fn
+                _hg_exp0 = expirations[0]
+                _hg_dte = max((pd.to_datetime(_hg_exp0) - pd.Timestamp.now()).days, 1)
+                _hg_T = _hg_dte / 365
+                _hg_atm_iv = _atm_iv_cache.get(_hg_exp0, 0.25)
+                _hg_rfr = 0.045
+                _hg = _hg_fn(spot, spot, _hg_T, _hg_rfr, _hg_atm_iv, "call")
+
+                _hg_items = [
+                    ("VANNA", f"{_hg['vanna']:.5f}", COLORS["warning"],
+                     f"{'Delta drops if IV rises' if _hg['vanna'] < 0 else 'Delta rises with IV'}"),
+                    ("CHARM", f"{_hg['charm']:.5f}/d", COLORS["warning"],
+                     f"Delta drifts {_hg['charm']:+.5f} overnight"),
+                    ("SPEED", f"{_hg['speed']:.7f}", COLORS["danger"],
+                     f"{'High pin risk' if abs(_hg['speed']) > 0.001 else 'Normal'}"),
+                    ("ZOMMA", f"{_hg['zomma']:.5f}", COLORS["danger"],
+                     f"{'Gamma spikes if IV rises' if _hg['zomma'] > 0 else 'Gamma drops with IV'}"),
+                ]
+                _hg_html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+                for _hl, _hv, _hc, _hd in _hg_items:
+                    _hg_html += (f'<div style="background:{COLORS["card_bg"]};border:1px solid {_hc};'
+                                 f'border-radius:8px;padding:8px 12px;flex:1;min-width:120px;text-align:center;">'
+                                 f'<div style="font-size:0.55rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:0.5px;">{_hl}</div>'
+                                 f'<div style="font-size:0.95rem;font-weight:700;color:{_hc};">{_hv}</div>'
+                                 f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">{_hd}</div></div>')
+                _hg_html += '</div>'
+                st.markdown(_hg_html, unsafe_allow_html=True)
+
+                # Deep dive link
+                st.markdown(f'<a href="/49_Higher_Greeks?ticker={ticker_display}" target="_self" '
+                            f'style="font-size:0.8rem;color:{COLORS["accent"]};text-decoration:none;">'
+                            f'Deep Dive: Full Higher-Order Greeks Analysis \u2192</a>',
+                            unsafe_allow_html=True)
+            except Exception:
+                pass
+
+            # ── AI Surface Narrator ──
+            st.divider()
+            st.markdown(f'<div style="font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:4px;">AI Surface Analysis</div>'
+                        f'<div style="font-size:0.8rem;color:{COLORS["text_muted"]};margin-bottom:10px;">'
+                        f'Gemini reads the full surface data and explains what it means in plain English.</div>',
+                        unsafe_allow_html=True)
+
+            @st.fragment
+            def _surface_narrator():
+                _narrator_key = f"vs_narrator_{ticker_display}"
+                if st.button("Analyze Surface", key="vs_narrate_btn", use_container_width=True):
+                    from src.api_keys import get_secret as _gk
+                    _nar_key = _gk("GEMINI_API_KEY")
+                    if not _nar_key:
+                        st.error("Gemini API key not configured.")
+                        return
+
+                    # Use pre-built context (no redundant API calls)
+                    _nar_context = st.session_state.get("vs_surface_context", "")
+
+                    from src.ai_validation import ACCURACY_CHECK_LIGHT, VOL_SURFACE_EXPERT_CONTEXT
+                    _nar_prompt = (
+                        "You are a veteran options trading mentor explaining a volatility surface to a trader "
+                        "who understands options but wants to know what THIS specific surface is telling them right now.\n\n"
+                        f"{VOL_SURFACE_EXPERT_CONTEXT}\n\n"
+                        "Below is the full surface profile data for this ticker. Write a clear, structured analysis "
+                        "that a trader can act on. NO trade recommendations — just describe what you see.\n\n"
+                        "Structure your response EXACTLY like this:\n\n"
+                        "## What the Surface is Telling You\n"
+                        "2-3 sentences: the single most important thing about this surface right now. "
+                        "Is vol cheap or expensive? Is the market bracing for something? Is there complacency?\n\n"
+                        "## Skew Story\n"
+                        "What does the put/call skew reveal about market positioning? Is downside protection expensive or cheap? "
+                        "Are calls bid (unusual demand)? Reference the butterfly and risk reversal numbers if available.\n\n"
+                        "## Term Structure Story\n"
+                        "What does the shape of IV across expirations reveal? Is there an event kink? "
+                        "Is the market pricing near-term risk differently from long-term? Which expirations stand out?\n\n"
+                        "## Where the Dislocations Are\n"
+                        "Which specific contracts are rich or cheap vs the surface? Are there pockets of mispricing "
+                        "the trader should know about? Reference the dislocation data if available.\n\n"
+                        "## The Gamma Picture\n"
+                        "Is gamma cheap or expensive to own? What does the IV/HV ratio say about whether to buy or sell vol? "
+                        "What daily move does the stock need to make for a long straddle to break even?\n\n"
+                        "## Key Risks on This Surface\n"
+                        "What could change this surface overnight? Earnings, FOMC, geopolitics? "
+                        "What would make the current vol regime snap?\n\n"
+                        "RULES:\n"
+                        "- Write for a trader, not an academic. Be direct.\n"
+                        "- Reference specific numbers from the data (IV levels, percentiles, ratios).\n"
+                        "- Do NOT suggest trades — that is for the Trade Ideas tab.\n"
+                        "- If a section has [unavailable] data, say so briefly and move on.\n"
+                        "- Keep each section to 2-4 sentences. Total response under 500 words.\n\n"
+                        f"SURFACE DATA:\n{_nar_context}\n\n"
+                        f"{ACCURACY_CHECK_LIGHT}"
+                    )
+
+                    with fun_loader("ai"):
+                        try:
+                            from google import genai
+                            from google.genai import types
+                            client = genai.Client(api_key=_nar_key)
+                            response = client.models.generate_content(
+                                model="gemini-3.1-pro-preview",
+                                contents=_nar_prompt,
+                                config=types.GenerateContentConfig(max_output_tokens=3000, temperature=0.3),
+                            )
+                            st.session_state[_narrator_key] = response.text
+                        except Exception as e:
+                            st.error(f"Analysis failed: {e}")
+
+                if _narrator_key in st.session_state:
+                    _nar_text = st.session_state[_narrator_key].replace("$", "\\$")
+                    st.markdown(
+                        f'<div style="border:1px solid {COLORS["card_border"]};border-radius:10px;'
+                        f'padding:16px 20px;background:{COLORS["card_bg"]};margin-top:8px;">'
+                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
+                        f'<div style="border:1px solid {COLORS["accent"]};border-radius:4px;padding:2px 8px;'
+                        f'font-size:0.7rem;color:{COLORS["accent"]};font-weight:600;">GEMINI 3.1 PRO</div>'
+                        f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};">Surface Narrator</span></div>'
+                        f'</div>', unsafe_allow_html=True)
+                    st.markdown(_nar_text)
+
+            _surface_narrator()
+
         else:
             st.warning("Not enough data to build surface.")
 
@@ -1747,21 +2252,62 @@ options market expects (realized > implied), you profit. If it moves less, theta
 
 with tab7:
     with error_boundary("Surface Animation"):
-        st.subheader("IV Surface — Daily Replay")
+        st.markdown(f'<div style="font-size:1.15rem;font-weight:700;color:#e6edf3;margin-bottom:4px;">IV Surface \u2014 Daily Replay</div>'
+                    f'<div style="font-size:0.8rem;color:{COLORS["text_muted"]};margin-bottom:12px;">'
+                    f'Scrub through the last 10 days of historical IV surfaces built from Polygon options data.</div>',
+                    unsafe_allow_html=True)
 
-        # Load snapshots from Supabase (pre-computed IV, no need to back out from prices)
-        cached_snapshots = _load_surface_snapshots(ticker_display, n_days=10)
+        _anim_days = st.slider("Days of history", 5, 30, 10, key="vs_anim_days_sel")
+
+        # Primary: fetch historical options prices from Polygon + compute IV
+        # Fallback: pre-saved snapshots from Supabase
+        _anim_key = f"vs_anim_hist_{ticker_display}_{_anim_days}"
+        if _anim_key not in st.session_state:
+            with fun_loader("data"):
+                try:
+                    _hist_raw = fetch_options_surface_history(ticker_display, days=_anim_days, max_contracts=150)
+                except Exception as _he:
+                    logger.warning(f"Options history fetch failed: {_he}")
+                    _hist_raw = {}
+
+                if _hist_raw and len(_hist_raw) >= 2:
+                    # Compute IV from close prices for each day
+                    from src.options_models import implied_vol as _iv_solver
+                    _hist_snaps = []
+                    for _dt, _day_data in sorted(_hist_raw.items()):
+                        _day_spot = _day_data["spot"]
+                        _rfr_anim = 0.045
+                        _iv_rows = []
+                        for _c in _day_data["data"]:
+                            _K = _c["strike"]
+                            _dte_c = _c["dte"]
+                            _T_c = _dte_c / 365
+                            _price = _c["close"]
+                            _otype = _c["type"]
+                            if _price <= 0 or _T_c <= 0 or _K <= 0:
+                                continue
+                            _computed_iv = _iv_solver(_price, _day_spot, _K, _T_c, _rfr_anim, _otype)
+                            if 0.01 < _computed_iv < 3.0:
+                                _iv_rows.append({
+                                    "strike": _K, "dte": _dte_c, "iv": _computed_iv,
+                                    "type": _otype, "exp": _c.get("exp", ""),
+                                })
+                        if len(_iv_rows) >= 15:
+                            _hist_snaps.append({"date": _dt, "spot": _day_spot, "data": _iv_rows})
+                    st.session_state[_anim_key] = _hist_snaps
+                else:
+                    # Fallback to saved snapshots
+                    _fallback = _load_surface_snapshots(ticker_display, n_days=_anim_days)
+                    st.session_state[_anim_key] = _fallback
+
+        cached_snapshots = st.session_state.get(_anim_key, [])
         n_snaps = len(cached_snapshots)
 
         if n_snaps < 2:
-            st.info(
-                f"**{n_snaps} snapshot{'s' if n_snaps != 1 else ''} available.** "
-                "A snapshot is saved each time you load this page, and the background worker saves one hourly. "
-                "After 2+ snapshots you'll see the surface change day-over-day."
-            )
+            st.info(f"**{n_snaps} day{'s' if n_snaps != 1 else ''} of data available.** "
+                    "Polygon Options Starter provides daily close prices. Try increasing the days slider or check API key.")
         else:
-            st.caption(f"Replaying **{n_snaps} daily snapshots** — real market IV, one day at a time.")
-
+            st.caption(f"**{n_snaps} trading days** of historical IV surface data")
             from scipy.interpolate import griddata as _gd
             try:
                 from scipy.ndimage import gaussian_filter as _gf
@@ -1771,6 +2317,7 @@ with tab7:
             GRID_M, GRID_D = 40, 20
             m_range = np.linspace(0.82, 1.18, GRID_M)
 
+            # Pre-compute all frames
             all_z_min, all_z_max = np.inf, -np.inf
             frames = []
             frame_labels = []
@@ -1778,11 +2325,8 @@ with tab7:
             for snap in cached_snapshots:
                 day_spot = snap["spot"]
                 day_date = snap["date"]
-                snap_data = snap["data"]
-
-                # Snapshots already have IV — no need to back out from prices
                 pts_m, pts_d, pts_iv = [], [], []
-                for r in snap_data:
+                for r in snap["data"]:
                     k = r.get("strike", 0)
                     dte = r.get("dte", 0)
                     iv = r.get("iv", 0)
@@ -1790,151 +2334,264 @@ with tab7:
                         pts_m.append(k / day_spot)
                         pts_d.append(dte)
                         pts_iv.append(iv)
-
                 if len(pts_m) < 15:
                     continue
-
                 pts_m, pts_d, pts_iv = np.array(pts_m), np.array(pts_d), np.array(pts_iv)
                 d_range = np.linspace(max(pts_d.min(), 1), min(pts_d.max(), 365), GRID_D)
                 gm, gd_mesh = np.meshgrid(m_range, d_range)
-
                 z = _gd((pts_m, pts_d), pts_iv, (gm, gd_mesh), method="cubic")
                 z_nn = _gd((pts_m, pts_d), pts_iv, (gm, gd_mesh), method="nearest")
                 z[np.isnan(z)] = z_nn[np.isnan(z)]
                 if _gf is not None:
                     z = _gf(z, sigma=0.7)
-
                 if not np.any(~np.isnan(z)):
                     continue
                 z = np.clip(z, 0.01, np.nanpercentile(z[~np.isnan(z)], 98))
-
                 all_z_min = min(all_z_min, float(np.nanmin(z)))
                 all_z_max = max(all_z_max, float(np.nanmax(z)))
-
                 strike_grid = (m_range * day_spot).tolist()
-                frame_labels.append(f"{day_date} — ${day_spot:,.2f}")
+                frame_labels.append(f"{day_date} \u2014 ${day_spot:,.2f}")
                 frames.append({"x": strike_grid, "y": d_range.tolist(), "z": z.tolist(), "spot": day_spot})
 
-            # Also store for comparison tab
             if frames:
                 st.session_state["vs_hist_frames"] = frames
                 st.session_state["vs_hist_labels"] = frame_labels
 
             if len(frames) < 2:
-                st.warning("Not enough days with valid options data to animate.")
+                st.warning("Not enough days with valid data.")
             else:
-                cs = [[0, "#0d0887"], [0.15, "#3b049a"], [0.3, "#7201a8"],
-                      [0.45, "#ae2891"], [0.6, "#ed6f45"], [0.8, "#fba238"], [1.0, "#f0f921"]]
-                z_pad = (all_z_max - all_z_min) * 0.05
+                # Store precomputed data for the fragment
+                st.session_state["vs_anim_frames"] = frames
+                st.session_state["vs_anim_labels"] = frame_labels
+                st.session_state["vs_anim_zrange"] = (all_z_min, all_z_max)
 
-                def _surf(f, cbar=True):
-                    return go.Surface(
-                        x=f["x"], y=f["y"], z=f["z"], colorscale=cs,
-                        cmin=all_z_min, cmax=all_z_max, showscale=cbar,
-                        colorbar=dict(title="IV", tickformat=".0%", len=0.5, thickness=10) if cbar else None,
-                        lighting=dict(ambient=0.5, diffuse=0.6, specular=0.35, roughness=0.4),
-                        contours=dict(z=dict(show=True, usecolormap=True, width=1,
-                                             size=(all_z_max - all_z_min) / 10)),
-                        opacity=0.95,
-                        hovertemplate="Strike: $%{x:.0f}<br>DTE: %{y:.0f}d<br>IV: %{z:.1%}<extra></extra>",
-                    )
+                @st.fragment
+                def _anim_viewer():
+                    _frames = st.session_state.get("vs_anim_frames", [])
+                    _labels = st.session_state.get("vs_anim_labels", [])
+                    _zmin, _zmax = st.session_state.get("vs_anim_zrange", (0, 1))
+                    if not _frames:
+                        return
 
-                def _spot(f):
-                    s = f["spot"]
-                    x_arr, z_arr = np.array(f["x"]), np.array(f["z"])
-                    ci = np.argmin(np.abs(x_arr - s))
-                    return go.Scatter3d(
-                        x=[s] * len(f["y"]), y=f["y"], z=z_arr[:, ci].tolist(),
-                        mode="lines", line=dict(color="#ffaa00", width=5), showlegend=False,
-                    )
+                    _sc1, _sc2 = st.columns([3, 1])
+                    with _sc1:
+                        _day_idx = st.slider("Day", 0, len(_frames) - 1, len(_frames) - 1,
+                                              format="", key="vs_anim_day")
+                    with _sc2:
+                        _view_mode = st.radio("View", ["Heatmap", "3D"], horizontal=True, key="vs_anim_view")
 
-                fig = go.Figure(
-                    data=[_surf(frames[0]), _spot(frames[0])],
-                    frames=[
-                        go.Frame(data=[_surf(f, False), _spot(f)], name=lbl)
-                        for f, lbl in zip(frames, frame_labels)
-                    ],
-                )
+                    _sel = _frames[_day_idx]
+                    _lbl = _labels[_day_idx]
+                    st.markdown(f'<div style="text-align:center;font-size:0.95rem;font-weight:700;color:{COLORS["accent"]};margin-bottom:8px;">'
+                                f'{_lbl}</div>', unsafe_allow_html=True)
 
-                all_x = [v for f in frames for v in f["x"]]
-                all_y = [v for f in frames for v in f["y"]]
+                    cs = [[0, "#0d0887"], [0.15, "#3b049a"], [0.3, "#7201a8"],
+                          [0.45, "#ae2891"], [0.6, "#ed6f45"], [0.8, "#fba238"], [1.0, "#f0f921"]]
 
-                fig.update_layout(
-                    template="plotly_dark", height=700,
-                    margin=dict(t=10, b=80, l=10, r=10),
-                    scene=dict(
-                        xaxis=dict(title="Strike ($)", range=[min(all_x), max(all_x)],
-                                   backgroundcolor="rgba(14,17,23,0.95)", gridcolor="rgba(48,54,61,0.3)"),
-                        yaxis=dict(title="DTE", range=[min(all_y), max(all_y)],
-                                   backgroundcolor="rgba(14,17,23,0.95)", gridcolor="rgba(48,54,61,0.3)"),
-                        zaxis=dict(title="IV", tickformat=".0%",
-                                   range=[all_z_min - z_pad, all_z_max + z_pad],
-                                   backgroundcolor="rgba(14,17,23,0.95)", gridcolor="rgba(48,54,61,0.3)"),
-                        camera=dict(eye=dict(x=1.5, y=-1.5, z=0.8)),
-                        aspectratio=dict(x=1.5, y=1.0, z=0.55),
-                    ),
-                    updatemenus=[dict(
-                        type="buttons", showactive=True,
-                        y=-0.02, x=0.5, xanchor="center",
-                        font=dict(size=13, color="#e0e0e0"),
-                        bgcolor="rgba(30,35,42,0.9)", bordercolor="#00d1ff",
-                        buttons=[
-                            dict(label="  ▶  Play  ", method="animate",
-                                 args=[None, {"frame": {"duration": 1000, "redraw": True},
-                                              "fromcurrent": True,
-                                              "transition": {"duration": 500, "easing": "cubic-in-out"}}]),
-                            dict(label="  ⏸  Pause  ", method="animate",
-                                 args=[[None], {"frame": {"duration": 0, "redraw": False},
-                                                "mode": "immediate", "transition": {"duration": 0}}]),
-                        ],
-                    )],
-                    sliders=[dict(
-                        active=0, yanchor="top", xanchor="left",
-                        currentvalue=dict(prefix="", visible=True, xanchor="center",
-                                          font=dict(size=15, color="#00d1ff", family="monospace")),
-                        transition=dict(duration=500, easing="cubic-in-out"),
-                        pad=dict(b=5, t=40), len=0.88, x=0.06,
-                        bgcolor="rgba(30,35,42,0.6)", activebgcolor="#00d1ff",
-                        bordercolor="rgba(48,54,61,0.5)", ticklen=4,
-                        font=dict(size=10, color="#aaa"),
-                        steps=[
-                            dict(args=[[lbl], {"frame": {"duration": 1000, "redraw": True},
-                                               "mode": "immediate",
-                                               "transition": {"duration": 500, "easing": "cubic-in-out"}}],
-                                 label=lbl.split(" —")[0], method="animate")
-                            for lbl in frame_labels
-                        ],
-                    )],
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                    if _view_mode == "Heatmap":
+                        # 2D heatmap — no camera reset on slider interaction
+                        fig_a = go.Figure(go.Heatmap(
+                            x=_sel["x"], y=_sel["y"], z=_sel["z"],
+                            colorscale=cs, zmin=_zmin, zmax=_zmax,
+                            colorbar=dict(title="IV", tickformat=".0%", len=0.6, thickness=12),
+                            hovertemplate="Strike: $%{x:.0f}<br>DTE: %{y:.0f}d<br>IV: %{z:.1%}<extra></extra>",
+                        ))
+                        fig_a.add_vline(x=_sel["spot"], line_dash="dash", line_color="#ffaa00",
+                                        annotation_text=f"Spot ${_sel['spot']:,.0f}")
+                        fig_a.update_layout(
+                            template="plotly_dark", height=500,
+                            margin=dict(t=10, b=30, l=0, r=0),
+                            xaxis_title="Strike ($)", yaxis_title="DTE",
+                        )
+                    else:
+                        # 3D surface — camera resets on slider change (Streamlit limitation)
+                        _zpad = (_zmax - _zmin) * 0.05
+                        fig_a = go.Figure()
+                        fig_a.add_trace(go.Surface(
+                            x=_sel["x"], y=_sel["y"], z=_sel["z"],
+                            colorscale=cs, cmin=_zmin, cmax=_zmax,
+                            colorbar=dict(title="IV", tickformat=".0%", len=0.5, thickness=10),
+                            lighting=dict(ambient=0.5, diffuse=0.6, specular=0.35, roughness=0.4),
+                            opacity=0.95,
+                            hovertemplate="Strike: $%{x:.0f}<br>DTE: %{y:.0f}d<br>IV: %{z:.1%}<extra></extra>",
+                        ))
+                        _s = _sel["spot"]
+                        _xa = np.array(_sel["x"])
+                        _za = np.array(_sel["z"])
+                        _ci = np.argmin(np.abs(_xa - _s))
+                        fig_a.add_trace(go.Scatter3d(
+                            x=[_s] * len(_sel["y"]), y=_sel["y"], z=_za[:, _ci].tolist(),
+                            mode="lines", line=dict(color="#ffaa00", width=5), showlegend=False))
+                        fig_a.update_layout(
+                            template="plotly_dark", height=600,
+                            margin=dict(t=10, b=10, l=10, r=10),
+                            scene=dict(
+                                xaxis=dict(title="Strike ($)", backgroundcolor="rgba(14,17,23,0.95)", gridcolor="rgba(48,54,61,0.3)"),
+                                yaxis=dict(title="DTE", backgroundcolor="rgba(14,17,23,0.95)", gridcolor="rgba(48,54,61,0.3)"),
+                                zaxis=dict(title="IV", tickformat=".0%", range=[_zmin - _zpad, _zmax + _zpad],
+                                           backgroundcolor="rgba(14,17,23,0.95)", gridcolor="rgba(48,54,61,0.3)"),
+                                camera=dict(eye=dict(x=1.5, y=-1.5, z=0.8)),
+                                aspectratio=dict(x=1.5, y=1.0, z=0.55),
+                            ),
+                        )
+                    st.plotly_chart(fig_a, use_container_width=True, config=PLOTLY_NOBAR)
 
-                # Day-over-day change summary
+                    st.divider()
+                    _cmp_to = st.radio("Compare to", ["Previous Day", "First Day"], horizontal=True, key="vs_anim_cmp")
+                    _ci2 = max(0, _day_idx - 1) if _cmp_to == "Previous Day" else 0
+                    _cf = _frames[_ci2]
+                    _cl = _labels[_ci2]
+
+                    _mc1, _mc2, _mc3 = st.columns(3)
+                    _mc1.metric("Spot", f"${_sel['spot']:.2f}",
+                                f"{(_sel['spot']/_cf['spot']-1)*100:+.1f}%")
+                    _sz = np.array(_sel["z"])
+                    _cz = np.array(_cf["z"])
+                    _mc2.metric("Avg IV", f"{np.nanmean(_sz):.1%}",
+                                f"{np.nanmean(_sz) - np.nanmean(_cz):+.1%}")
+                    _mc3.metric("vs", _cl.split(" \u2014")[0])
+
+                    if _sz.shape == _cz.shape and _day_idx != _ci2:
+                        _dz = _sz - _cz
+                        fig_d = go.Figure(go.Heatmap(
+                            x=_sel["x"], y=_sel["y"], z=_dz,
+                            colorscale=[[0, "#1e3a5f"], [0.35, "#4393c3"], [0.5, "#1c1f26"],
+                                        [0.65, "#d6604d"], [1.0, "#b2182b"]],
+                            zmid=0,
+                            colorbar=dict(title="\u0394IV", tickformat=".1%", thickness=12),
+                            hovertemplate="Strike: $%{x:.0f}<br>DTE: %{y:.0f}d<br>\u0394IV: %{z:+.2%}<extra></extra>",
+                        ))
+                        fig_d.update_layout(
+                            template="plotly_dark", height=300, margin=dict(t=30, b=0, l=0, r=0),
+                            title=f"IV Change: {_cl.split(' \u2014')[0]} \u2192 {_lbl.split(' \u2014')[0]}",
+                            xaxis_title="Strike ($)", yaxis_title="DTE",
+                        )
+                        st.plotly_chart(fig_d, use_container_width=True, config=PLOTLY_NOBAR)
+
+                _anim_viewer()
+
+            # ── AI Surface Evolution Analysis (outside fragment — button triggers full rerun which is fine) ──
+            if len(frames) >= 2:
                 st.divider()
-                first_spot, last_spot = frames[0]["spot"], frames[-1]["spot"]
-                first_z, last_z = np.array(frames[0]["z"]), np.array(frames[-1]["z"])
-                sc1, sc2 = st.columns(2)
-                sc1.metric("Spot", f"${last_spot:.2f}", f"{(last_spot/first_spot-1)*100:+.1f}%")
-                sc2.metric("Avg IV", f"{np.nanmean(last_z):.1%}",
-                           f"{np.nanmean(last_z) - np.nanmean(first_z):+.1%}")
+                st.markdown(f'<div style="font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:4px;">AI Surface Evolution Analysis</div>'
+                            f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};margin-bottom:8px;">'
+                            f'Analyzes how the vol surface changed over the loaded period and suggests trades.</div>',
+                            unsafe_allow_html=True)
 
-                # Diff heatmap: first day vs last day
-                if first_z.shape == last_z.shape:
-                    diff_z = last_z - first_z
-                    fig_diff = go.Figure(data=go.Heatmap(
-                        x=frames[-1]["x"], y=frames[-1]["y"], z=diff_z,
-                        colorscale=[[0, "#1e3a5f"], [0.35, "#4393c3"], [0.5, "#1c1f26"],
-                                    [0.65, "#d6604d"], [1.0, "#b2182b"]],
-                        zmid=0,
-                        colorbar=dict(title="IV Δ", tickformat=".1%", thickness=12, outlinewidth=0),
-                        hovertemplate="Strike: $%{x:.0f}<br>DTE: %{y:.0f}d<br>ΔIV: %{z:+.2%}<extra></extra>",
-                    ))
-                    fig_diff.update_layout(
-                        template="plotly_dark", height=350, margin=dict(t=30, b=0, l=0, r=0),
-                        title=dict(text=f"IV Change: {frame_labels[0].split(' —')[0]} → {frame_labels[-1].split(' —')[0]}",
-                                   font=dict(size=13)),
-                        xaxis_title="Strike ($)", yaxis_title="DTE",
-                    )
-                    st.plotly_chart(fig_diff, use_container_width=True, config=PLOTLY_NOBAR)
+                @st.fragment
+                def _anim_ai():
+                    if st.button("Analyze Surface Changes", key="vs_anim_ai_btn", use_container_width=True):
+                        from src.api_keys import get_secret as _gk_anim
+                        _ak = _gk_anim("GEMINI_API_KEY")
+                        if not _ak:
+                            st.error("Gemini API key not configured.")
+                            return
+
+                        from src.ai_validation import ACCURACY_CHECK_LIGHT, HIGHER_GREEKS_EXPERT_CONTEXT
+                        _fr = st.session_state.get("vs_anim_frames", [])
+                        _lb = st.session_state.get("vs_anim_labels", [])
+                        if len(_fr) < 2:
+                            st.warning("Need at least 2 days of data.")
+                            return
+
+                        # Build context: first day, last day, key changes
+                        _first = _fr[0]
+                        _last = _fr[-1]
+                        _fz = np.array(_first["z"])
+                        _lz = np.array(_last["z"])
+
+                        _ctx_lines = [
+                            f"SURFACE EVOLUTION ANALYSIS: {ticker_display}",
+                            f"Period: {_lb[0].split(' —')[0] if _lb else '?'} to {_lb[-1].split(' —')[0] if _lb else '?'} ({len(_fr)} trading days)",
+                            "",
+                            f"FIRST DAY: Spot ${_first['spot']:,.2f} | Avg IV {np.nanmean(_fz):.1%}",
+                            f"LAST DAY:  Spot ${_last['spot']:,.2f} | Avg IV {np.nanmean(_lz):.1%}",
+                            f"SPOT CHANGE: {(_last['spot']/_first['spot']-1)*100:+.1f}%",
+                            f"AVG IV CHANGE: {np.nanmean(_lz) - np.nanmean(_fz):+.1%}",
+                            "",
+                        ]
+
+                        # Per-day summary
+                        _ctx_lines.append("--- DAY-BY-DAY ---")
+                        for i, (_f, _l) in enumerate(zip(_fr, _lb)):
+                            _z = np.array(_f["z"])
+                            _prev_z = np.array(_fr[i-1]["z"]) if i > 0 else _z
+                            _chg = np.nanmean(_z) - np.nanmean(_prev_z) if i > 0 else 0
+                            _ctx_lines.append(f"  {_l}: Avg IV {np.nanmean(_z):.1%} (d/d {_chg:+.1%})")
+
+                        # Surface shape changes
+                        if _fz.shape == _lz.shape:
+                            _diff = _lz - _fz
+                            _ctx_lines.append("")
+                            _ctx_lines.append("--- SURFACE SHAPE CHANGES ---")
+                            _ctx_lines.append(f"Max IV increase: {np.nanmax(_diff):+.1%}")
+                            _ctx_lines.append(f"Max IV decrease: {np.nanmin(_diff):+.1%}")
+                            _ctx_lines.append(f"Avg change: {np.nanmean(_diff):+.1%}")
+                            # Where did IV change most? Front vs back
+                            _front_chg = np.nanmean(_diff[:len(_diff)//3])
+                            _back_chg = np.nanmean(_diff[2*len(_diff)//3:])
+                            _ctx_lines.append(f"Front-month IV change: {_front_chg:+.1%}")
+                            _ctx_lines.append(f"Back-month IV change: {_back_chg:+.1%}")
+                            _ts_shift = "Flattened (front rose more)" if _front_chg > _back_chg + 0.005 else ("Steepened (back rose more)" if _back_chg > _front_chg + 0.005 else "Parallel shift")
+                            _ctx_lines.append(f"Term structure: {_ts_shift}")
+                            # Left vs right (puts vs calls)
+                            _put_chg = np.nanmean(_diff[:, :len(_diff[0])//3])
+                            _call_chg = np.nanmean(_diff[:, 2*len(_diff[0])//3:])
+                            _skew_shift = "Skew steepened (puts rose more)" if _put_chg > _call_chg + 0.005 else ("Skew flattened (calls rose more)" if _call_chg > _put_chg + 0.005 else "Symmetric shift")
+                            _ctx_lines.append(f"Skew: {_skew_shift}")
+
+                        # Add cross-page context
+                        try:
+                            ctx_text = st.session_state.get("vs_surface_context", "")
+                            if ctx_text:
+                                _ctx_lines.append(f"\n--- CURRENT SURFACE METRICS ---\n{ctx_text[:1500]}")
+                        except Exception:
+                            pass
+
+                        _ctx = "\n".join(_ctx_lines)
+                        _prompt = (
+                            "You are a senior volatility trader analyzing how an options surface evolved over the past trading week.\n\n"
+                            f"{HIGHER_GREEKS_EXPERT_CONTEXT}\n\n"
+                            "Read the surface evolution data and provide actionable analysis:\n\n"
+                            "## What Changed\n"
+                            "The most important surface change over this period. Did vol expand or contract? "
+                            "Did the term structure steepen or flatten? Did skew shift? Reference specific numbers.\n\n"
+                            "## Why It Changed\n"
+                            "Based on the spot move and vol dynamics, what likely drove the surface shift? "
+                            "Was it an event (earnings, macro)? Dealer repositioning? Mean reversion? Vanna/charm flows?\n\n"
+                            "## What It Means for Positioning\n"
+                            "Given how the surface evolved, is the current regime favoring long or short vol? "
+                            "Is skew rich or cheap relative to the move? Is term structure pricing an event correctly?\n\n"
+                            "## Trade Ideas\n"
+                            "3-5 specific trades that exploit the surface evolution. For each: strategy, strikes, expiration, rationale. "
+                            "Include at least one trade that fades the recent move and one that rides the trend.\n\n"
+                            "RULES: Reference specific numbers from the data. Be direct. Each section 2-4 sentences. Under 500 words.\n\n"
+                            f"DATA:\n{_ctx}\n\n{ACCURACY_CHECK_LIGHT}"
+                        )
+
+                        with fun_loader("ai"):
+                            try:
+                                from google import genai
+                                from google.genai import types
+                                client = genai.Client(api_key=_ak)
+                                resp = client.models.generate_content(
+                                    model="gemini-3.1-pro-preview", contents=_prompt,
+                                    config=types.GenerateContentConfig(max_output_tokens=4000, temperature=0.3))
+                                st.session_state["vs_anim_ai_result"] = resp.text
+                            except Exception as e:
+                                st.error(f"Analysis failed: {e}")
+
+                    if "vs_anim_ai_result" in st.session_state:
+                        st.markdown(
+                            f'<div style="display:flex;align-items:center;gap:8px;margin:10px 0;">'
+                            f'<div style="border:1px solid {COLORS["accent"]};border-radius:4px;padding:2px 8px;'
+                            f'font-size:0.7rem;color:{COLORS["accent"]};font-weight:600;">GEMINI 3.1 PRO</div>'
+                            f'<span style="font-size:0.75rem;color:{COLORS["text_muted"]};">Surface Evolution Analyst</span></div>',
+                            unsafe_allow_html=True)
+                        st.markdown(st.session_state["vs_anim_ai_result"].replace("$", "\\$"))
+                        st.caption("AI-generated. Not financial advice.")
+
+                _anim_ai()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2317,13 +2974,14 @@ with tab8:
                     st.info(f"**{cr['ticker_b']}** is trading at a **{((avg_b/avg_a)-1)*100:.0f}% IV premium** to {cr['ticker_a']}.")
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 9 — GEMINI TRADE IDEAS
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab9:
     with error_boundary("Gemini Trade Ideas"):
-        st.subheader("AI Trade Suggestions — Gemini 2.5 Pro")
+        st.subheader("AI Trade Suggestions — Gemini 3.1 Pro")
         st.caption(
             "Sends the full vol surface profile to Google's top Gemini model for "
             "structured trade ideas based on skew, term structure, dislocations, and regime."
@@ -2335,159 +2993,27 @@ with tab9:
         if not gemini_key:
             st.error("Gemini API key not configured. Add GEMINI_API_KEY to your secrets.")
         else:
-            # Build the surface context payload
-            def _build_surface_context():
-                """Collect all surface metrics into a text block for the LLM."""
-                lines = [f"Ticker: {ticker_display}", f"Spot: ${spot:.2f}"]
+            # #7: Clear stale results when ticker changes
+            if st.session_state.get("vs_gemini_ticker") != ticker_display:
+                for _k in ["vs_gemini_result", "vs_gemini_style_used", "vs_gemini_context",
+                            "vs_gemini_conversation", "vs_gemini_ticker"]:
+                    st.session_state.pop(_k, None)
+                st.session_state["vs_gemini_ticker"] = ticker_display
 
-                # Vol regime summary (computed above tabs)
-                lines.append(f"\n--- VOL REGIME ---")
-                lines.append(f"Vol Level: {_vol_level} (front ATM IV: {_front_atm:.1%})")
-                lines.append(f"VRP: {_vrp_regime} ({_vrp:+.1%})")
-                lines.append(f"Skew: {_skew_regime} (put skew {_put_skew_ratio:.2f}x ATM)")
-                lines.append(f"Term Structure: {_ts_shape}")
-
-                # Historical percentile context
-                if _pctiles and any(v is not None for v in _pctiles.values()):
-                    lines.append("\n--- HISTORICAL PERCENTILE (252-day) ---")
-                    for key, label in [("atm_iv", "ATM IV"), ("put_skew", "Put Skew"), ("vrp", "VRP"),
-                                       ("iv_hv_ratio", "IV/HV Ratio"), ("hv20", "HV20")]:
-                        p = _pctiles.get(key)
-                        if p is not None:
-                            extremity = "EXTREME HIGH" if p > 90 else ("HIGH" if p > 75 else ("LOW" if p < 25 else ("EXTREME LOW" if p < 10 else "NORMAL")))
-                            lines.append(f"  {label}: {p:.0f}th percentile ({extremity})")
-
-                if current_hv20 is not None:
-                    lines.append(f"20-Day HV: {current_hv20:.1%}")
-                if current_hv60 is not None:
-                    lines.append(f"60-Day HV: {current_hv60:.1%}")
-
-                # ATM IV by expiration (using cache)
-                lines.append("\n--- ATM IV Term Structure ---")
-                for exp in expirations[:8]:
-                    dte = _dte(exp)
-                    if dte <= 0:
-                        continue
-                    atm = _atm_iv_cache.get(exp, 0)
-                    if atm > 0:
-                        lines.append(f"  {exp} ({dte}d): IV={atm:.1%}")
-
-                # Skew metrics per expiration
-                lines.append("\n--- Skew Profile ---")
-                for exp in expirations[:6]:
-                    chain = term_data[exp]
-                    dte = _dte(exp)
-                    if dte <= 0:
-                        continue
-                    atm = _atm_iv_cache.get(exp, 0)
-                    if atm <= 0:
-                        continue
-                    p25_strike, p25_iv = _find_delta_strike(chain, spot, 0.25, "put")
-                    c25_strike, c25_iv = _find_delta_strike(chain, spot, 0.25, "call")
-                    skew_str = ""
-                    if p25_iv and atm > 0:
-                        skew_str += f"25Δ put skew={((p25_iv/atm)-1)*100:+.0f}% "
-                    if c25_iv and atm > 0:
-                        skew_str += f"25Δ call skew={((c25_iv/atm)-1)*100:+.0f}%"
-                    lines.append(f"  {exp} ({dte}d): ATM={atm:.1%} {skew_str}")
-
-                # Variance risk premium (use precomputed values)
-                if current_hv20 is not None and current_hv20 > 0 and _front_atm > 0:
-                    lines.append(f"\nVariance Risk Premium (front IV - HV20): {_vrp:+.1%}")
-                    lines.append(f"  {_vrp_regime}")
-
-                # Term structure shape (use precomputed)
-                if len(expirations) >= 2:
-                    front_iv = _front_atm
-                    back_iv = _back_atm
-                    if front_iv > 0 and back_iv > 0:
-                        shape = "Backwardation (front > back)" if front_iv > back_iv else "Contango (front < back)"
-                        lines.append(f"\nTerm Structure: {shape}")
-                        lines.append(f"  Front ({expirations[0]}): {front_iv:.1%}")
-                        lines.append(f"  Back ({expirations[-1]}): {back_iv:.1%}")
-
-                # Recent price action
-                if len(_returns) >= 5:
-                    ret_5d = float(px_df["Close"].iloc[-1] / px_df["Close"].iloc[-6] - 1) * 100 if len(px_df) > 5 else 0
-                    ret_20d = float(px_df["Close"].iloc[-1] / px_df["Close"].iloc[-21] - 1) * 100 if len(px_df) > 20 else 0
-                    lines.append(f"\n--- Recent Price Action ---")
-                    lines.append(f"5-Day Return: {ret_5d:+.1f}%")
-                    lines.append(f"20-Day Return: {ret_20d:+.1f}%")
-                    recent_realized = float(_returns.tail(5).std() * np.sqrt(252) * 100)
-                    lines.append(f"5-Day Realized Vol: {recent_realized:.0f}%")
-
-                # Historical surface if available
-                hist = st.session_state.get("vs_hist_surface", {})
-                if hist:
-                    dates = sorted(hist.keys())
-                    if len(dates) >= 2:
-                        old_spot = hist[dates[0]]["spot"]
-                        lines.append(f"\n--- 10-Day Context ---")
-                        lines.append(f"Spot {dates[0]}: ${old_spot:.2f} → Today: ${spot:.2f} ({(spot/old_spot-1)*100:+.1f}%)")
-
-                # Cross-page signal composite
-                try:
-                    from src.signal_engine import compute_composite
-                    comp = compute_composite(ticker_display)
-                    if comp and comp["n_signals"] >= 2:
-                        lines.append(f"\n--- CROSS-PAGE SIGNAL COMPOSITE ---")
-                        lines.append(f"Direction: {comp['overall_direction'].upper()} (conviction {comp['overall_conviction']:.0%})")
-                        lines.append(f"Vol View: {comp['vol_regime']}")
-                        lines.append(f"Sources: {comp['n_signals']} ({comp['signal_agreement']:.0%} agreement)")
-                        for s in comp["signals"][:5]:
-                            lines.append(f"  • {s['source']}: {s['direction']} ({s['conviction']:.0%}) — {s.get('reasoning', '')[:80]}")
-                except Exception:
-                    pass
-
-                # Liquidity map (OI by strike for suggested trade validation)
-                lines.append(f"\n--- LIQUIDITY MAP (Open Interest by Strike) ---")
-                try:
-                    front_chain = term_data[expirations[0]]
-                    _oi_data = front_chain[front_chain["open_interest"] > 0]\
-                        .groupby("strike_price")["open_interest"].sum()\
-                        .sort_values(ascending=False).head(15)
-                    for strike, oi in _oi_data.items():
-                        liq = "HIGH" if oi > 5000 else ("MEDIUM" if oi > 500 else "LOW")
-                        lines.append(f"  ${strike:.0f}: OI={oi:,} ({liq})")
-                except Exception:
-                    lines.append("  Liquidity data unavailable")
-
-                # Iran war context for energy/defense/commodity tickers
-                _energy_syms = {"USO", "XLE", "XOP", "OIH", "CL", "BZ", "CVX", "XOM", "COP",
-                                "GLD", "GC", "SLV", "SI", "UNG", "NG", "LMT", "RTX", "NOC", "GD"}
-                _tk_check = ticker_display.upper().replace("=F", "")
-                if _tk_check in _energy_syms:
-                    try:
-                        from src.db import get_client
-                        _db_ctx = get_client()
-                        if _db_ctx:
-                            _ca = _db_ctx.table("conflict_analysis").select("situation_summary, escalation_risk")\
-                                .eq("region", "iran").order("timestamp", desc=True).limit(1).execute()
-                            if _ca.data:
-                                import json as _jctx
-                                _esc = _ca.data[0].get("escalation_risk", {})
-                                if isinstance(_esc, str):
-                                    _esc = _jctx.loads(_esc)
-                                _score = _esc.get("score", "?")
-                                lines.append(f"\n--- CRITICAL: ACTIVE IRAN WAR ---")
-                                lines.append(f"Escalation: {_score}/10. Strait of Hormuz CLOSED. 13.8 mbpd at risk.")
-                                lines.append(f"This asset is DIRECTLY affected by the ongoing conflict.")
-                                _summ = _ca.data[0].get("situation_summary", "")
-                                if _summ:
-                                    lines.append(f"Latest: {_summ[:300]}")
-                    except Exception:
-                        pass
-
-                return "\n".join(lines)
-
-            # Trade idea styles
-            idea_style = st.radio("Analysis focus", [
-                "Full Surface Scan",
-                "Income / Theta Plays",
-                "Directional Bets",
-                "Volatility Trades",
-                "Hedging Strategies",
-            ], horizontal=True, key="vs_gemini_style")
+            # Controls row: style + account size + cost
+            _gc1, _gc2 = st.columns([3, 1])
+            with _gc1:
+                idea_style = st.radio("Analysis focus", [
+                    "Full Surface Scan",
+                    "Income / Theta Plays",
+                    "Directional Bets",
+                    "Volatility Trades",
+                    "Hedging Strategies",
+                ], horizontal=True, key="vs_gemini_style")
+            with _gc2:
+                # #3: Position sizing context
+                _acct_size = st.number_input("Account size ($)", min_value=0, value=0, step=10000,
+                                             key="vs_acct_size", help="Optional. Enables position sizing in trade ideas.")
 
             style_prompts = {
                 "Full Surface Scan": "Analyze the full surface and suggest 3-5 trades across categories (income, directional, vol, hedging). For each, specify exact strikes, expirations, and expected P&L.",
@@ -2497,64 +3023,105 @@ with tab9:
                 "Hedging Strategies": "Focus on portfolio hedging. Suggest the most cost-effective downside protection: put spreads, collars, or tail-risk hedges. Optimize cost vs coverage.",
             }
 
+            # #6: Data freshness indicator
+            _chain_age_min = 0
+            try:
+                _now = datetime.now()
+                _load_ts = st.session_state.get("vs_chain_loaded_at")
+                if not _load_ts:
+                    st.session_state["vs_chain_loaded_at"] = _now
+                    _load_ts = _now
+                _chain_age_min = (_now - _load_ts).total_seconds() / 60
+                if _chain_age_min > 30 and _now.weekday() < 5 and 9 <= _now.hour <= 16:
+                    st.warning(f"Options data is {_chain_age_min:.0f} min old. Prices may have moved. Consider refreshing the page.")
+                elif _chain_age_min > 5:
+                    st.caption(f"Options data loaded {_chain_age_min:.0f} min ago")
+            except Exception:
+                pass
+
+            # #8: Cost estimate
+            st.caption(f"Estimated cost: ~\\$0.05 per generation")
+
+            # Build the system prompt (shared between generate and refine)
+            def _build_system_prompt(context, style, acct_size=0, refine_msg=None):
+                from src.ai_validation import ACCURACY_CHECK as _acc, VOL_SURFACE_EXPERT_CONTEXT as _vol_expert
+                _acct_str = ""
+                if acct_size and acct_size > 0:
+                    _acct_str = (f"\nACCOUNT SIZE: ${acct_size:,.0f}. For each trade, include a POSITION SIZING section: "
+                                 f"recommended number of contracts, total max risk in dollars, and percentage of account at risk. "
+                                 f"Target max 2-5% of account per trade.\n")
+
+                base = (
+                    "You are a senior options market maker and volatility strategist at a top-tier institutional desk. "
+                    "You have deep expertise in SABR surface modeling, Vanna-Volga pricing, higher-order Greek management, "
+                    "and systematic volatility arbitrage.\n\n"
+                    f"{_vol_expert}\n\n"
+                    "The user has loaded a live vol surface. Below is the surface profile data.\n\n"
+                    "You MUST structure your response EXACTLY like this example. Follow this format precisely:\n\n"
+                    '## Surface Assessment\n\n'
+                    '[2-3 sentences on what the surface is telling you. Reference VRP, skew, term structure.]\n\n'
+                    '---\n\n'
+                    '## Trade 1: [Name]\n\n'
+                    '**Strategy:** Iron Condor &nbsp;|&nbsp; **Conviction:** 4/5 &nbsp;|&nbsp; **R:R Grade:** B+\n\n'
+                    '#### Legs\n'
+                    '| # | Action | Type | Strike | Expiration | Est. Price |\n'
+                    '|---|--------|------|--------|------------|------------|\n'
+                    '| 1 | SELL | Put | $620 | [FRONT_EXP] | ~$1.85 |\n'
+                    '| 2 | BUY | Put | $610 | [FRONT_EXP] | ~$0.45 |\n'
+                    '| 3 | SELL | Call | $650 | [FRONT_EXP] | ~$1.10 |\n'
+                    '| 4 | BUY | Call | $660 | [FRONT_EXP] | ~$0.20 |\n\n'
+                    '#### P&L Profile\n'
+                    '| | |\n'
+                    '|---|---|\n'
+                    '| **Net Credit** | $2.30 ($230/contract) |\n'
+                    '| **Max Profit** | $230 (if between $620-$650 at exp) |\n'
+                    '| **Max Loss** | $770 (width $10 minus credit) |\n'
+                    '| **Breakevens** | $617.70 / $652.30 |\n'
+                    '| **Prob. of Profit** | ~68% (based on delta) |\n\n'
+                    '#### The Edge\n'
+                    '[2-3 sentences explaining WHY this trade works. Reference specific surface data.]\n\n'
+                    '#### Risk Flags\n'
+                    '- [Risk 1]\n- [Risk 2]\n\n'
+                    '---\n\n'
+                    '## Portfolio Note\n'
+                    '[Net Delta, Gamma, Theta, Vega if running all trades.]\n\n'
+                    "RULES:\n"
+                    "- Give 3-5 trades. Complete ALL of them. Do NOT truncate.\n"
+                    "- Use ## for trade headers. Use #### for subsections.\n"
+                    "- Every trade MUST have: Legs table, P&L Profile table, The Edge, Risk Flags.\n"
+                    "- Separate trades with horizontal rules (---).\n"
+                    "- Estimated prices must be realistic given the IV data.\n"
+                    "- Be direct. No disclaimers. Give your real desk view.\n"
+                    "- Include Prob. of Profit in P&L table (delta as proxy).\n"
+                    "- LIQUIDITY CHECK: Only suggest strikes with MEDIUM+ OI. Warn on LOW OI.\n"
+                    "- UNLIMITED LOSS WARNING: Flag unlimited loss positions prominently.\n"
+                    "- DISLOCATIONS: Sell rich contracts, buy cheap ones.\n"
+                    "- BUTTERFLY/RISK REVERSAL: Reference for tail risk and skew asymmetry.\n"
+                    "- GAMMA SCALP: IV/HV < 1.0 = buy gamma; > 1.3 = sell gamma.\n"
+                    "- EARNINGS: Flag if within 30 days. Avoid selling vol into earnings.\n"
+                    "- GEOPOLITICAL CONFLICT: Address impact on every trade if noted.\n"
+                    "- [unavailable] data: acknowledge gap, reduce confidence.\n\n"
+                    f"{_acct_str}"
+                    f"SURFACE DATA:\n{context}\n\n"
+                    f"ANALYSIS FOCUS: {style_prompts[style]}\n\n"
+                    f"{_acc}"
+                )
+
+                if refine_msg:
+                    base += f"\n\nUSER FOLLOW-UP REQUEST:\n{refine_msg}\n\nAdjust your previous trade ideas based on this request. Keep the same format."
+
+                return base
+
             @st.fragment
             def _gemini_fragment():
                 if st.button("Generate Trade Ideas", type="primary", use_container_width=True, key="vs_gemini_run"):
-                    context = _build_surface_context()
+                    # Use pre-built context if available, otherwise build fresh
+                    context = st.session_state.get("vs_surface_context") or _build_surface_context()
+                    system_prompt = _build_system_prompt(context, idea_style, _acct_size)
 
-                    system_prompt = (
-                        "You are a senior options market maker and volatility strategist at a top-tier institutional desk. "
-                        "You have deep expertise in SABR surface modeling, Vanna-Volga pricing, higher-order Greek management, "
-                        "and systematic volatility arbitrage.\n\n"
-                        "The user has loaded a live vol surface. Below is the surface profile data.\n\n"
-                        "You MUST structure your response EXACTLY like this example. Follow this format precisely:\n\n"
-                        '## Surface Assessment\n\n'
-                        '[2-3 sentences on what the surface is telling you. Reference VRP, skew, term structure.]\n\n'
-                        '---\n\n'
-                        '## Trade 1: [Name]\n\n'
-                        '**Strategy:** Iron Condor &nbsp;|&nbsp; **Conviction:** 4/5 &nbsp;|&nbsp; **R:R Grade:** B+\n\n'
-                        '#### Legs\n'
-                        '| # | Action | Type | Strike | Expiration | Est. Price |\n'
-                        '|---|--------|------|--------|------------|------------|\n'
-                        '| 1 | SELL | Put | $620 | 2026-03-30 | ~$1.85 |\n'
-                        '| 2 | BUY | Put | $610 | 2026-03-30 | ~$0.45 |\n'
-                        '| 3 | SELL | Call | $650 | 2026-03-30 | ~$1.10 |\n'
-                        '| 4 | BUY | Call | $660 | 2026-03-30 | ~$0.20 |\n\n'
-                        '#### P&L Profile\n'
-                        '| | |\n'
-                        '|---|---|\n'
-                        '| **Net Credit** | $2.30 ($230/contract) |\n'
-                        '| **Max Profit** | $230 (if between $620-$650 at exp) |\n'
-                        '| **Max Loss** | $770 (width $10 minus credit) |\n'
-                        '| **Breakevens** | $617.70 / $652.30 |\n'
-                        '| **Prob. of Profit** | ~68% (based on delta) |\n\n'
-                        '#### The Edge\n'
-                        '[2-3 sentences explaining WHY this trade works. Reference specific surface data: '
-                        'VRP magnitude, put skew steepness, term structure shape, IV vs HV ratio at this expiration.]\n\n'
-                        '#### Risk Flags\n'
-                        '- [Risk 1: e.g., FOMC on April 2 — could spike vol]\n'
-                        '- [Risk 2: e.g., Earnings in 3 weeks — front vol could expand]\n\n'
-                        '---\n\n'
-                        '## Trade 2: [Name]\n'
-                        '[...same format...]\n\n'
-                        '---\n\n'
-                        '## Portfolio Note\n'
-                        '[If running all trades: net Delta, Gamma, Theta, Vega exposure. '
-                        'Is the combined book long or short vol? Any correlated risks?]\n\n'
-                        "RULES:\n"
-                        "- Give 3-5 trades. Complete ALL of them. Do NOT truncate.\n"
-                        "- Use ## for trade headers (not ###). Use #### for subsections.\n"
-                        "- Every trade MUST have: Legs table, P&L Profile table, The Edge section, Risk Flags list.\n"
-                        "- Separate each trade with a horizontal rule (---).\n"
-                        "- Estimated prices must be realistic given the IV data.\n"
-                        "- Be direct. No disclaimers. No 'this is not financial advice'. Give your real desk view.\n"
-                        "- Include Prob. of Profit estimate in the P&L table (use delta as proxy).\n"
-                        "- LIQUIDITY CHECK: Reference the OI map provided. Only suggest strikes with MEDIUM or HIGH OI. If a strike has LOW OI, explicitly warn about fill risk.\n"
-                        "- UNLIMITED LOSS WARNING: If any trade has unlimited or undefined max loss, you MUST add a prominent risk flag. If an active war or geopolitical crisis is noted in the data, flag how it specifically threatens that trade.\n"
-                        "- If IRAN WAR context is provided, every trade MUST address how the conflict affects the position. Do NOT ignore it.\n\n"
-                        f"SURFACE DATA:\n{context}\n\n"
-                        f"ANALYSIS FOCUS: {style_prompts[idea_style]}"
-                    )
+                    # Store context for "View AI context" expander
+                    st.session_state["vs_gemini_context"] = context
+                    st.session_state["vs_gemini_conversation"] = [system_prompt]
 
                     # Check AI cache first
                     from src.ai_cache import get_cached_ai, cache_ai_response, build_cache_key_from_metrics
@@ -2572,21 +3139,16 @@ with tab9:
                             try:
                                 from google import genai
                                 from google.genai import types
-
                                 client = genai.Client(api_key=gemini_key)
                                 response = client.models.generate_content(
-                                    model="gemini-2.5-pro",
+                                    model="gemini-3.1-pro-preview",
                                     contents=system_prompt,
-                                    config=types.GenerateContentConfig(
-                                        max_output_tokens=20000,
-                                        temperature=0.4,
-                                    ),
+                                    config=types.GenerateContentConfig(max_output_tokens=20000, temperature=0.4),
                                 )
                                 result_text = response.text
                                 st.session_state["vs_gemini_result"] = result_text
                                 st.session_state["vs_gemini_style_used"] = idea_style
-                                # Cache for 2 hours
-                                cache_ai_response(_ai_key, result_text, model="gemini-2.5-pro",
+                                cache_ai_response(_ai_key, result_text, model="gemini-3.1-pro-preview",
                                                    source_page="vol_surface", ticker=ticker_display,
                                                    ttl_hours=2, cost_estimate=0.05,
                                                    prompt_summary=f"{idea_style} | spot={spot:.0f} IV={_front_atm:.1%} skew={_put_skew_ratio:.2f}")
@@ -2597,7 +3159,7 @@ with tab9:
                                 elif "quota" in err or "rate" in err or "429" in err:
                                     st.error("Rate limit exceeded. Wait 30 seconds and try again.")
                                 elif "404" in err or "not found" in err:
-                                    st.error("Model not available. Check that `gemini-2.5-pro` is accessible on your API key.")
+                                    st.error("Model not available. Check that `gemini-3.1-pro-preview` is accessible on your API key.")
                                 else:
                                     st.error(f"Gemini API error: {e}")
                                 logger.error(f"Gemini trade ideas failed: {e}")
@@ -2611,18 +3173,107 @@ with tab9:
                         f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">'
                         f'<div style="border:1px solid {COLORS["accent"]};border-radius:6px;padding:6px 14px;'
                         f'background:rgba(0,209,255,0.06);">'
-                        f'<span style="color:{COLORS["accent"]};font-weight:700;font-size:0.9rem;">Gemini 2.5 Pro</span></div>'
+                        f'<span style="color:{COLORS["accent"]};font-weight:700;font-size:0.9rem;">Gemini 3.1 Pro</span></div>'
                         f'<div style="color:{COLORS["text_muted"]};font-size:0.8rem;">'
                         f'{style_used} &bull; {ticker_display} &bull; Spot ${spot:,.2f}</div>'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
 
-                    # Render full response — escape $ signs so Streamlit doesn't parse as LaTeX
+                    # Render full response
                     _display_text = st.session_state["vs_gemini_result"].replace("$", "\\$")
                     st.markdown(_display_text)
 
+                    # Parse legs from AI response (shared by P&L diagram and CSV download)
+                    _legs = []
+                    try:
+                        _resp = st.session_state["vs_gemini_result"]
+                        import re as _re_pnl
+                        _leg_pattern = _re_pnl.compile(
+                            r'\|\s*\d+\s*\|\s*(SELL|BUY)\s*\|\s*(Put|Call)\s*\|\s*\$?([\d,.]+)\s*\|\s*([^\|]+)\|\s*~?\$?([\d,.]+)',
+                            _re_pnl.IGNORECASE)
+                        _legs = _leg_pattern.findall(_resp)
+                        if _legs and len(_legs) >= 2:
+                            _strikes = np.linspace(
+                                min(float(l[2].replace(",", "")) for l in _legs) * 0.95,
+                                max(float(l[2].replace(",", "")) for l in _legs) * 1.05, 200)
+                            _pnl = np.zeros_like(_strikes)
+                            _leg_data = []
+                            for _action, _otype, _strike_s, _exp_s, _price_s in _legs:
+                                _k = float(_strike_s.replace(",", ""))
+                                _p = float(_price_s.replace(",", ""))
+                                _sign = -1 if _action.upper() == "SELL" else 1
+                                _leg_data.append({"action": _action, "type": _otype, "strike": _k,
+                                                   "exp": _exp_s.strip(), "price": _p})
+                                if _otype.lower() == "call":
+                                    _pnl += _sign * (np.maximum(_strikes - _k, 0) - _p) * 100
+                                else:
+                                    _pnl += _sign * (np.maximum(_k - _strikes, 0) - _p) * 100
+
+                            _fig_pnl = go.Figure()
+                            _fig_pnl.add_trace(go.Scatter(
+                                x=_strikes, y=_pnl, mode="lines", line=dict(color="white", width=2),
+                                fill="tozeroy",
+                                fillcolor="rgba(0,255,150,0.1)" if _pnl.mean() > 0 else "rgba(255,68,68,0.1)",
+                                name="P&L"))
+                            _fig_pnl.add_hline(y=0, line_dash="dot", line_color=COLORS["text_muted"])
+                            _fig_pnl.add_vline(x=spot, line_dash="dash", line_color=COLORS["warning"],
+                                               annotation_text=f"Spot ${spot:,.0f}")
+                            for _ld in _leg_data:
+                                _fig_pnl.add_vline(x=_ld["strike"], line_dash="dot",
+                                                   line_color="#555", line_width=1)
+                            _fig_pnl.update_layout(
+                                template="plotly_dark", height=250,
+                                margin=dict(l=0, r=0, t=30, b=0),
+                                title=f"Combined P&L at Expiration ({len(_leg_data)} legs)",
+                                xaxis_title="Stock Price ($)", yaxis_title="P&L ($)",
+                            )
+                            with st.expander(f"P&L Payoff Diagram ({len(_leg_data)} legs parsed)", expanded=True):
+                                st.plotly_chart(_fig_pnl, use_container_width=True, config={"displayModeBar": False})
+                    except Exception:
+                        pass
+
+                    # #5: Download trades as CSV
+                    try:
+                        if _legs and len(_legs) >= 2:
+                            _csv_rows = "Action,Type,Strike,Expiration,Est. Price\n"
+                            for _action, _otype, _strike_s, _exp_s, _price_s in _legs:
+                                _csv_rows += f"{_action},{_otype},${_strike_s},{_exp_s.strip()},~${_price_s}\n"
+                            st.download_button("Download Trades (CSV)", data=_csv_rows,
+                                               file_name=f"{ticker_display}_trades_{datetime.now().strftime('%Y%m%d')}.csv",
+                                               mime="text/csv", key="vs_dl_trades")
+                    except Exception:
+                        pass
+
+                    # #2: Refine follow-up
                     st.divider()
+                    _refine = st.text_input("Refine trades (e.g., 'wider strikes on Trade 2', 'show me a calendar instead')",
+                                            key="vs_refine_input", placeholder="Ask for adjustments...")
+                    if _refine and st.button("Refine", key="vs_refine_btn"):
+                        context = st.session_state.get("vs_surface_context") or _build_surface_context()
+                        _refine_prompt = _build_system_prompt(context, idea_style, _acct_size, refine_msg=_refine)
+                        with fun_loader("ai"):
+                            try:
+                                from google import genai
+                                from google.genai import types
+                                client = genai.Client(api_key=gemini_key)
+                                response = client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=f"PREVIOUS ANALYSIS:\n{st.session_state['vs_gemini_result'][:3000]}\n\n{_refine_prompt}",
+                                    config=types.GenerateContentConfig(max_output_tokens=20000, temperature=0.4),
+                                )
+                                st.session_state["vs_gemini_result"] = response.text
+                                st.session_state["vs_gemini_style_used"] = f"{idea_style} (refined)"
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Refine failed: {e}")
+
+                    # #1: View AI context
+                    _saved_ctx = st.session_state.get("vs_gemini_context", "")
+                    if _saved_ctx:
+                        with st.expander("View AI Context (data sent to model)", expanded=False):
+                            st.code(_saved_ctx, language="text")
+
                     st.caption(
                         "AI-generated trade ideas are for educational purposes only. "
                         "Always validate with your own analysis before trading. "
@@ -2633,9 +3284,12 @@ with tab9:
 
 # ─── FOOTER ────────────────────────────────────────────────────────────────────
 
-st.markdown("---")
-st.caption(
-    "Volatility surfaces are based on current market quotes and may not reflect "
-    "executable prices. Not financial advice."
-)
-render_data_source_footer()
+_source = st.session_state.get('current_data_source', 'Polygon Options API')
+st.markdown(
+    f'<div style="margin-top:24px;padding:14px 20px;border-top:1px solid {COLORS["card_border"]};'
+    f'display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">'
+    f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};">'
+    f'Volatility surfaces are based on current market quotes and may not reflect executable prices. Not financial advice.</div>'
+    f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};opacity:0.7;">'
+    f'Data: {_source}</div>'
+    f'</div>', unsafe_allow_html=True)

@@ -62,6 +62,9 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `gdelt_events.py` | GDELT bulk event download & processing, conflict event filtering, parquet cache |
 | `chatbot.py` | Tier-based analyst chat (Gemini 2.5 Flash), inline expander with form input |
 | `gov_data.py` | CFTC COT (multi-contract snapshots for AI context), Treasury yields/auctions, defense contracts |
+| `ai_validation.py` | ACCURACY_CHECK + ACCURACY_CHECK_LIGHT (appended to all AI prompts), VOL_SURFACE_EXPERT_CONTEXT, HIGHER_GREEKS_EXPERT_CONTEXT |
+| `cross_asset_vol.py` | SCAN_UNIVERSE (20 ETFs), parallel data loading, cross-asset metrics, implied correlation, divergence detection |
+| `options_history.py` | Historical IV from Polygon Options Starter, proper IV percentile ranking, skew trend analysis |
 | `options_models.py` | Black-Scholes, Merton Jump-Diffusion, BS-MJD blended pricing + Greeks + implied_vol solver |
 | `simulation.py` | Stochastic Recursive Random Forest: 30-day forward price paths |
 | `signal_engine.py` | Unified signal aggregation — 8 pages write signals, weighted composite scoring |
@@ -73,7 +76,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `ai_cache.py` | AI response caching — eliminates redundant Gemini/Grok/Claude calls across users |
 | `user_prefs.py` | Persistent user preferences via Supabase (active ticker, watchlist, settings) |
 
-### pages/ — 30 Active Pages (7 disabled, 11 sectors consolidated into 1)
+### pages/ — 33 Active Pages (6 disabled, 11 sectors consolidated into 1)
 
 | # | File | What It Does |
 |---|------|-------------|
@@ -107,10 +110,12 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 45 | `Universe_Portfolio.py` | 7-tab multi-group portfolio construction |
 | 46 | `Market_Expectations.py` | 8-tab cross-asset options intelligence |
 | 47 | `Track_Record.py` | 5-tab institutional track record |
+| 48 | `Vol_Landscape.py` | Cross-asset vol surface analysis (20 ETFs), heatmaps, k-means VRP clustering, divergence detection, AI briefing |
+| 49 | `Higher_Greeks.py` | 2nd/3rd order Greeks (vanna, charm, speed, zomma, etc.), VV pricing, AI Greek analyst |
 | 99 | `Login.py` | Standalone login/register page |
 
 **Disabled pages** (code preserved, toggle via `DISABLED_PAGES` in `src/layout.py`):
-05 Historical Analysis, 07 Options Flow, 09 ML Predictor, 10 Tech Screener, 12 Monte Carlo, 13 VaR, 40 Power Strategies (merged into 23)
+05 Historical Analysis, 09 ML Predictor, 10 Tech Screener, 12 Monte Carlo, 13 VaR, 40 Power Strategies (merged into 23)
 
 ---
 

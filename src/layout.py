@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # ── Pages disabled from nav and access (code preserved, toggle back by removing from set) ──
 DISABLED_PAGES = {
     "05_Historical_Analysis",   # Redundant — Stock Analysis covers price history
-    "07_Options_Flow",          # Redundant — Options Analysis covers flow
+    # "07_Options_Flow",        # Re-enabled — Live Tick Flow with real trade data
     "09_ML_Stock_Predictor",    # Redundant — overlaps with RL Trading + Stock Analysis AI
     "10_Tech_Screener",         # Redundant — Signal Scanner is far superior
     "12_Monte_Carlo",           # Low-impact — lightweight niche tool
@@ -76,6 +76,8 @@ PAGE_CONFIG = {
     "45_Universe_Portfolio": ("Universe Portfolio | AI Statcharts", "🌐"),
     "46_Market_Expectations": ("Market Expectations | AI Statcharts", "🔮"),
     "47_Track_Record":       ("Track Record | AI Statcharts", "🎯"),
+    "48_Vol_Landscape":      ("Vol Landscape | AI Statcharts", "🌋"),
+    "49_Higher_Greeks":      ("Higher-Order Greeks | AI Statcharts", "🧮"),
 }
 
 
@@ -256,6 +258,8 @@ def render_header(current_page: str):
             ("45_Universe_Portfolio", "Universe Portfolio", "pages/45_Universe_Portfolio.py"),
             ("46_Market_Expectations", "Market Expectations", "pages/46_Market_Expectations.py"),
             ("47_Track_Record", "Track Record", "pages/47_Track_Record.py"),
+            ("48_Vol_Landscape", "Vol Landscape", "pages/48_Vol_Landscape.py"),
+            ("49_Higher_Greeks", "Higher-Order Greeks", "pages/49_Higher_Greeks.py"),
         ]),
         ("Sectors", [("24_Sector_Analysis", "Sector Analysis", "pages/24_Sector_Analysis.py")]),
         ("Energy", [

@@ -300,6 +300,7 @@ for tk, td in ticker_data.items():
             impl_move_pct = straddle * 0.798 / spot * 100
 
     # IV Percentile Rank (vs 1-year HV distribution)
+    # Historical IV percentile from options_history is too slow for 20-ticker batch scans
     iv_pctile = None
     if front_iv and td["px_df"] is not None and len(td["px_df"]) > 60:
         _rets = td["px_df"]["Close"].pct_change().dropna()

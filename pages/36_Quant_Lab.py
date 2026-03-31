@@ -50,6 +50,7 @@ with c3:
 
 if load_btn:
     st.session_state["ql_loaded"] = True
+    st.session_state["ql_last_ticker"] = ticker
 
 if not st.session_state.get("ql_loaded"):
     st.info("Enter a ticker and click **Run Analysis**.")

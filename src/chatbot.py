@@ -158,7 +158,8 @@ def run_sidebar_chatbot(context_data=""):
                     "Answer the user's questions directly and briefly. Use professional terminology. "
                     "If the user asks about data on their screen, do your best with the context provided. "
                     "If no specific data context is available, use your general financial knowledge. "
-                    "Keep responses to 2-4 sentences unless the user asks for detail."
+                    "Keep responses to 2-4 sentences unless the user asks for detail. "
+                    "Do not invent specific prices, dates, or statistics. If you are unsure, say so."
                 )
                 if context_data:
                     system_content += f"\n\nCurrent dashboard context:\n{context_data}"

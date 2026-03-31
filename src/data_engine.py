@@ -565,6 +565,12 @@ def fetch_options_chain(symbol: str, expiration: str = None, max_pages: int = 20
                         'gamma': g.get('gamma', 0),
                         'theta': g.get('theta', 0),
                         'vega': g.get('vega', 0),
+                        'rho': g.get('rho', 0),
+                        'day_open': day.get('open', 0) or 0,
+                        'day_high': day.get('high', 0) or 0,
+                        'day_low': day.get('low', 0) or 0,
+                        'day_vwap': day_vwap,
+                        'trade_count': day.get('trade_count', 0) or 0,
                     })
                 df = pd.DataFrame(rows)
                 st.session_state['current_data_source'] = "Massive API (Polygon)"
@@ -1099,7 +1105,7 @@ def fetch_options_oi_history(symbol: str, strike: float, expiration: str,
         # Build options ticker: O:AAPL260620C00200000
         exp_fmt = pd.to_datetime(expiration).strftime("%y%m%d")
         ct = "C" if contract_type.lower() == "call" else "P"
-        strike_fmt = f"{int(strike * 1000):08d}"
+        strike_fmt = f"{round(strike * 1000):08d}"
         options_ticker = f"O:{symbol}{exp_fmt}{ct}{strike_fmt}"
 
         end = date.today()
@@ -1238,6 +1244,82 @@ def fetch_options_surface_history(symbol: str, days: int = 10, max_contracts: in
             result[dt] = {"spot": day_spot, "data": rows}
 
     return result
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_options_trades(symbol: str, expiration: str = None, limit: int = 500) -> pd.DataFrame:
+    """Fetch recent options trades (tick-level) from Polygon v3/trades endpoint.
+
+    Returns DataFrame with: timestamp, price, size, exchange, conditions, contract_ticker,
+    strike, contract_type, expiration.
+
+    Uses Options Starter plan. Rate-limited — use sparingly.
+    """
+    key = _get_polygon_key()
+    if not key:
+        return pd.DataFrame()
+
+    symbol = format_massive_ticker(symbol)
+
+    # First get the chain to know contract tickers
+    chain = fetch_options_chain(symbol, expiration, max_pages=5)
+    if chain is None or chain.empty:
+        return pd.DataFrame()
+
+    # Filter to liquid contracts (top by volume)
+    chain = chain[chain["volume"] > 0].nlargest(min(50, len(chain)), "volume")
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _build_opt_ticker(row):
+        exp_fmt = pd.to_datetime(row["expiration_date"]).strftime("%y%m%d")
+        ct = "C" if str(row["contract_type"]).lower() == "call" else "P"
+        strike_fmt = f"{round(row['strike_price'] * 1000):08d}"
+        return f"O:{symbol}{exp_fmt}{ct}{strike_fmt}"
+
+    chain = chain.copy()
+    chain["opt_ticker"] = chain.apply(_build_opt_ticker, axis=1)
+
+    def _fetch_trades(opt_ticker, strike, ctype, exp):
+        try:
+            url = f"https://api.polygon.io/v3/trades/{opt_ticker}"
+            r = requests.get(url, params={"limit": 50, "order": "desc", "sort": "timestamp", "apiKey": key}, timeout=10)
+            if r.status_code != 200:
+                return []
+            results = r.json().get("results", [])
+            out = []
+            for t in results:
+                out.append({
+                    "timestamp": pd.to_datetime(t.get("sip_timestamp", 0), unit="ns"),
+                    "price": t.get("price", 0),
+                    "size": t.get("size", 0),
+                    "exchange": t.get("exchange", 0),
+                    "conditions": t.get("conditions", []),
+                    "contract_ticker": opt_ticker,
+                    "strike": strike,
+                    "contract_type": ctype,
+                    "expiration": exp,
+                })
+            return out
+        except Exception:
+            return []
+
+    all_trades = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {}
+        for _, row in chain.head(30).iterrows():  # Limit to top 30 contracts by volume
+            otk = row["opt_ticker"]
+            futures[executor.submit(_fetch_trades, otk, row["strike_price"],
+                                     row["contract_type"], row["expiration_date"])] = otk
+        for fut in as_completed(futures):
+            all_trades.extend(fut.result())
+
+    if not all_trades:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_trades)
+    df = df.sort_values("timestamp", ascending=False).head(limit)
+    return df
 
 
 # ─────────────────────────────────────────────

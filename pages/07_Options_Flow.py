@@ -580,7 +580,7 @@ if "flow_chain" in st.session_state:
         else:
             st.info("No block trades found with current filters. Try lowering thresholds.")
 
-    # ---- Write unified signal (P/C ratio + GEX) ----
+
     try:
         from src.signal_engine import write_signal
         _pc = pc_vol_ratio

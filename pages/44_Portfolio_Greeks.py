@@ -90,7 +90,7 @@ try:
                     bp_strike = bp_details.get("strike")
                     bp_exp = bp_details.get("expiration")
 
-                    delta = gamma = theta = vega = iv = 0.0
+                    delta = gamma = theta = vega = rho = iv = 0.0
                     cur_price = bp_entry
 
                     if bp_type == "Stock":
@@ -121,6 +121,7 @@ try:
                                     gamma = row.get("gamma", 0) or 0
                                     theta = row.get("theta", 0) or 0
                                     vega = row.get("vega", 0) or 0
+                                    rho = row.get("rho", 0) or 0
                                     iv = row.get("implied_volatility", 0) or 0
                         except Exception:
                             pass
@@ -129,7 +130,7 @@ try:
                         "ticker": bp_ticker, "type": bp_type, "qty": bp_qty,
                         "strike": bp_strike, "expiration": bp_exp,
                         "entry_price": bp_entry, "current_price": cur_price,
-                        "delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "iv": iv,
+                        "delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "rho": rho, "iv": iv,
                     })
                 st.session_state["pg_positions"] = positions
                 st.success(f"Imported {len(book_positions)} positions from Position Book.")
@@ -166,7 +167,7 @@ with st.expander("Add Position", expanded=len(positions) == 0):
 
         # Fetch current price and Greeks
         cur_price = 0.0
-        delta = gamma = theta = vega = iv = 0.0
+        delta = gamma = theta = vega = rho = iv = 0.0
 
         if pos_type == "Stock":
             try:
@@ -200,6 +201,7 @@ with st.expander("Add Position", expanded=len(positions) == 0):
                             gamma = row.get("gamma", 0) or 0
                             theta = row.get("theta", 0) or 0
                             vega = row.get("vega", 0) or 0
+                            rho = row.get("rho", 0) or 0
                             iv = row.get("implied_volatility", 0) or 0
                 except Exception as e:
                     st.warning(f"Could not fetch Greeks: {e}")
@@ -230,6 +232,7 @@ with st.expander("Add Position", expanded=len(positions) == 0):
             "gamma": gamma,
             "theta": theta,
             "vega": vega,
+            "rho": rho,
             "iv": iv,
         })
         st.session_state["pg_positions"] = positions
@@ -296,10 +299,11 @@ with tab1:
         total_gamma = pos_df["gamma_$"].sum()
         total_theta = pos_df["theta_$"].sum()
         total_vega = pos_df["vega_$"].sum()
+        total_rho = (pos_df["rho"] * pos_df["qty"] * 100).sum() if "rho" in pos_df.columns else 0
         total_value = pos_df["market_value"].sum()
         total_pnl = pos_df["pnl"].sum()
 
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         delta_color = COLORS["success"] if total_delta >= 0 else COLORS["danger"]
         m1.metric("Net Delta ($)", f"${total_delta:+,.0f}",
                   help="Dollar exposure to a $1 move in underlying. Positive = bullish.")
@@ -309,6 +313,8 @@ with tab1:
                   help="Daily P&L from time decay alone. Positive = earning theta.")
         m4.metric("Net Vega ($/1%)", f"${total_vega:+,.2f}",
                   help="P&L per 1% IV change. Positive = long vol.")
+        m5.metric("Net Rho ($)", f"${total_rho:+,.2f}",
+                  help="P&L per 1% interest rate change. Positive = benefits from rate hikes.")
 
         v1, v2, v3 = st.columns(3)
         v1.metric("Portfolio Value", f"${total_value:+,.0f}")

@@ -1,5 +1,111 @@
 # Changelog
 
+## 2026-03-30/31 — Major Options Infrastructure Overhaul + 3 New Pages
+
+### New Pages
+- **48_Vol_Landscape** — Cross-asset volatility surface analysis across 20 ETFs. 5 tabs: Vol Landscape heatmaps (smile + term structure), Market Environment (IV/HV ranking, skew, VRP k-means clustering, implied correlation, sector vs macro comparison), Metrics Table (sortable with change columns), Regime Signals & Alerts (divergence detection across 9 correlated pairs), AI Market Vol Briefing (Gemini 3.1 Pro).
+- **49_Higher_Greeks** — 2nd and 3rd order Greeks analysis. 8 tabs: Overview (Greek family tree + calculator), Vanna Profile, Charm & Time Risk (overnight delta drift + hedge recommendation), Gamma Risk Map (speed + zomma heatmap), Vega Convexity (volga/veta + vol shock simulator), Vanna-Volga Pricing (smile premium decomposition + mispricing detection), Portfolio Higher Greeks, AI Greek Analyst.
+- **07_Options_Flow** re-enabled — was disabled, now active with 4 tabs for unusual activity, P/C analysis, GEX, block detection.
+
+### New Shared Modules
+- **src/cross_asset_vol.py** — SCAN_UNIVERSE (20 ETFs), parallel data loading, cross-asset metrics computation, smile interpolation, implied correlation, divergence detection, metric change tracking.
+- **src/options_history.py** — Historical IV from Polygon Options Starter. get_historical_iv(), get_iv_percentile() (proper ranking vs historical IV, not HV proxy), get_skew_trend(), get_iv_summary().
+- **src/ai_validation.py** — ACCURACY_CHECK (full 5-point validation for all AI prompts), ACCURACY_CHECK_LIGHT, VOL_SURFACE_EXPERT_CONTEXT (institutional vol analysis framework), HIGHER_GREEKS_EXPERT_CONTEXT (dealer positioning, vanna flows, 0DTE dynamics, gamma scalping optimization).
+
+### Higher-Order Greeks (src/options_models.py)
+- **bs_higher_greeks()** — Closed-form BS formulas for 8 higher-order Greeks: vanna, volga, charm, veta, speed, zomma, color, ultima.
+- **bs_all_greeks()** — All 12 Greeks in one pass (first + second + third order). For chain-wide batch computation.
+- **vanna_volga_decomposition()** — Decomposes option price into BS base + vanna cost + volga cost (smile premium).
+
+### Stock Analysis (Page 03) — Complete Overhaul
+- Parallel AI model calls (ThreadPoolExecutor) — ~3x faster
+- Candlestick chart with volume bars replacing line chart
+- 3M/1Y/5Y timeframe toggle
+- Earnings data + IV/options context injected into AI prompt
+- Confidence-weighted model blending (not equal-weight)
+- Peer comparison table
+- Sentiment gauge + StockTwits posts feed
+- Per-model radar overlay on scorecard
+- Probability-weighted price target distribution curve
+- Per-model retry buttons for failed AI calls
+- Download report as markdown
+- Bottom half reorganized into 5 tabs (Sentiment, Model Comparison, EDGAR, Financials, Peers)
+- Wall Street vs AI target labels clearly distinguished
+- AI analysis expandable per-dimension (not wall of text)
+- Signal engine bug fix: confidence/100 → confidence/10
+
+### Vol Surface (Page 43) — Major Expansion
+- 3D Surface: Higher-Order Greeks Snapshot (vanna/charm/speed/zomma) with cross-page link to page 49
+- Surface Animation: rebuilt with Polygon Options Starter historical data (5-30 days configurable), heatmap/3D toggle, day-over-day comparison with diff heatmap, AI Surface Evolution Analyst
+- AI Surface Narrator on 3D tab with institutional analysis framework
+- Gemini Trade Ideas: position sizing, refine follow-up, P&L payoff diagram, CSV download, data freshness indicator, ticker change cleanup, cost estimate, view AI context expander
+- Surface data shared with Higher Greeks page via session state
+- 0-OI contract filtering on all delta/dislocation computations
+- Surface metric accounts for call/put stitching at ATM (no gap)
+- Absolute delta for Delta surface view (no sign cliff)
+
+### Polygon Options Starter Integration
+- **5 new fields extracted** from v3/snapshot: rho, day_open, day_high, day_low, trade_count
+- **fetch_options_trades()** function built for v3/trades (dormant — requires Options Advanced tier)
+- **fetch_options_oi_history()** wired into Options Analysis (was dead code)
+- **Historical IV surfaces** from daily OHLCV via implied_vol solver
+- **Proper IV percentile** on Stock Analysis page (ranks vs historical IV, not HV proxy)
+- Rho displayed on Portfolio Greeks (5th Greek)
+- Trade count displayed on Vol Surface metrics
+
+### AI Accuracy System
+- All 16 AI call sites across 7 files now include accuracy validation prompts
+- Full ACCURACY_CHECK (numerical accuracy, internal consistency, stale data, hallucination guard, final pass) on high-stakes calls
+- ACCURACY_CHECK_LIGHT on lightweight calls (conflict JSON, chat)
+- Domain-specific inline checks on FOMC, scenario analysis, conflict analysis
+- Chatbot anti-hallucination instruction
+
+### Gemini Model Upgrade
+- All Gemini Pro calls upgraded from gemini-2.5-pro to gemini-3.1-pro-preview across: Vol Surface, Fed Macro, Worker, Stock Analysis
+- Display labels updated from "Gemini 2.5 Pro" to "Gemini 3.1 Pro"
+
+### Cross-Page Data Sharing
+- Vol Surface ↔ Higher Greeks: shared chain data via session state (instant load if same ticker)
+- Vol Landscape ↔ Market Expectations: reuses page 46 ticker data if available
+- Cross-page navigation links between Vol Surface and Higher Greeks
+
+### Performance Fixes
+- Stock Analysis: fetch_stock_data parallelized (7 API calls concurrent), prompt builder parallelized (5 enrichment fetches concurrent), removed hist_3m (unused API call), single fun_loader instead of nested two
+- Auto-load on ticker change removed from 7 pages (caused tab resets)
+- Vol Landscape: data freshness indicator, refresh button, earnings cached in session state
+
+### UI/UX Polish
+- Global max-width: 1100px on main content (widescreen constraint)
+- Stock Analysis: styled card system (header, scorecard, fundamentals, price targets, technical metrics, risks/catalysts)
+- Vol Surface: styled metric cards, 3D tab explainer, surface reading cards with actionable analysis
+- Calendar Spreads: 5-day historical term structure context, AI markdown rendering fix, stale AI cleared on ticker change, missing get_secret import fix
+- Options Analysis: OI premium change table (5-day), rho + trade_count in Greeks heatmap, contract price history chart
+- Portfolio Greeks: rho as 5th aggregate Greek metric
+
+### Bug Fixes (30+)
+- rec_scores dict max/min on keys → values
+- sig_dir "strong" matching "Strong Sell" as bullish
+- Price target distribution division by zero guards
+- Insider data None guard
+- Retry button cache bypass
+- Dislocation baseline: per-expiration ATM IV (not flat HV)
+- Gamma scalp ATM lookup: reset_index + idxmin (not argsort)
+- Earnings fetch: earningsTimestampStart (not nonexistent field)
+- Duplicate "GD" in energy ticker set
+- Split HTML across st.markdown calls (regime banner)
+- Butterfly/Impl_Move falsy-when-zero in AI context
+- VRP scatter annotation positioning
+- Vol Landscape change tracking: promote-on-scan-only (not every render)
+- Stock Analysis current_iv passed as price*0.25 (wrong)
+- cross_asset_vol IndentationError after edit
+- Calendar Spreads missing get_secret import
+- RL Trading SPY relative strength: zeros → actual computation
+- Options ticker strike float precision: int() → round()
+- OI history showing price as OI (corrected to premium change)
+- Options Flow ticker variable scope (ticker → ticker_display)
+
+---
+
 ## 2026-03-29 — Platform Trim: 47 → 30 Active Pages
 
 ### Sector Consolidation (11 pages → 1 dynamic page)

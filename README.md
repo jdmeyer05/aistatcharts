@@ -13,8 +13,8 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **30 active pages** (47 total, 7 disabled, 11 sectors consolidated into 1 dynamic page, 2 power pages merged into 1) + automated hourly background worker
-- **4 AI models**: Grok 4, Gemini 2.5 Pro, Claude Sonnet/Opus, Gemini 2.5 Flash (chat)
+- **33 active pages** (50 total, 6 disabled, 11 sectors consolidated into 1 dynamic page, 2 power pages merged into 1) + automated hourly background worker
+- **4 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus, Gemini 2.5 Flash (chat)
 - **Unified Signal Engine** -- aggregates signals from 8+ analysis pages into weighted composite scores per ticker
 - **Historical Metrics Store** -- daily vol/options snapshots with 252-day percentile ranks
 - **Position Lifecycle Manager** -- Greek tracking, P&L attribution (delta/gamma/theta/vega), alerts, trade journal

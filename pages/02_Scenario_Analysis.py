@@ -250,7 +250,10 @@ Pay special attention to market reaction to today's FOMC decision and dot plot.
 Compare your assessment to the base probabilities and your most recent prior analysis. Note what changed.
 Start from the BASE PROBABILITIES and only adjust if specific new data justifies it. Do not drift.
 {f'PORTFOLIO TICKERS to estimate returns for: {", ".join(ticker_list)}. For each regime, estimate 12-month return for each ticker.' if ticker_list else ''}
-JSON only."""
+
+Before responding: verify all probabilities sum to 100%, all return estimates are internally consistent with the regime described, and all cited data points come from the FRED/market data provided above. Do not invent economic statistics.
+
+Respond with ONLY valid JSON."""
 
     response = client.chat.completions.create(
         model="grok-3",

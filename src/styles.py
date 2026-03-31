@@ -91,6 +91,13 @@ def load_theme_preference():
 def inject_global_css():
     """Inject global CSS classes used across all pages. Call once per page."""
     st.markdown(f"""<style>
+    /* ── Max-width cap for widescreen monitors ── */
+    .main .block-container {{
+        max-width: 1100px !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
+    }}
+
     /* ── Card containers ── */
     div[data-testid="stVerticalBlockBorderWrapper"] {{
         background-color: {COLORS['card_bg']} !important;

@@ -65,18 +65,20 @@ if submit:
         # Pre-fetch nearest 8 expirations for surface/term structure
         term_data = {}
         prefetch_exps = expirations[:8]
-        progress = st.progress(0, text="Loading options chain...")
-        for i, texp in enumerate(prefetch_exps):
-            try:
-                tdf = fetch_options_chain(ticker, texp)
-                if tdf is not None and not tdf.empty:
-                    if current_px:
-                        tdf = fill_missing_options_data(tdf, current_px, risk_free_rate=_rfr)
-                    term_data[texp] = tdf
-            except Exception:
-                pass
-            progress.progress((i + 1) / len(prefetch_exps), text=f"Loading {texp}...")
-        progress.empty()
+        _progress_container = st.container()
+        with _progress_container:
+            progress = st.progress(0, text="Loading options chain...")
+            for i, texp in enumerate(prefetch_exps):
+                try:
+                    tdf = fetch_options_chain(ticker, texp)
+                    if tdf is not None and not tdf.empty:
+                        if current_px:
+                            tdf = fill_missing_options_data(tdf, current_px, risk_free_rate=_rfr)
+                        term_data[texp] = tdf
+                except Exception:
+                    pass
+                progress.progress((i + 1) / len(prefetch_exps), text=f"Loading {texp}...")
+            progress.empty()
 
         if term_data:
             first_exp = list(term_data.keys())[0]
@@ -798,6 +800,37 @@ with tab_oi, error_boundary("Open Interest"):
         oc2.metric("Highest Put OI Strike", f"${max_put_oi_strike:,.0f}",
                    f"{((max_put_oi_strike / current_px) - 1) * 100:+.1f}% from spot" if current_px else "")
 
+    # Price history at top OI strikes — shows if premium is expanding or compressing
+    st.divider()
+    st.markdown("**Top OI Strikes — 5-Day Premium Change**")
+    st.caption("Tracks whether option premiums at the highest-OI strikes are expanding (new demand) or compressing (decay).")
+    try:
+        from src.data_engine import fetch_options_oi_history
+        _top_calls = calls.nlargest(3, "open_interest") if not calls.empty else pd.DataFrame()
+        _top_puts = puts.nlargest(3, "open_interest") if not puts.empty else pd.DataFrame()
+        _prem_rows = []
+        for _df, _ct in [(_top_calls, "call"), (_top_puts, "put")]:
+            for _, _r in _df.iterrows():
+                _h = fetch_options_oi_history(ticker_display, _r["strike_price"], _oi_exp, _ct, days=5)
+                if _h is not None and not _h.empty and "close" in _h.columns:
+                    _price_now = _r.get("last_price", 0) or ((_r.get("bid", 0) + _r.get("ask", 0)) / 2)
+                    _price_5d = float(_h["close"].iloc[0]) if len(_h) > 0 else 0
+                    _pct_chg = ((_price_now / _price_5d - 1) * 100) if _price_5d > 0 and _price_now > 0 else 0
+                    _prem_rows.append({
+                        "Strike": f"${_r['strike_price']:.0f}", "Type": _ct.title(),
+                        "OI": f"{_r['open_interest']:,.0f}",
+                        "Price Now": f"${_price_now:.2f}" if _price_now else "N/A",
+                        "Price 5d Ago": f"${_price_5d:.2f}" if _price_5d > 0 else "N/A",
+                        "Change": f"{_pct_chg:+.1f}%" if _price_5d > 0 else "N/A",
+                        "Signal": "Expanding" if _pct_chg > 10 else ("Compressing" if _pct_chg < -10 else "Stable"),
+                    })
+        if _prem_rows:
+            st.dataframe(pd.DataFrame(_prem_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Price history unavailable for these strikes.")
+    except Exception:
+        st.caption("Price history requires Polygon Options Starter plan.")
+
 
 # ── Tab: Gamma Exposure (GEX) ──
 with tab_gex, error_boundary("Gamma Exposure"):
@@ -1056,8 +1089,16 @@ with tab_greeks, error_boundary("Greeks Heatmap"):
     with greeks_cols[0]:
         st.markdown("**Calls**")
         if not calls.empty:
-            calls_display = calls[['strike_price', 'delta', 'gamma', 'theta', 'vega', 'implied_volatility']].copy()
-            calls_display.columns = ['Strike', 'Delta', 'Gamma', 'Theta', 'Vega', 'IV']
+            _greeks_fields = ['strike_price', 'delta', 'gamma', 'theta', 'vega', 'implied_volatility']
+            _greeks_names = ['Strike', 'Delta', 'Gamma', 'Theta', 'Vega', 'IV']
+            if 'rho' in calls.columns:
+                _greeks_fields.append('rho')
+                _greeks_names.append('Rho')
+            if 'trade_count' in calls.columns:
+                _greeks_fields.append('trade_count')
+                _greeks_names.append('Trades')
+            calls_display = calls[[c for c in _greeks_fields if c in calls.columns]].copy()
+            calls_display.columns = _greeks_names[:len(calls_display.columns)]
             calls_display = calls_display.set_index('Strike')
 
             # Style with color gradients
@@ -1094,8 +1135,16 @@ with tab_greeks, error_boundary("Greeks Heatmap"):
     with greeks_cols[1]:
         st.markdown("**Puts**")
         if not puts.empty:
-            puts_display = puts[['strike_price', 'delta', 'gamma', 'theta', 'vega', 'implied_volatility']].copy()
-            puts_display.columns = ['Strike', 'Delta', 'Gamma', 'Theta', 'Vega', 'IV']
+            _pgreeks_fields = ['strike_price', 'delta', 'gamma', 'theta', 'vega', 'implied_volatility']
+            _pgreeks_names = ['Strike', 'Delta', 'Gamma', 'Theta', 'Vega', 'IV']
+            if 'rho' in puts.columns:
+                _pgreeks_fields.append('rho')
+                _pgreeks_names.append('Rho')
+            if 'trade_count' in puts.columns:
+                _pgreeks_fields.append('trade_count')
+                _pgreeks_names.append('Trades')
+            puts_display = puts[[c for c in _pgreeks_fields if c in puts.columns]].copy()
+            puts_display.columns = _pgreeks_names[:len(puts_display.columns)]
             puts_display = puts_display.set_index('Strike')
 
             styled_p = puts_display.style.map(
@@ -1252,6 +1301,51 @@ with tab_chain, error_boundary("Chain View"):
         file_name=f"{ticker_display}_{exp_display}_chain.csv",
         mime="text/csv",
     )
+
+    # Contract Price History (Polygon Options Starter)
+    st.divider()
+    st.markdown("**Contract Price History** — select a strike to see its 30-day chart")
+    _avail_strikes = straddle_df["Strike"].dropna().tolist()
+    if _avail_strikes:
+        _sel_strike = st.selectbox("Strike", _avail_strikes, index=min(len(_avail_strikes)//2, len(_avail_strikes)-1), key="chain_hist_k")
+        _sel_type = st.radio("Type", ["call", "put"], horizontal=True, key="chain_hist_type")
+
+        @st.fragment
+        def _contract_hist():
+            if st.button(f"Load ${_sel_strike:.0f} {_sel_type} history", key="chain_hist_load"):
+                try:
+                    from src.data_engine import fetch_options_oi_history
+                    _hist = fetch_options_oi_history(ticker_display, _sel_strike, _chain_exp, _sel_type, days=30)
+                    if _hist is not None and not _hist.empty and "close" in _hist.columns:
+                        st.session_state["chain_hist_data"] = _hist
+                    else:
+                        st.warning("No history available for this contract.")
+                except Exception as _e:
+                    st.error(f"Failed: {_e}")
+
+            _hd = st.session_state.get("chain_hist_data")
+            if _hd is not None and not _hd.empty:
+                import plotly.graph_objects as _go_ch
+                fig_ch = _go_ch.Figure()
+                if "close" in _hd.columns:
+                    fig_ch.add_trace(_go_ch.Scatter(
+                        x=_hd.index, y=_hd["close"], mode="lines",
+                        line=dict(color="#00d1ff", width=2), name="Close"))
+                if "high" in _hd.columns and "low" in _hd.columns:
+                    fig_ch.add_trace(_go_ch.Scatter(
+                        x=_hd.index, y=_hd["high"], mode="lines",
+                        line=dict(color="#555", width=0.5), name="High", showlegend=False))
+                    fig_ch.add_trace(_go_ch.Scatter(
+                        x=_hd.index, y=_hd["low"], mode="lines",
+                        line=dict(color="#555", width=0.5), name="Low", showlegend=False,
+                        fill="tonexty", fillcolor="rgba(85,85,85,0.1)"))
+                fig_ch.update_layout(template="plotly_dark", height=300,
+                                      margin=dict(l=0, r=0, t=10, b=0),
+                                      yaxis_title="Price ($)", xaxis_title="Date")
+                st.plotly_chart(fig_ch, use_container_width=True)
+                st.caption(f"${_sel_strike:.0f} {_sel_type} — {len(_hd)} days of history")
+
+        _contract_hist()
 
     # Volume distribution chart below chain
     st.divider()

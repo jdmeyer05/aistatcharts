@@ -9,6 +9,7 @@ from scipy.stats import norm
 
 from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader
 from src.styles import COLORS
+from src.api_keys import get_secret
 from src.data_engine import (
     format_massive_ticker, fetch_massive_data,
     get_expiration_dates, fetch_options_chain,
@@ -165,13 +166,22 @@ def _render_ai_result(result):
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(f"**Assessment:** {_html.escape(result.get('assessment', ''))}")
-    st.markdown(f"**Market Context:** {_html.escape(result.get('market_context', ''))}")
-    st.markdown(f"**Entry Timing:** {_html.escape(result.get('optimal_entry', ''))}")
+    _assess = result.get("assessment", "")
+    _mktctx = result.get("market_context", "")
+    _entry = result.get("optimal_entry", "")
+    if _assess:
+        st.markdown(f"**Assessment**")
+        st.markdown(_assess)
+    if _mktctx:
+        st.markdown(f"**Market Context**")
+        st.markdown(_mktctx)
+    if _entry:
+        st.markdown(f"**Entry Timing**")
+        st.markdown(_entry)
     for flag in result.get("risk_flags", []):
-        st.warning(_html.escape(str(flag)))
+        st.warning(str(flag))
     for adj in result.get("adjustments", []):
-        st.info(_html.escape(str(adj)))
+        st.info(str(adj))
 
 
 def _ensure_chain_loaded(exp_str: str) -> bool:
@@ -300,6 +310,7 @@ if submit:
         st.session_state["cal_term_data"] = term_data
         st.session_state["cal_spot"] = spot
         st.session_state["cal_ticker"] = ticker
+        st.session_state.pop("cal_ai_result", None)  # Clear stale AI on ticker change
         st.session_state["cal_rfr"] = rfr
         st.session_state["cal_px"] = px_df
         # Store ALL expirations for dropdowns (not just pre-fetched)
@@ -737,6 +748,29 @@ the spread is entering at a historically cheap or rich level.
             margin=dict(l=50, r=20, t=30, b=50),
         )
         st.plotly_chart(fig_ts, use_container_width=True)
+
+        # Historical TS comparison (Polygon Options Starter)
+        try:
+            from src.options_history import get_historical_iv
+            _ts_hist = get_historical_iv(ticker_display, days=5)
+            if _ts_hist is not None and not _ts_hist.empty and "atm_iv" in _ts_hist.columns:
+                _avg_hist_iv = _ts_hist["atm_iv"].mean()
+                _current_iv = ts_df["atm_iv"].mean() if not ts_df.empty else 0
+                _chg = ((_current_iv / _avg_hist_iv - 1) * 100) if _avg_hist_iv > 0 else 0
+                _ts_hist_slope = _ts_hist.get("ts_slope")
+                _hist_slope_avg = float(_ts_hist_slope.dropna().mean()) if _ts_hist_slope is not None and not _ts_hist_slope.dropna().empty else None
+
+                _ts_rc = COLORS["danger"] if _chg > 10 else (COLORS["success"] if _chg < -10 else "#e6edf3")
+                st.markdown(
+                    f'<div style="background:{COLORS["card_bg"]};border:1px solid {COLORS["card_border"]};'
+                    f'border-radius:8px;padding:10px 14px;border-left:3px solid {_ts_rc};margin-bottom:12px;">'
+                    f'<div style="font-size:0.82rem;color:{_ts_rc};font-weight:600;">5-Day Context</div>'
+                    f'<div style="font-size:0.78rem;color:{COLORS["text_muted"]};">'
+                    f'Current avg ATM IV: {_current_iv:.1%} vs 5-day avg: {_avg_hist_iv:.1%} ({_chg:+.1f}%). '
+                    f'{"IV is elevated vs recent history \u2014 calendars are more expensive to enter." if _chg > 10 else ("IV has compressed \u2014 calendars are cheaper." if _chg < -10 else "IV is near recent average.")}'
+                    f'</div></div>', unsafe_allow_html=True)
+        except Exception:
+            pass
 
         # --- IV Differential across all pairs ---
         st.markdown("#### Calendar IV Differential (Back - Front)")

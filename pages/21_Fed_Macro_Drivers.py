@@ -1144,11 +1144,13 @@ Explain why.
 ## Next Meeting Expectations
 Based on this language evolution, what should we expect at the next meeting?
 
-Be specific and actionable. Reference exact phrases that changed."""
+Be specific and actionable. Reference exact phrases that changed.
+
+Before responding: verify every quoted phrase actually appears in the statements above. Do not invent rate levels, dot plot numbers, or policy language not present in the data. Label forward expectations as estimates."""
 
                                 client = genai.Client(api_key=gemini_key)
                                 response = client.models.generate_content(
-                                    model="gemini-2.5-pro",
+                                    model="gemini-3.1-pro-preview",
                                     contents=prompt,
                                     config=types.GenerateContentConfig(
                                         max_output_tokens=5000,
@@ -1157,7 +1159,7 @@ Be specific and actionable. Reference exact phrases that changed."""
                                 )
                                 result = response.text
                                 st.session_state["fomc_diff_result"] = result
-                                cache_ai_response(_cache_key, result, model="gemini-2.5-pro",
+                                cache_ai_response(_cache_key, result, model="gemini-3.1-pro-preview",
                                                    source_page="fed_macro", ticker="FED",
                                                    ttl_hours=24, cost_estimate=0.03,
                                                    prompt_summary=f"FOMC diff {_od} vs {_nd}")

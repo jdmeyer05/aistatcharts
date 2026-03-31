@@ -78,7 +78,9 @@ Cover ALL:
 3. DIPLOMATIC: Ceasefire signals, UN activity, mediators
 4. X/TWITTER PULSE: What are @sentdefender, @Faytuks, @inside_IL_intel, @JavierBlas, @IranIntl_En posting?
 
-250-400 words. Be direct and specific."""
+250-400 words. Be direct and specific.
+
+Before responding: verify all facts are from the last 4 hours. Do not invent events, casualty counts, or prices not confirmed by sources."""
 
     try:
         client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
@@ -142,7 +144,7 @@ Check: Reuters, Bloomberg, @sentdefender, @IranIntl_En, @JavierBlas, @IDF, @CENT
 Return ONLY a JSON array of NEW events (empty array [] if nothing major):
 [{{"date": "YYYY-MM-DD", "event": "what happened", "category": "Military/Escalation/Diplomatic/Policy/Supply", "impact": "market impact", "infrastructure": "infrastructure affected"}}]
 
-Only CONFIRMED events. Do NOT fabricate."""
+Only CONFIRMED events. Do NOT fabricate. Verify each event has a named source before including it."""
 
     try:
         client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
@@ -207,6 +209,7 @@ def update_conflict_analysis(db):
     except Exception:
         briefing = ""
 
+    from src.ai_validation import ACCURACY_CHECK_LIGHT
     base_prompt = f"""Analyze the current state of the US-Israel-Iran war (started Feb 28, 2026).
 
 LATEST INTELLIGENCE:
@@ -224,7 +227,9 @@ Provide your assessment as JSON:
     }},
     "ceasefire_probability_30d": <0-100>,
     "situation_summary": "<3-4 sentence summary>"
-}}"""
+}}
+
+{ACCURACY_CHECK_LIGHT}"""
 
     assessments = []
 
@@ -255,7 +260,7 @@ Provide your assessment as JSON:
             from google.genai import types
             client = genai.Client(api_key=gemini_key)
             resp = client.models.generate_content(
-                model="gemini-2.5-pro",
+                model="gemini-3.1-pro-preview",
                 contents=base_prompt,
                 config=types.GenerateContentConfig(max_output_tokens=1000, temperature=0.2),
             )
@@ -264,7 +269,7 @@ Provide your assessment as JSON:
             cleaned = re.sub(r"^```json?\s*", "", raw.strip())
             cleaned = re.sub(r"\s*```$", "", cleaned)
             data = json.loads(cleaned)
-            data["model"] = "Gemini 2.5 Pro"
+            data["model"] = "Gemini 3.1 Pro"
             assessments.append(data)
             logger.info("Gemini assessment: done")
         except Exception as e:
