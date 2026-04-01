@@ -241,16 +241,17 @@ _qp_strike = _qp.get("strike", "")
 _default_ticker = _qp_ticker if _qp_ticker else get_active_ticker()
 _default_type_idx = 1 if _qp_type == "put" else 0
 
-_c1, _c2, _c3 = st.columns([2, 1, 1])
-with _c1:
-    raw_ticker = st.text_input("Underlying Ticker", value=_default_ticker)
-    ticker = format_massive_ticker(raw_ticker)
-    set_active_ticker(ticker)
-with _c2:
-    spread_type = st.selectbox("Spread Type", ["call", "put"], index=_default_type_idx)
-with _c3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    submit = st.button("Load Chain Data", type="primary", use_container_width=True)
+with st.form("calendar_spreads_form", border=True):
+    _c1, _c2, _c3 = st.columns([2, 1, 1])
+    with _c1:
+        raw_ticker = st.text_input("Underlying Ticker", value=_default_ticker)
+        ticker = format_massive_ticker(raw_ticker)
+        set_active_ticker(ticker)
+    with _c2:
+        spread_type = st.selectbox("Spread Type", ["call", "put"], index=_default_type_idx)
+    with _c3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        submit = st.form_submit_button("Load Chain Data", type="primary", use_container_width=True)
 
 # ─── FETCH ─────────────────────────────────────────────────────────────────────
 

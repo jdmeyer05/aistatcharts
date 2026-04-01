@@ -75,7 +75,7 @@ DEFAULT_UNIVERSE = [
     "AMD", "BA", "DIS", "UBER", "INTC", "F",
 ]
 
-with st.container(border=True):
+with st.form("ic_scan_form", border=True):
     cc1, cc2, cc3, cc4, cc5 = st.columns(5)
     with cc1:
         target_dte_min = st.number_input("Min DTE", value=7, min_value=1, max_value=90, step=5)
@@ -133,7 +133,7 @@ with st.container(border=True):
                    "Managed win rate = POP + bump (early profit-taking increases win rate). "
                    "Half-Kelly is the institutional standard.")
 
-    scan = st.button("Scan for Iron Condors", type="primary", use_container_width=True)
+    scan = st.form_submit_button("Scan for Iron Condors", type="primary", use_container_width=True)
 
 
 # ═══════════════════════════════════════════════
@@ -871,6 +871,9 @@ def _enrich_ivr_vrp(r: dict, px: pd.DataFrame | None) -> None:
 
 
 if scan and tickers:
+    # Clear old results so stale filter/sort widgets don't render during scan
+    st.session_state.pop("ic_results", None)
+    st.session_state.pop("ic_ai_result", None)
     results = []
     with fun_loader("data"):
         progress = st.progress(0, text="Fetching spot prices...")

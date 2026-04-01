@@ -136,24 +136,25 @@ def _fetch_fundamentals(tickers_tuple):
 # CONTROLS
 # ═══════════════════════════════════════════════
 
-c1, c2, c3 = st.columns([2, 1, 1])
-with c1:
-    universe_name = st.selectbox("Universe", list(UNIVERSES.keys()), key="ss_universe")
-    if universe_name == "Custom":
-        custom_raw = st.text_input(
-            "Custom tickers (comma-separated)",
-            "AAPL,MSFT,GOOGL,AMZN,META,NVDA,TSLA,JPM,V,UNH",
-            key="ss_custom",
-        )
-        tickers = [t.strip().upper() for t in custom_raw.split(",") if t.strip()]
-    else:
-        tickers = UNIVERSES[universe_name]
-with c2:
-    ss_lookback = st.selectbox("Lookback", ["6M", "1Y", "2Y"], index=1, key="ss_lookback")
-    lookback_map = {"6M": "6mo", "1Y": "1y", "2Y": "2y"}
-with c3:
-    st.markdown("<br>", unsafe_allow_html=True)
-    ss_load = st.button("Scan Signals", type="primary", use_container_width=True, key="ss_load")
+with st.form("signal_scanner_form", border=True):
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        universe_name = st.selectbox("Universe", list(UNIVERSES.keys()), key="ss_universe")
+        if universe_name == "Custom":
+            custom_raw = st.text_input(
+                "Custom tickers (comma-separated)",
+                "AAPL,MSFT,GOOGL,AMZN,META,NVDA,TSLA,JPM,V,UNH",
+                key="ss_custom",
+            )
+            tickers = [t.strip().upper() for t in custom_raw.split(",") if t.strip()]
+        else:
+            tickers = UNIVERSES[universe_name]
+    with c2:
+        ss_lookback = st.selectbox("Lookback", ["6M", "1Y", "2Y"], index=1, key="ss_lookback")
+        lookback_map = {"6M": "6mo", "1Y": "1y", "2Y": "2y"}
+    with c3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        ss_load = st.form_submit_button("Scan Signals", type="primary", use_container_width=True)
 
 if ss_load:
     st.session_state["ss_loaded"] = True

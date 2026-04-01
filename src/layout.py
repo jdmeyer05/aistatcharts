@@ -1,5 +1,5 @@
 """Shared layout helpers for AI Statcharts — sidebar, status bar, error boundaries, page setup."""
-import sys, os
+import sys, os, html as _html
 # Ensure project root is always on sys.path so 'from src.*' imports never break
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
@@ -317,9 +317,9 @@ def render_header(current_page: str):
             _is_guest = not email or email in ("local-dev@preview", "guest@open-beta")
             if not _is_guest:
                 st.markdown(
-                    f'<div style="font-size:0.82rem;color:{COLORS["text_primary"]};">{email}</div>'
+                    f'<div style="font-size:0.82rem;color:{COLORS["text_primary"]};">{_html.escape(email)}</div>'
                     f'<div style="font-size:0.75rem;margin-top:2px;">'
-                    f'<span style="color:{t_color};font-weight:600;">{tier_cfg["name"]}</span> plan</div>',
+                    f'<span style="color:{t_color};font-weight:600;">{_html.escape(tier_cfg["name"])}</span> plan</div>',
                     unsafe_allow_html=True,
                 )
             else:

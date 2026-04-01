@@ -229,23 +229,24 @@ def _download_prices(tickers_tuple, period):
 # CONTROLS
 # ═══════════════════════════════════════════════
 
-with st.expander("Configuration", expanded=True):
-    uc1, uc2, uc3, uc4 = st.columns(4)
-    with uc1:
-        u_lookback = st.selectbox("Lookback", ["1Y", "2Y", "3Y", "5Y"], index=2, key="up_lb")
-    with uc2:
-        u_est = st.selectbox("Estimation Window", [126, 189, 252, 504], index=2,
-                              format_func=lambda d: f"{d}D ({d//21}mo)", key="up_est")
-    with uc3:
-        u_rebal = st.selectbox("Rebalance", ["Monthly", "Quarterly"], index=0, key="up_rebal")
-    with uc4:
-        u_denoise = st.checkbox("Ledoit-Wolf Denoising", value=True, key="up_dn")
+with st.form("universe_portfolio_form", border=True):
+    with st.expander("Configuration", expanded=True):
+        uc1, uc2, uc3, uc4 = st.columns(4)
+        with uc1:
+            u_lookback = st.selectbox("Lookback", ["1Y", "2Y", "3Y", "5Y"], index=2, key="up_lb")
+        with uc2:
+            u_est = st.selectbox("Estimation Window", [126, 189, 252, 504], index=2,
+                                  format_func=lambda d: f"{d}D ({d//21}mo)", key="up_est")
+        with uc3:
+            u_rebal = st.selectbox("Rebalance", ["Monthly", "Quarterly"], index=0, key="up_rebal")
+        with uc4:
+            u_denoise = st.checkbox("Ledoit-Wolf Denoising", value=True, key="up_dn")
 
-rebal_map = {"Monthly": "ME", "Quarterly": "QE"}
-lookback_map = {"1Y": "1y", "2Y": "2y", "3Y": "3y", "5Y": "5y"}
-rebal_period = rebal_map[u_rebal]
+    rebal_map = {"Monthly": "ME", "Quarterly": "QE"}
+    lookback_map = {"1Y": "1y", "2Y": "2y", "3Y": "3y", "5Y": "5y"}
+    rebal_period = rebal_map[u_rebal]
 
-run_btn = st.button("Run Universe Analysis", type="primary", use_container_width=True, key="up_run")
+    run_btn = st.form_submit_button("Run Universe Analysis", type="primary", use_container_width=True)
 
 if run_btn:
     st.session_state["up_loaded"] = True

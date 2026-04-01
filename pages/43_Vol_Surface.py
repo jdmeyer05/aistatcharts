@@ -190,14 +190,15 @@ def _find_delta_strike(chain, spot, target_delta, opt_type):
 
 # ─── CONTROLS ──────────────────────────────────────────────────────────────────
 
-_c1, _c2 = st.columns([3, 1])
-with _c1:
-    raw_ticker = st.text_input("Ticker", value=get_active_ticker())
-    ticker = format_massive_ticker(raw_ticker)
-    set_active_ticker(ticker)
-with _c2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    submit = st.button("Load Surface", type="primary", use_container_width=True)
+with st.form("vol_surface_form", border=True):
+    _c1, _c2 = st.columns([3, 1])
+    with _c1:
+        raw_ticker = st.text_input("Ticker", value=get_active_ticker())
+        ticker = format_massive_ticker(raw_ticker)
+        set_active_ticker(ticker)
+    with _c2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        submit = st.form_submit_button("Load Surface", type="primary", use_container_width=True)
 
 # ─── FETCH ─────────────────────────────────────────────────────────────────────
 

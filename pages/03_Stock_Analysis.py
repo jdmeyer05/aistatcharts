@@ -795,17 +795,18 @@ st.markdown(f'<div style="font-size:1.6rem;font-weight:800;color:#e6edf3;margin-
             unsafe_allow_html=True)
 
 # Controls
-_ctrl1, _ctrl2 = st.columns([2, 1])
-with _ctrl1:
-    ticker_input = st.text_input("Ticker", value=get_active_ticker("AAPL"))
-with _ctrl2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    _is_running = st.session_state.get("_ai_running", False)
-    analyze_btn = st.button(
-        "Running..." if _is_running else "Run Analysis",
-        type="primary", use_container_width=True,
-        disabled=_is_running,
-    )
+with st.form("stock_analysis_form", border=True):
+    _ctrl1, _ctrl2 = st.columns([2, 1])
+    with _ctrl1:
+        ticker_input = st.text_input("Ticker", value=get_active_ticker("AAPL"))
+    with _ctrl2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        _is_running = st.session_state.get("_ai_running", False)
+        analyze_btn = st.form_submit_button(
+            "Running..." if _is_running else "Run Analysis",
+            type="primary", use_container_width=True,
+            disabled=_is_running,
+        )
 
 ticker = ticker_input.strip().upper()
 set_active_ticker(ticker)

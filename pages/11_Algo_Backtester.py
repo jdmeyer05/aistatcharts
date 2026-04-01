@@ -518,44 +518,45 @@ def extract_trades(df):
 
 
 # --- Controls ---
-_c1, _c2, _c3, _c4, _c5 = st.columns([2, 2, 2, 1, 1])
-with _c1:
-    raw_ticker = st.text_input("Ticker", value=get_active_ticker())
-with _c2:
-    lookback = st.slider("Historical Data (Days)", 252, 5040, 1260, step=252)
-with _c3:
-    strategy = st.selectbox("Algorithmic Strategy", STRATEGIES)
-with _c4:
-    commission_bps = st.number_input("Commission (bps)", value=5, step=1)
-with _c5:
-    slippage_bps = st.number_input("Slippage (bps)", value=5, step=1)
-_b1, _b2, _b3, _ = st.columns([1, 1, 1, 3])
-run_test = _b1.button("Run Standard", use_container_width=True)
-run_opt = _b2.button("Optimize", type="primary", use_container_width=True)
-run_compare = _b3.button("Compare All", use_container_width=True)
+with st.form("backtester_form", border=True):
+    _c1, _c2, _c3, _c4, _c5 = st.columns([2, 2, 2, 1, 1])
+    with _c1:
+        raw_ticker = st.text_input("Ticker", value=get_active_ticker())
+    with _c2:
+        lookback = st.slider("Historical Data (Days)", 252, 5040, 1260, step=252)
+    with _c3:
+        strategy = st.selectbox("Algorithmic Strategy", STRATEGIES)
+    with _c4:
+        commission_bps = st.number_input("Commission (bps)", value=5, step=1)
+    with _c5:
+        slippage_bps = st.number_input("Slippage (bps)", value=5, step=1)
+    _b1, _b2, _b3, _ = st.columns([1, 1, 1, 3])
+    run_test = _b1.form_submit_button("Run Standard", use_container_width=True)
+    run_opt = _b2.form_submit_button("Optimize", type="primary", use_container_width=True)
+    run_compare = _b3.form_submit_button("Compare All", use_container_width=True)
 
-with st.expander("Advanced Settings"):
-    adv1, adv2 = st.columns(2)
-    with adv1:
-        borrow_rate = st.slider("Short Borrow Rate (% ann.)", 0.0, 10.0, 1.5, step=0.5,
-                                help="Annual cost of borrowing shares for short positions.")
-        use_bet_sizing = st.checkbox("Enable Bet Sizing (Meta-Labeling)",
-                                     help="Scale position size by signal confidence instead of always ±1.")
-    with adv2:
-        use_fracdiff = st.checkbox("Fractional Differentiation",
-                                    help="Preserve long memory while achieving stationarity (López de Prado, ch. 5). Auto-finds minimum d.")
-        use_triple_barrier = st.checkbox("Enable Triple Barrier Exits",
-                                         help="Apply profit-taking, stop-loss, and time-expiry barriers (López de Prado).")
-        if use_triple_barrier:
-            tb1, tb2, tb3 = st.columns(3)
-            with tb1:
-                tb_pt = st.number_input("Take Profit (ATR mult)", value=2.0, step=0.5, min_value=0.5)
-            with tb2:
-                tb_sl = st.number_input("Stop Loss (ATR mult)", value=1.0, step=0.5, min_value=0.5)
-            with tb3:
-                tb_hold = st.number_input("Max Hold (days)", value=20, step=5, min_value=5)
-        else:
-            tb_pt, tb_sl, tb_hold = 2.0, 1.0, 20
+    with st.expander("Advanced Settings"):
+        adv1, adv2 = st.columns(2)
+        with adv1:
+            borrow_rate = st.slider("Short Borrow Rate (% ann.)", 0.0, 10.0, 1.5, step=0.5,
+                                    help="Annual cost of borrowing shares for short positions.")
+            use_bet_sizing = st.checkbox("Enable Bet Sizing (Meta-Labeling)",
+                                         help="Scale position size by signal confidence instead of always ±1.")
+        with adv2:
+            use_fracdiff = st.checkbox("Fractional Differentiation",
+                                        help="Preserve long memory while achieving stationarity (López de Prado, ch. 5). Auto-finds minimum d.")
+            use_triple_barrier = st.checkbox("Enable Triple Barrier Exits",
+                                             help="Apply profit-taking, stop-loss, and time-expiry barriers (López de Prado).")
+            if use_triple_barrier:
+                tb1, tb2, tb3 = st.columns(3)
+                with tb1:
+                    tb_pt = st.number_input("Take Profit (ATR mult)", value=2.0, step=0.5, min_value=0.5)
+                with tb2:
+                    tb_sl = st.number_input("Stop Loss (ATR mult)", value=1.0, step=0.5, min_value=0.5)
+                with tb3:
+                    tb_hold = st.number_input("Max Hold (days)", value=20, step=5, min_value=5)
+            else:
+                tb_pt, tb_sl, tb_hold = 2.0, 1.0, 20
 
 ticker = format_massive_ticker(raw_ticker)
 set_active_ticker(ticker)
