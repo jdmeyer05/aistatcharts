@@ -120,23 +120,41 @@ with tab1:
         df_surf["iv"] = df_surf["iv"].clip(upper=iv_cap)
 
         if len(df_surf) > 20:
-            fig_3d = go.Figure(data=[go.Mesh3d(
-                x=df_surf["strike"],
-                y=df_surf["dte"],
-                z=df_surf["iv"],
-                intensity=df_surf["iv"],
-                colorscale="Turbo",
-                opacity=0.8,
-                hovertemplate="Strike: $%{x}<br>DTE: %{y}<br>IV: %{z:.1%}<extra></extra>",
+            # Pivot into surface grid (same approach as Vol Surface page)
+            _surf_pivot = df_surf.pivot_table(index="dte", columns="strike", values="iv", aggfunc="mean")
+            _surf_pivot = _surf_pivot.interpolate(axis=1, limit=3).dropna(how="all")
+            if not _surf_pivot.empty:
+                _z_vals = _surf_pivot.values
+                _exp_labels = [f"{d}d" for d in _surf_pivot.index]
+            else:
+                _z_vals = df_surf.pivot_table(index="dte", columns="strike", values="iv", aggfunc="mean").fillna(0).values
+                _exp_labels = [f"{d}d" for d in sorted(df_surf["dte"].unique())]
+                _surf_pivot = df_surf.pivot_table(index="dte", columns="strike", values="iv", aggfunc="mean").fillna(0)
+
+            fig_3d = go.Figure(data=[go.Surface(
+                x=_surf_pivot.columns.tolist(),
+                y=list(range(len(_surf_pivot.index))),
+                z=_z_vals,
+                colorscale="Viridis",
+                colorbar=dict(title="IV", tickformat=".0%", len=0.6, thickness=15),
+                lighting=dict(ambient=0.6, diffuse=0.5, specular=0.3, roughness=0.5),
+                opacity=0.92,
+                hovertemplate="Strike: $%{x:.0f}<br>DTE: %{y}<br>IV: %{z:.1%}<extra></extra>",
             )])
 
             fig_3d.update_layout(
                 template="plotly_dark", height=600,
-                margin=dict(t=10, b=0, l=0, r=0),
+                margin=dict(t=10, b=10, l=10, r=10),
                 scene=dict(
-                    xaxis_title="Strike ($)",
-                    yaxis_title="Days to Expiration",
-                    zaxis_title="Implied Volatility",
+                    xaxis=dict(title="Strike ($)", backgroundcolor="rgba(14,17,23,0.8)",
+                               gridcolor="rgba(48,54,61,0.4)", showbackground=True),
+                    yaxis=dict(title="Expiration", tickvals=list(range(len(_surf_pivot.index))),
+                               ticktext=_exp_labels, backgroundcolor="rgba(14,17,23,0.8)",
+                               gridcolor="rgba(48,54,61,0.4)", showbackground=True),
+                    zaxis=dict(title="IV", tickformat=".0%", backgroundcolor="rgba(14,17,23,0.8)",
+                               gridcolor="rgba(48,54,61,0.4)", showbackground=True),
+                    camera=dict(eye=dict(x=1.8, y=-1.4, z=0.9)),
+                    aspectratio=dict(x=1.5, y=1, z=0.6),
                 ),
             )
             st.plotly_chart(fig_3d, use_container_width=True)
@@ -155,7 +173,9 @@ with tab1:
                     hovertemplate="DTE: %{x}<br>IV: %{y:.1%}<extra></extra>",
                 ))
                 fig_term.update_layout(
-                    template="plotly_dark", height=350, margin=dict(t=10, b=0, l=0, r=0),
+                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)", height=350,
+                    margin=dict(l=50, r=20, t=10, b=50),
                     xaxis_title="Days to Expiration", yaxis_title="ATM Implied Volatility",
                     hovermode="x unified",
                 )
@@ -178,7 +198,9 @@ with tab1:
             if spot:
                 fig_skew.add_vline(x=spot, line_dash="dot", line_color="#ffaa00")
             fig_skew.update_layout(
-                template="plotly_dark", height=400, margin=dict(t=10, b=0, l=0, r=0),
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)", height=400,
+                margin=dict(l=50, r=20, t=10, b=50),
                 xaxis_title="Strike", yaxis_title="Implied Volatility",
                 xaxis=dict(range=[spot * 0.85, spot * 1.15]) if spot else {},
                 hovermode="x unified",
@@ -574,20 +596,22 @@ with tab4:
         fig_decay = go.Figure()
         fig_decay.add_trace(go.Heatmap(
             z=z, x=days_arr, y=price_steps,
-            colorscale="RdYlGn" if bs_type == "call" else "RdYlGn_r",
+            colorscale=[[0, "#ff4444"], [0.5, "#1c1f26"], [1, "#00ff96"]],
             text=np.round(z, 1), texttemplate="%{text}",
-            showscale=False,
+            textfont=dict(size=9),
+            colorbar=dict(title="Value ($)", len=0.6, thickness=12),
             hovertemplate="DTE: %{x}<br>Spot: $%{y:.2f}<br>Value: $%{z:.2f}<extra></extra>",
         ))
         fig_decay.add_trace(go.Contour(
             z=z, x=days_arr, y=price_steps,
             contours=dict(start=center_val, end=center_val, size=0, coloring="none"),
-            line=dict(color="black", width=3, dash="dash"),
+            line=dict(color="white", width=2, dash="dash"),
             showscale=False, hoverinfo="skip",
         ))
         fig_decay.update_layout(
-            template="plotly_dark", height=600,
-            margin=dict(t=10, b=30, l=50, r=50),
+            template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)", height=600,
+            margin=dict(l=50, r=20, t=30, b=50),
             xaxis_title="Days to Expiration",
             yaxis_title="Stock Price ($)",
             xaxis=dict(autorange="reversed"),
