@@ -5,12 +5,11 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import logging
-from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.layout import setup_page, error_boundary, get_active_ticker, fun_loader
+from src.layout import setup_page, error_boundary, fun_loader
 from src.styles import COLORS
-from src.data_engine import fetch_options_chain, get_expiration_dates, polygon_batch_snapshot
+from src.data_engine import fetch_options_chain, polygon_batch_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -123,14 +122,21 @@ def _find_best_condor(chain: pd.DataFrame, spot: float, dte_min: int, dte_max: i
     long_put = long_put_row.iloc[0]
     long_call = long_call_row.iloc[0]
 
-    # Calculate credit and risk
-    sp_mid = (short_put.get("bid", 0) + short_put.get("ask", 0)) / 2
-    sc_mid = (short_call.get("bid", 0) + short_call.get("ask", 0)) / 2
-    lp_mid = (long_put.get("bid", 0) + long_put.get("ask", 0)) / 2
-    lc_mid = (long_call.get("bid", 0) + long_call.get("ask", 0)) / 2
+    # Calculate credit and risk (handle NaN/zero bids)
+    def _mid(row):
+        b = row.get("bid", 0) or 0
+        a = row.get("ask", 0) or 0
+        lp = row.get("last_price", 0) or 0
+        mid = (b + a) / 2 if (b > 0 and a > 0) else lp
+        return mid if mid > 0 else 0
+
+    sp_mid = _mid(short_put)
+    sc_mid = _mid(short_call)
+    lp_mid = _mid(long_put)
+    lc_mid = _mid(long_call)
 
     credit = (sp_mid + sc_mid) - (lp_mid + lc_mid)
-    if credit <= 0:
+    if credit <= 0.01:
         return None
 
     put_width = abs(sp_strike - long_put["strike_price"])
@@ -140,21 +146,26 @@ def _find_best_condor(chain: pd.DataFrame, spot: float, dte_min: int, dte_max: i
     if max_risk <= 0:
         return None
 
-    # Probability of profit (approximate from short deltas)
-    sp_delta = abs(short_put.get("delta", 0.16))
-    sc_delta = abs(short_call.get("delta", 0.16))
+    # Probability of profit (approximate from short deltas, handle NaN)
+    sp_delta = abs(float(short_put.get("delta", 0) or 0)) or target_delta
+    sc_delta = abs(float(short_call.get("delta", 0) or 0)) or target_delta
     pop = 1 - sp_delta - sc_delta  # P(between short strikes)
     pop = max(0, min(1, pop))
 
     # Expected value
     ev = credit * pop - max_risk * (1 - pop)
 
-    # IV from short legs (average)
-    avg_iv = (short_put.get("implied_volatility", 0) + short_call.get("implied_volatility", 0)) / 2
+    # IV from short legs (average, handle NaN)
+    _sp_iv = float(short_put.get("implied_volatility", 0) or 0)
+    _sc_iv = float(short_call.get("implied_volatility", 0) or 0)
+    avg_iv = (_sp_iv + _sc_iv) / 2 if (_sp_iv + _sc_iv) > 0 else 0
 
-    # Theta collected (daily decay)
-    theta_collected = abs(short_put.get("theta", 0)) + abs(short_call.get("theta", 0)) \
-                    - abs(long_put.get("theta", 0)) - abs(long_call.get("theta", 0))
+    # Theta collected (daily decay, handle NaN)
+    def _safe_theta(row):
+        v = row.get("theta", 0)
+        return abs(float(v)) if v and not np.isnan(float(v)) else 0
+    theta_collected = _safe_theta(short_put) + _safe_theta(short_call) \
+                    - _safe_theta(long_put) - _safe_theta(long_call)
 
     # Composite score: credit/risk ratio × POP × IV boost
     score = (credit / max_risk) * pop * (1 + avg_iv)
@@ -283,7 +294,7 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                 sp = r["short_put"]
                 sc = r["short_call"]
                 lc = r["long_call"]
-                spot = r["spot"]
+                r_spot = r["spot"]
 
                 st.markdown(
                     f'<div style="display:flex;align-items:center;justify-content:center;gap:4px;'
@@ -293,7 +304,7 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                     f'<span style="color:#888;">—</span>'
                     f'<span style="color:{COLORS["warning"]};border:1px solid {COLORS["warning"]};padding:2px 8px;border-radius:4px;">'
                     f'Sell ${sp:.0f}P</span>'
-                    f'<span style="color:#888;">···${spot:.0f}···</span>'
+                    f'<span style="color:#888;">···${r_spot:.0f}···</span>'
                     f'<span style="color:{COLORS["warning"]};border:1px solid {COLORS["warning"]};padding:2px 8px;border-radius:4px;">'
                     f'Sell ${sc:.0f}C</span>'
                     f'<span style="color:#888;">—</span>'
@@ -305,16 +316,7 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
 
                 # P&L at expiration payoff diagram
                 prices = np.linspace(lp - 5, lc + 5, 200)
-                pnl = np.zeros_like(prices)
                 credit = r["credit"]
-                for i, px in enumerate(prices):
-                    # Short put P&L
-                    sp_pnl = min(credit, credit - max(sp - px, 0) + max(lp - px, 0))
-                    # Short call P&L
-                    sc_pnl = min(0, -max(px - sc, 0) + max(px - lc, 0))
-                    pnl[i] = (sp_pnl + sc_pnl) * 100
-
-                # Recalculate properly: full iron condor P&L
                 pnl = np.zeros_like(prices)
                 for i, px in enumerate(prices):
                     short_put_pnl = -max(sp - px, 0)
@@ -340,7 +342,7 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                     hoverinfo="skip", showlegend=False,
                 ))
                 fig_pnl.add_hline(y=0, line_dash="dot", line_color="#555", line_width=1)
-                fig_pnl.add_vline(x=spot, line_dash="dash", line_color=COLORS["accent"], line_width=1,
+                fig_pnl.add_vline(x=r_spot, line_dash="dash", line_color=COLORS["accent"], line_width=1,
                                    annotation_text="Spot", annotation_position="top")
                 fig_pnl.update_layout(
                     template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
