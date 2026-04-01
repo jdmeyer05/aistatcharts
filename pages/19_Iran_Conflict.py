@@ -3040,16 +3040,16 @@ with fun_loader("data"):
     def _fetch_defense():
         _results["defense_contracts"] = get_defense_contract_summary(days=30)
 
-    # ── Critical path: data needed for initial page render (escalation dashboard + charts) ──
+    # ── Critical path: only oil price (dashboard renders fast) ──
     critical_threads = [
-        threading.Thread(target=_fetch_gdelt),
         threading.Thread(target=_fetch_oil),
-        threading.Thread(target=_fetch_stocks),
-    ]
-    # ── Deferred: data for AI tab and supplementary sections (can load while user reads dashboard) ──
-    deferred_threads = [
-        threading.Thread(target=_fetch_acled),
         threading.Thread(target=_fetch_market_context),
+    ]
+    # ── Deferred: everything else loads while user reads dashboard ──
+    deferred_threads = [
+        threading.Thread(target=_fetch_gdelt),
+        threading.Thread(target=_fetch_stocks),
+        threading.Thread(target=_fetch_acled),
         threading.Thread(target=_fetch_infra_validation),
         threading.Thread(target=_fetch_timeline_update),
         threading.Thread(target=_fetch_polymarket),
@@ -3064,9 +3064,9 @@ with fun_loader("data"):
     # Start everything
     for t in critical_threads + deferred_threads:
         t.start()
-    # Wait only for critical path (page can render with this)
+    # Wait only for critical path (~2s for oil + market)
     for t in critical_threads:
-        t.join(timeout=15)
+        t.join(timeout=8)
 
     gdelt_data, df_tone = _results.get("gdelt", ({}, None))
     df_oil = _results.get("oil", pd.DataFrame())
@@ -3079,8 +3079,37 @@ with fun_loader("data"):
     df_acled, acled_source = _results.get("acled", (pd.DataFrame(), None))
     market_context = _results.get("market_context", {})
     _prefetched_infra = _results.get("infra_validation")
-    live_timeline = _results.get("timeline", CONFLICT_TIMELINE_EVENTS)
+
+    # Timeline: prefer Supabase (worker-updated) → Grok thread → hardcoded
+    live_timeline = _results.get("timeline")
+    if not live_timeline:
+        try:
+            from src.db import get_client as _get_db
+            _tl_db = _get_db()
+            if _tl_db:
+                _tl_resp = _tl_db.table("conflict_timeline").select("*")\
+                    .order("date", desc=True).limit(50).execute()
+                if _tl_resp.data and len(_tl_resp.data) >= 5:
+                    live_timeline = _tl_resp.data
+        except Exception:
+            pass
+    if not live_timeline:
+        live_timeline = CONFLICT_TIMELINE_EVENTS
+
+    # Situation briefing: prefer Supabase worker cache → Grok thread
     situation_briefing = _results.get("situation_briefing", "")
+    if not situation_briefing:
+        try:
+            from src.db import get_client as _get_db2
+            _sb_db = _get_db2()
+            if _sb_db:
+                _hour_key = f"situation_briefing_{datetime.now().strftime('%Y%m%d_%H')}"
+                _sb_resp = _sb_db.table("ai_response_cache").select("response")\
+                    .eq("input_hash", _hour_key).limit(1).execute()
+                if _sb_resp.data:
+                    situation_briefing = _sb_resp.data[0].get("response", "")
+        except Exception:
+            pass
     polymarket_data = _results.get("polymarket", [])
     oil_curve = _results.get("oil_curve", {})
     breaking_news = _results.get("breaking_news", "")
@@ -3163,9 +3192,40 @@ if _change_alerts and _change_alerts.get("alerts"):
         unsafe_allow_html=True,
     )
 
-# --- SITUATION BRIEFING (Grok live analysis, always visible) ---
+# --- COMPACT STATUS BAR (always visible) ---
+_last_result = None
+try:
+    _lr, _lr_stale = get_latest_conflict_result()
+    _last_result = _lr
+except Exception:
+    pass
+if _last_result and _last_result.get("blended"):
+    _bl = _last_result["blended"]
+    _esc = _bl.get("escalation_risk", {})
+    _esc_score = _esc.get("score", 0)
+    _esc_level = _esc.get("level", "Unknown")
+    _esc_color = "#ff4444" if _esc_score >= 8 else "#ff6b35" if _esc_score >= 6 else "#ffaa00" if _esc_score >= 4 else "#00ff96"
+    _days_war = (datetime.now() - datetime(2026, 2, 28)).days
+    _oil_info = _bl.get("oil_impact", {})
+    _oil_range = _oil_info.get("price_range", "")
+    _cease = _bl.get("diplomatic_outlook", {}).get("ceasefire_probability_30d", "?")
+    _summary = _bl.get("situation_summary", "")[:200]
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("Escalation", f"{_esc_score}/10", _esc_level)
+    sc2.metric("Day", str(_days_war))
+    sc3.metric("Oil", _oil_range or "—")
+    sc4.metric("Ceasefire 30d", f"{_cease}%")
+
+    if _summary:
+        st.caption(_summary)
+    st.divider()
+
+# --- SITUATION BRIEFING + LATEST EVENTS (collapsible to reduce clutter) ---
+_briefing_expander = st.expander("Intelligence Briefing & Latest Events", expanded=False)
+_bx = _briefing_expander  # short alias for rendering inside expander
+
 if situation_briefing:
-    st.markdown("#### Situation Briefing")
     _briefing_time = datetime.now().strftime("%b %d, %I:%M %p")
 
     # Parse sections from the briefing text
@@ -3231,8 +3291,8 @@ if situation_briefing:
             _line = _re.sub(r'@(\w+)', r'<span style="color:#1DA1F2;">@\1</span>', _line)
             _brief_html += f'<div style="font-size:0.82rem;color:#ddd;line-height:1.6;margin:6px 0;">{_line}</div>'
 
-    # Render the full briefing
-    st.markdown(
+    # Render the full briefing inside expander
+    _bx.markdown(
         f'<div style="padding:16px 20px;border:1px solid #30363d;border-radius:8px;'
         f'background:linear-gradient(135deg, rgba(0,209,255,0.04), rgba(255,68,68,0.02));margin-bottom:16px;">'
         # Header bar
@@ -3256,8 +3316,8 @@ if situation_briefing:
         unsafe_allow_html=True,
     )
 
-# --- LATEST EVENTS (always visible, above tabs) ---
-st.markdown("#### Latest Conflict Events")
+# --- LATEST EVENTS (inside expander) ---
+_bx.markdown("#### Latest Conflict Events")
 _latest_events = sorted(live_timeline, key=lambda e: e.get("date", ""), reverse=True)[:8]
 _cat_colors = {
     "Military": "#ff4b4b", "Escalation": "#ff6b35", "Supply": "#ffaa00",
@@ -3283,7 +3343,7 @@ for evt in _latest_events:
             f'⚡ {_einfra}</div>'
         )
 
-    st.markdown(
+    _bx.markdown(
         f'<div style="padding:8px 12px;border-left:3px solid {_ccolor};margin-bottom:5px;'
         f'background:rgba(255,255,255,0.02);border-radius:0 6px 6px 0;">'
         f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">'
@@ -3297,8 +3357,6 @@ for evt in _latest_events:
         f'</div>',
         unsafe_allow_html=True,
     )
-
-st.divider()
 
 # --- TABS ---
 tab_ai, tab_timeline, tab_infra = st.tabs([
