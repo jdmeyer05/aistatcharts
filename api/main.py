@@ -15,6 +15,24 @@ from fastapi.middleware.cors import CORSMiddleware
 # Ensure project root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Patch @st.cache_data to be a no-op outside Streamlit runtime.
+# The decorated functions just run uncached — simpler and more reliable
+# than trying to use the real cache without a Streamlit session.
+try:
+    import streamlit as st
+
+    def _noop_cache_data(*args, **kwargs):
+        """Replace @st.cache_data with a passthrough — no caching in FastAPI."""
+        if args and callable(args[0]):
+            return args[0]  # @st.cache_data without parens
+        def decorator(func):
+            return func     # @st.cache_data(ttl=...) with parens
+        return decorator
+
+    st.cache_data = _noop_cache_data
+except Exception:
+    pass
+
 # Load secrets from .streamlit/secrets.toml into env vars (local dev)
 try:
     import toml
@@ -48,19 +66,25 @@ app = FastAPI(
 # CORS — allow the Next.js frontend (and local dev)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8501", "https://aistatcharts.com"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8501",
+        "https://aistatcharts.com",
+        "https://*.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Register route modules
-from api.routes import market, signals, positions, options
+from api.routes import market, signals, positions, options, scanner
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 app.include_router(positions.router, prefix="/api/positions", tags=["Positions"])
 app.include_router(options.router, prefix="/api/options", tags=["Options"])
+app.include_router(scanner.router, prefix="/api/scan", tags=["Scanners"])
 
 
 @app.get("/api/health")

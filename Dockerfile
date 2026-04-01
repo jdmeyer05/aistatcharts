@@ -23,9 +23,8 @@ COPY . .
 # Create data directories for caches
 RUN mkdir -p /app/data/gdelt_events /app/src
 
-# Cloud Run expects the app on $PORT
-ENV PORT=8080
-EXPOSE 8080
+# Ports: Streamlit (8080) + FastAPI (8000)
+EXPOSE 8080 8000
 
 # Streamlit config for production
 ENV STREAMLIT_SERVER_PORT=8080 \
@@ -36,11 +35,13 @@ ENV STREAMLIT_SERVER_PORT=8080 \
     STREAMLIT_SERVER_MAX_UPLOAD_SIZE=10
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:8080/_stcore/health || exit 1
+    CMD curl -f http://localhost:8080/_stcore/health || curl -f http://localhost:8000/api/health || exit 1
 
-# Start Streamlit
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8080", \
-     "--server.address=0.0.0.0", \
-     "--server.enableXsrfProtection=true", \
-     "--server.enableCORS=false"]
+# Start both Streamlit and FastAPI
+# Streamlit runs in background, FastAPI in foreground (so Docker tracks its PID)
+CMD bash -c "streamlit run app.py \
+    --server.port=8080 \
+    --server.address=0.0.0.0 \
+    --server.enableXsrfProtection=true \
+    --server.enableCORS=false &\
+    uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2"
