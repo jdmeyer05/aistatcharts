@@ -16,7 +16,7 @@ from src.data_engine import fetch_massive_data
 def _get_openai_client(**kwargs):
     from openai import OpenAI
     return OpenAI(**kwargs)
-from src.layout import setup_page, error_boundary, fun_loader
+from src.layout import setup_page, error_boundary, fun_loader, freshness_bar
 from src.gdelt_events import fetch_gdelt_bulk_events, summarize_gdelt_events, build_gdelt_ai_context
 from src.edgar import fetch_recent_8k as _fetch_edgar_8k
 from src.gov_data import get_cot_summary, fetch_treasury_yields, get_defense_contract_summary
@@ -3617,6 +3617,16 @@ Recent timeline of key events (auto-updated):
 
         # Display results
         if conflict_result and conflict_result.get("success"):
+            _conflict_ts = latest_conflict.get("timestamp") if latest_conflict else None
+            if _conflict_ts and isinstance(_conflict_ts, str):
+                try:
+                    _conflict_ts = datetime.fromisoformat(_conflict_ts)
+                except Exception:
+                    _conflict_ts = datetime.now()
+            freshness_bar(
+                ("Conflict Data", _conflict_ts or datetime.now(), 60, 240),
+                ("Briefing", datetime.now(), 60, 240),
+            )
             st.divider()
 
             # Escalation gauge + key metrics

@@ -496,16 +496,18 @@ def prewarm_options_chains(db):
                 ask = quote.get('ask') or 0
                 day_close = day.get('close', 0) or 0
                 day_vwap = day.get('vwap', 0) or 0
+                quote_is_live = bid > 0 and ask > 0
                 if bid == 0 and day_close > 0:
-                    bid = day_close * 0.99
+                    bid = day_close * 0.95
                 if ask == 0 and day_close > 0:
-                    ask = day_close * 1.01
+                    ask = day_close * 1.05
                 rows.append({
                     'strike_price': d.get('strike_price'),
                     'contract_type': d.get('contract_type'),
                     'expiration_date': d.get('expiration_date'),
                     'bid': bid, 'ask': ask,
                     'last_price': day_close or day_vwap or 0,
+                    'quote_live': quote_is_live,
                     'volume': day.get('volume', 0),
                     'open_interest': r.get('open_interest', 0),
                     'implied_volatility': r.get('implied_volatility', 0),
@@ -571,12 +573,84 @@ def cleanup_caches(db):
         logger.warning(f"Price history cleanup failed: {e}")
 
 
+# ─── TASK 7: MARKET NEWS SCAN ────────────────────────────────
+
+def update_market_news_scan(db):
+    """Scan for market-moving news via Grok with live X/Twitter search.
+
+    Runs hourly during market hours. Cached in ai_response_cache,
+    shared across all users. Read by the Summary landing page.
+    Cost: ~$0.01/call × 8/day = ~$0.08/day.
+    """
+    grok_key = os.environ.get("GROK_API_KEY")
+    if not grok_key:
+        logger.warning("GROK_API_KEY not set, skipping market news scan")
+        return
+
+    now = datetime.now()
+    today = now.strftime("%B %d, %Y %I:%M %p ET")
+    weekday = now.strftime("%A")
+
+    prompt = f"""TODAY: {weekday}, {today}. Search X/Twitter and financial news RIGHT NOW.
+
+Report the most market-moving developments from the LAST 4 HOURS. If it is pre-market, focus on overnight moves, Asian/European session, and the setup for today's US session.
+
+COVER (only what's actually happening — skip categories with nothing notable):
+1. MACRO & FED — CPI/PPI/jobs data, Fed speakers, rate expectations, Treasury auctions
+2. EARNINGS — beats/misses from the last 12 hours, guidance changes, pre-market movers
+3. GEOPOLITICAL — trade policy, sanctions, conflicts, tariffs affecting markets
+4. SECTOR MOVES — notable rotation, breakouts, or breakdowns by sector
+5. COMMODITIES & FX — oil/gold/dollar/crypto moves with catalysts
+6. OPTIONS & FLOW — unusual volume, large blocks, VIX moves, put/call skew shifts
+
+SOURCES TO CHECK: @CNBC, @Bloomberg, @zaborsky, @DeItaone, @Fxhedgers, @unusual_whales, @spotgamma, @JavierBlas, @NickTimiraos, @LiveSquawk
+
+FORMAT: Lead with the single biggest story. Then bullet the rest. 200-300 words max. Be specific — name tickers, numbers, percentages. No filler.
+
+ACCURACY: Only report confirmed developments. Do not speculate or fabricate. If markets are quiet, say so briefly."""
+
+    try:
+        client = _get_openai_client(api_key=grok_key, base_url="https://api.x.ai/v1")
+        response = client.chat.completions.create(
+            model="grok-4-1-fast-reasoning",
+            messages=[
+                {"role": "system", "content": (
+                    "You are a senior market intelligence analyst at a quantitative trading firm. "
+                    "Your job: scan X/Twitter and news for the developments that are actually moving "
+                    "markets right now. Be direct, specific, and quantitative. No boilerplate."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1200,
+            temperature=0.2,
+        )
+        news = response.choices[0].message.content.strip()
+        if news:
+            hour_key = f"market_news_{now.strftime('%Y%m%d_%H')}"
+            db.table("ai_response_cache").upsert({
+                "input_hash": hour_key,
+                "model": "grok-4-1-fast",
+                "source_page": "market_news",
+                "ticker": "MARKET",
+                "response": news,
+                "prompt_summary": "Hourly market-moving news scan",
+                "created_at": now.isoformat(),
+                "expires_at": (now + timedelta(hours=1.5)).isoformat(),
+            }, on_conflict="input_hash").execute()
+            logger.info(f"Market news scan updated ({len(news)} chars)")
+        else:
+            logger.warning("Grok returned empty market news")
+    except Exception as e:
+        logger.error(f"Market news scan failed: {e}")
+
+
 # ─── MAIN ─────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="AI Statcharts hourly worker")
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
-                                            "metrics", "cleanup", "prewarm", "options"],
+                                            "metrics", "cleanup", "prewarm", "options",
+                                            "market_news"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -598,6 +672,9 @@ def main():
 
     if args.task in ("all", "options", "prewarm"):
         prewarm_options_chains(db)
+
+    if args.task in ("all", "market_news"):
+        update_market_news_scan(db)
 
     if args.task in ("all", "cleanup"):
         cleanup_caches(db)

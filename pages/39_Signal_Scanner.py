@@ -18,8 +18,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 import logging
-from src.layout import setup_page, error_boundary
+from src.layout import setup_page, error_boundary, freshness_bar
 from src.styles import COLORS
 from src.quant_features import compute_vpin, compute_entropy
 
@@ -192,6 +193,11 @@ with st.spinner(f"Scanning {len(tickers)} assets — prices, fundamentals, earni
 if prices.empty or len(prices.columns) < 3:
     st.error("Insufficient price data returned.")
     st.stop()
+
+freshness_bar(
+    ("Prices", datetime.now(), 5, 15),
+    ("Fundamentals", datetime.now(), 60, 240),
+)
 
 # Clean up
 prices = prices.dropna(axis=1, how="all")

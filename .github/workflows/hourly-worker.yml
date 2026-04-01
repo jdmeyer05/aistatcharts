@@ -22,6 +22,7 @@ on:
           - timeline
           - metrics
           - cleanup
+          - market_news
 
 jobs:
   run-worker:

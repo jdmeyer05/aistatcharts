@@ -7,7 +7,7 @@ import logging
 from datetime import date, timedelta, datetime
 from scipy.stats import norm
 
-from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader
+from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader, freshness_bar
 from src.styles import COLORS
 from src.api_keys import get_secret
 from src.data_engine import (
@@ -341,6 +341,9 @@ spot = st.session_state["cal_spot"]
 ticker_display = st.session_state["cal_ticker"]
 rfr = st.session_state["cal_rfr"]
 px_df = st.session_state["cal_px"]
+
+freshness_bar(("Chain", datetime.now(), 60, 120))
+
 # All available expirations (for dropdowns) vs pre-fetched (for scanner/term structure)
 all_expirations = st.session_state.get("cal_all_expirations", st.session_state.get("cal_expirations", []))
 expirations = st.session_state["cal_expirations"]  # pre-fetched only

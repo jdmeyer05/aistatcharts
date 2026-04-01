@@ -6,7 +6,7 @@ from plotly.subplots import make_subplots
 import logging
 from datetime import datetime
 
-from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader
+from src.layout import setup_page, get_active_ticker, set_active_ticker, error_boundary, fun_loader, freshness_bar
 from src.styles import COLORS
 from src.data_engine import (
     format_massive_ticker, fetch_massive_data,
@@ -283,6 +283,8 @@ spot = st.session_state["vs_spot"]
 ticker_display = st.session_state["vs_ticker"]
 px_df = st.session_state["vs_px"]
 expirations = st.session_state["vs_exps"]
+
+freshness_bar(("Chain", datetime.now(), 60, 120))
 
 # Compute realized vol once (used by Tab 3 and Tab 4)
 _returns = px_df["Close"].pct_change().dropna() if px_df is not None else pd.Series(dtype=float)

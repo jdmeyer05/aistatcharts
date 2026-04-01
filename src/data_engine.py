@@ -544,10 +544,13 @@ def fetch_options_chain(symbol: str, expiration: str = None, max_pages: int = 20
                     day_close = day.get('close', 0) or 0
                     day_vwap = day.get('vwap', 0) or 0
 
+                    # Track whether this is a real live quote or synthetic from daily close
+                    quote_is_live = bid > 0 and ask > 0
+
                     if bid == 0 and day_close > 0:
-                        bid = day_close * 0.99
+                        bid = day_close * 0.95  # wider synthetic spread (was 0.99)
                     if ask == 0 and day_close > 0:
-                        ask = day_close * 1.01
+                        ask = day_close * 1.05  # wider synthetic spread (was 1.01)
 
                     last_price = day_close or day_vwap or 0
 
@@ -558,6 +561,7 @@ def fetch_options_chain(symbol: str, expiration: str = None, max_pages: int = 20
                         'bid': bid,
                         'ask': ask,
                         'last_price': last_price,
+                        'quote_live': quote_is_live,
                         'volume': day.get('volume', 0),
                         'open_interest': r.get('open_interest', 0),
                         'implied_volatility': r.get('implied_volatility', 0),

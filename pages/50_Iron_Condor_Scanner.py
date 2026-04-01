@@ -9,12 +9,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import html as _html
 
-from src.layout import setup_page, error_boundary, fun_loader
+from src.layout import setup_page, error_boundary, fun_loader, freshness_bar
 from src.styles import COLORS
 from src.data_engine import fetch_options_chain, polygon_batch_snapshot, fetch_massive_data
 from src.options_models import black_scholes
-from src.options_history import get_iv_percentile, get_historical_iv
-from src.metrics_store import save_snapshot, load_history
+from src.metrics_store import save_snapshot, percentile_rank
 from src.api_keys import get_secret
 from src.economic_calendar import FOMC_DATES, FOMC_SEP_DATES
 
@@ -53,26 +52,14 @@ with st.expander("How this scanner works"):
 # ═══════════════════════════════════════════════
 
 DEFAULT_UNIVERSE = [
-    # Broad indices
+    # Broad indices (penny-wide spreads, massive OI)
     "SPY", "QQQ", "IWM", "DIA",
-    # All 11 SPDR sectors
-    "XLF", "XLK", "XLE", "XLP", "XLU", "XLV", "XLRE", "XLC", "XLI", "XLB",
-    # Thematic / sub-sector ETFs
-    "XBI", "SMH", "KRE", "GDX",
-    # Commodity / real asset / fixed income
-    "GLD", "SLV", "USO", "TLT", "HYG", "LQD",
-    # International
-    "EEM", "EFA", "FXI",
-    # Mega cap tech
-    "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META", "NFLX", "CRM",
-    # Financials
-    "JPM", "GS", "BAC", "C", "MS",
-    # Mega cap value / stable (range-bound, ideal condor underlyings)
-    "JNJ", "PG", "KO", "PEP", "MCD", "UNH", "V", "WMT",
-    # Energy majors
-    "XOM", "CVX",
-    # High-liquidity mid-IV
-    "AMD", "BA", "DIS", "UBER", "INTC", "F",
+    # Mega cap tech (deep chains, active market makers)
+    "AAPL", "TSLA", "NVDA", "AMD", "AMZN", "META", "MSFT", "GOOGL", "NFLX",
+    # Liquid ETFs (tight spreads across strikes)
+    "GLD", "SMH", "XLF", "TLT", "EEM",
+    # Liquid single names
+    "JPM", "BA",
 ]
 
 with st.form("ic_scan_form", border=True):
@@ -230,18 +217,40 @@ def _find_best_condor(chain: pd.DataFrame, spot: float, dte_min: int, dte_max: i
         v = row.get("ask", 0) or 0
         return v if v > 0 else _mid(row)
 
+    def _is_live(row):
+        return bool(row.get("quote_live", True))
+
+    # For short legs (we sell): use bid for natural, mid for theoretical
+    # For long legs (we buy): use ask for natural, mid for theoretical
+    # When a leg has no live quote, use conservative pricing:
+    #   - Short legs: use bid (lower, conservative for credit)
+    #   - Long legs: use ask (higher, conservative for cost)
     sp_mid = _mid(short_put)
     sc_mid = _mid(short_call)
     lp_mid = _mid(long_put)
     lc_mid = _mid(long_call)
 
-    credit = (sp_mid + sc_mid) - (lp_mid + lc_mid)
+    # Count legs with synthetic (non-live) quotes
+    _live_flags = [_is_live(short_put), _is_live(long_put), _is_live(short_call), _is_live(long_call)]
+    _n_synthetic = sum(1 for f in _live_flags if not f)
+
+    # Conservative credit: if any leg has synthetic quotes, price shorts at bid
+    # and longs at ask to avoid inflated credit estimates
+    if _n_synthetic > 0:
+        credit_conservative = (_bid(short_put) + _bid(short_call)) - (_ask(long_put) + _ask(long_call))
+        credit_mid = (sp_mid + sc_mid) - (lp_mid + lc_mid)
+        # Blend: weight toward conservative when more legs are synthetic
+        _synth_weight = min(_n_synthetic / 4, 0.75)  # max 75% conservative
+        credit = credit_mid * (1 - _synth_weight) + credit_conservative * _synth_weight
+    else:
+        credit = (sp_mid + sc_mid) - (lp_mid + lc_mid)
+
     if credit <= 0.01:
         return None
 
     # Spread bid/ask
     spread_natural = (_bid(short_put) + _bid(short_call)) - (_ask(long_put) + _ask(long_call))
-    spread_mid = credit
+    spread_mid = (sp_mid + sc_mid) - (lp_mid + lc_mid)
 
     # ── Liquidity scoring ──
     def _leg_liquidity(row):
@@ -467,6 +476,15 @@ def _find_best_condor(chain: pd.DataFrame, spot: float, dte_min: int, dte_max: i
         # Wing width context
         "wing_pct": round(width / spot * 100, 1) if spot > 0 else 0,
         "optimal_wing": round(spot / 10, 0),
+        # Quote quality
+        "n_synthetic_legs": _n_synthetic,
+        # Per-leg pricing for transparency
+        "legs": [
+            {"label": f"{sp_strike:.0f}P (short)", "bid": round(_bid(short_put), 2), "ask": round(_ask(short_put), 2), "mid": round(sp_mid, 2), "oi": int(float(short_put.get("open_interest", 0) or 0)), "vol": int(float(short_put.get("volume", 0) or 0)), "live": _is_live(short_put)},
+            {"label": f"{lp_strike_val:.0f}P (long)", "bid": round(_bid(long_put), 2), "ask": round(_ask(long_put), 2), "mid": round(lp_mid, 2), "oi": int(float(long_put.get("open_interest", 0) or 0)), "vol": int(float(long_put.get("volume", 0) or 0)), "live": _is_live(long_put)},
+            {"label": f"{sc_strike:.0f}C (short)", "bid": round(_bid(short_call), 2), "ask": round(_ask(short_call), 2), "mid": round(sc_mid, 2), "oi": int(float(short_call.get("open_interest", 0) or 0)), "vol": int(float(short_call.get("volume", 0) or 0)), "live": _is_live(short_call)},
+            {"label": f"{lc_strike_val:.0f}C (long)", "bid": round(_bid(long_call), 2), "ask": round(_ask(long_call), 2), "mid": round(lc_mid, 2), "oi": int(float(long_call.get("open_interest", 0) or 0)), "vol": int(float(long_call.get("volume", 0) or 0)), "live": _is_live(long_call)},
+        ],
     }
 
 
@@ -818,11 +836,13 @@ def _fetch_earnings_date(ticker: str) -> dict | None:
 
 
 def _enrich_ivr_vrp(r: dict, px: pd.DataFrame | None) -> None:
-    """Compute true IVR, VRP, and HV20. Mutates r in place.
+    """Compute IVR, VRP, and HV20. Mutates r in place.
 
-    Uses get_iv_percentile() for true IVR from Polygon historical options data.
-    Cached in session_state after first fetch (~10s per ticker, instant after).
-    Also saves ATM IV to metrics_store for long-term accumulation.
+    IVR source priority:
+      1. metrics_store percentile (accumulated daily ATM IV snapshots in Supabase)
+      2. HV-based proxy (rank current IV against 252-day HV range from price history)
+    Each scan also saves today's ATM IV to metrics_store, so IVR accuracy
+    improves automatically over time as history deepens.
     """
     ticker = r["ticker"]
     current_iv = r["avg_iv"] / 100
@@ -831,21 +851,27 @@ def _enrich_ivr_vrp(r: dict, px: pd.DataFrame | None) -> None:
     ivr = None
 
     # HV20 and VRP from price history
+    hv_series = None
     if px is not None and len(px) > 30:
-        hv20_series = px["Close"].pct_change().rolling(20).std().dropna() * np.sqrt(252)
-        if len(hv20_series) > 0:
-            hv20 = float(hv20_series.iloc[-1] * 100)
+        hv_series = px["Close"].pct_change().rolling(20).std().dropna() * np.sqrt(252)
+        if len(hv_series) > 0:
+            hv20 = float(hv_series.iloc[-1] * 100)
         if hv20 is not None and current_iv > 0:
             vrp = round((current_iv * 100) - hv20, 1)
 
-    # True IVR from Polygon historical options data
+    # IVR: try metrics_store first (fast Supabase read, ~100ms)
     if current_iv > 0:
         try:
-            ivr = get_iv_percentile(ticker, current_iv, days=10)
+            ivr = percentile_rank(ticker, "atm_iv", current_value=current_iv)
         except Exception:
             pass
 
-    # Save today's ATM IV to metrics_store
+    # Fallback: HV-based IVR proxy (rank current IV against 252-day HV range)
+    if ivr is None and current_iv > 0 and hv_series is not None and len(hv_series) >= 20:
+        hv_vals = hv_series.values
+        ivr = float(np.sum(hv_vals <= current_iv) / len(hv_vals) * 100)
+
+    # Save today's ATM IV to metrics_store (builds history for future IVR lookups)
     try:
         _snapshot = {"ticker": ticker, "atm_iv": current_iv}
         if hv20 is not None:
@@ -1043,6 +1069,12 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
         elif _stale:
             st.info(f"Results are {_age_label} (scanned at {_ts_str}). Consider re-scanning for fresh quotes.")
 
+    freshness_bar(
+        ("Chains", _scan_ts, 30, 120),
+        ("Prices", _scan_ts, 10, 30),
+        ("IVR", _scan_ts, 60, 240),
+    )
+
     # ── Integrated composite score (non-mutating) ──
     # Combines all computed signals into a single ranking metric.
     # Base: credit/risk × POP (economic edge)
@@ -1196,7 +1228,12 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
     top_results = results[:12]
     if top_results:
         st.markdown("##### Setup Details")
-        detail_tabs = st.tabs([f"{r['ticker']} ({r.get('liq_grade','?')})" for r in top_results])
+        def _fmt_exp(exp_str):
+            try:
+                return pd.to_datetime(exp_str).strftime("%b %d")
+            except Exception:
+                return exp_str
+        detail_tabs = st.tabs([f"{r['ticker']} · {_fmt_exp(r['expiration'])} · {r['dte']}d ({r.get('liq_grade','?')})" for r in top_results])
 
         for tab, r in zip(detail_tabs, top_results):
             with tab:
@@ -1232,6 +1269,9 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                         _flags.append(f'<span style="color:{COLORS["accent"]};">Narrow wings ({_wing_pct:.1f}%)</span>')
                     if r.get("earnings_before_exp"):
                         _flags.append(f'<span style="color:{COLORS["danger"]};">EARNINGS {r["earnings_days"]}d</span>')
+                    _n_synth = r.get("n_synthetic_legs", 0)
+                    if _n_synth > 0:
+                        _flags.append(f'<span style="color:{COLORS["warning"]};">{_n_synth} leg{"s" if _n_synth > 1 else ""} no live quote</span>')
                     _flags_html = f' · '.join(_flags) if _flags else f'<span style="color:{COLORS["success"]};">No warnings</span>'
 
                     st.markdown(
@@ -1254,13 +1294,26 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                         h1.metric(r["ticker"], f"${r['spot']:,.2f}")
                         h2.metric("Open For", f"${r['spread_estimate'] * 100:,.0f} cr")
 
+                        # Price transparency: show natural / estimate / mid
+                        _nat = r.get("spread_natural", 0) * 100
+                        _est = r.get("spread_estimate", 0) * 100
+                        _mid_px = r.get("spread_mid", 0) * 100
+                        _fill = {"A": 40, "B": 30, "C": 20, "D": 10, "F": 5}.get(r.get("liq_grade", "F"), 15)
+                        st.markdown(
+                            f'<div style="font-size:0.68rem;color:{COLORS["text_muted"]};font-family:monospace;margin:-8px 0 6px 0;">'
+                            f'Natural ${_nat:,.0f} · <b>Fill ${_est:,.0f}</b> · Mid ${_mid_px:,.0f}'
+                            f' ({_fill}% improve)</div>',
+                            unsafe_allow_html=True,
+                        )
+
                         h3, h4 = st.columns(2)
                         h3.metric("Max Risk", f"${r['max_risk_100']:,.0f}")
                         h4.metric("POP", f"{r['pop']}%")
 
                         h5, h6 = st.columns(2)
                         h5.metric(f"{r['target_pct']}% Target", f"${r['profit_at_target_100']:,.0f}")
-                        h6.metric("Days to Target", f"{r['days_to_target']}d / {r['dte']}d")
+                        h6.metric("Expiration", _fmt_exp(r["expiration"]) + f", {pd.to_datetime(r['expiration']).year}" if r.get("expiration") else "?")
+                        h6.caption(f"{r['dte']}d to exp · ~{r['days_to_target']}d to target")
 
                         h7, h8 = st.columns(2)
                         h7.metric("Breakevens", f"${r['lower_be']:.0f} / ${r['upper_be']:.0f}")
@@ -1284,7 +1337,7 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                         lc = r["long_call"]
                         st.markdown(
                             f'<div style="display:flex;align-items:center;justify-content:center;gap:3px;'
-                            f'font-size:0.72rem;padding:4px 0;font-family:monospace;">'
+                            f'font-size:0.72rem;padding:4px 0;font-family:monospace;flex-wrap:wrap;">'
                             f'<span style="color:{COLORS["danger"]};border:1px solid {COLORS["danger"]};padding:1px 6px;border-radius:3px;">'
                             f'{lp:.0f}P</span>'
                             f'<span style="color:#888;">—</span>'
@@ -1380,6 +1433,65 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                     st.caption("**Charts:** Payoff = P&L at expiration. Green = profit zone, red = loss. "
                                "Dashed lines: yellow = profit target, red = breakevens, orange = 30Δ adjustment triggers (shaded = warning zone). "
                                "Theta decay = spread value over time (should decay toward the target close line).")
+
+                    # ── Book It button ──
+                    @st.fragment
+                    def _book_it(setup):
+                        _tk = setup["ticker"]
+                        _booked_key = f"ic_booked_{_tk}_{setup['expiration']}"
+                        if st.session_state.get(_booked_key):
+                            st.success(f"{_tk} iron condor booked to Position Book.")
+                        else:
+                            _b1, _b2 = st.columns([1, 3])
+                            with _b1:
+                                if st.button("Book It", key=f"book_{_tk}_{setup['expiration']}",
+                                             type="primary", use_container_width=True):
+                                    from src.position_book import add_position
+                                    _contracts = setup.get("size_contracts", 1) or 1
+                                    _credit_per = setup["spread_estimate"]
+                                    _details = {
+                                        "strategy": "iron_condor",
+                                        "short_put": setup["short_put"],
+                                        "long_put": setup["long_put"],
+                                        "short_call": setup["short_call"],
+                                        "long_call": setup["long_call"],
+                                        "expiration": setup["expiration"],
+                                        "dte_at_entry": setup["dte"],
+                                        "credit_per_share": _credit_per,
+                                        "credit_per_contract": round(_credit_per * 100, 0),
+                                        "max_risk_per_contract": setup["max_risk_100"],
+                                        "spread_natural": setup.get("spread_natural", 0),
+                                        "spread_mid": setup.get("spread_mid", 0),
+                                        "pop": setup["pop"],
+                                        "ivr": setup.get("ivr"),
+                                        "vrp": setup.get("vrp"),
+                                        "liq_grade": setup.get("liq_grade"),
+                                        "adj_score": setup.get("adj_score"),
+                                        "profit_target_pct": setup["target_pct"],
+                                        "stop_multiplier": setup.get("stop_mult", 1.5),
+                                        "managed_wr": setup.get("managed_wr"),
+                                        "kelly_adj": setup.get("kelly_adj"),
+                                        "net_delta": setup.get("net_delta"),
+                                        "net_theta": setup.get("net_theta"),
+                                        "net_vega": setup.get("net_vega"),
+                                    }
+                                    _pos_id = add_position(
+                                        ticker=_tk,
+                                        type="iron_condor",
+                                        qty=_contracts,
+                                        entry_price=_credit_per,
+                                        details=_details,
+                                        source_page="50_Iron_Condor_Scanner",
+                                    )
+                                    st.session_state[_booked_key] = _pos_id
+                                    st.success(f"Booked {_contracts} × {_tk} iron condor (ID: {_pos_id}). "
+                                               f"Credit: ${_credit_per * 100 * _contracts:,.0f}. "
+                                               f"Track P&L on the Portfolio Greeks page.")
+                            with _b2:
+                                st.caption(f"{setup.get('size_contracts', 1) or 1} contracts · "
+                                           f"${setup['spread_estimate'] * 100:,.0f}/contract · "
+                                           f"Exp {_fmt_exp(setup.get('expiration', ''))}")
+                    _book_it(r)
 
                     # ── Below-card tabs: Management / Expirations / Greeks ──
                     sub_tabs = st.tabs(["Management", "Compare Expirations", "Greeks"])
@@ -1543,6 +1655,31 @@ if "ic_results" in st.session_state and st.session_state["ic_results"]:
                             st.caption(f"{_contracts} contracts · \\${r.get('size_total_credit', 0):,.0f} credit · "
                                        f"\\${r.get('size_total_risk', 0):,.0f} risk · "
                                        f"\\${r.get('size_margin', 0):,.0f} margin")
+
+                        # Per-leg pricing table
+                        _legs = r.get("legs")
+                        if _legs:
+                            st.markdown("---")
+                            st.markdown(f'<div style="font-size:0.72rem;font-weight:600;margin-bottom:4px;">Leg Pricing</div>', unsafe_allow_html=True)
+                            _leg_rows = []
+                            for leg in _legs:
+                                _ba = leg["ask"] - leg["bid"] if leg["ask"] > 0 and leg["bid"] > 0 else None
+                                _quote_status = "Live" if leg.get("live", True) else "Synthetic"
+                                _leg_rows.append({
+                                    "Leg": leg["label"],
+                                    "Bid": f"${leg['bid']:.2f}",
+                                    "Ask": f"${leg['ask']:.2f}",
+                                    "Mid": f"${leg['mid']:.2f}",
+                                    "B/A": f"${_ba:.2f}" if _ba is not None else "—",
+                                    "OI": f"{leg['oi']:,}",
+                                    "Vol": f"{leg['vol']:,}",
+                                    "Quote": _quote_status,
+                                })
+                            st.dataframe(pd.DataFrame(_leg_rows), use_container_width=True, hide_index=True)
+                            _synth_count = sum(1 for leg in _legs if not leg.get("live", True))
+                            if _synth_count > 0:
+                                st.caption(f"⚠ {_synth_count} leg(s) have synthetic quotes (estimated from daily close, not live bid/ask). "
+                                           f"Actual fill price may differ — verify in your broker before trading.")
 
     # ── AI Assessment ──
     st.markdown("##### AI Assessment")
@@ -1786,6 +1923,10 @@ Respond with JSON:
                     _earn_str = f"{_earn_days}d"
                 else:
                     _earn_str = "—"
+                try:
+                    _exp_dt = pd.to_datetime(r["expiration"]).strftime("%b %d")
+                except Exception:
+                    _exp_dt = r.get("expiration", "?")
                 table_rows.append({
                     "Ticker": r["ticker"],
                     "Liq": r.get("liq_grade", "?"),
@@ -1793,7 +1934,7 @@ Respond with JSON:
                     "VRP": f"{_vrp:+.1f}" if _vrp is not None else "—",
                     "Earn": _earn_str,
                     "Strikes": f"{r['short_put']:.0f}P / {r['short_call']:.0f}C",
-                    "DTE": r["dte"],
+                    "Exp": f"{_exp_dt} ({r['dte']}d)",
                     "Credit": f"${r['spread_estimate'] * 100:,.0f}",
                     "Risk": f"${r['max_risk_100']:,.0f}",
                     "POP": f"{r['pop']}%",

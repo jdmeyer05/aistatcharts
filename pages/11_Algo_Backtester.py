@@ -4,8 +4,9 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm as _norm
 from itertools import combinations
+from datetime import datetime
 from src.data_engine import fetch_massive_data, format_massive_ticker
-from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader
+from src.layout import setup_page, get_active_ticker, set_active_ticker, fun_loader, freshness_bar
 setup_page("11_Algo_Backtester")
 
 st.title("🏗️ Algo Backtester & Optimizer")
@@ -726,6 +727,8 @@ if run_compare:
 if "bt_data" not in st.session_state:
     st.info("Configure parameters and click **Run Standard** or **Optimize**.")
     st.stop()
+
+freshness_bar(("Price History", datetime.now(), 5, 15))
 
 df = st.session_state.bt_data
 

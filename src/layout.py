@@ -485,6 +485,134 @@ def card_header(title: str, icon: str = ""):
     st.markdown(f'<div class="card-header">{icon_html}{title}</div>', unsafe_allow_html=True)
 
 
+def freshness_badge(label: str, timestamp, green_minutes: int = 5,
+                     yellow_minutes: int = 15) -> None:
+    """Render a compact data freshness indicator.
+
+    Args:
+        label: Data source name (e.g., "Prices", "AI Analysis", "Options Chain")
+        timestamp: datetime, ISO string, or pd.Timestamp of when data was last fetched
+        green_minutes: threshold for green (fresh)
+        yellow_minutes: threshold for yellow (aging) — beyond this is red (stale)
+
+    Usage:
+        freshness_badge("Prices", snapshot_timestamp)
+        freshness_badge("AI Analysis", analysis_time, green_minutes=60, yellow_minutes=240)
+        freshness_badge("FRED", fred_fetch_time, green_minutes=360, yellow_minutes=720)
+    """
+    import pandas as _pd
+    if timestamp is None:
+        st.markdown(
+            f'<div style="font-size:0.6rem;color:#888;font-family:monospace;">'
+            f'{label}: no data</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    try:
+        if isinstance(timestamp, str):
+            ts = _pd.to_datetime(timestamp)
+        else:
+            ts = _pd.Timestamp(timestamp)
+        age = (_pd.Timestamp.now() - ts).total_seconds() / 60
+    except Exception:
+        st.markdown(
+            f'<div style="font-size:0.6rem;color:#888;font-family:monospace;">'
+            f'{label}: unknown age</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    if age < green_minutes:
+        color = COLORS["success"]
+        dot = "●"
+    elif age < yellow_minutes:
+        color = COLORS["warning"]
+        dot = "●"
+    else:
+        color = COLORS["danger"]
+        dot = "●"
+
+    if age < 1:
+        age_str = "just now"
+    elif age < 60:
+        age_str = f"{age:.0f}m ago"
+    elif age < 1440:
+        age_str = f"{age / 60:.1f}h ago"
+    else:
+        age_str = f"{age / 1440:.0f}d ago"
+
+    st.markdown(
+        f'<div style="font-size:0.6rem;font-family:monospace;color:{color};">'
+        f'{dot} {label}: {age_str}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def freshness_bar(*sources: tuple) -> None:
+    """Render a compact horizontal freshness bar for multiple data sources.
+
+    Args:
+        sources: tuples of (label, timestamp, green_min, yellow_min)
+                 or (label, timestamp) using defaults (5min green, 15min yellow)
+
+    Usage:
+        freshness_bar(
+            ("Prices", price_ts),
+            ("Chain", chain_ts, 60, 120),
+            ("AI", ai_ts, 60, 240),
+        )
+    """
+    import pandas as _pd
+    parts = []
+    for src in sources:
+        if len(src) == 4:
+            label, ts, g, y = src
+        elif len(src) == 2:
+            label, ts = src
+            g, y = 5, 15
+        else:
+            continue
+
+        if ts is None:
+            parts.append(f'<span style="color:#555;">● {label}: —</span>')
+            continue
+
+        try:
+            if isinstance(ts, str):
+                t = _pd.to_datetime(ts)
+            else:
+                t = _pd.Timestamp(ts)
+            age = (_pd.Timestamp.now() - t).total_seconds() / 60
+        except Exception:
+            parts.append(f'<span style="color:#555;">● {label}: ?</span>')
+            continue
+
+        if age < g:
+            color = COLORS["success"]
+        elif age < y:
+            color = COLORS["warning"]
+        else:
+            color = COLORS["danger"]
+
+        if age < 1:
+            a = "now"
+        elif age < 60:
+            a = f"{age:.0f}m"
+        elif age < 1440:
+            a = f"{age / 60:.0f}h"
+        else:
+            a = f"{age / 1440:.0f}d"
+
+        parts.append(f'<span style="color:{color};">● {label} {a}</span>')
+
+    st.markdown(
+        f'<div style="font-size:0.6rem;font-family:monospace;display:flex;flex-wrap:wrap;gap:8px;">'
+        f'{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def get_active_ticker(default: str = "SPY") -> str:
     """Get the active ticker from query params, session state, or Supabase prefs.
     Use as the default value for ticker inputs to enable cross-page linking."""

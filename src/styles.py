@@ -613,6 +613,44 @@ def inject_global_css():
         }}
     }}
 
+    /* ── Responsive: card content scaling ── */
+    /* Inline HTML cards (status banners, leg diagrams, pricing lines) */
+    @media (max-width: 900px) {{
+        /* Plotly charts: reduce height on tablet */
+        .js-plotly-plot {{
+            max-height: 200px !important;
+        }}
+    }}
+
+    @media (max-width: 640px) {{
+        /* Stack 2-column card layouts vertically */
+        .stHorizontalBlock > div[data-testid="stColumn"] {{
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+        }}
+        /* Scale down custom HTML card text */
+        div[data-testid="stContainer"] div[style*="font-size:0.78rem"],
+        div[data-testid="stContainer"] div[style*="font-size:0.72rem"],
+        div[data-testid="stContainer"] div[style*="font-size:0.68rem"] {{
+            font-size: 0.65rem !important;
+        }}
+        /* Metric cards: tighter padding */
+        [data-testid="stMetric"] {{
+            padding: 3px 4px !important;
+        }}
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] {{
+            font-size: 0.6rem !important;
+        }}
+        /* Plotly charts: smaller on phone */
+        .js-plotly-plot {{
+            max-height: 180px !important;
+        }}
+        /* Dataframes: horizontal scroll */
+        [data-testid="stDataFrame"] {{
+            overflow-x: auto !important;
+        }}
+    }}
+
     /* ── Skeleton loading animation ── */
     @keyframes shimmer {{
         0% {{ background-position: -400px 0; }}

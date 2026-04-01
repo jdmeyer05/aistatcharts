@@ -9,7 +9,7 @@ import logging
 import json
 from datetime import datetime, timedelta
 import re
-from src.layout import setup_page, card_header, error_boundary, get_active_ticker, set_active_ticker, fun_loader
+from src.layout import setup_page, card_header, error_boundary, get_active_ticker, set_active_ticker, fun_loader, freshness_bar
 from src.styles import COLORS
 
 setup_page("03_Stock_Analysis")
@@ -975,6 +975,11 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
     sentiment = cached["sentiment"]
     grok_result = cached["blended"]
     model_results = cached.get("model_results", {})
+
+    freshness_bar(
+        ("Prices", datetime.now(), 5, 15),
+        ("AI Analysis", datetime.now(), 60, 240),
+    )
 
     # Card style helper
     _card = (f'background:{COLORS["card_bg"]};border:1px solid {COLORS["card_border"]};'

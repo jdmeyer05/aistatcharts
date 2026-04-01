@@ -6,7 +6,7 @@ import os
 import logging
 from datetime import datetime, date, timedelta
 from src.auth import init_supabase, get_user_tier, get_tier_config, TIERS
-from src.layout import setup_page, error_boundary
+from src.layout import setup_page, error_boundary, freshness_bar
 from src.styles import COLORS
 from src.data_engine import polygon_batch_snapshot, polygon_symbol
 
@@ -51,6 +51,7 @@ FUTURES_TICKERS = [
 
 @st.fragment(run_every=120)
 def _market_pulse():
+    st.session_state["_prices_last_update"] = datetime.now()
     tickers = [t for t, _ in PULSE_TICKERS]
     snaps = polygon_batch_snapshot(tickers)
 
@@ -134,6 +135,252 @@ def _futures_pulse():
 
 _futures_pulse()
 
+# Data freshness bar for market data
+freshness_bar(
+    ("Prices", st.session_state.get("_prices_last_update"), 5, 15),
+    ("Signals", st.session_state.get("_signals_last_update"), 2, 10),
+    ("Positions", st.session_state.get("_positions_last_update"), 5, 15),
+)
+
+
+# ═══════════════════════════════════════════════
+# ROW 0.5: AI MARKET INTELLIGENCE
+# ═══════════════════════════════════════════════
+
+st.markdown("##### Market Intelligence")
+
+_mi_left, _mi_right = st.columns([3, 2])
+
+with _mi_left:
+    with st.container(border=True):
+        with error_boundary("Market News"):
+            _news_content = None
+            _news_age = None
+            try:
+                from src.ai_cache import get_cached_ai
+                # Try current hour, then previous hour
+                _now = datetime.now()
+                _hour_key = f"market_news_{_now.strftime('%Y%m%d_%H')}"
+                _news_content = get_cached_ai(_hour_key)
+                if _news_content:
+                    _news_age = "< 1 hour"
+                else:
+                    _prev = _now - timedelta(hours=1)
+                    _hour_key_prev = f"market_news_{_prev.strftime('%Y%m%d_%H')}"
+                    _news_content = get_cached_ai(_hour_key_prev)
+                    if _news_content:
+                        _news_age = "1-2 hours"
+            except Exception:
+                pass
+
+            if _news_content:
+                _age_color = COLORS["success"] if _news_age == "< 1 hour" else COLORS["warning"]
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+                    f'<span style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Grok Market Scan</span>'
+                    f'<span style="font-size:0.65rem;color:{_age_color};">{_news_age} ago</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                # Render with st.markdown (handles markdown natively, no HTML injection risk)
+                st.markdown(_news_content, unsafe_allow_html=False)
+            else:
+                st.markdown(
+                    f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;margin-bottom:6px;">Grok Market Scan</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption("Market news scan not yet available. It updates hourly during market hours, or click below to scan now.")
+
+            # On-demand refresh button
+            @st.fragment
+            def _refresh_news():
+                if st.button("Refresh News", key="refresh_market_news", use_container_width=True):
+                    from src.api_keys import get_secret
+                    _grok_key = get_secret("GROK_API_KEY")
+                    if not _grok_key:
+                        st.warning("Grok API key not configured.")
+                        return
+                    with st.spinner("Scanning X/Twitter for market news..."):
+                        try:
+                            from openai import OpenAI as _OAI
+                            _client = _OAI(api_key=_grok_key, base_url="https://api.x.ai/v1")
+                            _now_str = datetime.now().strftime("%B %d, %Y %I:%M %p ET")
+                            _weekday = datetime.now().strftime("%A")
+                            _resp = _client.chat.completions.create(
+                                model="grok-4-1-fast-reasoning",
+                                messages=[
+                                    {"role": "system", "content": (
+                                        "You are a senior market intelligence analyst. "
+                                        "Scan X/Twitter and news for developments moving markets right now. "
+                                        "Be direct, specific, quantitative. No boilerplate."
+                                    )},
+                                    {"role": "user", "content": (
+                                        f"TODAY: {_weekday}, {_now_str}. Search X/Twitter and financial news RIGHT NOW.\n\n"
+                                        "Report the most market-moving developments from the LAST 4 HOURS.\n\n"
+                                        "COVER (skip categories with nothing notable):\n"
+                                        "1. MACRO & FED — data releases, Fed speakers, rate expectations\n"
+                                        "2. EARNINGS — beats/misses, guidance, pre-market movers\n"
+                                        "3. GEOPOLITICAL — trade, sanctions, conflicts, tariffs\n"
+                                        "4. SECTOR MOVES — rotation, breakouts, breakdowns\n"
+                                        "5. COMMODITIES & FX — oil/gold/dollar/crypto with catalysts\n"
+                                        "6. OPTIONS & FLOW — unusual volume, VIX, skew shifts\n\n"
+                                        "SOURCES: @DeItaone, @Fxhedgers, @unusual_whales, @spotgamma, "
+                                        "@NickTimiraos, @LiveSquawk, @CNBC, @Bloomberg\n\n"
+                                        "Lead with the biggest story. Bullet the rest. 200-300 words. "
+                                        "Name tickers and numbers. If markets are quiet, say so briefly.\n\n"
+                                        "ACCURACY: Only confirmed developments. No speculation."
+                                    )},
+                                ],
+                                max_tokens=1200,
+                                temperature=0.2,
+                            )
+                            _fresh_news = _resp.choices[0].message.content.strip()
+                            if _fresh_news:
+                                from src.ai_cache import cache_ai_response
+                                _hk = f"market_news_{datetime.now().strftime('%Y%m%d_%H')}"
+                                cache_ai_response(_hk, _fresh_news, model="grok-4-1-fast",
+                                                   source_page="market_news", ticker="MARKET",
+                                                   ttl_hours=1.5, prompt_summary="On-demand market news scan")
+                                st.markdown(_fresh_news, unsafe_allow_html=False)
+                                st.success("News updated.")
+                        except Exception as e:
+                            st.error(f"Scan failed: {e}")
+            _refresh_news()
+
+with _mi_right:
+    with st.container(border=True):
+        with error_boundary("Upcoming Events"):
+            st.markdown(
+                f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;margin-bottom:6px;">Upcoming Events</div>',
+                unsafe_allow_html=True,
+            )
+            try:
+                from src.economic_calendar import find_events_near_date, get_upcoming_fomc, FOMC_SEP_DATES
+                _today = date.today()
+                _events = find_events_near_date(_today.strftime("%Y-%m-%d"), window_days=14)
+                _fomc_dates = get_upcoming_fomc(3)
+
+                _ev_items = []
+                for ev in (_events or []):
+                    days = ev.get("days_away", 0)
+                    if days < 0:
+                        continue
+                    urgency = COLORS["danger"] if days == 0 else COLORS["warning"] if days <= 2 else COLORS["text_muted"]
+                    when = "TODAY" if days == 0 else f"in {days}d"
+                    _ev_items.append((days, ev["name"], when, urgency, ev.get("date", "")))
+
+                _event_dates = {e.get("date", "") for e in (_events or [])}
+                for fd in (_fomc_dates or []):
+                    if fd not in _event_dates:
+                        fd_dt = pd.to_datetime(fd).date()
+                        days = (fd_dt - _today).days
+                        if days > 0:
+                            _is_sep = fd in FOMC_SEP_DATES
+                            _label = "FOMC + SEP/Dots" if _is_sep else "FOMC Meeting"
+                            urgency = COLORS["danger"] if days <= 1 else COLORS["warning"] if days <= 7 else COLORS["text_muted"]
+                            _ev_items.append((days, _label, f"in {days}d", urgency, fd))
+
+                _ev_items.sort(key=lambda x: x[0])
+
+                if _ev_items:
+                    _ev_html = ""
+                    for _, name, when, color, dt_str in _ev_items[:8]:
+                        _ev_html += (
+                            f'<div style="display:flex;justify-content:space-between;padding:3px 0;'
+                            f'border-bottom:1px solid {COLORS["card_border"]};">'
+                            f'<span style="font-size:0.78rem;">{name}</span>'
+                            f'<div style="display:flex;gap:8px;">'
+                            f'<span style="font-size:0.68rem;color:{COLORS["text_muted"]};">{dt_str}</span>'
+                            f'<span style="font-size:0.68rem;font-weight:600;color:{color};">{when}</span>'
+                            f'</div></div>'
+                        )
+                    st.markdown(
+                        f'<div style="padding:2px 0;">{_ev_html}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.caption("No major events in the next 14 days.")
+            except Exception as e:
+                logger.debug(f"Events load failed: {e}")
+                st.caption("Event calendar unavailable.")
+
+    # Risk snapshot below events (compact)
+    with st.container(border=True):
+        with error_boundary("Risk Snapshot"):
+            _risk_cols = st.columns(3)
+            # Iran conflict score
+            with _risk_cols[0]:
+                try:
+                    _conflict_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "iran_conflict_history.json")
+                    if os.path.exists(_conflict_file):
+                        with open(_conflict_file, "r") as f:
+                            _cd = json.load(f)
+                        if _cd:
+                            _bl = _cd[-1].get("blended", {})
+                            _esc = _bl.get("escalation_risk", {})
+                            _sc = _esc.get("score", 0)
+                            _ec = "#ff4444" if _sc >= 8 else "#ff6b35" if _sc >= 6 else "#ffaa00" if _sc >= 4 else "#00ff96"
+                            st.markdown(
+                                f'<div style="text-align:center;">'
+                                f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Iran</div>'
+                                f'<div style="font-size:1.3rem;font-weight:800;color:{_ec};">{_sc}/10</div>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Iran: N/A</div>', unsafe_allow_html=True)
+                except Exception:
+                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Iran: N/A</div>', unsafe_allow_html=True)
+
+            # Macro regime
+            with _risk_cols[1]:
+                try:
+                    _grok_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "grok_regime_history.json")
+                    if os.path.exists(_grok_file):
+                        with open(_grok_file, "r") as f:
+                            _gd = json.load(f)
+                        if _gd:
+                            _regs = sorted(_gd[-1].get("regimes", []), key=lambda r: r.get("probability", 0), reverse=True)
+                            if _regs:
+                                _rn = _regs[0].get("name", "?")
+                                _rp = _regs[0].get("probability", 0)
+                                _regime_colors = {"Stagflation": "#ff4444", "Recession": "#ff8c00", "Soft Landing": "#00cc66",
+                                                  "Financial Crisis": "#ff0066", "Re-Acceleration": "#00d1ff", "Goldilocks": "#aa66ff"}
+                                _rc2 = _regime_colors.get(_rn, "#888")
+                                st.markdown(
+                                    f'<div style="text-align:center;">'
+                                    f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Macro</div>'
+                                    f'<div style="font-size:0.85rem;font-weight:700;color:{_rc2};">{_rn}</div>'
+                                    f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};">{_rp}%</div>'
+                                    f'</div>',
+                                    unsafe_allow_html=True,
+                                )
+                    else:
+                        st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Macro: N/A</div>', unsafe_allow_html=True)
+                except Exception:
+                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Macro: N/A</div>', unsafe_allow_html=True)
+
+            # Vol regime (SPY)
+            with _risk_cols[2]:
+                try:
+                    from src.metrics_store import get_latest_snapshot
+                    _spy_snap = get_latest_snapshot("SPY")
+                    if _spy_snap and _spy_snap.get("atm_iv") is not None:
+                        _iv = _spy_snap["atm_iv"]
+                        _iv_label = "High" if _iv > 0.25 else "Low" if _iv < 0.15 else "Normal"
+                        _iv_color = COLORS["danger"] if _iv > 0.25 else COLORS["success"] if _iv < 0.15 else COLORS["warning"]
+                        st.markdown(
+                            f'<div style="text-align:center;">'
+                            f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">SPY Vol</div>'
+                            f'<div style="font-size:0.85rem;font-weight:700;color:{_iv_color};">{_iv:.0%} ({_iv_label})</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>', unsafe_allow_html=True)
+                except Exception:
+                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>', unsafe_allow_html=True)
+
 
 # ═══════════════════════════════════════════════
 # ROW 1: THREE-COLUMN LIVE DASHBOARD
@@ -151,6 +398,7 @@ with dash_c1:
 
                 @st.fragment(run_every=60)
                 def _signals_card():
+                    st.session_state["_signals_last_update"] = datetime.now()
                     sig = get_signal_summary()
                     if sig["n_tickers"] > 0:
                         m1, m2 = st.columns(2)
@@ -230,6 +478,7 @@ with dash_c3:
 
                 @st.fragment(run_every=120)
                 def _positions_card():
+                    st.session_state["_positions_last_update"] = datetime.now()
                     pb = get_portfolio_summary()
                     if pb.get("n_positions", 0) > 0:
                         pc1, pc2 = st.columns(2)
@@ -433,134 +682,42 @@ with error_boundary("Market Heatmap"):
 
 
 # ═══════════════════════════════════════════════
-# ROW 3: AI INTELLIGENCE
+# ROW 3: SIGNAL TRACK RECORD (collapsed)
 # ═══════════════════════════════════════════════
 
-GROK_HISTORY = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "grok_regime_history.json")
-CONFLICT_HISTORY = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "iran_conflict_history.json")
-
-grok_data = None
-try:
-    if os.path.exists(GROK_HISTORY):
-        with open(GROK_HISTORY, "r") as f:
-            grok_all = json.load(f)
-        if grok_all:
-            grok_data = grok_all[-1]
-except Exception:
-    pass
-
-conflict_data = None
-try:
-    if os.path.exists(CONFLICT_HISTORY):
-        with open(CONFLICT_HISTORY, "r") as f:
-            conflict_all = json.load(f)
-        if conflict_all:
-            conflict_data = conflict_all[-1]
-except Exception:
-    pass
-
-st.markdown("##### AI Intelligence")
-ai_c1, ai_c2, ai_c3 = st.columns(3)
-
-with ai_c1:
-    with st.container(border=True):
-        with error_boundary("Macro Regime"):
-            st.markdown(f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Macro Regime</div>', unsafe_allow_html=True)
-            if grok_data and grok_data.get("regimes"):
-                regimes = sorted(grok_data["regimes"], key=lambda r: r.get("probability", 0), reverse=True)
-                top = regimes[0]
-                regime_colors = {
-                    "Stagflation": "#ff4444", "Recession": "#ff8c00", "Soft Landing": "#00cc66",
-                    "Financial Crisis": "#ff0066", "Re-Acceleration": "#00d1ff", "Goldilocks": "#aa66ff",
-                }
-                top_name = top.get("name", "Unknown")
-                top_prob = top.get("probability", 0)
-                top_color = regime_colors.get(top_name, "#888")
-                st.markdown(
-                    f'<div style="font-size:1.3rem;font-weight:800;color:{top_color};">{top_name}</div>'
-                    f'<div style="font-size:0.8rem;color:{COLORS["text_muted"]};">{top_prob}% probability</div>',
-                    unsafe_allow_html=True,
-                )
-                for r in regimes[:4]:
-                    rn = r.get("name", "")
-                    rc = regime_colors.get(rn, "#888")
-                    w = r.get("probability", 0)
-                    st.markdown(
-                        f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">'
-                        f'<div style="flex:0 0 80px;font-size:0.7rem;color:{COLORS["text_muted"]};">{rn}</div>'
-                        f'<div style="flex:1;background:{COLORS["card_border"]};border-radius:3px;height:6px;">'
-                        f'<div style="width:{w}%;height:100%;background:{rc};border-radius:3px;"></div></div>'
-                        f'<div style="flex:0 0 28px;font-size:0.7rem;color:{rc};text-align:right;">{w}%</div>'
-                        f'</div>', unsafe_allow_html=True,
-                    )
-                if st.button("Scenario Analysis →", key="goto_scenario", use_container_width=True):
-                    st.switch_page("pages/02_Scenario_Analysis.py")
-            else:
-                st.caption("Run Scenario Analysis to generate regime data.")
-                if st.button("Go →", key="goto_scenario2", use_container_width=True):
-                    st.switch_page("pages/02_Scenario_Analysis.py")
-
-with ai_c2:
-    with st.container(border=True):
-        with error_boundary("Conflict Risk"):
-            st.markdown(f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Iran Conflict</div>', unsafe_allow_html=True)
-            if conflict_data and conflict_data.get("blended"):
-                blended = conflict_data["blended"]
-                esc = blended.get("escalation_risk", {})
-                score = esc.get("score", 0)
-                level = esc.get("level", "Unknown")
-                esc_color = "#ff4444" if score >= 8 else "#ff6b35" if score >= 6 else "#ffaa00" if score >= 4 else "#00ff96"
-                days = (datetime.now() - datetime(2026, 2, 28)).days
-
-                st.markdown(
-                    f'<div style="font-size:2rem;font-weight:800;color:{esc_color};">{score}/10</div>'
-                    f'<div style="font-size:0.8rem;color:{COLORS["text_muted"]};">{level} · Day {days}</div>',
-                    unsafe_allow_html=True,
-                )
-                oil = blended.get("oil_impact", {})
-                if oil.get("price_range"):
-                    st.markdown(f'<div style="font-size:0.75rem;margin-top:4px;">Oil: **{oil["price_range"]}**</div>', unsafe_allow_html=True)
-                situation = blended.get("situation_summary", "")
-                if situation:
-                    st.caption(situation[:120] + ("..." if len(situation) > 120 else ""))
-                if st.button("Full Analysis →", key="goto_conflict", use_container_width=True):
-                    st.switch_page("pages/19_Iran_Conflict.py")
-            else:
-                st.caption("Run Iran Conflict analysis to generate risk data.")
-                if st.button("Go →", key="goto_conflict2", use_container_width=True):
-                    st.switch_page("pages/19_Iran_Conflict.py")
-
-with ai_c3:
-    with st.container(border=True):
-        with error_boundary("Track Record"):
-            st.markdown(f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Prediction Accuracy</div>', unsafe_allow_html=True)
-            try:
-                from src.prediction_tracker import get_track_record, get_all_sources
-                sources = get_all_sources()
-                if sources:
-                    for src_name in sources[:5]:
-                        tr = get_track_record(src_name, horizon=30)
+with st.expander("Signal Track Record (30-day accuracy)"):
+    with error_boundary("Track Record"):
+        try:
+            from src.prediction_tracker import get_track_record, get_all_sources
+            sources = get_all_sources()
+            if sources:
+                _tr_cols = st.columns(min(len(sources), 4))
+                for i, src_name in enumerate(sources[:8]):
+                    tr = get_track_record(src_name, horizon=30)
+                    with _tr_cols[i % min(len(sources), 4)]:
                         if tr["evaluated"] > 0 and tr["accuracy"] is not None:
                             acc = tr["accuracy"] * 100
                             acc_color = COLORS["success"] if acc >= 55 else (COLORS["danger"] if acc < 45 else COLORS["warning"])
                             st.markdown(
-                                f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;padding:2px 0;">'
-                                f'<span>{src_name.replace("_", " ").title()}</span>'
-                                f'<span style="color:{acc_color};font-weight:700;">{acc:.0f}% ({tr["evaluated"]})</span>'
+                                f'<div style="text-align:center;padding:4px;">'
+                                f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{src_name.replace("_", " ").title()}</div>'
+                                f'<div style="font-size:1.1rem;font-weight:700;color:{acc_color};">{acc:.0f}%</div>'
+                                f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">{tr["evaluated"]} evaluated</div>'
                                 f'</div>', unsafe_allow_html=True,
                             )
                         elif tr["total_predictions"] > 0:
                             st.markdown(
-                                f'<div style="font-size:0.75rem;color:{COLORS["text_muted"]};padding:2px 0;">'
-                                f'{src_name.replace("_", " ").title()}: {tr["total_predictions"]} pending</div>',
-                                unsafe_allow_html=True,
+                                f'<div style="text-align:center;padding:4px;">'
+                                f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{src_name.replace("_", " ").title()}</div>'
+                                f'<div style="font-size:0.8rem;color:{COLORS["text_muted"]};">{tr["total_predictions"]} pending</div>'
+                                f'</div>', unsafe_allow_html=True,
                             )
-                    if st.button("Track Record →", key="goto_track", use_container_width=True):
-                        st.switch_page("pages/47_Track_Record.py")
-                else:
-                    st.caption("Predictions will appear after using analysis pages.")
-            except Exception:
-                st.caption("Track record loading...")
+                if st.button("Full Track Record →", key="goto_track", use_container_width=True):
+                    st.switch_page("pages/47_Track_Record.py")
+            else:
+                st.caption("Predictions will appear after using analysis pages.")
+        except Exception:
+            st.caption("Track record loading...")
 
 
 # ═══════════════════════════════════════════════
