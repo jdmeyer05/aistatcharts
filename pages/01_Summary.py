@@ -307,7 +307,7 @@ with _mi_right:
     # Risk snapshot below events (compact)
     with st.container(border=True):
         with error_boundary("Risk Snapshot"):
-            _risk_cols = st.columns(3)
+            _risk_cols = st.columns(4)
             # Iran conflict score
             with _risk_cols[0]:
                 try:
@@ -380,6 +380,33 @@ with _mi_right:
                         st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>', unsafe_allow_html=True)
                 except Exception:
                     st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>', unsafe_allow_html=True)
+
+            # Strategy regime
+            with _risk_cols[3]:
+                try:
+                    from src.metrics_store import get_latest_snapshot as _get_snap
+                    _spy_s = _get_snap("SPY")
+                    _s_iv = _spy_s.get("atm_iv", 0.20) if _spy_s else 0.20
+                    _s_vrp = _spy_s.get("vrp", 0) if _spy_s else 0
+                    # Simple regime logic
+                    if _s_iv > 0.25 and _s_vrp and _s_vrp > 0.03:
+                        _strat, _sc, _sr = "Iron Condors", COLORS["warning"], "Rich vol + VRP"
+                    elif _s_iv < 0.18:
+                        _strat, _sc, _sr = "Calendars", COLORS["accent"], "Low vol, exploit contango"
+                    elif _s_vrp and _s_vrp > 0.02:
+                        _strat, _sc, _sr = "Iron Condors", COLORS["success"], "Positive VRP edge"
+                    else:
+                        _strat, _sc, _sr = "Both viable", COLORS["text_muted"], "Normal conditions"
+                    st.markdown(
+                        f'<div style="text-align:center;">'
+                        f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Strategy</div>'
+                        f'<div style="font-size:0.8rem;font-weight:700;color:{_sc};">{_strat}</div>'
+                        f'<div style="font-size:0.55rem;color:{COLORS["text_muted"]};">{_sr}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                except Exception:
+                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Strategy: N/A</div>', unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════

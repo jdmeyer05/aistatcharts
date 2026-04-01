@@ -80,6 +80,7 @@ PAGE_CONFIG = {
     "48_Vol_Landscape":      ("Vol Landscape | AI Statcharts", "🌋"),
     "49_Higher_Greeks":      ("Higher-Order Greeks | AI Statcharts", "🧮"),
     "50_Iron_Condor_Scanner": ("Iron Condor Scanner | AI Statcharts", "🦅"),
+    "51_Calendar_Spread_Scanner": ("Calendar Spread Scanner | AI Statcharts", "📅"),
 }
 
 
@@ -247,6 +248,7 @@ def render_header(current_page: str):
             ("43_Vol_Surface", "Vol Surface", "pages/43_Vol_Surface.py"),
             ("44_Portfolio_Greeks", "Portfolio Greeks", "pages/44_Portfolio_Greeks.py"),
             ("50_Iron_Condor_Scanner", "Iron Condor Scanner", "pages/50_Iron_Condor_Scanner.py"),
+            ("51_Calendar_Spread_Scanner", "Calendar Spread Scanner", "pages/51_Calendar_Spread_Scanner.py"),
         ]),
         ("Tools", [
             ("05_Historical_Analysis", "Historical", "pages/05_Historical_Analysis.py"),
