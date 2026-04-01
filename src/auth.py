@@ -22,6 +22,7 @@ TIERS = {
             "22_Smart_Money", "23_Power_Analytics", "24_Sector_Analysis",
             "42_Calendar_Spreads", "43_Vol_Surface", "44_Portfolio_Greeks",
             "45_Universe_Portfolio", "46_Market_Expectations", "47_Track_Record",
+            "50_Iron_Condor_Scanner",
         ],
         "daily_ai_analyses": 0,
         "ai_models": [],
