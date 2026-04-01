@@ -475,13 +475,15 @@ with tab3:
             z=z_matrix,
             x=days,
             y=price_steps,
-            colorscale="RdYlGn",
+            colorscale=[[0, "#ff4444"], [0.5, "#1c1f26"], [1, "#00ff96"]],
             zmid=0,
+            colorbar=dict(title="P&L ($)", len=0.6, thickness=12),
             hovertemplate="DTE: %{x}<br>Price: $%{y:.1f}<br>P&L: $%{z:,.0f}<extra></extra>",
         ))
         fig_heat.update_layout(
-            template="plotly_dark", height=500,
-            margin=dict(t=10, b=0, l=0, r=0),
+            template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)", height=500,
+            margin=dict(l=50, r=20, t=30, b=50),
             xaxis_title="Days to Expiration",
             yaxis_title="Underlying Price ($)",
             xaxis=dict(autorange="reversed"),

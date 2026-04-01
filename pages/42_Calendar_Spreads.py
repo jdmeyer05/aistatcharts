@@ -1276,7 +1276,7 @@ The scenario sliders let you model:
                 [1, COLORS["success"]],
             ],
             zmid=0,
-            colorbar=dict(title="P&L ($)"),
+            colorbar=dict(title="P&L ($)", len=0.6, thickness=12),
             hovertemplate="Price: $%{x:.2f}<br>Day: %{y}<br>P&L: $%{z:.0f}<extra></extra>",
         ))
         fig_heat.add_vline(x=spot, line_dash="dash", line_color="white", line_width=1)

@@ -440,7 +440,7 @@ with tab2:
             z=pnl_grid,
             colorscale=[[0, COLORS["danger"]], [0.5, "#1c1f26"], [1, COLORS["success"]]],
             zmid=0,
-            colorbar=dict(title="P&L ($)"),
+            colorbar=dict(title="P&L ($)", len=0.6, thickness=12),
             text=np.round(pnl_grid, 0).astype(int),
             texttemplate="$%{text}",
             textfont=dict(size=9),
@@ -448,7 +448,7 @@ with tab2:
         ))
         fig_scenario.update_layout(
             template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)", height=400,
+            plot_bgcolor="rgba(0,0,0,0)", height=500,
             xaxis_title="Underlying Price Move",
             yaxis_title="IV Shift",
             margin=dict(l=80, r=20, t=30, b=50),
