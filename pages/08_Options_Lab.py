@@ -95,8 +95,7 @@ spot = st.session_state["lab_spot"]
 ticker_display = st.session_state["lab_ticker"]
 px_df = st.session_state["lab_px"]
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Volatility Surface",
+tab2, tab3, tab4, tab5 = st.tabs([
     "Earnings Move Analyzer",
     "Strategy P&L Modeler",
     "BS Pricing & Greeks",
@@ -104,8 +103,8 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 
-# ---- TAB 1: 3D Volatility Surface ----
-with tab1:
+# ---- (Volatility Surface tab removed — use dedicated Vol Surface page) ----
+if False:  # preserved but disabled
     st.subheader("Implied Volatility Surface")
 
     # Filter to calls with meaningful data near the money
