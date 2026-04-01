@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-04-01 — Iron Condor Scanner (New Page)
+
+### New Page: 50_Iron_Condor_Scanner
+Full institutional-grade short iron condor scanner with 57-ticker universe across indices, sectors, commodities, and individual stocks.
+
+#### Scan & Scoring Engine
+- **7-factor composite score**: credit/risk × POP (slippage-adjusted), IVR band (50-75 optimal per quant manual), VRP (IV-HV20), liquidity grade (A-F), earnings penalty, historical managed win rate, theta efficiency ($/day/risk)
+- **True IV Percentile**: fetches historical IV from Polygon Options Starter, caches in session_state. Ranks current IV against actual implied vol history, not HV proxy. Saves daily ATM IV to metrics_store for long-term accumulation.
+- **Adaptive fill estimates**: fill % from natural-to-mid varies by liquidity grade (A=40%, B=30%, C=20%, D=10%, F=5%). Slippage deducted from credit in the score.
+- **57-ticker universe**: SPY/QQQ/IWM/DIA, all 11 SPDR sectors, XBI/SMH/KRE/GDX, GLD/SLV/USO/TLT/HYG/LQD, EEM/EFA/FXI, mega-cap tech, financials, value/stable, energy majors
+- **Flexible strike search**: finds nearest available strike at or beyond target wing width (handles $1/$2.50/$5/$10 strike increments)
+- **Spot price fallback**: batch snapshot → price history → chain median
+
+#### Trade Analysis (per setup)
+- **Profit target / exit management**: configurable %, BS forward pricing for days-to-target, theta decay chart
+- **Spread pricing**: natural, mid, and liquidity-adjusted fill estimate per setup
+- **Breakevens**: upper/lower with % from spot, on payoff chart
+- **Full DGTV Greeks**: net delta/gamma/theta/vega per contract, theta/vega ratio, institutional limit warnings (±0.30Δ, ±0.03Γ, ±0.20ν)
+- **Position sizing (Kelly Criterion)**: managed win rate (from backtest or POP+bump), configurable stop multiplier, Kelly fraction, hard cap. Uses historical managed WR when available.
+- **30Δ adjustment triggers**: BS binary search for spot price where short legs hit 0.30 delta. Warning zones shaded on payoff chart.
+- **21 DTE time stop**: marked on theta decay chart
+
+#### Backtesting & Stress Testing
+- **Historical managed exit simulation**: day-by-day walk through 252 days of price history. Three exit paths per trial: profit target hit (theta decay approximation), stop loss hit, held to expiration. Reports managed WR, exp-only WR, early profit count, stopped out count, breached count.
+- **Forward event stress test**: FOMC meetings (from economic_calendar.py, regular vs SEP/dot plot) and earnings within DTE window. 1σ/2σ/3σ gap scenarios in both directions. Shows P&L and whether each scenario survives the stop loss.
+
+#### Earnings Intelligence
+- Per-ticker earnings date from yfinance (parallel fetch in thread pool)
+- Expected move from daily 1σ (IV × √(1/252))
+- Strikes-inside-expected-move warning
+- Exclude earnings toggle
+
+#### Multi-Expiration Comparison
+- Up to 3 alternative expirations with credit, $/day, max risk, POP
+- Best value ($/day) and highest absolute credit callout
+
+#### Liquidity Scoring
+- Per-leg OI, volume, bid-ask width
+- Composite grade A-F with specific thresholds
+- Slippage estimate (avg BA × 2)
+- Wing width optimization warning (flags <1.5% of underlying)
+
+#### AI Assessment (Grok 4)
+- Analyzes all displayed setups (up to 12) with live X/Twitter search
+- Per-setup: grade A-F, thesis, key risk, IV view, events, verdict (SELL/WAIT/SKIP)
+- **Portfolio recommendation**: best 3-5 diversified picks
+- **Correlation warning**: flags concentrated sector exposure
+- **Macro environment**: VIX regime, Fed, geopolitical read
+- Full quantitative context in prompt: IVR bands, VRP framework, backtest results, Greeks, Kelly, slippage
+
+#### Layout
+- Tabbed detail cards (up to 12, one at a time)
+- Consolidated warning banner (IVR/liquidity/wings/earnings in one line)
+- Two-column card layout (metrics left, charts right)
+- Sub-tabs per setup: Management (rules + backtest + stress test), Compare Expirations, Greeks
+- Portfolio summary bar (total contracts/credit/risk/earnings/liquidity)
+- Sort by 7 fields, filter by POP/liquidity/IVR/VRP/earnings/EV
+- Collapsed full results table at bottom
+- Contextual explainers throughout
+
+#### Performance
+- Batch snapshot for spot prices (1 API call for all tickers)
+- Price history + earnings fetched in parallel thread pool (10 workers)
+- Chain scanning sequential on main thread (session_state safety)
+- True IVR cached in session_state after first fetch
+- ATM IV saved to metrics_store for progressive cache building
+
+---
+
 ## 2026-03-30/31 — Major Options Infrastructure Overhaul + 3 New Pages
 
 ### New Pages

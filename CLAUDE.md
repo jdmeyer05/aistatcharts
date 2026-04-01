@@ -76,7 +76,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | `ai_cache.py` | AI response caching — eliminates redundant Gemini/Grok/Claude calls across users |
 | `user_prefs.py` | Persistent user preferences via Supabase (active ticker, watchlist, settings) |
 
-### pages/ — 33 Active Pages (6 disabled, 11 sectors consolidated into 1)
+### pages/ — 34 Active Pages (6 disabled, 11 sectors consolidated into 1)
 
 | # | File | What It Does |
 |---|------|-------------|
@@ -112,6 +112,7 @@ data/acled_events.csv         → Cached ACLED conflict events (gitignored)
 | 47 | `Track_Record.py` | 5-tab institutional track record |
 | 48 | `Vol_Landscape.py` | Cross-asset vol surface analysis (20 ETFs), heatmaps, k-means VRP clustering, divergence detection, AI briefing |
 | 49 | `Higher_Greeks.py` | 2nd/3rd order Greeks (vanna, charm, speed, zomma, etc.), VV pricing, AI Greek analyst |
+| 50 | `Iron_Condor_Scanner.py` | 57-ticker scanner: 7-factor composite score (true IVR, VRP, liquidity, earnings, backtest, Kelly), managed exit simulation, forward event stress test (FOMC/earnings), Grok AI portfolio recommendation |
 | 99 | `Login.py` | Standalone login/register page |
 
 **Disabled pages** (code preserved, toggle via `DISABLED_PAGES` in `src/layout.py`):

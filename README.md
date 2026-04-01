@@ -13,7 +13,7 @@ Opens at **http://localhost:8501** (or next available port).
 
 ## Platform Overview
 
-- **33 active pages** (50 total, 6 disabled, 11 sectors consolidated into 1 dynamic page, 2 power pages merged into 1) + automated hourly background worker
+- **34 active pages** (51 total, 6 disabled, 11 sectors consolidated into 1 dynamic page, 2 power pages merged into 1) + automated hourly background worker
 - **4 AI models**: Grok 4, Gemini 3.1 Pro, Claude Sonnet/Opus, Gemini 2.5 Flash (chat)
 - **Unified Signal Engine** -- aggregates signals from 8+ analysis pages into weighted composite scores per ticker
 - **Historical Metrics Store** -- daily vol/options snapshots with 252-day percentile ranks
@@ -77,6 +77,7 @@ Opens at **http://localhost:8501** (or next available port).
 | **Track Record** | 5-tab institutional accountability dashboard: platform scorecard (rolling accuracy, calibration curve, win/loss streaks), tool breakdown (confusion matrix, precision/recall/F1, return distributions, best/worst calls), signal engine performance (conviction vs accuracy, source weights), position P&L (win rate, profit factor, closed position analytics), full prediction log with filters |
 | **Universe Portfolio** | 15-group universe scan, cross-group correlation, hierarchical two-layer allocation, walk-forward backtest, statistical tests |
 | **Market Expectations** | Cross-asset options intelligence: vol dashboard, term structure comparison, skew landscape, PCA, implied correlation, VRP, trade synthesis |
+| **Iron Condor Scanner** | 57-ticker scanner: 7-factor composite score (credit/risk, true IVR, VRP, liquidity A-F, earnings, historical managed backtest, theta efficiency), Kelly position sizing, 30Δ adjustment triggers, forward event stress test (FOMC/earnings), multi-expiration comparison, Grok AI portfolio recommendation |
 | **+ 6 more** | Options (2 active), oil, natgas, ERCOT (2), futures |
 | **Disabled (7)** | Historical Analysis, Options Flow, ML Predictor, Tech Screener, Monte Carlo, VaR, Power Strategies (merged into Power Analytics) |
 
