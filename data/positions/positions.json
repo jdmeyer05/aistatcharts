@@ -1,0 +1,50 @@
+[
+  {
+    "id": "40a54bbd",
+    "user_id": "default",
+    "ticker": "NVDA",
+    "type": "iron_condor",
+    "qty": 2,
+    "entry_price": 3.07,
+    "entry_date": "2026-04-01T13:17:58.454939",
+    "details": {
+      "strategy": "iron_condor",
+      "short_put": 165.0,
+      "long_put": 155.0,
+      "short_call": 195.0,
+      "long_call": 205.0,
+      "expiration": "2026-05-15",
+      "dte_at_entry": "43",
+      "credit_per_share": 3.07,
+      "credit_per_contract": 307.0,
+      "max_risk_per_contract": 691.0,
+      "spread_natural": 2.96,
+      "spread_mid": 3.49,
+      "pop": 50.1,
+      "ivr": 65.2,
+      "vrp": -0.7,
+      "liq_grade": "C",
+      "adj_score": 0.2959,
+      "profit_target_pct": 50,
+      "stop_multiplier": 1.5,
+      "managed_wr": 92.8,
+      "kelly_adj": 35.6,
+      "net_delta": 0.0032,
+      "net_theta": 0.0444,
+      "net_vega": -0.1074
+    },
+    "source_page": "50_Iron_Condor_Scanner",
+    "status": "open",
+    "close_price": null,
+    "close_date": null,
+    "notes": "",
+    "greeks": {},
+    "alerts": {},
+    "journal": {
+      "entry_thesis": "",
+      "exit_thesis": "",
+      "tags": [],
+      "notes": []
+    }
+  }
+]

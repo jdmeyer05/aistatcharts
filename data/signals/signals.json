@@ -1,0 +1,1 @@
+[{"source": "test_probe", "ticker": "SPY", "direction": "bull", "conviction": 0.75, "vol_view": "short_vol", "reasoning": "Connection test", "timestamp": "2026-03-28T23:13:31.857413"}]

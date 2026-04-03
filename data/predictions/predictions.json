@@ -1,0 +1,52 @@
+[
+  {
+    "id": "106f5699",
+    "timestamp": "2026-03-28T20:55:00.683106",
+    "source": "stock_analysis",
+    "ticker": "SPY",
+    "prediction": {
+      "direction": "Hold",
+      "score": 4.5,
+      "target": 653.3,
+      "confidence": 7
+    },
+    "spot_at_prediction": 634.09,
+    "metadata": {
+      "n_models": 3
+    },
+    "outcomes": {},
+    "evaluated_days": []
+  },
+  {
+    "id": "901645b0",
+    "timestamp": "2026-03-28T21:11:33.755720",
+    "source": "stock_analysis",
+    "ticker": "TLT",
+    "prediction": {
+      "direction": "Hold",
+      "score": 5.5,
+      "target": 90.0,
+      "confidence": 6
+    },
+    "spot_at_prediction": 85.64,
+    "metadata": {
+      "n_models": 3
+    },
+    "outcomes": {},
+    "evaluated_days": []
+  },
+  {
+    "id": "e25a5204",
+    "timestamp": "2026-03-28T23:13:32.106939",
+    "source": "test_probe",
+    "ticker": "SPY",
+    "prediction": {
+      "direction": "bull",
+      "score": 8
+    },
+    "spot_at_prediction": 570.0,
+    "metadata": {},
+    "outcomes": {},
+    "evaluated_days": []
+  }
+]

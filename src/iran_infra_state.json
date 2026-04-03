@@ -1,0 +1,107 @@
+[
+  {
+    "name": "Strait of Hormuz",
+    "status": "offline",
+    "detail": "Fully closed. Commercial traffic near zero. Heavily mined with active drone/missile threats. Latest AIS data from vessel tracking shows no transits in past 72 hours. -15.0 mbpd disruption.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Qatar LNG (Ras Laffan)",
+    "status": "offline",
+    "detail": "Extensive damage from mid-March strikes unrepaired. Force majeure remains in effect with no restart announced. Disruption estimated at 2.0 mbpd equivalent.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Abqaiq (Saudi Arabia)",
+    "status": "operational",
+    "detail": "Operating normally with East-West bypass active at +4.5 mbpd offset. No new incidents reported in latest market updates.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Kharg Island (Iran)",
+    "status": "degraded",
+    "detail": "Exporting estimated 1.2-1.4 mbpd via shadow fleet to China. Military targets hit but core oil loading infrastructure remains functional.",
+    "changed": true,
+    "update": "Slight upward revision in export volume estimate from tanker tracking data."
+  },
+  {
+    "name": "Fujairah (UAE)",
+    "status": "degraded",
+    "detail": "Operations partially restored but still impacted by March drone strikes. Limited rerouting via Oman continues.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Ras Tanura (Saudi Arabia)",
+    "status": "degraded",
+    "detail": "Refinery running but sea exports constrained by Hormuz closure. Increased volumes confirmed rerouted to Yanbu terminal.",
+    "changed": true,
+    "update": "Rerouting to Yanbu now handling majority of exports per energy market reports."
+  },
+  {
+    "name": "Assaluyeh / South Pars (Iran)",
+    "status": "offline",
+    "detail": "Treatment plants struck mid-March remain offline with no visible repair activity in recent imagery.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Bandar Abbas naval base",
+    "status": "offline",
+    "detail": "Struck multiple times late March. IRGC Navy assets destroyed with pier facilities non-functional.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Kirkuk-Ceyhan Pipeline",
+    "status": "operational",
+    "detail": "Flows currently estimated at 300 kbpd under Iraq-KRG agreement. On track to reach 450 kbpd in coming weeks as bypass route.",
+    "changed": true,
+    "update": "Flow rates increased from initial restart levels."
+  },
+  {
+    "name": "Bab el-Mandeb / Red Sea",
+    "status": "degraded",
+    "detail": "Houthi attacks ongoing in support of Iran. Shipping volumes remain sharply reduced with majority of vessels using Cape of Good Hope route.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Iranian Power Grid",
+    "status": "offline",
+    "detail": "Multiple power plants including Isfahan, Bandar Abbas and Ahvaz struck. Estimated 45% of grid offline with widespread blackouts persisting.",
+    "changed": true,
+    "update": "Minor restoration in non-critical areas but overall status unchanged."
+  },
+  {
+    "name": "Fordow Enrichment Facility",
+    "status": "degraded",
+    "detail": "Facility approximately 55% offline following US strikes. Centrifuge halls severely damaged though some underground sections intact.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Bandar Abbas Naval Base",
+    "status": "offline",
+    "detail": "Cratered by strikes with piers destroyed and multiple vessels sunk. No naval operations observed.",
+    "changed": false,
+    "update": null
+  },
+  {
+    "name": "Natanz Enrichment Facility",
+    "status": "degraded",
+    "detail": "Impacted by reported strikes in late March. Centrifuge operations estimated at 40% capacity with significant infrastructure damage.",
+    "changed": true,
+    "update": "New facility added based on OSINT and news reporting of additional strikes."
+  },
+  {
+    "name": "Yanbu Terminal (Saudi Arabia)",
+    "status": "operational",
+    "detail": "Handling increased crude and product exports as Hormuz bypass. No direct attacks reported; operating at elevated throughput.",
+    "changed": true,
+    "update": "New facility added due to confirmed increased utilization as alternative export route."
+  }
+]

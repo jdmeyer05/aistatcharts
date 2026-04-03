@@ -45,6 +45,43 @@
   --font-mono: var(--font-geist-mono), "JetBrains Mono", "Fira Code", monospace;
 }
 
+/* ═══════════════════════════════════════════════
+   DARK MODE — Bloomberg terminal inspired
+   Activated via .dark class on <html> (next-themes)
+   ═══════════════════════════════════════════════ */
+
+.dark {
+  --color-bg: #0d1117;
+  --color-surface: #161b22;
+  --color-surface-alt: #1c2128;
+
+  --color-navy: #c9d1d9;
+  --color-navy-light: #8b949e;
+  --color-navy-muted: #6e7681;
+
+  --color-border: #30363d;
+  --color-border-strong: #484f58;
+
+  --color-text: #e6edf3;
+  --color-text-secondary: #b1bac4;
+  --color-text-muted: #8b949e;
+
+  --color-accent: #58a6ff;
+  --color-accent-hover: #79c0ff;
+  --color-accent-light: #152238;
+
+  --color-gain: #3fb950;
+  --color-gain-bg: #122117;
+  --color-loss: #f85149;
+  --color-loss-bg: #2d1214;
+  --color-warn: #d29922;
+  --color-warn-bg: #2a1e0c;
+  --color-info: #58a6ff;
+  --color-info-bg: #152238;
+
+  color-scheme: dark;
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-text);
@@ -75,7 +112,7 @@ body {
 /* Navy header card variant */
 .card-header-navy {
   background: var(--color-navy);
-  color: #ffffff;
+  color: var(--color-bg);
   border: none;
   border-radius: 6px 6px 0 0;
   padding: 10px 20px;
@@ -83,6 +120,11 @@ body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.dark .card-header-navy {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
 }
 
 /* ─── Badge ─────────────────────────────────── */
@@ -156,8 +198,14 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #ffffff;
-  background: var(--color-navy);
-  border-bottom: 2px solid var(--color-navy-light);
+  background: #1a2332;
+  border-bottom: 2px solid #2c3e50;
+}
+
+.dark .data-table th {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  border-bottom-color: var(--color-border);
 }
 
 .data-table th:first-child {
@@ -178,7 +226,7 @@ body {
 }
 
 .data-table tr:hover {
-  background: #e8f0fe;
+  background: var(--color-accent-light);
 }
 
 /* ─── Section header (editorial style) ──────── */
@@ -187,8 +235,8 @@ body {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--color-navy);
-  border-bottom: 2px solid var(--color-navy);
+  color: var(--color-text);
+  border-bottom: 2px solid var(--color-border-strong);
   padding-bottom: 4px;
   margin-bottom: 12px;
 }
@@ -215,6 +263,8 @@ select,
 textarea {
   border-color: var(--color-border);
   font-size: 0.8rem;
+  color: var(--color-text);
+  background: var(--color-surface);
 }
 
 input[type="number"]:focus,
@@ -223,5 +273,20 @@ select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px rgba(26, 86, 219, 0.15);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+/* ─── Range slider ─────────────────────────── */
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
+
+/* ─── Details/Summary ──────────────────────── */
+details summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
+details summary:hover {
+  color: var(--color-text);
 }

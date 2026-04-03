@@ -1,5 +1,99 @@
 # Changelog
 
+## 2026-04-02/03 — Next.js Platform Overhaul + Strategy Scanner + Market Intelligence
+
+### New Pages
+- **Market Scan** (`/daily-briefing`) — 4-source news intelligence pipeline (Polygon + SEC EDGAR + yfinance earnings + Grok live X/Twitter search), claim-level cross-verification, freshness labeling, AI market note (Gemini synthesis of scan + news), trade opportunity scanner, risk budget, sector concentration warnings
+- **Strategy Scanner** (`/strategy-scanner`) — 4 modes: Multi-Ticker Scan (24 strategies × N tickers ranked by Deflated Sharpe), Parameter Optimizer (Optuna Bayesian TPE), Combination Testing (AND logic pairs/triples), Deep Scan (multi-timeframe meta-analysis with heatmap, correlation matrix, portfolio recommendation)
+- **Live Scan** (`/live-scan`) — Real-time 3D visualization (Three.js react-three-fiber) of strategy scanning via SSE streaming. Instanced mesh columns rise and color as results stream in. Also has particle galaxy (Canvas) and heatmap modes.
+- **Vertical Spread Scanner** (`/vertical-spreads`) — All 4 spread types (bull put, bear call, bull call, bear put) with IV skew scoring, expected move check, forward event stress test, historical backtest, Kelly sizing, compare expirations
+
+### Strategy Scanner Engine
+- 24 strategies using TA-Lib (C-compiled, matches Bloomberg/TradingView): SMA Cross, EMA Cross, Golden Cross, MACD, Donchian, ATR Trailing, Momentum, Dual Momentum, ADX+DI, Parabolic SAR, Ichimoku Cloud, TEMA Cross, RSI, BB Mean Reversion, BB Breakout, Z-Score MR, Stochastic K/D, CCI, Williams %R, OBV Divergence, Trend+RSI Composite, Trend+BB Composite, Turn-of-Month, Halloween Effect
+- Sharpe computed on active days only (prevents sparse signal inflation)
+- Excess Sharpe vs buy-and-hold as primary ranking metric
+- DSR corrected for total combinations tested (proper multiple testing)
+- Walk-forward OOS Sharpe with rolling windows on active days
+- Flip cost = 2× (close + reopen), entry/exit = 1×
+- yfinance adjusted OHLCV for split/dividend handling
+- Intraday support (60min, 15min, 5min via Polygon)
+- Optuna Bayesian optimization with walk-forward OOS objective
+- Combination scanner: AND logic for signal confluence
+
+### News Intelligence Pipeline
+- Phase 1: Structured APIs in parallel (Polygon news with 24h filter + noise/opinion publisher removal, SEC EDGAR 8-K with item code labels, yfinance earnings recency-gated to last 3 days)
+- Phase 2: Grok live X/Twitter + web search (explicitly told today's date, training data is stale, specific source handles)
+- Phase 3: Claim-level cross-verification (keyword overlap, not just ticker match)
+- Phase 4: Freshness labels (live/recent/today/stale), recency-first sorting
+- Grok freshness verification: items without temporal words flagged as suspect
+
+### Stock Analysis — Major Rebuild
+- New endpoint `stock-data-full`: 10 parallel fetches (technicals via TA-Lib, fundamentals via XBRL + yfinance, StockTwits, insider scoring 0-100, 8-K events, XBRL history charts, analyst consensus)
+- New endpoint `stock-ai-analysis`: 3-model parallel (Grok + Gemini + Claude) with structured JSON scoring, confidence-weighted blending, agreement/divergence reporting
+- 5-tab frontend: Chart & Technicals (candlestick + EMA/BB + RSI + MACD + 3M/1Y/5Y), AI Analysis (radar chart, price targets, risks/catalysts), Insiders & EDGAR, Financials (XBRL bar charts), Model Comparison
+
+### Iron Condor Scanner — 20 Features Added
+- Historical winrate simulation (252-day backtest), alt expirations, forward event stress test (FOMC + earnings), Kelly UI, IVR/VRP/earnings filters, compare expirations tab, DGTV breach warnings, chart overlays (profit target, stop loss, 21 DTE time stop), positive EV filter
+- Bug fixes: stress test long leg protection, DGTV limits scaled by contracts, market hours timezone detection
+
+### Algo Backtester — Full Rebuild
+- 14 strategies (was 7), 9 tabs (was 5), all de Prado stats (DSR, PBO, walk-forward, regime analysis)
+- Strategy comparison tab with risk-return scatter
+- Position chart with shaded long overlays
+- Monthly returns heatmap, rolling 60-day Sharpe
+- Sortino, Calmar, annualized vol, avg winner/loser metrics
+
+### All Options Pages at Parity
+- Options Analysis: 9/9 tabs (+Vol Surface 3D, Term Structure, Unusual Activity)
+- Options Lab: 4/4 tabs (+Earnings Move Analyzer, Strategy Optimizer)
+- Calendar Spreads: 8/8 tabs (+Scanner, Roll Optimizer, Backtest, AI Assessment)
+- Portfolio Greeks: 5/5 tabs (+Greeks by Expiration, Greeks Over Time)
+- Higher Greeks: 8/8 tabs (+Portfolio Higher Greeks, AI Greek Analyst)
+
+### Vol Surface — Full Parity + Polish
+- Surface Reading prose (VRP/Skew/Term Structure interpretation)
+- Historical date scrubber on 3D tab
+- AI Surface Narrator + AI Evolution Analysis
+- Gamma Scalp P&L Backtest
+- Event kink detection on term structure
+- Actionable dislocation trade ideas (top 5 rich/cheap)
+- P&L payoff diagram parsing from AI markdown
+- Bug fixes: t.hv20/t.hv60 undefined colors, risk reversal table color inverted
+
+### Platform Changes
+- Auth gate: password-protected Next.js site
+- Pages removed: RL Trading, Universe Portfolio, Market Expectations, Iran Conflict, Power Analytics (consolidated into ERCOT Power 8 tabs)
+- Credit spreads weighted 1.5× over debit in Market Scan (per academic research)
+- ERCOT Power consolidated to 8 tabs (added Duck Curve + Generation Stack)
+- Dependencies added: optuna, ta-lib, three.js + react-three-fiber + drei
+
+### Bug Fixes (50+)
+- Stress test long leg protection for iron condors and verticals
+- DGTV limits scaled by contracts
+- Market hours timezone detection (Intl.DateTimeFormat)
+- Timeframe toggle stale state (React closure issue)
+- Prompt MACD "Bearish" when no data
+- Single-model AI results missing model_results field
+- Insider scoring column name mismatch (Polygon vs scorer)
+- XBRL/yfinance merge priority (XBRL wins for percentages)
+- Recommendation datetime serialization
+- rec_order index overflow clamped
+- yfinance 2D array (.ravel() for TA-Lib compatibility)
+- Bollinger Bands ddof=1 (sample std)
+- Flip cost 2× for position reversals
+- Sparse signal Sharpe inflation (active days only)
+- DSR skew/kurtosis consistency
+- Bull call skew multiplier inverted
+- Debit spread stress test P&L formula
+- VIX fetched via yfinance (Polygon doesn't carry index tickers)
+- SPY/QQQ 0% change fallback to yfinance
+- Stale earnings data (trailingEps vs forwardEps → recency-gated earnings_dates)
+- News recency parser ("15min ago" failure)
+- React Fragment key warnings in combo table
+- WebGL null values in 3D surface
+
+---
+
 ## 2026-04-01 — Iron Condor Scanner (New Page)
 
 ### New Page: 50_Iron_Condor_Scanner

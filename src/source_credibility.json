@@ -1,0 +1,72 @@
+{
+  "@sentdefender": {
+    "citations": 7,
+    "accuracy_sum": 584.0,
+    "score": 83
+  },
+  "@criticalthreats": {
+    "citations": 4,
+    "accuracy_sum": 382.0,
+    "score": 96
+  },
+  "@centcom": {
+    "citations": 8,
+    "accuracy_sum": 714.0,
+    "score": 89
+  },
+  "@javierblas": {
+    "citations": 6,
+    "accuracy_sum": 516.0,
+    "score": 86
+  },
+  "@idf": {
+    "citations": 8,
+    "accuracy_sum": 710.0,
+    "score": 89
+  },
+  "@tankertrackers": {
+    "citations": 2,
+    "accuracy_sum": 194.00000000000003,
+    "score": 97
+  },
+  "@barakravid": {
+    "citations": 9,
+    "accuracy_sum": 778.0,
+    "score": 86
+  },
+  "@oilsheppard": {
+    "citations": 3,
+    "accuracy_sum": 246.0,
+    "score": 82
+  },
+  "@middleeasteye": {
+    "citations": 2,
+    "accuracy_sum": 186.0,
+    "score": 93
+  },
+  "@iranintl_en": {
+    "citations": 5,
+    "accuracy_sum": 482.0,
+    "score": 96
+  },
+  "@thestudyofwar": {
+    "citations": 2,
+    "accuracy_sum": 196.0,
+    "score": 98
+  },
+  "@khamenei_ir": {
+    "citations": 3,
+    "accuracy_sum": 250.0,
+    "score": 83
+  },
+  "@auroraintel": {
+    "citations": 1,
+    "accuracy_sum": 100,
+    "score": 100
+  },
+  "@marinetraffic": {
+    "citations": 3,
+    "accuracy_sum": 280.0,
+    "score": 93
+  }
+}

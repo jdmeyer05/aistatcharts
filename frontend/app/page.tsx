@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchSnapshot, fetchMarketNews, fetchSignalSummary, fetchTopIdeas,
   fetchPortfolioSummary, fetchHeatmap, fetchEvents, fetchRisk,
+  fetchAccuracySummary, fetchTickerMetrics,
   type HeatmapItem,
 } from "@/lib/api";
 import { Metric } from "@/components/ui/metric";
@@ -12,496 +13,384 @@ import ReactMarkdown from "react-markdown";
 import { useState } from "react";
 import Link from "next/link";
 
-// ─── MARKET PULSE ────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   TICKER TAPE — full-width, no card border, horizontal scroll
+   ═══════════════════════════════════════════════════════════════ */
 
-const PULSE_TICKERS = [
-  { symbol: "SPY", label: "S&P 500" },
-  { symbol: "QQQ", label: "Nasdaq" },
-  { symbol: "IWM", label: "Russell" },
-  { symbol: "^VIX", label: "VIX" },
-  { symbol: "GLD", label: "Gold" },
-  { symbol: "USO", label: "Crude" },
-  { symbol: "TLT", label: "20Y Bond" },
-  { symbol: "DX-Y.NYB", label: "Dollar" },
+const EQ_TICKERS = [
+  { s: "SPY", l: "S&P 500" }, { s: "QQQ", l: "Nasdaq" }, { s: "IWM", l: "Russell" },
+  { s: "^VIX", l: "VIX" }, { s: "GLD", l: "Gold" }, { s: "USO", l: "Crude" },
+  { s: "TLT", l: "Bonds" }, { s: "DX-Y.NYB", l: "Dollar" },
+];
+const FUT_TICKERS = [
+  { s: "ES=F", l: "ES" }, { s: "NQ=F", l: "NQ" }, { s: "YM=F", l: "Dow" },
+  { s: "CL=F", l: "Crude" }, { s: "GC=F", l: "Gold" }, { s: "SI=F", l: "Silver" },
+  { s: "NG=F", l: "NatGas" }, { s: "ZB=F", l: "30Y" }, { s: "ZN=F", l: "10Y" },
+  { s: "6E=F", l: "Euro" }, { s: "BTC-USD", l: "BTC" },
 ];
 
-const FUTURES_TICKERS = [
-  { symbol: "ES=F", label: "ES" },
-  { symbol: "NQ=F", label: "NQ" },
-  { symbol: "YM=F", label: "Dow" },
-  { symbol: "CL=F", label: "Crude" },
-  { symbol: "GC=F", label: "Gold" },
-  { symbol: "SI=F", label: "Silver" },
-  { symbol: "NG=F", label: "NatGas" },
-  { symbol: "BTC-USD", label: "Bitcoin" },
-];
-
-function PulseBar({ tickers, label }: { tickers: typeof PULSE_TICKERS; label: string }) {
-  const { data } = useQuery({
-    queryKey: ["pulse", label],
-    queryFn: () => fetchSnapshot(tickers.map((t) => t.symbol)),
-    refetchInterval: 2 * 60 * 1000,
-  });
-
-  return (
-    <div className="card card-compact">
-      <div className="flex items-center gap-2">
-        <span className="metric-label text-[0.55rem] hidden sm:block [writing-mode:vertical-lr] rotate-180">{label}</span>
-        <div className="flex flex-wrap gap-1 flex-1">
-          {tickers.map(({ symbol, label: tickerLabel }) => {
-            const snap = data?.[symbol];
-            if (!snap?.price) {
-              return (
-                <div key={symbol} className="flex-1 min-w-[80px] text-center py-1.5">
-                  <div className="text-[0.6rem] text-text-muted">{tickerLabel}</div>
-                  <div className="h-5 bg-surface-alt rounded animate-pulse mt-0.5 mx-3" />
-                </div>
-              );
-            }
-            const chg = snap.change ?? 0;
-            const isUp = chg >= 0;
-            const priceStr =
-              ["^VIX", "DX-Y.NYB"].includes(symbol)
-                ? snap.price.toFixed(2)
-                : snap.price >= 1000
-                  ? `$${(snap.price / 1000).toFixed(1)}k`
-                  : snap.price >= 100
-                    ? `$${snap.price.toFixed(0)}`
-                    : `$${snap.price.toFixed(2)}`;
-
-            return (
-              <div key={symbol} className="flex-1 min-w-[80px] text-center py-1.5">
-                <div className="text-[0.6rem] text-text-muted">{tickerLabel}</div>
-                <div className="text-sm font-semibold font-data">{priceStr}</div>
-                <div className={`text-[0.65rem] font-semibold font-data ${isUp ? "text-gain" : "text-loss"}`}>
-                  {isUp ? "▲" : "▼"}{Math.abs(chg).toFixed(2)}%
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MarketPulse() {
-  const { dataUpdatedAt } = useQuery({
-    queryKey: ["pulse", "Equities"],
-    queryFn: () => fetchSnapshot(PULSE_TICKERS.map((t) => t.symbol)),
-    refetchInterval: 2 * 60 * 1000,
-  });
-
+function TickerTape() {
+  const { data: eq } = useQuery({ queryKey: ["pulse-eq"], queryFn: () => fetchSnapshot(EQ_TICKERS.map(t => t.s)), refetchInterval: 120_000 });
+  const { data: fut, dataUpdatedAt } = useQuery({ queryKey: ["pulse-fut"], queryFn: () => fetchSnapshot(FUT_TICKERS.map(t => t.s)), refetchInterval: 120_000 });
   const ageMin = dataUpdatedAt ? (Date.now() - dataUpdatedAt) / 60000 : null;
 
-  return (
-    <section className="space-y-1.5">
-      <PulseBar tickers={PULSE_TICKERS} label="EQUITIES" />
-      <PulseBar tickers={FUTURES_TICKERS} label="FUTURES" />
-      <FreshnessBar
-        sources={[{ label: "Prices", ageMinutes: ageMin, greenThreshold: 5, yellowThreshold: 15 }]}
-      />
-    </section>
-  );
-}
-
-// ─── MARKET NEWS ─────────────────────────────────────────────
-
-function MarketNews() {
-  const { data } = useQuery({
-    queryKey: ["market-news"],
-    queryFn: fetchMarketNews,
-    staleTime: 30 * 60 * 1000,
-  });
-
-  const ageLabel =
-    data?.age_hours === 0 ? "< 1 hour ago" : data?.age_hours === 1 ? "1-2 hours ago" : null;
+  const all = [...EQ_TICKERS.map(t => ({ ...t, snap: eq?.[t.s] })), ...FUT_TICKERS.map(t => ({ ...t, snap: fut?.[t.s] }))];
 
   return (
-    <div className="card h-full flex flex-col">
-      <div className="flex justify-between items-center mb-3">
-        <div className="section-title">Market Intelligence</div>
-        {ageLabel && (
-          <span className={`text-[0.65rem] font-mono ${data?.age_hours === 0 ? "dot-fresh" : "dot-aging"}`}>
-            {ageLabel}
-          </span>
-        )}
+    <div className="-mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 py-2 border-b border-border bg-surface/50 backdrop-blur-sm">
+      <div className="flex gap-5 overflow-x-auto pb-1 scrollbar-none">
+        {all.map(({ s, l, snap }) => {
+          if (!snap?.price) return (
+            <div key={s} className="shrink-0 flex items-center gap-1.5 opacity-40">
+              <span className="text-[0.6rem] text-text-muted">{l}</span>
+              <span className="text-xs font-data">—</span>
+            </div>
+          );
+          const chg = snap.change ?? 0;
+          const up = chg >= 0;
+          const fmt = ["^VIX", "DX-Y.NYB"].includes(s)
+            ? snap.price.toFixed(2)
+            : snap.price >= 1000 ? `${(snap.price / 1000).toFixed(1)}k` : snap.price >= 100 ? snap.price.toFixed(0) : snap.price.toFixed(2);
+          return (
+            <div key={s} className="shrink-0 flex items-center gap-1.5">
+              <span className="text-[0.6rem] text-text-muted">{l}</span>
+              <span className="text-xs font-bold font-data">{fmt}</span>
+              <span className={`text-[0.6rem] font-data font-semibold ${up ? "text-gain" : "text-loss"}`}>{up ? "+" : ""}{chg.toFixed(2)}%</span>
+            </div>
+          );
+        })}
       </div>
-      <div className="flex-1">
-        {data?.content ? (
-          <div className="text-sm leading-relaxed text-text-secondary prose prose-sm prose-gray max-w-none
-                          prose-strong:text-text prose-li:my-0.5 prose-ul:my-1 prose-p:my-1">
-            <ReactMarkdown>{data.content}</ReactMarkdown>
-          </div>
-        ) : (
-          <p className="text-sm text-text-muted">
-            Market news scan not yet available. Updates hourly during market hours.
-          </p>
-        )}
-      </div>
+      <FreshnessBar sources={[{ label: "Prices", ageMinutes: ageMin, greenThreshold: 5, yellowThreshold: 15 }]} />
     </div>
   );
 }
 
-// ─── SIGNALS ─────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   RISK STRIP — horizontal metrics bar, no card borders
+   ═══════════════════════════════════════════════════════════════ */
+
+const REGIME_COLORS: Record<string, string> = {
+  "Stagflation": "text-loss", "Recession": "text-warn", "Soft Landing": "text-gain",
+  "Financial Crisis": "text-loss", "Re-Acceleration": "text-accent", "Goldilocks": "text-info",
+};
+
+function RiskStrip() {
+  const { data } = useQuery({ queryKey: ["risk"], queryFn: fetchRisk, staleTime: 5 * 60 * 1000 });
+  const { data: metrics } = useQuery({ queryKey: ["spy-metrics"], queryFn: () => fetchTickerMetrics("SPY"), staleTime: 10 * 60 * 1000 });
+  const p = metrics?.percentiles ?? {};
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-8 gap-y-2 py-3 border-b border-border">
+      {/* Macro */}
+      {data?.macro && (
+        <div className="flex items-center gap-2">
+          <span className="text-[0.55rem] text-text-muted uppercase tracking-wider">Regime</span>
+          <span className={`text-sm font-bold ${REGIME_COLORS[data.macro.top_regime] ?? "text-text"}`}>{data.macro.top_regime}</span>
+          <span className="text-[0.55rem] text-text-muted">{data.macro.top_prob}%</span>
+        </div>
+      )}
+      {/* Vol */}
+      {data?.vol && (
+        <div className="flex items-center gap-2">
+          <span className="text-[0.55rem] text-text-muted uppercase tracking-wider">IV</span>
+          <span className={`text-sm font-bold font-data ${data.vol.level === "High" ? "text-loss" : data.vol.level === "Low" ? "text-gain" : ""}`}>
+            {data.vol.atm_iv}%
+          </span>
+          {data.vol.vrp !== null && <span className="text-[0.55rem] text-text-muted">VRP {data.vol.vrp}%</span>}
+          {p.atm_iv != null && <span className="text-[0.55rem] text-text-muted">{(Number(p.atm_iv) * 100).toFixed(0)}th</span>}
+        </div>
+      )}
+      {/* Strategy */}
+      {data?.strategy && (
+        <div className="flex items-center gap-2">
+          <span className="text-[0.55rem] text-text-muted uppercase tracking-wider">Play</span>
+          <span className="text-sm font-bold text-accent">{data.strategy.rec}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SIGNAL ENGINE
+   ═══════════════════════════════════════════════════════════════ */
 
 function SignalSpotlight() {
-  const { data: summary } = useQuery({
-    queryKey: ["signal-summary"],
-    queryFn: fetchSignalSummary,
-    refetchInterval: 60 * 1000,
-  });
-
-  const { data: ideas } = useQuery({
-    queryKey: ["top-ideas"],
-    queryFn: () => fetchTopIdeas(5),
-    refetchInterval: 60 * 1000,
-  });
+  const { data: summary } = useQuery({ queryKey: ["signal-summary"], queryFn: fetchSignalSummary, refetchInterval: 60_000 });
+  const { data: ideas } = useQuery({ queryKey: ["top-ideas"], queryFn: () => fetchTopIdeas(5), refetchInterval: 60_000 });
 
   return (
-    <div className="card">
-      <div className="section-title">Signal Engine</div>
-      {summary && summary.n_tickers > 0 ? (
-        <>
-          <div className="flex gap-4 mb-3">
-            <Metric label="Bullish" value={String(summary.n_bullish)} deltaType="gain" />
-            <Metric label="Bearish" value={String(summary.n_bearish)} deltaType="loss" />
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wider">Signals</h2>
+        {summary && summary.n_tickers > 0 && (
+          <div className="flex gap-3 text-xs font-data">
+            <span className="text-gain">{summary.n_bullish} bull</span>
+            <span className="text-loss">{summary.n_bearish} bear</span>
           </div>
-          {ideas && ideas.length > 0 && (
-            <div className="space-y-1.5">
-              {ideas.map((t) => (
-                <div key={t.ticker} className="flex items-center justify-between text-sm py-0.5
-                                               border-b border-border last:border-0">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        t.overall_direction === "bull"
-                          ? "bg-gain"
-                          : t.overall_direction === "bear"
-                            ? "bg-loss"
-                            : "bg-text-muted"
-                      }`}
-                    />
-                    <span className="font-semibold">{t.ticker}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-16 h-1.5 bg-surface-alt rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${t.overall_direction === "bull" ? "bg-gain" : "bg-loss"}`}
-                        style={{ width: `${t.overall_conviction * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-text-muted text-xs font-data w-16 text-right">
-                      {(t.overall_conviction * 100).toFixed(0)}% · {t.n_signals}
-                    </span>
-                  </div>
+        )}
+      </div>
+      {ideas && ideas.length > 0 ? (
+        <div className="space-y-1">
+          {ideas.map(t => (
+            <div key={t.ticker} className="flex items-center justify-between py-1.5">
+              <div className="flex items-center gap-2">
+                <div className={`w-1 h-6 rounded-full ${t.overall_direction === "bull" ? "bg-gain" : t.overall_direction === "bear" ? "bg-loss" : "bg-text-muted"}`} />
+                <span className="font-semibold text-sm">{t.ticker}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-20 h-1 bg-surface-alt rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full ${t.overall_direction === "bull" ? "bg-gain" : "bg-loss"}`} style={{ width: `${t.overall_conviction * 100}%` }} />
                 </div>
-              ))}
+                <span className="text-text-muted text-xs font-data w-8 text-right">{(t.overall_conviction * 100).toFixed(0)}%</span>
+              </div>
             </div>
-          )}
-        </>
-      ) : (
-        <p className="text-sm text-text-muted">Run analysis pages to generate signals.</p>
-      )}
+          ))}
+        </div>
+      ) : <p className="text-sm text-text-muted">No signals yet.</p>}
     </div>
   );
 }
 
-// ─── POSITIONS ───────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   POSITIONS
+   ═══════════════════════════════════════════════════════════════ */
 
 function PositionSummary() {
-  const { data } = useQuery({
-    queryKey: ["portfolio-summary"],
-    queryFn: fetchPortfolioSummary,
-    refetchInterval: 2 * 60 * 1000,
-  });
-
+  const { data } = useQuery({ queryKey: ["portfolio-summary"], queryFn: fetchPortfolioSummary, refetchInterval: 120_000 });
   const pnl = data?.total_pnl ?? 0;
-  const isUp = pnl >= 0;
 
   return (
-    <div className="card">
-      <div className="flex justify-between items-center mb-3">
-        <div className="section-title">Position Book</div>
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wider">Positions</h2>
         {data && data.n_positions > 0 && (
-          <span className={`badge ${isUp ? "badge-gain" : "badge-loss"}`}>
-            {isUp ? "▲" : "▼"} ${Math.abs(pnl).toLocaleString("en-US", { maximumFractionDigits: 0 })}
+          <span className={`text-xs font-bold font-data ${pnl >= 0 ? "text-gain" : "text-loss"}`}>
+            {pnl >= 0 ? "+" : ""}${Math.abs(pnl).toLocaleString("en-US", { maximumFractionDigits: 0 })} P&L
           </span>
         )}
       </div>
-      {data && data.n_positions > 0 ? (
-        <Metric label="Open Positions" value={String(data.n_positions)} />
-      ) : (
-        <p className="text-sm text-text-muted">No open positions.</p>
-      )}
+      {data && data.n_positions > 0 ? (<>
+        {data.positions && (data.positions as { ticker: string; type: string; pnl?: number }[]).slice(0, 4).map((pos, i) => (
+          <div key={i} className="flex justify-between items-center text-xs py-1">
+            <span>{pos.ticker} <span className="text-text-muted">{pos.type}</span></span>
+            {pos.pnl !== undefined && <span className={`font-data font-semibold ${pos.pnl >= 0 ? "text-gain" : "text-loss"}`}>${pos.pnl.toFixed(0)}</span>}
+          </div>
+        ))}
+        <Link href="/portfolio-greeks" className="text-[0.65rem] text-accent hover:underline">Manage →</Link>
+      </>) : <p className="text-xs text-text-muted">No open positions.</p>}
     </div>
   );
 }
 
-// ─── HEATMAP ─────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   EVENTS
+   ═══════════════════════════════════════════════════════════════ */
+
+function UpcomingEvents() {
+  const { data } = useQuery({ queryKey: ["events"], queryFn: fetchEvents, staleTime: 3600_000 });
+
+  return (
+    <div className="space-y-2">
+      <h2 className="text-sm font-bold uppercase tracking-wider">Events</h2>
+      {data?.events && data.events.length > 0 ? (
+        <div className="space-y-0">
+          {data.events.slice(0, 5).map((ev, i) => (
+            <div key={i} className="flex justify-between items-center py-1.5 border-b border-border/50 last:border-0">
+              <span className="text-xs">{ev.name}</span>
+              <span className={`text-[0.6rem] font-data font-semibold ${ev.days_away === 0 ? "text-loss" : ev.days_away <= 2 ? "text-warn" : "text-text-muted"}`}>
+                {ev.days_away === 0 ? "TODAY" : `${ev.days_away}d`}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : <p className="text-xs text-text-muted">No upcoming events.</p>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HEATMAP
+   ═══════════════════════════════════════════════════════════════ */
 
 const HEATMAP_GROUPS = [
-  { key: "sectors", label: "Sectors" },
-  { key: "indices", label: "Indices" },
-  { key: "fixed_income", label: "Fixed Income" },
-  { key: "commodities", label: "Commodities" },
+  { key: "sectors", label: "Sectors" }, { key: "indices", label: "Indices" },
+  { key: "fixed_income", label: "Bonds" }, { key: "commodities", label: "Commodities" },
   { key: "mega_caps", label: "Mega Caps" },
 ];
 
-function heatColor(change: number): string {
-  if (change >= 2) return "bg-[#0f7b3f] text-white";
-  if (change >= 1) return "bg-[#16a34a] text-white";
-  if (change >= 0.3) return "bg-[#dcfce7] text-[#0f7b3f]";
-  if (change > -0.3) return "bg-gray-50 text-gray-500";
-  if (change > -1) return "bg-[#fee2e2] text-[#b91c1c]";
-  if (change > -2) return "bg-[#dc2626] text-white";
-  return "bg-[#b91c1c] text-white";
+function heatColor(c: number): string {
+  if (c >= 2) return "bg-gain text-white"; if (c >= 0.8) return "bg-gain/70 text-white";
+  if (c >= 0.2) return "bg-gain/20 text-gain"; if (c > -0.2) return "bg-surface-alt text-text-muted";
+  if (c > -0.8) return "bg-loss/20 text-loss"; if (c > -2) return "bg-loss/70 text-white";
+  return "bg-loss text-white";
 }
 
 function MarketHeatmap() {
   const [group, setGroup] = useState("sectors");
-  const { data } = useQuery({
-    queryKey: ["heatmap", group],
-    queryFn: () => fetchHeatmap(group),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data } = useQuery({ queryKey: ["heatmap", group], queryFn: () => fetchHeatmap(group), staleTime: 300_000 });
 
   return (
-    <div className="card">
-      <div className="flex justify-between items-center mb-3">
-        <div className="section-title">Market Heatmap</div>
-        <div className="flex gap-1">
-          {HEATMAP_GROUPS.map((g) => (
-            <button
-              key={g.key}
-              onClick={() => setGroup(g.key)}
-              className={`px-2 py-0.5 text-[0.65rem] rounded-md transition-colors ${
-                group === g.key
-                  ? "bg-accent text-white"
-                  : "text-text-muted hover:text-text hover:bg-surface-alt"
-              }`}
-            >
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wider">Market</h2>
+        <div className="flex gap-0.5">
+          {HEATMAP_GROUPS.map(g => (
+            <button key={g.key} onClick={() => setGroup(g.key)}
+              className={`px-2.5 py-1 text-[0.6rem] rounded-full transition-colors ${group === g.key ? "bg-accent text-white" : "text-text-muted hover:bg-surface-alt"}`}>
               {g.label}
             </button>
           ))}
         </div>
       </div>
-      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
+      <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-11 gap-1">
         {data?.items?.map((item: HeatmapItem) => (
-          <div
-            key={item.symbol}
-            className={`rounded-lg p-2 text-center ${heatColor(item.change)}`}
-          >
-            <div className="text-[0.65rem] font-semibold">{item.symbol}</div>
-            <div className="text-xs font-data font-bold">
-              {item.change >= 0 ? "+" : ""}{item.change.toFixed(2)}%
-            </div>
+          <div key={item.symbol} className={`rounded-lg p-2.5 text-center ${heatColor(item.change)}`}>
+            <div className="text-[0.65rem] font-bold">{item.symbol}</div>
+            <div className="text-[0.5rem] opacity-70 leading-tight">{item.label}</div>
+            <div className="text-xs font-bold font-data mt-1">{item.change >= 0 ? "+" : ""}{item.change.toFixed(2)}%</div>
           </div>
-        )) ?? (
-          Array.from({ length: 11 }).map((_, i) => (
-            <div key={i} className="h-12 bg-surface-alt rounded-lg animate-pulse" />
-          ))
-        )}
+        )) ?? Array.from({ length: 11 }).map((_, i) => <div key={i} className="h-16 bg-surface-alt rounded-lg animate-pulse" />)}
       </div>
     </div>
   );
 }
 
-// ─── EVENTS ──────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   INTELLIGENCE (news)
+   ═══════════════════════════════════════════════════════════════ */
 
-function UpcomingEvents() {
-  const { data } = useQuery({
-    queryKey: ["events"],
-    queryFn: fetchEvents,
-    staleTime: 60 * 60 * 1000,
-  });
+function MarketNews() {
+  const { data } = useQuery({ queryKey: ["market-news"], queryFn: fetchMarketNews, staleTime: 1800_000 });
 
   return (
-    <div className="card">
-      <div className="section-title">Upcoming Events</div>
-      {data?.events && data.events.length > 0 ? (
-        <div className="space-y-0">
-          {data.events.map((ev, i) => {
-            const urgencyClass =
-              ev.days_away === 0
-                ? "text-loss font-bold"
-                : ev.days_away <= 2
-                  ? "text-warn font-semibold"
-                  : "text-text-muted";
-            const whenLabel = ev.days_away === 0 ? "TODAY" : `in ${ev.days_away}d`;
-
-            return (
-              <div
-                key={i}
-                className="flex justify-between items-center py-1.5 border-b border-border last:border-0 text-sm"
-              >
-                <span>{ev.name}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-[0.7rem] text-text-muted">{ev.date}</span>
-                  <span className={`text-[0.7rem] ${urgencyClass}`}>{whenLabel}</span>
-                </div>
-              </div>
-            );
-          })}
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wider">Intelligence</h2>
+        {data?.age_hours === 0 && <span className="text-[0.55rem] font-data dot-fresh">Live</span>}
+      </div>
+      {data?.content ? (
+        <div className="text-[0.78rem] leading-relaxed text-text-secondary prose prose-sm max-w-none dark:prose-invert prose-strong:text-text prose-p:my-1 prose-li:my-0.5">
+          <ReactMarkdown>{data.content}</ReactMarkdown>
         </div>
-      ) : (
-        <p className="text-sm text-text-muted">No major events in the next 14 days.</p>
+      ) : <p className="text-xs text-text-muted">Updates hourly during market hours.</p>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TRACK RECORD
+   ═══════════════════════════════════════════════════════════════ */
+
+function TrackRecord() {
+  const { data } = useQuery({ queryKey: ["accuracy-summary"], queryFn: fetchAccuracySummary, staleTime: 600_000 });
+  if (!data || data.evaluated === 0) return null;
+  const sources = Object.entries(data.by_source).sort(([, a], [, b]) => b.accuracy - a.accuracy);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wider">Track Record</h2>
+        <Link href="/track-record" className="text-[0.6rem] text-accent hover:underline">Details →</Link>
+      </div>
+      <div className="flex items-baseline gap-3">
+        <span className={`text-2xl font-bold font-data ${data.accuracy > 0.55 ? "text-gain" : data.accuracy < 0.45 ? "text-loss" : ""}`}>
+          {(data.accuracy * 100).toFixed(0)}%
+        </span>
+        <span className="text-xs text-text-muted">{data.correct}/{data.evaluated} correct</span>
+      </div>
+      {sources.length > 0 && (
+        <div className="space-y-1">
+          {sources.slice(0, 5).map(([src, v]) => (
+            <div key={src} className="flex items-center gap-2">
+              <span className="text-[0.6rem] text-text-muted w-24 truncate">{src.replace(/_/g, " ")}</span>
+              <div className="flex-1 h-1 bg-surface-alt rounded-full overflow-hidden">
+                <div className={`h-full rounded-full ${v.accuracy > 0.55 ? "bg-gain" : v.accuracy < 0.45 ? "bg-loss" : "bg-accent"}`}
+                  style={{ width: `${v.accuracy * 100}%` }} />
+              </div>
+              <span className="text-[0.6rem] font-data font-semibold w-8 text-right">{(v.accuracy * 100).toFixed(0)}%</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-// ─── RISK SNAPSHOT ───────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   QUICK NAV
+   ═══════════════════════════════════════════════════════════════ */
 
-const REGIME_COLORS: Record<string, string> = {
-  "Stagflation": "text-red-500",
-  "Recession": "text-orange-500",
-  "Soft Landing": "text-green-500",
-  "Financial Crisis": "text-red-600",
-  "Re-Acceleration": "text-sky-500",
-  "Goldilocks": "text-purple-500",
-};
-
-function RiskSnapshot() {
-  const { data } = useQuery({
-    queryKey: ["risk"],
-    queryFn: fetchRisk,
-    staleTime: 5 * 60 * 1000,
-  });
-
-  return (
-    <div className="card">
-      <div className="section-title">Risk Dashboard</div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {/* Iran */}
-        <div className="text-center">
-          <div className="text-[0.6rem] text-text-muted uppercase tracking-wider">Iran</div>
-          {data?.iran ? (
-            <>
-              <div className={`text-2xl font-bold font-data ${
-                data.iran.score >= 8 ? "text-red-500" :
-                data.iran.score >= 6 ? "text-orange-500" :
-                data.iran.score >= 4 ? "text-warn" : "text-gain"
-              }`}>
-                {data.iran.score}/10
-              </div>
-              <div className="text-[0.6rem] text-text-muted">{data.iran.level}</div>
-            </>
-          ) : <div className="text-sm text-text-muted mt-1">N/A</div>}
-        </div>
-
-        {/* Macro */}
-        <div className="text-center">
-          <div className="text-[0.6rem] text-text-muted uppercase tracking-wider">Macro</div>
-          {data?.macro ? (
-            <>
-              <div className={`text-sm font-bold mt-1 ${REGIME_COLORS[data.macro.top_regime] || "text-text"}`}>
-                {data.macro.top_regime}
-              </div>
-              <div className="text-[0.6rem] text-text-muted">{data.macro.top_prob}%</div>
-            </>
-          ) : <div className="text-sm text-text-muted mt-1">N/A</div>}
-        </div>
-
-        {/* Vol */}
-        <div className="text-center">
-          <div className="text-[0.6rem] text-text-muted uppercase tracking-wider">SPY Vol</div>
-          {data?.vol ? (
-            <>
-              <div className={`text-sm font-bold font-data mt-1 ${
-                data.vol.level === "High" ? "text-loss" :
-                data.vol.level === "Low" ? "text-gain" : "text-warn"
-              }`}>
-                {data.vol.atm_iv}% ({data.vol.level})
-              </div>
-              {data.vol.vrp !== null && (
-                <div className="text-[0.6rem] text-text-muted">VRP {data.vol.vrp}%</div>
-              )}
-            </>
-          ) : <div className="text-sm text-text-muted mt-1">N/A</div>}
-        </div>
-
-        {/* Strategy */}
-        <div className="text-center">
-          <div className="text-[0.6rem] text-text-muted uppercase tracking-wider">Strategy</div>
-          {data?.strategy ? (
-            <>
-              <div className="text-sm font-bold mt-1 text-accent">{data.strategy.rec}</div>
-              <div className="text-[0.6rem] text-text-muted">{data.strategy.reason}</div>
-            </>
-          ) : <div className="text-sm text-text-muted mt-1">N/A</div>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── QUICK NAV ───────────────────────────────────────────────
-
-const NAV_CARDS = [
-  { label: "Iron Condor Scanner", href: "/iron-condor", desc: "Short premium setups" },
-  { label: "Calendar Spreads", href: "/calendar-spread", desc: "Term structure plays" },
-  { label: "Stock Analysis", href: "http://localhost:8501/Stock_Analysis", desc: "3-model AI consensus", external: true },
-  { label: "Vol Surface", href: "http://localhost:8501/Vol_Surface", desc: "IV surface + trade ideas", external: true },
-  { label: "Signal Scanner", href: "http://localhost:8501/Signal_Scanner", desc: "Multi-factor ranking", external: true },
-  { label: "Fed & Macro", href: "http://localhost:8501/Fed_Macro_Drivers", desc: "FOMC, inflation, yields", external: true },
+const TOOLS = [
+  { l: "Stock Analysis", h: "/stock-analysis" }, { l: "Vol Surface", h: "/vol-surface" },
+  { l: "Iron Condor", h: "/iron-condor" }, { l: "Signal Scanner", h: "/signal-scanner" },
+  { l: "Fed & Macro", h: "/fed-macro" },
+  { l: "Backtester", h: "/algo-backtester" }, { l: "Optimizer", h: "/portfolio-optimizer" },
+  { l: "Correlation", h: "/correlation" },
+  { l: "Calendar", h: "/economic-calendar" }, { l: "Track Record", h: "/track-record" },
 ];
 
 function QuickNav() {
   return (
-    <div>
-      <div className="section-title">Tools</div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        {NAV_CARDS.map((item) => {
-          const inner = (
-            <div className="card card-compact text-center hover:border-accent transition-colors cursor-pointer group">
-              <div className="text-sm font-semibold group-hover:text-accent transition-colors">{item.label}</div>
-              <div className="text-[0.65rem] text-text-muted mt-0.5">{item.desc}</div>
-            </div>
-          );
-          return item.external ? (
-            <a key={item.label} href={item.href} target="_blank" rel="noopener noreferrer">{inner}</a>
-          ) : (
-            <Link key={item.label} href={item.href}>{inner}</Link>
-          );
-        })}
+    <div className="pt-2 border-t border-border">
+      <div className="flex flex-wrap gap-1.5">
+        {TOOLS.map(t => (
+          <Link key={t.l} href={t.h}
+            className="px-3 py-1.5 text-[0.65rem] font-semibold rounded-full border border-border
+                       text-text-muted hover:text-accent hover:border-accent/40 transition-colors">
+            {t.l}
+          </Link>
+        ))}
       </div>
     </div>
   );
 }
 
-// ─── DASHBOARD ───────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   DASHBOARD
+   ═══════════════════════════════════════════════════════════════ */
 
 export default function Dashboard() {
   return (
-    <div className="space-y-5">
-      <MarketPulse />
+    <div className="space-y-6">
+      {/* Ticker tape — edge-to-edge, no card */}
+      <TickerTape />
 
-      {/* Row 1: News + Signals/Positions */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        <div className="lg:col-span-3">
-          <MarketNews />
+      {/* Risk strip — inline metrics, no card */}
+      <RiskStrip />
+
+      {/* Main content: 3-column on desktop */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left column: Signals + Positions (5/12) */}
+        <div className="lg:col-span-5 space-y-6">
+          <div className="card p-5">
+            <SignalSpotlight />
+          </div>
+          <div className="card p-5">
+            <PositionSummary />
+          </div>
         </div>
-        <div className="lg:col-span-2 space-y-4">
-          <SignalSpotlight />
-          <PositionSummary />
+
+        {/* Right column: Events + Track Record + News (7/12) */}
+        <div className="lg:col-span-7 space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="card p-5">
+              <UpcomingEvents />
+            </div>
+            <div className="card p-5">
+              <TrackRecord />
+            </div>
+          </div>
+          <div className="card p-5">
+            <MarketNews />
+          </div>
         </div>
       </div>
 
-      {/* Row 2: Risk + Events */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2">
-          <RiskSnapshot />
-        </div>
-        <div>
-          <UpcomingEvents />
-        </div>
-      </div>
-
-      {/* Row 3: Heatmap */}
+      {/* Heatmap — full width, no card wrapper */}
       <MarketHeatmap />
 
-      {/* Row 4: Quick Nav */}
+      {/* Tool pills */}
       <QuickNav />
     </div>
   );
