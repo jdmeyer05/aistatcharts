@@ -129,8 +129,8 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
 
     for (const [famKey, fam] of Object.entries(SCORING_FAMILIES)) {
       const famResults = tickerResults.filter(r => fam.strategies.includes(r.strategy));
-      // Only count strategies with positive Sharpe as confirmations (negative = proven non-performer)
-      const matching = famResults.filter(r => r.current_signal === matchSignal && r.sharpe > 0);
+      // Count strategies with non-negative Sharpe as confirmations (deeply negative = proven non-performer)
+      const matching = famResults.filter(r => r.current_signal === matchSignal && r.sharpe > -0.5);
       const best = matching.sort((a, b) => b.dsr - a.dsr)[0];
       if (matching.length > 0) {
         confirmedScoringFamilies++;
@@ -161,13 +161,13 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
     const oppositeSignal = matchSignal === "Long" ? "Short" : "Long";
     const dissentFamilies = Object.entries(SCORING_FAMILIES).filter(([, fam]) => {
       const famResults = tickerResults.filter(r => fam.strategies.includes(r.strategy));
-      // Only count positive-Sharpe strategies as meaningful dissent
-      return famResults.some(r => r.current_signal === oppositeSignal && r.sharpe > 0);
+      // Only count non-terrible strategies as meaningful dissent
+      return famResults.some(r => r.current_signal === oppositeSignal && r.sharpe > -0.5);
     }).length;
     if (dissentFamilies >= confirmedScoringFamilies) continue;
 
     const confirming = tickerResults
-      .filter(r => r.current_signal === matchSignal && r.sharpe > 0)
+      .filter(r => r.current_signal === matchSignal && r.sharpe > -0.5)
       .sort((a, b) => b.dsr - a.dsr);
 
     const price = trigger.current_price || 0;
