@@ -291,7 +291,7 @@ export default function TradeIdeas() {
       const tickers = watchlist.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
       setAnalysis(""); // clear old analysis on re-scan
       const [scanRes, volRes] = await Promise.all([
-        fetchStrategyScan(tickers, ALL_STRATEGIES),
+        fetchStrategyScan(tickers, ALL_STRATEGIES, 756),  // 3yr lookback — enough for signals, faster
         fetchVolAnalysis(tickers).catch(() => ({ success: false, results: {} })),
       ]);
       if (volRes.success) setVolData(volRes.results);

@@ -382,7 +382,7 @@ export async function fetchStrategyScan(
   return apiFetch("/api/market/strategy-scan", {
     method: "POST",
     body: JSON.stringify({ tickers, strategies, lookback_days: lookbackDays, commission_bps: commBps, slippage_bps: slipBps, min_dsr: minDsr, timeframe }),
-    timeoutMs: 5 * 60 * 1000,
+    timeoutMs: 8 * 60 * 1000,
   });
 }
 

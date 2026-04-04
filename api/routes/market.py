@@ -2338,22 +2338,24 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
         except Exception:
             return None
 
-    # ── Pre-fetch all ticker data SEQUENTIALLY to avoid yfinance race conditions ──
+    # ── Pre-fetch ticker data (Supabase cache + yfinance/Polygon) ──
     import logging as _scan_log
     _scan_log.getLogger(__name__).info(f"Pre-fetching OHLCV for {len(tickers)} tickers...")
     _ohlcv_cache: dict = {}
     if is_intraday:
-        # Intraday: fetch from Polygon (already per-ticker, no race condition)
         for tk in tickers:
             _ohlcv_cache[tk] = _fetch_intraday_polygon(tk, req.timeframe, req.lookback_days)
     else:
-        period_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y", 2520: "10y"}
-        period = period_map.get(req.lookback_days, f"{req.lookback_days}d")
-        for tk in tickers:
+        from src.ohlcv_cache import fetch_ohlcv
+        # Use 3 workers — cache hits are instant, only misses hit yfinance
+        def _fetch_cached(tk):
             try:
-                _ohlcv_cache[tk] = yf.Ticker(tk).history(period=period, auto_adjust=True)
+                return tk, fetch_ohlcv(tk, req.lookback_days)
             except Exception:
-                _ohlcv_cache[tk] = None
+                return tk, None
+        with ThreadPoolExecutor(max_workers=3) as prefetch_pool:
+            for tk, df in prefetch_pool.map(_fetch_cached, tickers):
+                _ohlcv_cache[tk] = df
     _scan_log.getLogger(__name__).info(f"Pre-fetch complete. {sum(1 for v in _ohlcv_cache.values() if v is not None and len(v) > 0)}/{len(tickers)} tickers loaded.")
 
     # ── Run all combinations in parallel (no yfinance calls inside threads) ──
@@ -3904,18 +3906,19 @@ async def vol_analysis(req: VolAnalysisRequest, user: str = Depends(get_current_
 
     tickers = [t.strip().upper() for t in req.tickers[:20] if t.strip()]
 
-    # Pre-fetch OHLCV sequentially to avoid yfinance race conditions
-    _vol_cache: dict = {}
+    # Pre-fetch OHLCV via Supabase cache
+    from src.ohlcv_cache import fetch_ohlcv as _vol_fetch
+    _vol_ohlcv: dict = {}
     for tk in tickers:
         try:
-            _vol_cache[tk] = yf.Ticker(tk).history(period="2y", auto_adjust=True)
+            _vol_ohlcv[tk] = _vol_fetch(tk, 504)  # 2yr for vol cone
         except Exception:
-            _vol_cache[tk] = None
+            _vol_ohlcv[tk] = None
 
     def _analyze(ticker: str) -> dict:
         try:
             ytk = yf.Ticker(ticker)
-            df = _vol_cache.get(ticker)
+            df = _vol_ohlcv.get(ticker)
             if df is None or len(df) < 60:
                 return {"ticker": ticker}
 
