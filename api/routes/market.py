@@ -1794,19 +1794,21 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
     def _ema(c, p): return talib.EMA(c, timeperiod=p)
     def _rsi(c, p=14): return talib.RSI(c, timeperiod=p)
 
-    def _generate_signals(closes, highs, lows, strategy, volumes=None):
+    def _generate_signals(closes, highs, lows, strategy, volumes=None, params_override=None):
         n = len(closes)
         signals = np.zeros(n)
+        p = params_override or {}  # shorthand
 
         if strategy == "sma_cross":
-            fast, slow = _sma(closes, 50), _sma(closes, 200)
+            fast, slow = _sma(closes, p.get("fast", 50)), _sma(closes, p.get("slow", 200))
             for i in range(200, n):
                 if not np.isnan(fast[i]) and not np.isnan(slow[i]):
                     signals[i] = 1 if fast[i] > slow[i] else -1
 
         elif strategy == "ema_cross":
-            fast, slow = _ema(closes, 12), _ema(closes, 26)
-            for i in range(26, n):
+            fast, slow = _ema(closes, p.get("fast", 12)), _ema(closes, p.get("slow", 26))
+            warmup = p.get("slow", 26) + 1
+            for i in range(warmup, n):
                 signals[i] = 1 if fast[i] > slow[i] else -1
 
         elif strategy == "golden_cross":
@@ -1816,18 +1818,23 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                     signals[i] = 1 if closes[i] > slow[i] and fast[i] > slow[i] else -1
 
         elif strategy == "macd":
-            e12, e26 = _ema(closes, 12), _ema(closes, 26)
-            macd_line = e12 - e26
-            sig_line = _ema(macd_line, 9)
-            for i in range(34, n):
-                signals[i] = 1 if macd_line[i] > sig_line[i] else -1
+            mf, ms, msig = p.get("fast", 12), p.get("slow", 26), p.get("signal", 9)
+            e_f, e_s = _ema(closes, mf), _ema(closes, ms)
+            macd_line = e_f - e_s
+            sig_line = _ema(macd_line, msig)
+            warmup = ms + msig + 1
+            for i in range(warmup, n):
+                if not np.isnan(macd_line[i]) and not np.isnan(sig_line[i]):
+                    signals[i] = 1 if macd_line[i] > sig_line[i] else -1
 
         elif strategy == "rsi_ob_os":
-            r = _rsi(closes)
-            for i in range(15, n):
+            rsi_period = p.get("period", 14)
+            r = talib.RSI(closes, timeperiod=rsi_period)
+            ob, os_ = p.get("overbought", 70), p.get("oversold", 30)
+            for i in range(rsi_period + 1, n):
                 if np.isnan(r[i]): continue
-                if r[i] < 30: signals[i] = 1
-                elif r[i] > 70: signals[i] = -1
+                if r[i] < os_: signals[i] = 1
+                elif r[i] > ob: signals[i] = -1
                 else: signals[i] = signals[i - 1]
 
         elif strategy in ("mean_rev", "bb_breakout"):
@@ -1990,9 +1997,7 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                 else: signals[i] = signals[i - 1]
 
         elif strategy == "parabolic_sar":
-            # Parabolic SAR — built-in trailing stop + signal
-            # Long when price above SAR, short when below
-            sar = talib.SAR(highs, lows, acceleration=0.02, maximum=0.2)
+            sar = talib.SAR(highs, lows, acceleration=p.get("accel", 0.02), maximum=p.get("max_accel", 0.2))
             for i in range(2, n):
                 if np.isnan(sar[i]): continue
                 signals[i] = 1 if closes[i] > sar[i] else -1
@@ -2128,7 +2133,10 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                 return None  # too many extreme moves, data quality suspect
 
             volumes = df["Volume"].values.astype(float).ravel() if "Volume" in df.columns else None
-            signals = _generate_signals(closes, highs, lows, strategy, volumes)
+            # Load optimized params from Supabase cache (if available)
+            from src.strategy_optimizer import get_cached_params
+            opt_params = get_cached_params(tk, strategy)
+            signals = _generate_signals(closes, highs, lows, strategy, volumes, params_override=opt_params)
 
             # Daily returns
             daily_rets = np.zeros(n)
@@ -2412,6 +2420,81 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
         "n_significant": len(significant),
         "n_active_signals": len(active_signals),
         "active_signals": [r for r in results[:50] if r["current_signal"] != "Flat"],
+    }
+
+
+class BatchOptimizeRequest(BaseModel):
+    tickers: list[str] = ["SPY", "QQQ", "AAPL", "NVDA", "TSLA"]
+    strategies: list[str] = []  # empty = all optimizable
+    n_trials: int = 50
+    lookback_days: int = 2520
+
+
+@router.post("/batch-optimize")
+async def batch_optimize(req: BatchOptimizeRequest, user: str = Depends(get_current_user)):
+    """Run Optuna optimization for multiple ticker × strategy combos. Stores results in Supabase."""
+    import logging
+    _log = logging.getLogger(__name__)
+
+    from src.strategy_optimizer import PARAM_SPACES, optimize_strategy, save_optimized_params, get_cached_params
+    from src.ohlcv_cache import fetch_ohlcv
+
+    tickers = [t.strip().upper() for t in req.tickers[:30] if t.strip()]
+    strategies = req.strategies or list(PARAM_SPACES.keys())
+    strategies = [s for s in strategies if s in PARAM_SPACES]
+
+    _log.info(f"Batch optimize: {len(tickers)} tickers × {len(strategies)} strategies = {len(tickers) * len(strategies)} combos")
+
+    results = []
+    skipped = 0
+    failed = 0
+
+    for tk in tickers:
+        df = fetch_ohlcv(tk, req.lookback_days)
+        if df is None or len(df) < 252:
+            failed += 1
+            continue
+
+        closes = df["Close"].values.astype(float).ravel()
+        highs = df["High"].values.astype(float).ravel()
+        lows = df["Low"].values.astype(float).ravel()
+        volumes = df["Volume"].values.astype(float).ravel() if "Volume" in df.columns else None
+        import numpy as np
+        highs = np.maximum(highs, closes)
+        lows = np.minimum(lows, closes)
+
+        for strat in strategies:
+            # Skip if already optimized recently
+            cached = get_cached_params(tk, strat)
+            if cached is not None:
+                skipped += 1
+                continue
+
+            try:
+                result = optimize_strategy(tk, strat, closes, highs, lows, volumes, n_trials=req.n_trials)
+                if result:
+                    save_optimized_params(tk, strat, result["params"], result)
+                    results.append({
+                        "ticker": tk, "strategy": strat,
+                        "params": result["params"],
+                        "wf_sharpe": result["wf_sharpe"],
+                        "sharpe": result["sharpe"],
+                        "trades": result["trades"],
+                        "win_rate": result["win_rate"],
+                    })
+                    _log.info(f"  {tk} {strat}: WF Sharpe {result['wf_sharpe']:.3f}, {result['trades']} trades")
+                else:
+                    failed += 1
+            except Exception as e:
+                _log.warning(f"  {tk} {strat} failed: {e}")
+                failed += 1
+
+    return {
+        "success": True,
+        "optimized": len(results),
+        "skipped": skipped,
+        "failed": failed,
+        "results": results,
     }
 
 
