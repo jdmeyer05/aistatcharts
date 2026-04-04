@@ -30,25 +30,46 @@ const STRAT_NAMES: Record<string, string> = {
 };
 const PRESETS: Record<string, { label: string; tickers: string[] }> = {
   bluechip: {
-    label: "Blue Chips + ETFs",
+    label: "Blue Chips",
     tickers: ["SPY","QQQ","IWM","DIA","AAPL","MSFT","NVDA","TSLA","AMZN","META","GOOGL","NFLX","AMD","JPM","BA","GS","V","MA","UNH","JNJ","PG","HD","COST","XOM","CVX"],
   },
   sectors: {
-    label: "Sector Rotation",
+    label: "Sectors",
     tickers: ["XLK","XLF","XLE","XLV","XLI","XLC","XLY","XLP","XLRE","XLU","XLB","SMH","GLD","SLV","TLT","HYG","USO","GDX","IBB","ARKK"],
   },
   highvol: {
-    label: "High Volatility",
+    label: "High Vol",
     tickers: ["TSLA","AMD","NVDA","MSTR","COIN","PLTR","SOFI","RIVN","LCID","ARM","SMCI","RBLX","SNAP","SQ","SHOP","ROKU","CRWD","NET","DKNG","MARA"],
+  },
+  meme: {
+    label: "Meme / Reddit",
+    tickers: ["GME","AMC","MSTR","COIN","PLTR","SOFI","HOOD","RIVN","LCID","MARA","RIOT","SMCI","IONQ","RGTI","RKLB","BBAI"],
+  },
+  commodities: {
+    label: "Commodities + Macro",
+    tickers: ["GLD","SLV","GDX","USO","UNG","TLT","TIP","DBA","WEAT","URA","COPX","LIT"],
+  },
+  semis: {
+    label: "Semiconductors",
+    tickers: ["NVDA","AMD","INTC","AVGO","QCOM","MU","MRVL","ARM","SMCI","TSM","ASML","LRCX","KLAC","AMAT"],
+  },
+  defense: {
+    label: "Defense / Iran",
+    tickers: ["LMT","RTX","NOC","GD","BA","HII","LHX","KTOS","DFEN","XAR"],
+  },
+  holdings: {
+    label: "My Holdings",
+    tickers: ["RGTI","QUBT","QBTS","IONQ","UAMY","SPY","USO"],  // updated dynamically from RH below
   },
 };
 const DEFAULT_TICKERS = PRESETS.bluechip.tickers;
+
 
 interface TradeIdea {
   ticker: string;
   direction: "long" | "short";
   // Trigger
-  trigger: { strategy: string; signalDays: number; dsr: number; excessSharpe: number; winRate: number; best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number };
+  trigger: { strategy: string; signalDays: number; dsr: number; sharpe: number; excessSharpe: number; winRate: number; trades: number; recentSharpe?: number; best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number };
   // Confluence
   familyConfirmations: { family: string; label: string; color: string; count: number; total: number; best: string }[];
   confluenceScore: number;
@@ -83,11 +104,17 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
   const byTicker: Record<string, StrategyScanResult[]> = {};
   for (const r of results) (byTicker[r.ticker] ??= []).push(r);
 
+  // DSR threshold scales with n_tested: stricter for small scans, looser for large
+  // With 460 tests (20 tickers): threshold ≈ 0.5
+  // With 2277 tests (99 tickers): threshold ≈ 0.15
+  const nTickers = Object.keys(byTicker).length;
+  const dsrThreshold = nTickers <= 20 ? 0.5 : nTickers <= 50 ? 0.3 : 0.15;
+
   const ideas: TradeIdea[] = [];
 
   for (const [ticker, tickerResults] of Object.entries(byTicker)) {
     const freshSignals = tickerResults.filter(r =>
-      r.current_signal !== "Flat" && r.signal_days <= 10 && r.dsr >= 0.5
+      r.current_signal !== "Flat" && r.signal_days <= 10 && r.dsr >= dsrThreshold && r.trades >= 5
     ).sort((a, b) => b.dsr - a.dsr);
 
     if (freshSignals.length === 0) continue;
@@ -153,18 +180,17 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
                            SCORING_FAMILIES.composite.strategies.includes(trigger.strategy);
     const isMeanRevTrigger = SCORING_FAMILIES.mean_rev.strategies.includes(trigger.strategy);
 
-    // For trend: use backtest-validated ATR stop (if survival > 50%)
-    // For mean reversion: use wider stop (the trade expects drawdown before recovery)
     let stopMult: number;
     if (isTrendTrigger && trigger.best_stop_atr && trigger.stop_2x_survival && trigger.stop_2x_survival > 50) {
       stopMult = trigger.best_stop_atr;
     } else if (isMeanRevTrigger) {
-      // MR trades draw down before recovering — use the avg MAE as a guide, minimum 2.5
       stopMult = Math.max(2.5, Math.min(trigger.avg_mae_atr || 3.0, 5.0));
     } else {
-      stopMult = 2.0; // default
+      stopMult = 2.0;
     }
-    const targetMult = stopMult * 1.5;
+    // Target: use avg MFE from backtest (how far trades actually run), minimum 1.5× stop
+    const mfeMult = trigger.avg_mfe_atr || 0;
+    const targetMult = Math.max(stopMult * 1.5, mfeMult > 0 ? mfeMult : stopMult * 1.5);
 
     let stop: number, target: number;
     if (direction === "long") {
@@ -187,8 +213,8 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
     const ev = winRate * reward - (1 - winRate) * risk;
     const evPct = (ev / price) * 100;
 
-    // Skip negative EV or negligible edge
-    if (ev <= 0) continue;
+    // Skip significantly negative EV — but allow marginal trades with warning
+    if (ev < -(risk * 0.1)) continue;  // only skip if losing > 10% of risk per trade
 
     // Warnings
     const warnings: string[] = [];
@@ -196,8 +222,17 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
     const rangePct = range20 > 0 ? ((price - low20) / range20) * 100 : 50;
     if (direction === "long" && rangePct > 80) warnings.push(`Buying near 20d high (${rangePct.toFixed(0)}% of range)`);
     if (direction === "short" && rangePct < 20) warnings.push(`Shorting near 20d low (${rangePct.toFixed(0)}% of range)`);
-    if (evPct < 0.5) warnings.push(`Thin edge — EV ${evPct.toFixed(2)}% per trade ($${ev.toFixed(2)})`);
+    if (ev <= 0) warnings.push(`Negative EV — ${evPct.toFixed(2)}% per trade ($${ev.toFixed(2)}). Signal-based exit may perform better than ATR stop.`);
+    else if (evPct < 0.5) warnings.push(`Thin edge — EV ${evPct.toFixed(2)}% per trade ($${ev.toFixed(2)})`);
     if (dissentFamilies >= 1) warnings.push(`${dissentFamilies}/${Object.keys(SCORING_FAMILIES).length} families dissenting`);
+    if (trigger.trades < 10) warnings.push(`Low sample: only ${trigger.trades} historical trades`);
+    const rSharpe = trigger.recent_sharpe;
+    const hSharpe = trigger.sharpe;
+    if (rSharpe != null && rSharpe < 0) {
+      warnings.push(`Degrading — recent 1yr Sharpe ${rSharpe.toFixed(2)} (negative)`);
+    } else if (rSharpe != null && hSharpe > 0 && rSharpe < hSharpe * 0.3) {
+      warnings.push(`Weakening — recent Sharpe ${rSharpe.toFixed(2)} vs ${hSharpe.toFixed(2)} historical`);
+    }
 
     const freshCount = confirming.filter(r => r.signal_days <= 5).length;
 
@@ -207,8 +242,8 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
         strategy: trigger.strategy,
         signalDays: trigger.signal_days,
         dsr: trigger.dsr,
-        excessSharpe: trigger.excess_sharpe,
-        winRate: trigger.win_rate,
+        excessSharpe: trigger.excess_sharpe, sharpe: trigger.sharpe,
+        winRate: trigger.win_rate, trades: trigger.trades, recentSharpe: trigger.recent_sharpe,
         best_stop_atr: trigger.best_stop_atr,
         avg_mae_atr: trigger.avg_mae_atr,
         avg_mfe_atr: trigger.avg_mfe_atr,
@@ -253,8 +288,8 @@ function suggestOptions(direction: string, vol: VolAnalysis | undefined): string
 
   // Use IV vs RV as primary signal (more reliable than IVR proxy)
   if (iv && rv) {
-    const ivRich = iv > rv * 1.05; // IV > RV by 5%+ = options overpriced → sell
-    const ivCheap = rv > iv * 1.05; // RV > IV by 5%+ = options underpriced → buy
+    const ivRich = iv > rv * 1.05;
+    const ivCheap = rv > iv * 1.05;
 
     if (ivRich) {
       return isLong
@@ -264,6 +299,9 @@ function suggestOptions(direction: string, vol: VolAnalysis | undefined): string
       return isLong
         ? `IV ${iv}% < RV ${rv}% — options are cheap relative to actual moves → Buy Bull Call Spread (leveraged upside)`
         : `IV ${iv}% < RV ${rv}% — options are cheap relative to actual moves → Buy Bear Put Spread (leveraged downside)`;
+    } else {
+      // IV ≈ RV — no vol edge either way
+      return `IV ${iv}% ≈ RV ${rv}% — no vol edge, stock or directional spread`;
     }
   }
 
@@ -286,12 +324,23 @@ export default function TradeIdeas() {
   const rhQuery = useQuery({ queryKey: ["rh-positions"], queryFn: fetchRobinhoodPositions, staleTime: 5 * 60_000 });
   const accountEquity = rhQuery.data?.portfolio?.equity || 12500;
 
+  // Dynamic holdings from RH
+  const rhTickers = [...new Set([
+    ...(rhQuery.data?.stocks ?? []).map(s => s.ticker),
+    ...(rhQuery.data?.spreads ?? []).map(s => s.ticker),
+  ])];
+  const activePresets = {
+    ...PRESETS,
+    holdings: { ...PRESETS.holdings, tickers: rhTickers.length > 0 ? rhTickers : PRESETS.holdings.tickers },
+  };
+  const allPresetTickers = [...new Set(Object.values(activePresets).flatMap(p => p.tickers))];
+
   const scan = useMutation({
     mutationFn: async () => {
       const tickers = watchlist.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
       setAnalysis(""); // clear old analysis on re-scan
       const [scanRes, volRes] = await Promise.all([
-        fetchStrategyScan(tickers, ALL_STRATEGIES, 756),  // 3yr lookback — enough for signals, faster
+        fetchStrategyScan(tickers, ALL_STRATEGIES, 2520),  // 10yr — max data, cached so no cost
         fetchVolAnalysis(tickers).catch(() => ({ success: false, results: {} })),
       ]);
       if (volRes.success) setVolData(volRes.results);
@@ -345,8 +394,8 @@ export default function TradeIdeas() {
           <div className="flex-1 min-w-[200px]">
             <h1 className="text-xl font-bold tracking-tight mb-1">Trade Ideas</h1>
             <p className="text-text-secondary text-[0.6rem] mb-1">Fresh signals ({"\u2264"}10d) + 2+ family confluence + positive EV + ATR stops + IV/RV options overlay</p>
-            <div className="flex gap-1 mb-1">
-              {Object.entries(PRESETS).map(([key, preset]) => (
+            <div className="flex flex-wrap gap-1 mb-1">
+              {Object.entries(activePresets).map(([key, preset]) => (
                 <button key={key} onClick={() => setWatchlist(preset.tickers.join(", "))}
                   className={`px-2 py-0.5 rounded text-[0.55rem] font-semibold border transition-colors ${
                     watchlist === preset.tickers.join(", ") ? "border-accent text-accent bg-accent/10" : "border-border text-text-muted hover:text-text"
@@ -354,6 +403,12 @@ export default function TradeIdeas() {
                   {preset.label} ({preset.tickers.length})
                 </button>
               ))}
+              <button onClick={() => setWatchlist(allPresetTickers.join(", "))}
+                className={`px-2 py-0.5 rounded text-[0.55rem] font-bold border transition-colors ${
+                  watchlist === allPresetTickers.join(", ") ? "border-accent text-accent bg-accent/10" : "border-warn text-warn hover:bg-warn/10"
+                }`}>
+                ALL ({allPresetTickers.length})
+              </button>
             </div>
             <textarea value={watchlist} onChange={e => setWatchlist(e.target.value)} rows={2}
               className="w-full px-3 py-1.5 border border-border rounded-lg text-xs font-data bg-surface resize-y" />
@@ -366,7 +421,11 @@ export default function TradeIdeas() {
         {scan.isPending && (
           <div className="flex items-center gap-2 mt-2">
             <div className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs text-text-muted">Running {ALL_STRATEGIES.length} strategies on {watchlist.split(",").filter(Boolean).length} tickers...</span>
+            <span className="text-xs text-text-muted">
+              Running {ALL_STRATEGIES.length} strategies on {watchlist.split(",").filter(Boolean).length} tickers
+              ({(ALL_STRATEGIES.length * watchlist.split(",").filter(Boolean).length).toLocaleString()} combinations)
+              {watchlist.split(",").filter(Boolean).length > 50 && " — large scan, may take 2-3 min"}
+            </span>
           </div>
         )}
       </div>
@@ -375,7 +434,8 @@ export default function TradeIdeas() {
 
       {scan.data && ideas.length === 0 && (
         <div className="card text-center text-sm text-text-muted py-6">
-          No trade ideas found. Filters: fresh signal ({"\u2264"}10d), 2+ family confirmation, R:R {"\u2265"} 1.0, positive expected value.
+          No trade ideas passed all filters. Scanned {scan.data.n_tested} combinations, found {scan.data.n_active_signals} active signals.
+          <br />Filters: fresh ({"\u2264"}10d) + DSR {"\u2265"} 0.5 + 2+ family confirmation + R:R {"\u2265"} 1.0 + EV not deeply negative.
         </div>
       )}
 
@@ -625,6 +685,11 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
           <span className="text-warn">{idea.vol.short_ratio}d to cover</span>
         )}
         <span>{idea.confirmingStrategies.length} confirming</span>
+        {idea.trigger.recentSharpe != null && (
+          <span className={idea.trigger.recentSharpe >= 0.5 ? "text-gain" : idea.trigger.recentSharpe >= 0 ? "text-text" : "text-loss"}>
+            1yr: {idea.trigger.recentSharpe.toFixed(2)} Sharpe
+          </span>
+        )}
         {idea.trigger.stop_2x_survival != null && (
           <span className={idea.trigger.stop_2x_survival >= 80 ? "text-gain" : idea.trigger.stop_2x_survival >= 60 ? "text-text" : "text-warn"}>
             2×ATR stop: {idea.trigger.stop_2x_survival}% survival

@@ -570,7 +570,7 @@ export default function DailyBriefing() {
 
     // Strategy scan + vol analysis in background (doesn't block AI note)
     Promise.all([
-      fetchStrategyScan(tkList, ALL_STRATS),
+      fetchStrategyScan(tkList, ALL_STRATS, 2520),  // 10yr — cached
       fetchVolAnalysis(tkList).catch(() => ({ success: false, results: {} })),
     ]).then(([scanRes, volRes]) => {
       if (scanRes?.results) {

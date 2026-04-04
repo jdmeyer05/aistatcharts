@@ -2292,6 +2292,17 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
             avg_wf = round(float(np.mean(wf_sharpes)), 3) if wf_sharpes else None
             pct_wf_pos = round(sum(1 for s in wf_sharpes if s > 0) / max(len(wf_sharpes), 1) * 100, 0) if wf_sharpes else None
 
+            # ── Recent performance (last 252 days) — detect degradation ──
+            recent_sharpe = None
+            if n > 504:  # need at least 2yr to have a "recent" vs "historical" split
+                recent_rets = daily_rets[-252:]
+                recent_sigs = signals[-252:]
+                recent_active = recent_rets[recent_sigs != 0]
+                if len(recent_active) >= 10:
+                    rm = float(np.mean(recent_active))
+                    rs = float(np.std(recent_active, ddof=1))
+                    recent_sharpe = round(rm / rs * ann if rs > 0 else 0, 3)
+
             # ── Current signal + duration ──
             current_signal = "Long" if signals[-1] == 1 else "Short" if signals[-1] == -1 else "Flat"
             signal_days = 0
@@ -2325,6 +2336,8 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                 "current_signal": current_signal, "signal_days": signal_days,
                 "long_only": is_long_only, "n_days": n,
                 "skew": round(skew, 2), "kurtosis": round(kurt, 2),
+                # Recent performance
+                "recent_sharpe": recent_sharpe,
                 # Price levels
                 "current_price": current_price, "atr_14": atr_14,
                 "high_20d": high_20d, "low_20d": low_20d,
@@ -2347,16 +2360,28 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
             _ohlcv_cache[tk] = _fetch_intraday_polygon(tk, req.timeframe, req.lookback_days)
     else:
         from src.ohlcv_cache import fetch_ohlcv
-        # Use 3 workers — cache hits are instant, only misses hit yfinance
+        import time as _pftime
         def _fetch_cached(tk):
             try:
                 return tk, fetch_ohlcv(tk, req.lookback_days)
             except Exception:
                 return tk, None
+        # Pass 1: fetch with 3 workers
         with ThreadPoolExecutor(max_workers=3) as prefetch_pool:
             for tk, df in prefetch_pool.map(_fetch_cached, tickers):
                 _ohlcv_cache[tk] = df
-    _scan_log.getLogger(__name__).info(f"Pre-fetch complete. {sum(1 for v in _ohlcv_cache.values() if v is not None and len(v) > 0)}/{len(tickers)} tickers loaded.")
+        # Pass 2: retry any failures sequentially (rate limit recovery)
+        failed = [tk for tk, df in _ohlcv_cache.items() if df is None or len(df) < 50]
+        if failed:
+            _scan_log.getLogger(__name__).info(f"Retrying {len(failed)} failed tickers...")
+            _pftime.sleep(2)
+            for tk in failed:
+                try:
+                    _ohlcv_cache[tk] = fetch_ohlcv(tk, req.lookback_days)
+                except Exception:
+                    pass
+    loaded = sum(1 for v in _ohlcv_cache.values() if v is not None and len(v) > 0)
+    _scan_log.getLogger(__name__).info(f"Pre-fetch complete. {loaded}/{len(tickers)} tickers loaded.")
 
     # ── Run all combinations in parallel (no yfinance calls inside threads) ──
     results = []
