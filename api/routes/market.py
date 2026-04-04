@@ -2283,12 +2283,16 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                 s0 = delay_sharpes.get(0, 0)
                 s2 = delay_sharpes.get(2, 0)
                 s5 = delay_sharpes.get(5, 0)
-                if s0 > 0 and s2 < s0 * 0.5:
+                if s0 <= 0:
+                    entry_urgency = "neutral"  # no edge to begin with
+                elif s2 < s0 * 0.5:
                     entry_urgency = "urgent"  # edge halves by day 2
-                elif s2 > s0 * 0.8 and s5 > s0 * 0.5:
-                    entry_urgency = "patient"  # edge persists
                 elif s2 > s0:
                     entry_urgency = "wait"  # improves with delay
+                elif s5 > s0 * 0.5:
+                    entry_urgency = "patient"  # edge persists through day 5
+                else:
+                    entry_urgency = "urgent"  # decays but not as fast
 
             # Compute optimal stop from data
             best_stop_mult = 2.0
