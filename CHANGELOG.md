@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-04-03/04 — Full Trading Platform: Market Scan, Position Monitor, Trade Ideas
+
+### Infrastructure
+- **Supabase OHLCV Cache** — 3-tier cache (memory 0ms → Supabase 50ms → yfinance 2-5s). First scan caches 10yr data, subsequent scans instant. Incremental updates fetch only missing days from Polygon.
+- **Polygon Live Data** — during market hours, appends today's bar from Polygon API for real-time prices
+- **yfinance Thread Safety** — all `yf.download()` replaced with sequential `yf.Ticker(tk).history()` pre-fetch + parallel numpy/talib backtests. Prevents cross-ticker data contamination.
+- **Supabase Strategy Params** — 575 Optuna-optimized parameter sets cached across 22 strategies × 99 tickers. Walk-forward OOS validated.
+
+### Optuna Parameter Optimization
+- Batch optimizer: POST /batch-optimize runs Bayesian TPE per strategy × ticker
+- 22 strategies with tunable parameter spaces (SMA, EMA, MACD, RSI, SAR, Stochastic, ADX, Ichimoku, TEMA, BB, Donchian, OBV, CCI, Williams %R, ATR Trail, Z-Score MR, Golden Cross, composites)
+- Walk-forward OOS Sharpe as objective (not in-sample overfitting)
+- Results: SPY MACD 0.95 → 2.17 Sharpe, SPY SAR 1.83 → 3.48 with optimized params
+- Params cached 30 days in Supabase before re-optimization
+- Scan automatically loads cached optimal params
+
+### Trade Ideas Engine
+- 22 strategies grouped into 4 scoring families (Trend, Mean Rev, Volume, Composite) + Calendar display-only
+- Fresh signal flips (≤10d) with family-weighted confluence — VALIDATED: 2+ families = 5.3× buy-and-hold Sharpe, 3+ = 8.5×
+- Backtest-validated ATR stops from MAE/MFE tracking (not rules of thumb)
+- Trend strategies: validated stop. Mean reversion: wider stops (2.5-5×ATR)
+- Expected value computation with negative EV filtering
+- Negative-Sharpe strategies excluded from triggers, confirmations, and dissent
+- DSR threshold scales with scan size (0.5 for 20 tickers, 0.15 for 99)
+- Minimum 5 trades required for triggers
+- Recent 1yr Sharpe degradation detection
+- Historical holding period (avg + median from backtest trade loop)
+- Delayed entry analysis: backtests entries at 0-5 day delays, classifies urgency (ENTER NOW / WAIT / PATIENT)
+- Vol analysis: IV vs RV → options structure (sell if overpriced, buy if cheap, stock if neutral)
+- Smart vehicle selection: accounts for IV/RV, hold period, theta decay, account size
+- Optimal DTE computation (3.5× median hold period)
+- HOLDS THROUGH EARNINGS warning when hold period overlaps earnings
+- Short interest from yfinance
+- 8 preset ticker groups + ALL (99 unique tickers)
+- AI trade analysis via Gemini with news + positions context
+- Dynamic holdings preset from Robinhood
+
+### Position Monitor Enhancements
+- Monte Carlo simulation (10K paths GBM) with P/L distribution histogram
+- Trade outlook: theta vs delta race, recovery days, per-leg ITM probability
+- Scenario analysis with corrected gamma sign (short legs = negative gamma)
+- Covered call detection (cross-references stock vs short calls)
+- Holdings Research: Grok search + yfinance fundamentals with analyst targets, cash runway, earnings moves
+
+### Critical Bug Fixes
+- yfinance concurrent download corruption → sequential pre-fetch with retry
+- Gamma sign: abs(sign) → sign (iron condor gamma was +479 instead of -1)
+- Directional strike checking: calls breached when stock above, puts when below
+- Robinhood P&L: negative average_price handling for credit positions
+- DSR over-filtering for large scans (99 tickers × 23 strategies)
+- 100% win rate on 1 trade eliminated by minimum trades filter
+- IV ≈ RV no longer contradicts IVR fallback
+
+---
+
 ## 2026-04-03 — Market Scan Overhaul, Position Monitor, Trade Ideas, Robinhood Integration
 
 ### New Pages
