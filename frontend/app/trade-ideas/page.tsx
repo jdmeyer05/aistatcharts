@@ -69,7 +69,7 @@ interface TradeIdea {
   ticker: string;
   direction: "long" | "short";
   // Trigger
-  trigger: { strategy: string; signalDays: number; dsr: number; sharpe: number; excessSharpe: number; winRate: number; trades: number; recentSharpe?: number; best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number };
+  trigger: { strategy: string; signalDays: number; dsr: number; sharpe: number; excessSharpe: number; winRate: number; trades: number; recentSharpe?: number; best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number; avgHoldDays?: number; medianHoldDays?: number };
   // Confluence
   familyConfirmations: { family: string; label: string; color: string; count: number; total: number; best: string }[];
   confluenceScore: number;
@@ -243,6 +243,7 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
         signalDays: trigger.signal_days,
         dsr: trigger.dsr,
         excessSharpe: trigger.excess_sharpe, sharpe: trigger.sharpe,
+        avgHoldDays: trigger.avg_hold_days, medianHoldDays: trigger.median_hold_days,
         winRate: trigger.win_rate, trades: trigger.trades, recentSharpe: trigger.recent_sharpe,
         best_stop_atr: trigger.best_stop_atr,
         avg_mae_atr: trigger.avg_mae_atr,
@@ -623,6 +624,7 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
           <span className="text-text-muted">Stock:</span>{" "}
           <span className="text-text">
             {idea.direction === "long" ? "Buy" : "Short"} at ${idea.price.toFixed(2)}, stop ${idea.stop.toFixed(2)} ({idea.stopMult.toFixed(1)}×ATR{idea.trigger.stop_2x_survival != null && idea.trigger.stop_2x_survival > 50 ? " validated" : ""}), target ${idea.target.toFixed(2)}
+            {idea.trigger.medianHoldDays ? ` · ~${idea.trigger.medianHoldDays}d typical hold` : ""}
           </span>
         </div>
         {/* Options trade */}
@@ -688,6 +690,11 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
         {idea.trigger.recentSharpe != null && (
           <span className={idea.trigger.recentSharpe >= 0.5 ? "text-gain" : idea.trigger.recentSharpe >= 0 ? "text-text" : "text-loss"}>
             1yr: {idea.trigger.recentSharpe.toFixed(2)} Sharpe
+          </span>
+        )}
+        {idea.trigger.medianHoldDays != null && idea.trigger.medianHoldDays > 0 && (
+          <span className="text-text-muted">
+            hold: ~{idea.trigger.medianHoldDays}d median{idea.trigger.avgHoldDays && idea.trigger.avgHoldDays !== idea.trigger.medianHoldDays ? ` (${idea.trigger.avgHoldDays}d avg)` : ""} over {idea.trigger.trades} trades
           </span>
         )}
         {idea.trigger.stop_2x_survival != null && (

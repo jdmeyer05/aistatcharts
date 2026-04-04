@@ -2198,6 +2198,7 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                            2.5: {"stopped": 0, "survived": 0, "win_survived": 0}}
             mfe_list = []  # max favorable excursion per trade (in ATR multiples)
             mae_list = []  # max adverse excursion per trade (in ATR multiples)
+            hold_days = []  # holding period per trade in bars
 
             for i in range(1, n):
                 if signals[i] != 0 and pos == 0:
@@ -2212,6 +2213,7 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                     while entry_idx > 0 and signals[entry_idx] == pos:
                         entry_idx -= 1
                     entry_idx += 1
+                    hold_days.append(i - entry_idx)
                     entry_atr = float(atr_arr[entry_idx]) if not np.isnan(atr_arr[entry_idx]) else 0
                     if entry_atr > 0:
                         trade_highs = highs[entry_idx:i+1]
@@ -2258,6 +2260,8 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
 
             avg_mae = round(float(np.mean(mae_list)), 2) if mae_list else 0
             avg_mfe = round(float(np.mean(mfe_list)), 2) if mfe_list else 0
+            avg_hold = round(float(np.mean(hold_days))) if hold_days else 0
+            median_hold = round(float(np.median(hold_days))) if hold_days else 0
             stop_2x_survival = round(stop_results[2.0]["survived"] / max(stop_results[2.0]["survived"] + stop_results[2.0]["stopped"], 1) * 100, 0)
 
             # ── DSR (on active returns — no sparse inflation) ──
@@ -2347,6 +2351,8 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                 "avg_mae_atr": avg_mae,
                 "avg_mfe_atr": avg_mfe,
                 "stop_2x_survival": stop_2x_survival,
+                "avg_hold_days": avg_hold,
+                "median_hold_days": median_hold,
             }
         except Exception:
             return None

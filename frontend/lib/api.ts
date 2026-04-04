@@ -369,6 +369,7 @@ export interface StrategyScanResult {
   recent_sharpe?: number;
   current_price?: number; atr_14?: number; high_20d?: number; low_20d?: number; rsi?: number;
   best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number;
+  avg_hold_days?: number; median_hold_days?: number;
 }
 
 export interface StrategyScanResponse {
