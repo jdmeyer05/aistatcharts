@@ -558,9 +558,9 @@ Respond with ONLY valid JSON:
 
 STOCK_MODEL_CONFIGS = {
     "grok": {
-        "name": "Grok 4",
+        "name": "Grok 4.20",
         "base_url": "https://api.x.ai/v1",
-        "model": "grok-3",
+        "model": "grok-4.20-reasoning",
         "key_name": "GROK_API_KEY",
         "extra": "IMPORTANT: Search X/Twitter for the latest sentiment, news, and analyst commentary on this ticker.",
         "color": "#ff4444",
@@ -1121,6 +1121,9 @@ async def daily_briefing(req: DailyBriefingRequest, user: str = Depends(get_curr
                   "GLD": "Commodity", "SMH": "Semi", "XLF": "Financials", "TLT": "Bonds",
                   "EEM": "EM", "JPM": "Financials", "BA": "Industrials"}
 
+    # Build price lookup from watchlist
+    price_map = {w["ticker"]: w["price"] for w in watchlist_data if w.get("price")}
+
     for r in spread_results[:15]:
         tk = r.get("ticker", "")
         opportunities.append({
@@ -1131,6 +1134,8 @@ async def daily_briefing(req: DailyBriefingRequest, user: str = Depends(get_curr
             "max_profit": r.get("max_profit", 0), "rr_ratio": r.get("rr_ratio", 0),
             "contracts": r.get("contracts", 0),
             "strikes": f"${r.get('long_strike', 0):.0f}/${r.get('short_strike', 0):.0f}",
+            "long_strike": r.get("long_strike", 0), "short_strike": r.get("short_strike", 0),
+            "stock_price": price_map.get(tk, 0),
             "expiration": r.get("expiration", ""), "dte": r.get("dte", 0),
             "ivr": r.get("ivr"), "ivr_band": r.get("ivr_band", "N/A"),
             "liq_grade": r.get("liq_grade", "?"),
@@ -1149,6 +1154,9 @@ async def daily_briefing(req: DailyBriefingRequest, user: str = Depends(get_curr
             "rr_ratio": round(r.get("fill_estimate", 0) / max(r.get("max_risk", 1), 1), 2),
             "contracts": r.get("contracts", 0),
             "strikes": f"${r.get('short_put', 0):.0f}P/${r.get('short_call', 0):.0f}C",
+            "short_put": r.get("short_put", 0), "long_put": r.get("long_put", 0),
+            "short_call": r.get("short_call", 0), "long_call": r.get("long_call", 0),
+            "stock_price": price_map.get(tk, 0),
             "expiration": r.get("expiration", ""), "dte": r.get("dte", 0),
             "ivr": r.get("ivr"), "ivr_band": r.get("ivr_band", "N/A"),
             "liq_grade": r.get("liq_grade", "?"),
@@ -1192,10 +1200,68 @@ async def daily_briefing(req: DailyBriefingRequest, user: str = Depends(get_curr
         if count > 3 and sec != "Index":
             warnings.append(f"{sec} sector: {count} setups — correlated risk")
 
+    # ── 6. Computed Outlook ──
+    import math
+    spy_price = market_context.get("spy", {}).get("price", 0) or 0
+    vix_val = market_context.get("vix", {}).get("price", 0) or 0
+    # 5-day implied move: VIX/100 / sqrt(252) * sqrt(5) * SPY
+    if spy_price > 0 and vix_val > 0:
+        daily_vol = vix_val / 100 / math.sqrt(252)
+        five_day_vol = daily_vol * math.sqrt(5)
+        implied_move_pct = round(five_day_vol * 100, 2)
+        implied_move_dollar = round(spy_price * five_day_vol, 2)
+        implied_low = round(spy_price - implied_move_dollar, 2)
+        implied_high = round(spy_price + implied_move_dollar, 2)
+    else:
+        implied_move_pct = 0
+        implied_low = implied_high = implied_move_dollar = 0
+
+    # Position exposure analysis
+    top5 = opportunities[:5]
+    exposure_notes = []
+    # Sector correlation
+    for sec, count in sector_counts.items():
+        if count >= 3 and sec != "Index":
+            tickers_in_sec = [o["ticker"] for o in top5 if o.get("sector") == sec]
+            if tickers_in_sec:
+                exposure_notes.append({
+                    "type": "correlated",
+                    "note": f"{count} {sec} setups correlated — if sector drops, {', '.join(tickers_in_sec[:3])} all lose",
+                })
+    # Earnings risk
+    for o in top5:
+        if o.get("earnings_before"):
+            exposure_notes.append({
+                "type": "earnings",
+                "note": f"{o['ticker']} {o['label']} has earnings before expiry — IV crush risk",
+            })
+    # Directional exposure
+    bull_count = sum(1 for o in top5 if "Bull" in o.get("label", ""))
+    bear_count = sum(1 for o in top5 if "Bear" in o.get("label", ""))
+    condor_count = sum(1 for o in top5 if o.get("type") == "condor")
+    if bull_count >= 3:
+        exposure_notes.append({"type": "directional", "note": f"{bull_count} bullish setups — vulnerable to broad selloff"})
+    if bear_count >= 3:
+        exposure_notes.append({"type": "directional", "note": f"{bear_count} bearish setups — vulnerable to rally"})
+    if condor_count >= 2:
+        exposure_notes.append({"type": "neutral", "note": f"{condor_count} condors profit if range-bound — vulnerable to breakout"})
+
+    outlook = {
+        "spy_price": spy_price,
+        "vix": vix_val,
+        "implied_move_pct": implied_move_pct,
+        "implied_move_dollar": implied_move_dollar,
+        "implied_low": implied_low,
+        "implied_high": implied_high,
+        "earnings": [{"ticker": tk, **edata} for tk, edata in earnings_map.items()],
+        "fomc_events": market_context.get("fomc_events", []),
+        "exposure_notes": exposure_notes,
+    }
+
     return {
         "market_context": market_context,
         "watchlist": watchlist_data,
-        "earnings_this_week": [{"ticker": tk, **data} for tk, data in earnings_map.items()],
+        "earnings_this_week": [{"ticker": tk, **edata} for tk, edata in earnings_map.items()],
         "opportunities": opportunities,
         "risk_budget": risk_budget,
         "warnings": warnings,
@@ -1205,6 +1271,7 @@ async def daily_briefing(req: DailyBriefingRequest, user: str = Depends(get_curr
             "condors_found": len(condor_results),
             "top_shown": len(opportunities),
         },
+        "outlook": outlook,
     }
 
 
@@ -1212,382 +1279,297 @@ class NewsIntelRequest(BaseModel):
     watchlist: list[str] = ["SPY", "QQQ", "AAPL", "NVDA", "TSLA"]
 
 
-@router.post("/news-intel")
-async def news_intel(req: NewsIntelRequest, user: str = Depends(get_current_user)):
-    """Multi-source news intelligence pipeline.
+def _grok_helpers(grok_key: str):
+    """Shared helpers for Grok Responses API calls."""
+    import httpx, re, json
 
-    Phase 1: Pull structured data from APIs (factual, no AI)
-      - Polygon news (real headlines)
-      - yfinance earnings surprises
-      - SEC EDGAR recent 8-K filings
-    Phase 2: Grok searches X/Twitter for breaking news APIs miss
-    Phase 3: Cross-reference — verify Grok claims against API data, label confidence
-    Phase 4: Rank by market impact
-    """
-    import json, re
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from src.api_keys import get_secret
+    def _grok_request(model: str, instructions: str, prompt: str, timeout: float = 120.0) -> str:
+        import time
+        last_err = None
+        for attempt in range(3):
+            try:
+                if attempt > 0:
+                    time.sleep(3)  # brief pause before retry
+                resp = httpx.post(
+                    "https://api.x.ai/v1/responses",
+                    headers={"Authorization": f"Bearer {grok_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "instructions": instructions,
+                        "input": [{"role": "user", "content": prompt}],
+                        "tools": [{"type": "web_search"}, {"type": "x_search"}],
+                        "temperature": 0.1,
+                    },
+                    timeout=timeout,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for out_item in data.get("output", []):
+                    if out_item.get("type") == "message":
+                        for content in out_item.get("content", []):
+                            if content.get("type") == "output_text":
+                                return content.get("text", "")
+                return ""
+            except Exception as e:
+                last_err = e
+                continue
+        raise last_err  # all retries failed
 
-    from datetime import datetime as _dt, timedelta
-    tickers = [t.strip().upper() for t in req.watchlist[:20] if t.strip()]
-    now = _dt.utcnow()
-    cutoff_24h = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    all_items = []
+    def _extract_json_array(text: str) -> list:
+        cleaned = text.strip()
+        cleaned = re.sub(r"^```json?\s*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?\s*```\s*$", "", cleaned)
+        start = cleaned.find("[")
+        if start == -1:
+            return []
+        depth = 0
+        end = start
+        for i in range(start, len(cleaned)):
+            if cleaned[i] == "[": depth += 1
+            elif cleaned[i] == "]": depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+        return json.loads(cleaned[start:end])
 
-    # ── Phase 1A: Polygon news — last 24 hours only, filtered ──
-    def _fetch_polygon_news():
-        items = []
-        try:
-            import requests
-            api_key = get_secret("MASSIVE_API_KEY")
-            if not api_key: return items
-            for tk in tickers[:10]:
-                try:
-                    r = requests.get(f"https://api.polygon.io/v2/reference/news",
-                        params={"ticker": tk, "limit": 5, "order": "desc", "sort": "published_utc",
-                                "published_utc.gte": cutoff_24h, "apiKey": api_key}, timeout=10)
-                    if r.status_code == 200:
-                        for article in r.json().get("results", []):
-                            title = article.get("title", "")
-                            pub = article.get("published_utc", "")
+    def _dedup_by_story(items: list) -> list:
+        """Cluster items about the same story, keep the best one per cluster."""
+        if not items:
+            return items
 
-                            # Filter opinion/clickbait
-                            noise_words = ["i'd buy", "i would buy", "should you buy", "my top", "best stocks",
-                                          "could soar", "to buy now", "no brainer", "millionaire", "why i",
-                                          "best investment", "don't miss", "smart investors", "secret",
-                                          "top picks", "buy the dip", "hot stock", "next big"]
-                            if any(nw in title.lower() for nw in noise_words):
-                                continue
+        CONFIDENCE_RANK = {"verified": 3, "likely": 2, "unverified": 1}
+        SOURCE_RANK = {"Reuters": 5, "Bloomberg": 5, "WSJ": 5, "CNBC": 4, "AP": 4,
+                       "MarketWatch": 3, "Yahoo Finance": 3, "Barron's": 3}
 
-                            # Filter opinion publishers entirely
-                            publisher = article.get("publisher", {}).get("name", "")
-                            opinion_pubs = ["The Motley Fool", "InvestorPlace", "24/7 Wall St"]
-                            if publisher in opinion_pubs:
-                                continue
+        def _keywords(headline: str) -> set:
+            stop = {"the","and","for","that","with","from","this","has","are","was","its",
+                    "new","says","amid","after","over","into","than","about","just","will",
+                    "could","would","may","also","but","not","more","most","than","out","all"}
+            return set(w.lower() for w in re.sub(r"[^\w\s]", "", headline).split()
+                       if len(w) > 3 and w.lower() not in stop)
 
-                            # Compute hours ago
-                            hours_ago = ""
-                            try:
-                                pub_dt = _dt.strptime(pub[:19], "%Y-%m-%dT%H:%M:%S")
-                                hrs = (now - pub_dt).total_seconds() / 3600
-                                hours_ago = f"{int(hrs)}h ago" if hrs >= 1 else f"{int(hrs * 60)}m ago"
-                            except Exception:
-                                hours_ago = pub[:16].replace("T", " ")
+        def _score(item: dict) -> float:
+            conf = CONFIDENCE_RANK.get(item.get("confidence", ""), 0)
+            src = SOURCE_RANK.get(item.get("source", ""), 1)
+            has_url = 1 if item.get("url") else 0
+            return conf * 10 + src + has_url
 
-                            items.append({
-                                "ticker": tk,
-                                "headline": title[:200],
-                                "source": publisher or "Polygon News",
-                                "source_type": "news_api",
-                                "impact": "neutral",
-                                "confidence": "high",
-                                "time": hours_ago,
-                                "url": article.get("article_url", ""),
-                            })
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # Cluster by keyword overlap within same category
+        clusters: list[list[dict]] = []
+        cluster_kws: list[set] = []  # union of all keywords in each cluster
+        for item in items:
+            kw = _keywords(item.get("headline", ""))
+            placed = False
+            for ci, cluster in enumerate(clusters):
+                # Compare against the union of ALL headlines in the cluster
+                if (item.get("category") == cluster[0].get("category")
+                        and len(kw & cluster_kws[ci]) >= 2):
+                    cluster.append(item)
+                    cluster_kws[ci] |= kw  # grow the cluster's keyword pool
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([item])
+                cluster_kws.append(kw.copy())
+
+        # Pick the best item from each cluster
+        deduped = []
+        for cluster in clusters:
+            best = max(cluster, key=_score)
+            # Mention how many sources confirmed if cluster > 1
+            if len(cluster) > 1:
+                sources = set(c.get("source", "") for c in cluster if c.get("source"))
+                if sources and best.get("verification_note"):
+                    pass  # verification_note already mentions sources
+                elif sources:
+                    best["verification_note"] = f"Confirmed by {len(sources)} sources: {', '.join(sorted(sources)[:4])}"
+            deduped.append(best)
+        return deduped
+
+    def _finalize(items: list) -> list:
+        CONFIDENCE_ORDER = {"verified": 0, "likely": 1, "unverified": 2}
+        CATEGORY_ORDER = {"trump": 0, "iran_oil": 1, "macro": 2, "earnings": 3, "news": 4}
+        for item in items:
+            item["source_type"] = "grok_live"
+            if not item.get("url"): item["url"] = ""
+            if not item.get("confidence"): item["confidence"] = "unverified"
+            if not item.get("category"): item["category"] = "news"
+        items = _dedup_by_story(items)
+        items.sort(key=lambda x: (
+            CATEGORY_ORDER.get(x.get("category", "news"), 9),
+            CONFIDENCE_ORDER.get(x.get("confidence", "unverified"), 9),
+        ))
         return items
 
-    # ── Phase 1B: Earnings surprises — ONLY if reported in last 3 days ──
-    def _fetch_earnings():
-        items = []
-        try:
-            import yfinance as yf
-            from datetime import datetime as _dt, timedelta
-            now = _dt.now()
-            for tk in tickers[:10]:
-                try:
-                    ytk = yf.Ticker(tk)
-                    # Check if earnings were reported in the last 3 days
-                    cal = ytk.calendar
-                    info = ytk.info or {}
-                    earnings_ts = info.get("mostRecentQuarter")  # unix timestamp of last reported quarter
-                    if not earnings_ts:
-                        continue
+    def _make_sources(items: list) -> dict:
+        return {
+            "grok_verified": sum(1 for i in items if i.get("confidence") == "verified"),
+            "grok_likely": sum(1 for i in items if i.get("confidence") == "likely"),
+            "grok_unverified": sum(1 for i in items if i.get("confidence") == "unverified"),
+            "trump": sum(1 for i in items if i.get("category") == "trump"),
+        }
 
-                    # mostRecentQuarter is a unix timestamp of the quarter end date, not the report date
-                    # Use earningsTimestampStart for the actual report date
-                    report_ts = info.get("earningsTimestampStart") or info.get("earningsTimestampEnd")
+    return _grok_request, _extract_json_array, _finalize, _make_sources
 
-                    # Check if the LAST earnings report was within 3 days
-                    last_report = None
-                    try:
-                        # earnings_dates gives actual past + future dates
-                        edates = ytk.earnings_dates
-                        if edates is not None and len(edates) > 0:
-                            past = [d for d in edates.index if d.tz_localize(None) <= now]
-                            if past:
-                                last_report = max(past).tz_localize(None)
-                    except Exception:
-                        pass
 
-                    if last_report and (now - last_report).days <= 3:
-                        # Recent earnings — get actual vs estimate from earnings_dates
-                        try:
-                            row = edates.loc[last_report]
-                            actual = row.get("Reported EPS")
-                            estimate = row.get("EPS Estimate")
-                            if actual is not None and estimate is not None and estimate != 0:
-                                surprise_pct = round((actual - estimate) / abs(estimate) * 100, 1)
-                                beat = actual > estimate
-                                if abs(surprise_pct) > 1:  # only material
-                                    items.append({
-                                        "ticker": tk,
-                                        "headline": f"Earnings {'beat' if beat else 'miss'}: ${actual:.2f} vs ${estimate:.2f} est ({'+' if surprise_pct > 0 else ''}{surprise_pct}%)",
-                                        "source": f"yfinance (reported {last_report.strftime('%b %d')})",
-                                        "source_type": "earnings_data",
-                                        "impact": "bull" if beat else "bear",
-                                        "confidence": "high",
-                                        "time": f"{(now - last_report).days}d ago",
-                                        "url": "",
-                                    })
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return items
+def _news_search_prompt(today: str, tickers_str: str) -> tuple[str, str]:
+    """Return (instructions, prompt) for Pass 1 search."""
+    instructions = (
+        f"You are a real-time financial news scanner. TODAY IS: {today}. "
+        "Use web_search and x_search tools aggressively to find LIVE breaking news. "
+        "Do NOT rely on training data — SEARCH first, then report what you found."
+    )
+    prompt = f"""Search the web AND X/Twitter RIGHT NOW for market-moving news on: {tickers_str}
 
-    # ── Phase 1C: SEC EDGAR recent 8-K filings ──
-    def _fetch_sec_filings():
-        items = []
-        try:
-            from src.edgar import fetch_recent_8k
-            for tk in tickers[:8]:
-                try:
-                    filings = fetch_recent_8k(tk, days=3)
-                    # 8-K item codes that matter
-                    ITEM_LABELS = {
-                        "1.01": "Material agreement", "1.02": "Bankruptcy/receivership",
-                        "2.01": "Asset acquisition/disposal", "2.02": "Results of operations (earnings)",
-                        "2.03": "Financial obligation", "2.05": "Delisting/transfer",
-                        "2.06": "Material impairment", "3.01": "Securities delisting",
-                        "4.01": "Auditor change", "4.02": "Non-reliance on financials",
-                        "5.01": "Corporate governance change", "5.02": "Executive departure/appointment",
-                        "5.03": "Bylaws amendment", "7.01": "Regulation FD disclosure",
-                        "8.01": "Other material event", "9.01": "Financial statements/exhibits",
-                    }
-                    for f in filings[:2]:
-                        raw_items = f.get("items", "")
-                        # Parse item codes and add human-readable labels
-                        labels = []
-                        for code, label in ITEM_LABELS.items():
-                            if code in raw_items:
-                                labels.append(label)
-                        why = " — ".join(labels[:2]) if labels else "Material event disclosure"
-                        # Determine impact from filing type
-                        impact = "neutral"
-                        if any(c in raw_items for c in ["2.02", "7.01"]): impact = "neutral"  # earnings/FD = check direction
-                        if any(c in raw_items for c in ["1.02", "2.06", "4.02"]): impact = "bear"  # bankruptcy/impairment/non-reliance
-                        if any(c in raw_items for c in ["2.01", "5.02"]): impact = "neutral"  # could go either way
-
-                        items.append({
-                            "ticker": tk,
-                            "headline": f"SEC 8-K: {why}",
-                            "source": f"SEC EDGAR ({f.get('company', tk)})",
-                            "source_type": "sec_filing",
-                            "impact": impact,
-                            "confidence": "high",
-                            "time": f.get("filed", "recent"),
-                            "url": f.get("url", ""),
-                        })
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return items
-
-    # ── Phase 2: Grok live search (X/Twitter + web) — the ONLY model with real-time access ──
-    def _fetch_grok_intel():
-        items = []
-        grok_key = get_secret("GROK_API_KEY")
-        if not grok_key: return items
-
-        from datetime import datetime as _dt
-        today = _dt.now().strftime("%A, %B %d, %Y")
-        tickers_str = ", ".join(tickers[:15])
-
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=grok_key, base_url="https://api.x.ai/v1")
-            response = client.chat.completions.create(
-                model="grok-3",  # grok-3 has web search; upgrade to grok-4 reasoning when available
-                messages=[
-                    {"role": "system", "content": f"""You are a real-time financial news scanner with live web and X/Twitter search.
-TODAY IS: {today}. Search for news from TODAY and the last 12 hours ONLY. Anything older is stale — ignore it.
-Your training data is outdated. Do NOT rely on memory. SEARCH the web and X/Twitter for current information."""},
-                    {"role": "user", "content": f"""Search the web AND X/Twitter RIGHT NOW for market-moving news on these tickers: {tickers_str}
-
-TODAY IS {today}. Only return news from TODAY or last night's after-hours.
+TODAY IS {today}. Only return news from the last 24 hours.
 
 SEARCH FOR:
-1. Web news: Reuters, Bloomberg, CNBC, WSJ, MarketWatch headlines from today
-2. X/Twitter: posts from @DeItaone, @zaborhedge, @LiveSquawk, @unusual_whales, @FirstSquawk, company IR accounts, named analysts
-3. Pre-market movers: any ticker gapping up/down >2% and WHY
-4. Macro: any economic data released today (CPI, jobs, PMI, Fed speakers)
-5. Earnings: any company that reported last night or this morning
+1. Web: Reuters, Bloomberg, CNBC, WSJ, MarketWatch, Yahoo Finance, Barron's
+2. X/Twitter: @DeItaone, @zaborhedge, @LiveSquawk, @unusual_whales, @FirstSquawk, company IR accounts
+3. Pre/post-market movers gapping >2% and WHY
+4. Macro data releases today (CPI, jobs, PMI, Fed speakers)
+5. Earnings reported last night or this morning
+6. **CRITICAL — Trump / White House**: Search @POTUS, @realDonaldTrump, @WhiteHouse, Truth Social posts, and news about ANY Trump statements, executive orders, tariff announcements, trade policy, sanctions, geopolitical threats, or regulatory actions from the last 24 hours. Trump posts move markets — capture ALL of them. Return at LEAST 4 Trump items if any exist.
+7. **CRITICAL — Iran conflict & oil supply**: Search for Iran war developments, US military strikes on Iran, Iranian retaliation, Strait of Hormuz, OPEC response, oil production disruptions, oil price moves, crude supply/demand impacts, tanker traffic, refinery impacts, defense contractor news. Include oil price levels (WTI, Brent) if mentioned. Return at LEAST 3 Iran/oil items.
 
-DO NOT RETURN:
-- Anything from yesterday or earlier (unless after-hours last night)
-- Opinions, predictions, or analysis
-- Generic "market is up/down" commentary
+MINIMUM TARGETS: At least 5 Trump items, at least 4 Iran/oil items, at least 8 other news/macro/earnings items. Cast a wide net — more is better, dedup happens downstream.
 
-For each item found TODAY:
-- ticker: affected ticker(s)
-- headline: one factual sentence (what happened, not what might happen)
-- source: specific outlet or @handle
-- impact: bull/bear/neutral
-- time: how long ago (e.g., "2h ago", "pre-market", "last night AH")
+DO NOT RETURN opinions, predictions, or generic "market is up" filler.
 
-Return JSON array. Max 15 items. Return [] if quiet day.
-[{{"ticker": "AAPL", "headline": "...", "source": "...", "impact": "bull", "time": "2h ago"}}]"""},
-                ],
-                max_tokens=3000, temperature=0.1,
-            )
-            raw = response.choices[0].message.content or "[]"
-            cleaned = re.sub(r"^```json?\s*", "", raw.strip())
-            cleaned = re.sub(r"\s*```$", "", cleaned)
-            parsed = json.loads(cleaned)
-            if isinstance(parsed, list):
-                for item in parsed:
-                    item["source_type"] = "x_twitter"
-                    item["url"] = ""
-                    # Freshness sanity: check if Grok's time references are plausibly recent
-                    t = item.get("time", "")
-                    if any(w in t.lower() for w in ["ago", "pre-market", "last night", "this morning", "overnight", "ah", "today"]):
-                        item["confidence"] = "medium"  # plausibly live search result
-                    else:
-                        item["confidence"] = "low"  # suspicious — might be from training data
-                        item["headline"] = item.get("headline", "") + " [⚠ freshness unverified]"
-                    items.append(item)
-        except Exception:
-            pass
-        return items
+For each item:
+- ticker: affected ticker(s), or "MACRO" if it affects the broad market, or "OIL" / "USO" / "XLE" for oil/energy
+- headline: one factual sentence
+- source: specific outlet name or @handle
+- impact: "bull" / "bear" / "neutral"
+- time: relative (e.g. "2h ago", "pre-market", "last night AH")
+- url: source URL if found, empty string if not
+- category: "trump" if Trump/White House/tariffs/trade policy, "iran_oil" if Iran conflict/military/oil supply/crude prices/OPEC/Strait of Hormuz, "macro" for economic data/Fed, "earnings" for earnings, "news" for everything else
 
-    # ── Run all sources in parallel ──
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futs = {
-            pool.submit(_fetch_polygon_news): "polygon",
-            pool.submit(_fetch_earnings): "earnings",
-            pool.submit(_fetch_sec_filings): "sec",
-            pool.submit(_fetch_grok_intel): "grok",
-        }
-        for fut in as_completed(futs):
-            try:
-                items = fut.result()
-                all_items.extend(items)
-            except Exception:
-                pass
+Return ONLY a JSON array. Return 20-40 items. More is better — duplicates will be removed downstream. Return [] if nothing found.
+[{{"ticker":"OIL","headline":"...","source":"Reuters","impact":"bear","time":"2h ago","url":"","category":"iran_oil"}}]"""
+    return instructions, prompt
 
-    # ── Phase 3: Cross-reference & deduplicate ──
-    # Build API headline snippets for claim-level verification
-    api_claims = {}  # ticker -> list of headline keywords
-    for item in all_items:
-        if item.get("source_type") in ("news_api", "earnings_data", "sec_filing"):
-            tk = item.get("ticker", "")
-            if tk not in api_claims:
-                api_claims[tk] = []
-            # Extract key words from headline (>3 chars, not common words)
-            stop = {"the", "and", "for", "that", "with", "from", "this", "has", "are", "was", "its", "sec"}
-            words = set(w.lower() for w in item.get("headline", "").split() if len(w) > 3 and w.lower() not in stop)
-            api_claims[tk].append(words)
 
-    for item in all_items:
-        if item.get("source_type") == "x_twitter":
-            tk = item.get("ticker", "")
-            grok_words = set(w.lower() for w in item.get("headline", "").split() if len(w) > 3)
-            if tk in api_claims:
-                # Check if any API headline shares 2+ meaningful words with Grok's claim
-                best_overlap = 0
-                for api_words in api_claims[tk]:
-                    overlap = len(grok_words & api_words)
-                    best_overlap = max(best_overlap, overlap)
-                if best_overlap >= 2:
-                    item["confidence"] = "high"
-                    item["cross_verified"] = True
-                else:
-                    item["cross_verified"] = False  # same ticker but different claim
-            else:
-                item["cross_verified"] = False
+@router.post("/news-intel-search")
+async def news_intel_search(req: NewsIntelRequest, user: str = Depends(get_current_user)):
+    """Pass 1: Fast search via grok-4-1-fast-reasoning. Returns unverified items immediately."""
+    import json, re, logging
+    from src.api_keys import get_secret
 
-    # Deduplicate by headline similarity (first 40 chars, normalized)
-    seen = set()
-    deduped = []
-    for item in all_items:
-        norm = item.get("headline", "").lower().replace("'", "").replace('"', '')[:40]
-        key = (item.get("ticker", ""), norm)
-        if key not in seen:
-            seen.add(key)
-            deduped.append(item)
+    _log = logging.getLogger(__name__)
+    grok_key = get_secret("GROK_API_KEY")
+    if not grok_key:
+        return {"success": False, "error": "GROK_API_KEY not configured", "items": []}
 
-    # ── Phase 4: Sort by recency first, then impact ──
-    # Parse time strings into sortable values (lower = more recent)
-    def _recency(item):
-        t = item.get("time", "").lower()
-        # Handle "Xd ago", "Xh ago", "Xm ago", "X minutes ago" from Grok
-        if "ago" in t:
-            try:
-                num = int("".join(c for c in t.split("ago")[0] if c.isdigit()) or "99")
-                if "d" in t: return num * 1440       # days → minutes
-                if "h" in t: return num * 60          # hours → minutes
-                if "min" in t or "m" in t: return num  # minutes (check 'min' first, then 'm')
-                return num  # default to minutes if just a number + "ago"
-            except Exception: pass
-        # Handle ISO-ish timestamps from Polygon "2026-04-03 01:05"
-        if len(t) >= 10 and t[4] == "-":
-            try:
-                from datetime import datetime
-                dt = datetime.strptime(t[:16], "%Y-%m-%d %H:%M")
-                mins = (datetime.now() - dt).total_seconds() / 60
-                return max(0, mins)
-            except Exception: pass
-        # Handle "recent", "latest quarter", etc.
-        if "recent" in t.lower(): return 500
-        return 9999  # unknown = sort last
+    from datetime import datetime as _dt
+    tickers = [t.strip().upper() for t in req.watchlist[:20] if t.strip()]
+    today = _dt.utcnow().strftime("%A, %B %d, %Y")
+    tickers_str = ", ".join(tickers[:15])
 
-    IMPACT_RANK = {"earnings_data": 5, "sec_filing": 4, "news_api": 3, "x_twitter": 2}
-    CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
-    # Add freshness labels
-    for item in deduped:
-        mins = _recency(item)
-        if mins < 60: item["freshness"] = "live"
-        elif mins < 360: item["freshness"] = "recent"  # <6h
-        elif mins < 720: item["freshness"] = "today"    # <12h
-        else: item["freshness"] = "stale"                # >12h
+    _grok_request, _extract_json_array, _finalize, _make_sources = _grok_helpers(grok_key)
 
-    # Remove stale items (>24h)
-    deduped = [item for item in deduped if _recency(item) < 1500]  # ~25h cutoff
+    try:
+        _log.info("Grok Pass 1 (fast): searching web + X...")
+        instructions, prompt = _news_search_prompt(today, tickers_str)
+        raw = _grok_request("grok-4-1-fast-reasoning", instructions, prompt, timeout=90.0)
+        items = _extract_json_array(raw)
+        _log.info(f"Grok Pass 1: found {len(items)} items")
+    except Exception as e:
+        _log.warning(f"Grok Pass 1 failed: {e}")
+        return {"success": False, "error": f"Grok search failed: {e}", "items": []}
 
-    deduped.sort(key=lambda x: (
-        _recency(x),
-        -(IMPACT_RANK.get(x.get("source_type", ""), 1) * CONFIDENCE_RANK.get(x.get("confidence", "low"), 1)),
-    ))
+    if not items:
+        return {"success": True, "items": [], "sources": _make_sources([]), "total": 0}
 
-    return {
-        "success": True,
-        "items": deduped[:25],
-        "sources": {
-            "polygon_news": sum(1 for i in deduped if i.get("source_type") == "news_api"),
-            "earnings": sum(1 for i in deduped if i.get("source_type") == "earnings_data"),
-            "sec_filings": sum(1 for i in deduped if i.get("source_type") == "sec_filing"),
-            "x_twitter": sum(1 for i in deduped if i.get("source_type") == "x_twitter"),
-        },
-        "total_raw": len(all_items),
-        "total_deduped": len(deduped),
-    }
+    # Mark all as unverified
+    for item in items:
+        item["confidence"] = "unverified"
+        item["verification_note"] = ""
+
+    items = _finalize(items)
+    return {"success": True, "items": items[:40], "sources": _make_sources(items), "total": len(items)}
+
+
+class NewsVerifyRequest(BaseModel):
+    items: list[dict] = []
+
+
+@router.post("/news-intel-verify")
+async def news_intel_verify(req: NewsVerifyRequest, user: str = Depends(get_current_user)):
+    """Pass 2: Fact-check items via grok-4.20-reasoning. Returns verified items."""
+    import json, re, logging
+    from src.api_keys import get_secret
+
+    _log = logging.getLogger(__name__)
+    grok_key = get_secret("GROK_API_KEY")
+    if not grok_key:
+        return {"success": False, "error": "GROK_API_KEY not configured", "items": []}
+
+    from datetime import datetime as _dt
+    today = _dt.utcnow().strftime("%A, %B %d, %Y")
+
+    _grok_request, _extract_json_array, _finalize, _make_sources = _grok_helpers(grok_key)
+
+    pass1_items = req.items
+    if not pass1_items:
+        return {"success": True, "items": [], "sources": _make_sources([]), "total": 0}
+
+    try:
+        _log.info("Grok Pass 2 (reasoning): fact-checking...")
+        claims_json = json.dumps(pass1_items, indent=1)
+        raw = _grok_request(
+            "grok-4.20-reasoning",
+            f"You are a financial news fact-checker. TODAY IS: {today}. "
+            "Use web_search and x_search to VERIFY each claim below. "
+            "For each item, search for independent confirmation. Be strict.",
+            f"""Fact-check each news item below by searching the web and X for independent confirmation.
+
+CLAIMS TO VERIFY:
+{claims_json}
+
+For EACH item, search for the specific claim. Then return the same array with TWO added fields:
+- confidence: "verified" (found 2+ independent sources confirming), "likely" (found 1 confirming source), "unverified" (could not find confirmation), "false" (found contradicting evidence)
+- verification_note: one sentence explaining what you found or didn't find
+
+Remove any item where confidence is "false".
+Keep the original fields (ticker, headline, source, impact, time, url, category) unchanged.
+Return ONLY a JSON array.""",
+            timeout=120.0,
+        )
+        items = _extract_json_array(raw)
+        _log.info(f"Grok Pass 2: {len(items)} items after verification")
+    except Exception as e:
+        _log.warning(f"Grok Pass 2 failed: {e} — returning unverified")
+        items = pass1_items
+        for item in items:
+            item["confidence"] = "unverified"
+            item["verification_note"] = "Fact-check pass failed — unverified"
+
+    items = _finalize(items)
+    return {"success": True, "items": items[:40], "sources": _make_sources(items), "total": len(items)}
+
+
+@router.post("/news-intel")
+async def news_intel(req: NewsIntelRequest, user: str = Depends(get_current_user)):
+    """Legacy: runs both passes sequentially. Use /news-intel-search + /news-intel-verify for streaming UX."""
+    search_result = await news_intel_search(req, user)
+    if not search_result.get("success") or not search_result.get("items"):
+        return search_result
+    verify_req = NewsVerifyRequest(items=search_result["items"])
+    return await news_intel_verify(verify_req, user)
 
 
 class MarketNoteRequest(BaseModel):
     briefing_data: dict = {}
     news_items: list[dict] = []
+    polymarket: list[dict] = []
+    book_summary: str = ""
+    signal_summary: str = ""
 
 
 @router.post("/morning-note")
 async def morning_note(req: MarketNoteRequest, user: str = Depends(get_current_user)):
-    """Generate AI market note from scan data + news intelligence."""
+    """Generate AI market note from scan data + news intelligence + prediction markets."""
     from src.api_keys import get_secret
 
     data = req.briefing_data
@@ -1597,71 +1579,148 @@ async def morning_note(req: MarketNoteRequest, user: str = Depends(get_current_u
     rb = data.get("risk_budget", {})
     warns = data.get("warnings", [])
     news = req.news_items
+    poly = req.polymarket
 
     def _pct(v): return f"{v:+.2f}%" if isinstance(v, (int, float)) else "N/A"
 
-    ctx = f"""MARKET DATA (use ONLY these numbers — do NOT invent):
+    ctx = f"""DATA (use ONLY these numbers):
 
-PRICES:
-- SPY: ${mc.get('spy', {}).get('price', 0) or 0} ({_pct(mc.get('spy', {}).get('change_pct'))})
-- QQQ: ${mc.get('qqq', {}).get('price', 0) or 0} ({_pct(mc.get('qqq', {}).get('change_pct'))})
-- VIX: {mc.get('vix', {}).get('price', 0) or 0} — regime: {mc.get('vix', {}).get('regime', 'N/A')}
-- VIX term structure: {mc.get('vix', {}).get('term_structure', 'N/A')} (VIX3M/VIX ratio: {mc.get('vix', {}).get('term_ratio', 'N/A')})
-
-EVENTS:
-- FOMC: {', '.join(f"{e['type']} in {e['days_away']}d" for e in mc.get('fomc_events', [])) or 'No FOMC within 30 days'}
-- Earnings this week: {', '.join(f"{e['ticker']} in {e['days']}d" for e in earn) or 'None on watchlist'}
+SPY ${mc.get('spy', {}).get('price', 0) or 0} ({_pct(mc.get('spy', {}).get('change_pct'))}) | QQQ ${mc.get('qqq', {}).get('price', 0) or 0} ({_pct(mc.get('qqq', {}).get('change_pct'))})
+VIX {mc.get('vix', {}).get('price', 0) or 0} {mc.get('vix', {}).get('regime', 'N/A')} | Term: {mc.get('vix', {}).get('term_structure', 'N/A')} ({mc.get('vix', {}).get('term_ratio', 'N/A')}x)
+FOMC: {', '.join(f"{e['type']} {e['days_away']}d" for e in mc.get('fomc_events', [])) or 'None within 30d'}
+Earnings: {', '.join(f"{e['ticker']} {e['days']}d" for e in earn) or 'None'}
 """
+
+    if poly:
+        ctx += "\nPREDICTION MARKETS (Polymarket — real money odds, sorted by near-term actionability):\n"
+        for p in poly[:6]:
+            outcomes = p.get("outcomes", [])
+            odds = ", ".join(
+                f"{o['label']}: {o['yes_pct']}%" + (f" ({o['days_out']}d out)" if o.get('days_out', 999) < 180 else "")
+                for o in outcomes[:3]
+            )
+            ctx += f"  {p.get('title','?')}: {odds}\n"
+        ctx += "  NOTE: Near-term uncertain odds (20-80%, <60 days) are most actionable. Far-out >90% odds are priced in.\n"
 
     if news:
-        ctx += "\nNEWS (from Polygon, SEC EDGAR, yfinance, X/Twitter — fact-checked):\n"
-        for item in news[:12]:
-            verified = "✓" if item.get("confidence") == "high" else "?"
-            ctx += f"  {verified} [{item.get('ticker','?')}] {item.get('headline','')} — {item.get('source','')} ({item.get('time','')}) [{item.get('impact','neutral')}]\n"
+        trump_news = [n for n in news if n.get("category") == "trump"]
+        iran_news = [n for n in news if n.get("category") == "iran_oil"]
+        other_news = [n for n in news if n.get("category") not in ("trump", "iran_oil")]
+        if trump_news:
+            ctx += "\nTRUMP/WHITE HOUSE NEWS:\n"
+            for item in trump_news[:5]:
+                conf = item.get("confidence", "unverified")
+                ctx += f"  [{item.get('ticker','?')}] {item.get('headline','')} — {item.get('source','')} ({item.get('time','')}) [{item.get('impact','neutral')}] [{conf}]\n"
+        if iran_news:
+            ctx += "\nIRAN CONFLICT & OIL SUPPLY NEWS:\n"
+            for item in iran_news[:5]:
+                conf = item.get("confidence", "unverified")
+                ctx += f"  [{item.get('ticker','?')}] {item.get('headline','')} — {item.get('source','')} ({item.get('time','')}) [{item.get('impact','neutral')}] [{conf}]\n"
+        if other_news:
+            ctx += "\nOTHER NEWS:\n"
+            for item in other_news[:8]:
+                conf = item.get("confidence", "unverified")
+                ctx += f"  [{item.get('ticker','?')}] {item.get('headline','')} — {item.get('source','')} ({item.get('time','')}) [{item.get('impact','neutral')}] [{conf}]\n"
 
     if opps:
-        ctx += f"\nTOP {min(len(opps), 8)} TRADE SETUPS (ranked by composite score):\n"
-        for i, o in enumerate(opps[:8]):
+        ctx += f"\nTOP {min(len(opps), 5)} SETUPS:\n"
+        for i, o in enumerate(opps[:5]):
             flags = ""
-            if o.get('earnings_before'): flags += " ⚠EARNINGS"
+            if o.get('earnings_before'): flags += " ⚠EARN"
             if o.get('inside_exp_move'): flags += " ⚠INSIDE_EM"
             kelly = o.get('kelly_adj')
-            kelly_str = f"{kelly:.1f}%" if isinstance(kelly, (int, float)) else "N/A"
-            ctx += f"  {i+1}. {o.get('ticker','?')} {o.get('label','?')} {o.get('strikes','?')} {o.get('dte','?')}d — POP {o.get('pop','?')}% R:R {o.get('rr_ratio','?')}x IVR {o.get('ivr', 'N/A')} ({o.get('ivr_band','?')}) Liq:{o.get('liq_grade','?')} Kelly:{kelly_str} → {o.get('contracts',0)}×{flags}\n"
+            kelly_str = f"{kelly:.1f}%" if isinstance(kelly, (int, float)) else "?"
+            ctx += f"  {i+1}. {o.get('ticker','?')} {o.get('label','?')} {o.get('strikes','?')} {o.get('dte','?')}d POP:{o.get('pop','?')}% R:R:{o.get('rr_ratio','?')}x IVR:{o.get('ivr', '?')} ({o.get('ivr_band','?')}) Liq:{o.get('liq_grade','?')} Kelly:{kelly_str} → {o.get('contracts',0)}×{flags}\n"
 
-    ctx += f"""
-RISK: ${rb.get('account_size', 0)} account | Top 5 deployed: ${rb.get('top5_risk', 0)} ({rb.get('pct_of_account', 0)}%) | {rb.get('verdict', 'N/A')}
-WARNINGS: {'; '.join(warns) or 'None'}
-SECTORS: {', '.join(f"{s}:{c}" for s, c in data.get('sector_exposure', {}).items()) or 'N/A'}
+    ctx += f"\nRISK: ${rb.get('account_size', 0)} acct | deployed ${rb.get('top5_risk', 0)} ({rb.get('pct_of_account', 0)}%) | {rb.get('verdict', '?')}"
+    if warns:
+        ctx += f"\nWARNINGS: {'; '.join(warns)}"
+    ctx += f"\nSECTORS: {', '.join(f'{s}:{c}' for s, c in data.get('sector_exposure', {}).items()) or 'N/A'}\n"
+
+    from datetime import datetime as _dt, date as _date
+    now_dt = _dt.now()
+    today = now_dt.strftime("%A, %B %d, %Y")
+
+    # Market hours check — weekends + NYSE holidays
+    NYSE_HOLIDAYS_2026 = {
+        _date(2026, 1, 1), _date(2026, 1, 19), _date(2026, 2, 16),
+        _date(2026, 4, 3),  # Good Friday
+        _date(2026, 5, 25), _date(2026, 7, 3), _date(2026, 9, 7),
+        _date(2026, 11, 26), _date(2026, 12, 25),
+    }
+    today_date = now_dt.date()
+    if today_date.weekday() >= 5:
+        market_status = "MARKETS CLOSED (weekend)"
+    elif today_date in NYSE_HOLIDAYS_2026:
+        market_status = "MARKETS CLOSED (holiday)"
+    else:
+        market_status = "Markets open"
+
+    # Build the top trade context with more detail
+    top_opp = opps[0] if opps else None
+    top_trade_ctx = ""
+    if top_opp:
+        top_trade_ctx = f"""
+TOP RANKED TRADE (score {top_opp.get('score', 0):.3f}):
+  {top_opp.get('ticker','?')} {top_opp.get('label','?')} {top_opp.get('strikes','?')} {top_opp.get('dte','?')}d
+  POP {top_opp.get('pop','?')}% | R:R {top_opp.get('rr_ratio','?')}x | IVR {top_opp.get('ivr','?')} ({top_opp.get('ivr_band','?')}) | Kelly {top_opp.get('kelly_adj',0):.1f}% | Liq {top_opp.get('liq_grade','?')}
+  Premium ${top_opp.get('premium',0)} | Max Risk ${top_opp.get('max_risk',0)} | Max Profit ${top_opp.get('max_profit',0)}
+  {'⚠ EARNINGS BEFORE EXPIRY' if top_opp.get('earnings_before') else ''}{'⚠ INSIDE EXPECTED MOVE' if top_opp.get('inside_exp_move') else ''}
 """
+    ctx += top_trade_ctx
 
-    from datetime import datetime as _dt
-    today = _dt.now().strftime("%A, %B %d, %Y")
+    # Live book from Robinhood
+    book = req.book_summary
+    if book:
+        ctx += f"\nYOUR LIVE POSITIONS (from Robinhood):\n{book}\n"
+        ctx += "IMPORTANT: If any position is breached or at max loss, address it FIRST in your note. Management of existing positions takes priority over new trades.\n"
 
-    system = f"""You are writing a private trading note TO YOURSELF. Today is {today}.
+    signals = req.signal_summary
+    if signals:
+        ctx += f"\nTECHNICAL SIGNAL CONSENSUS (24 strategies, family-weighted, fresh flips only):\n{signals}\n"
+        ctx += "These are the top trade ideas from the strategy scanner. Each has 2+ independent strategy families confirming. Reference them in TOP TRADE if they align with the market thesis.\n"
+        ctx += "IMPORTANT: Cross-check signals against news. If a signal says BUY but news is bearish, FLAG the contradiction. If signal + news agree, that's high conviction.\n"
 
-IMPORTANT: Your training data is STALE. Do NOT reference any news, events, or market conditions from memory.
-The ONLY facts you know about today come from the data below. If the data says SPY is at $655, that IS the current price.
-If there are news items below, those are the ONLY news items that exist today. Do not add others from memory.
+    system = f"""You are a portfolio manager writing a private morning note to yourself before market open. Today is {today}. {market_status}.
 
-Structure (5 short sections, each 2-3 sentences max):
+You trade options spreads (credit and debit verticals, iron condors). You sell premium when VIX is 20-30 and IVR is elevated. You size positions using half-Kelly. You respect earnings risk and sector concentration.
 
-**MARKET**: What's the tape doing? VIX regime + term structure = what it means for selling premium. Any events that change the playbook?
+Your training data is STALE. ONLY use the data below. Do not invent numbers, tickers, or events.
 
-**NEWS**: What matters from the news feed? Only mention items that affect your trading decisions today. If nothing material, say "quiet tape." Connect news to specific tickers in the trade list if relevant.
+{"Markets are CLOSED today. State this in STANCE. Say 'No trades today' in TOP TRADE. Say 'No deployment' in SIZING. In OUTLOOK, frame as 'when markets reopen' — the forward view still matters." if "CLOSED" in market_status else ""}
 
-**TRADES**: Your top 2-3 picks from the scan. For each: ticker, strategy, WHY (cite the IVR band, POP, R:R). If any have earnings flags, explicitly say skip or proceed with caution.
+OUTPUT EXACTLY 4 SECTIONS. Be direct. Take a stance. No hedging, no "on the other hand."
 
-**AVOID**: What NOT to trade and why. Earnings exposure, sector concentration, low liquidity setups. Be specific.
+**STANCE**
+One sentence. Are you bullish, bearish, or sitting out today? Why?
+Synthesize: VIX regime + term structure + today's news + prediction market odds + YOUR LIVE BOOK status → net directional bias.
+If you have positions that are breached or at max loss, your stance should reflect that reality.
 
-**SIZE**: One sentence. How much to deploy given risk budget + VIX regime. If elevated vol, note to reduce size.
+**TOP TRADE**
+If you have live positions that need management (breached strikes, at max loss, expiring soon), address those FIRST — "close X", "roll Y", "hold Z". Existing position management beats new trades.
+Then, if appropriate, your #1 new pick from the scan:
+- What it is (ticker, strategy, strikes, DTE)
+- Why THIS one (IVR, POP, Kelly edge)
+- How today's news supports or threatens it
+- If it overlaps with an existing position, note it
+
+**RISKS**
+What could blow up — both your EXISTING positions and any new trades from the scan.
+- Flag any live position where the short strike is within 3% of stock price
+- Earnings exposure on any position or scan ticker
+- Sector concentration across your ENTIRE book (live + new)
+- Geopolitical: Iran/oil (cite Polymarket odds), tariffs
+
+**SIZING**
+One sentence. Account for what's ALREADY deployed in your live book.
+Reference: account equity, existing exposure, remaining buying power.
 
 RULES:
-- Reference ONLY data provided. No invented numbers.
-- No disclaimers, no "not financial advice."
-- If VIX < 15: note thin premiums. If VIX 20-30: premium selling sweet spot. If VIX > 30: reduce size, widen wings.
-- If news contradicts a trade setup (e.g., bearish news on a ticker you'd sell puts on), FLAG IT.
-- Write like you're talking to yourself before market open."""
+- Write like you're talking to yourself. No filler. No "it's worth noting." No disclaimers.
+- Every claim must reference specific data from below — a number, a ticker, a Polymarket odd.
+- If you can't support a statement with data provided, don't make it.
+- Do NOT repeat the news feed. The news is already on screen. Your job is to interpret it for trading.
+- Be wrong confidently rather than right vaguely. A trader needs a clear signal, not a balanced essay."""
 
     try:
         api_key = get_secret("GEMINI_API_KEY")
@@ -1674,9 +1733,21 @@ RULES:
         response = client.models.generate_content(
             model="gemini-3.1-pro-preview",
             contents=f"{system}\n\n{ctx}",
-            config=types.GenerateContentConfig(max_output_tokens=1500, temperature=0.25),
+            config=types.GenerateContentConfig(max_output_tokens=4000, temperature=0.15),
         )
-        return {"content": response.text or "", "success": True}
+        text = response.text or ""
+        # Strip leaked thinking / self-correction artifacts
+        import re as _re
+        text = _re.sub(r"\*Self-[Cc]orrection[^*]*\*:?[^\n]*\n?", "", text)
+        text = _re.sub(r"\*?(?:Let me|Wait,|Actually,|Hmm,|Note to self)[^\n]*\n?", "", text, flags=_re.IGNORECASE)
+        text = _re.sub(r"^\s*(?:Okay|Alright|Sure|Here'?s)[^\n]*\n", "", text.strip())
+        # Ensure it starts with the first section header
+        for header in ["**STANCE**", "**STANCE", "**TOP TRADE**", "**TOP TRADE"]:
+            idx = text.find(header)
+            if idx > 0:
+                text = text[idx:]
+                break
+        return {"content": text.strip(), "success": True}
     except Exception as e:
         return {"content": f"AI generation failed: {str(e)}", "success": False}
 
@@ -2029,17 +2100,11 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
             return None
 
     def _backtest_combo(tk, strategy):
-        """Run full backtest using adjusted OHLCV. Daily=yfinance, Intraday=Polygon."""
+        """Run full backtest using pre-fetched OHLCV data. No yfinance calls inside threads."""
         try:
             import pandas as pd
 
-            if is_intraday:
-                df = _fetch_intraday_polygon(tk, req.timeframe, req.lookback_days)
-            else:
-                period_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y", 2520: "10y"}
-                period = period_map.get(req.lookback_days, f"{req.lookback_days}d")
-                df = yf.download(tk, period=period, progress=False, auto_adjust=True)
-
+            df = _ohlcv_cache.get(tk)
             if df is None or len(df) < 100:
                 return None
 
@@ -2124,8 +2189,16 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
             # Time in market
             pct_active = round(float(np.sum(active_mask)) / max(len(active_mask), 1) * 100, 0)
 
-            # Win rate
+            # Win rate + trade-level ATR stop analysis
+            atr_arr = talib.ATR(highs, lows, closes, timeperiod=14)
             trades, wins, pos, entry_px = 0, 0, 0, 0.0
+            # ATR stop simulation: track trades with 1.5x, 2x, 2.5x ATR stops
+            stop_results = {1.5: {"stopped": 0, "survived": 0, "win_survived": 0},
+                           2.0: {"stopped": 0, "survived": 0, "win_survived": 0},
+                           2.5: {"stopped": 0, "survived": 0, "win_survived": 0}}
+            mfe_list = []  # max favorable excursion per trade (in ATR multiples)
+            mae_list = []  # max adverse excursion per trade (in ATR multiples)
+
             for i in range(1, n):
                 if signals[i] != 0 and pos == 0:
                     pos = int(signals[i]); entry_px = closes[i]
@@ -2133,11 +2206,59 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                     pnl = (closes[i] / entry_px - 1) * pos
                     trades += 1
                     if pnl > 2 * cost_1x: wins += 1
+
+                    # Compute MAE/MFE for this trade (find entry index)
+                    entry_idx = i - 1
+                    while entry_idx > 0 and signals[entry_idx] == pos:
+                        entry_idx -= 1
+                    entry_idx += 1
+                    entry_atr = float(atr_arr[entry_idx]) if not np.isnan(atr_arr[entry_idx]) else 0
+                    if entry_atr > 0:
+                        trade_highs = highs[entry_idx:i+1]
+                        trade_lows = lows[entry_idx:i+1]
+                        if pos == 1:  # long
+                            mfe = float(np.max(trade_highs) - entry_px) / entry_atr
+                            mae = float(entry_px - np.min(trade_lows)) / entry_atr
+                        else:  # short
+                            mfe = float(entry_px - np.min(trade_lows)) / entry_atr
+                            mae = float(np.max(trade_highs) - entry_px) / entry_atr
+                        mfe_list.append(round(mfe, 2))
+                        mae_list.append(round(mae, 2))
+
+                        # Test each stop level
+                        for mult, sr in stop_results.items():
+                            if mae >= mult:
+                                sr["stopped"] += 1
+                            else:
+                                sr["survived"] += 1
+                                if pnl > 2 * cost_1x:
+                                    sr["win_survived"] += 1
+
                     if signals[i] != 0:
                         pos = int(signals[i]); entry_px = closes[i]
                     else:
                         pos = 0
             win_rate = round(wins / max(trades, 1) * 100, 1)
+
+            # Compute optimal stop from data
+            best_stop_mult = 2.0
+            best_stop_ev = -999
+            for mult, sr in stop_results.items():
+                total = sr["stopped"] + sr["survived"]
+                if total < 5:
+                    continue
+                survival_rate = sr["survived"] / total
+                win_rate_stopped = sr["win_survived"] / max(sr["survived"], 1)
+                # EV with this stop: wins × avg_target - losses × stop_level
+                # Use 1.5× stop as target proxy (gives 1.5:1 R:R at mult stop)
+                ev = win_rate_stopped * 1.5 * mult - (1 - win_rate_stopped) * mult
+                if ev > best_stop_ev:
+                    best_stop_ev = ev
+                    best_stop_mult = mult
+
+            avg_mae = round(float(np.mean(mae_list)), 2) if mae_list else 0
+            avg_mfe = round(float(np.mean(mfe_list)), 2) if mfe_list else 0
+            stop_2x_survival = round(stop_results[2.0]["survived"] / max(stop_results[2.0]["survived"] + stop_results[2.0]["stopped"], 1) * 100, 0)
 
             # ── DSR (on active returns — no sparse inflation) ──
             n_obs = len(active_rets)
@@ -2181,27 +2302,61 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
             # Long-only flag
             is_long_only = strategy == "atr_trail"
 
+            # Price levels for trade ideas
+            atr_arr = talib.ATR(highs, lows, closes, timeperiod=14)
+            atr_14 = round(float(atr_arr[-1]), 2) if not np.isnan(atr_arr[-1]) else 0
+            current_price = round(float(closes[-1]), 2)
+            high_20d = round(float(np.max(highs[-20:])), 2) if n >= 20 else current_price
+            low_20d = round(float(np.min(lows[-20:])), 2) if n >= 20 else current_price
+            # RSI for context
+            rsi_arr = talib.RSI(closes, timeperiod=14)
+            current_rsi = round(float(rsi_arr[-1]), 1) if not np.isnan(rsi_arr[-1]) else 50
+
             return {
                 "ticker": tk, "strategy": strategy,
                 "sharpe": round(sharpe, 3), "dsr": round(dsr, 4), "dsr_pct": round(dsr * 100, 1),
                 "cagr": round(cagr, 1), "max_dd": round(max_dd, 1), "total_ret": round(total_ret, 1),
                 "win_rate": win_rate, "trades": trades,
-                # Buy-and-hold benchmark
                 "bh_sharpe": round(bh_sharpe, 3), "bh_cagr": round(bh_cagr, 1), "bh_total_ret": round(bh_total_ret, 1),
-                # Excess over benchmark
                 "excess_sharpe": excess_sharpe, "excess_cagr": excess_cagr, "excess_ret": excess_ret,
                 "pct_active": pct_active,
-                # Walk-forward
                 "avg_wf_sharpe": avg_wf, "pct_wf_positive": pct_wf_pos,
                 "n_wf_folds": len(wf_sharpes),
                 "current_signal": current_signal, "signal_days": signal_days,
                 "long_only": is_long_only, "n_days": n,
                 "skew": round(skew, 2), "kurtosis": round(kurt, 2),
+                # Price levels
+                "current_price": current_price, "atr_14": atr_14,
+                "high_20d": high_20d, "low_20d": low_20d,
+                "rsi": current_rsi,
+                # Validated stop analysis
+                "best_stop_atr": best_stop_mult,
+                "avg_mae_atr": avg_mae,
+                "avg_mfe_atr": avg_mfe,
+                "stop_2x_survival": stop_2x_survival,
             }
         except Exception:
             return None
 
-    # ── Run all combinations in parallel ──
+    # ── Pre-fetch all ticker data SEQUENTIALLY to avoid yfinance race conditions ──
+    import logging as _scan_log
+    _scan_log.getLogger(__name__).info(f"Pre-fetching OHLCV for {len(tickers)} tickers...")
+    _ohlcv_cache: dict = {}
+    if is_intraday:
+        # Intraday: fetch from Polygon (already per-ticker, no race condition)
+        for tk in tickers:
+            _ohlcv_cache[tk] = _fetch_intraday_polygon(tk, req.timeframe, req.lookback_days)
+    else:
+        period_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y", 2520: "10y"}
+        period = period_map.get(req.lookback_days, f"{req.lookback_days}d")
+        for tk in tickers:
+            try:
+                _ohlcv_cache[tk] = yf.Ticker(tk).history(period=period, auto_adjust=True)
+            except Exception:
+                _ohlcv_cache[tk] = None
+    _scan_log.getLogger(__name__).info(f"Pre-fetch complete. {sum(1 for v in _ohlcv_cache.values() if v is not None and len(v) > 0)}/{len(tickers)} tickers loaded.")
+
+    # ── Run all combinations in parallel (no yfinance calls inside threads) ──
     results = []
     with ThreadPoolExecutor(max_workers=6) as pool:
         futs = {pool.submit(_backtest_combo, tk, strat): (tk, strat) for tk in tickers for strat in strategies}
@@ -2224,6 +2379,274 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
         "n_significant": len(significant),
         "n_active_signals": len(active_signals),
         "active_signals": [r for r in results[:50] if r["current_signal"] != "Flat"],
+    }
+
+
+class ConfluenceValidationRequest(BaseModel):
+    tickers: list[str] = ["SPY", "QQQ", "AAPL", "NVDA", "TSLA", "GLD"]
+    lookback_days: int = 1260
+
+
+@router.post("/confluence-validation")
+async def confluence_validation(req: ConfluenceValidationRequest, user: str = Depends(get_current_user)):
+    """Backtest the multi-family confluence signal to validate it improves over individual strategies."""
+    import numpy as np, yfinance as yf, talib, logging
+    from scipy import stats as sp_stats
+
+    _log = logging.getLogger(__name__)
+    tickers = [t.strip().upper() for t in req.tickers[:10] if t.strip()]
+
+    FAMILIES = {
+        "trend": ["sma_cross", "ema_cross", "golden_cross", "macd", "donchian", "atr_trail", "momentum", "adx_di", "parabolic_sar", "ichimoku", "tema_cross"],
+        "mean_rev": ["rsi_ob_os", "mean_rev", "bb_breakout", "zscore_mr", "stochastic", "cci", "williams_r"],
+        "volume": ["obv_divergence"],
+        "composite": ["trend_mr_composite", "trend_bb_composite"],
+    }
+    ALL_STRATS = [s for fam in FAMILIES.values() for s in fam]
+
+    def _sma(c, p): return talib.SMA(c, timeperiod=p)
+    def _ema(c, p): return talib.EMA(c, timeperiod=p)
+    def _rsi(c, p=14): return talib.RSI(c, timeperiod=p)
+
+    # Import signal generator from scan (reuse existing code)
+    # We need access to _generate_signals — it's defined inside strategy_scan
+    # Simplest: inline a lightweight version for the strategies we need
+    from api.routes.market import router  # self-reference won't work, inline it
+
+    period_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y", 2520: "10y"}
+    period = period_map.get(req.lookback_days, "5y")
+    ann = np.sqrt(252)
+
+    results_per_ticker = []
+
+    for tk in tickers:
+        try:
+            df = yf.Ticker(tk).history(period=period, auto_adjust=True)
+            if df is None or len(df) < 252:
+                continue
+
+            closes = df["Close"].values.astype(float).ravel()
+            highs = df["High"].values.astype(float).ravel()
+            lows = df["Low"].values.astype(float).ravel()
+            volumes = df["Volume"].values.astype(float).ravel() if "Volume" in df.columns else None
+            n = len(closes)
+            highs = np.maximum(highs, closes)
+            lows = np.minimum(lows, closes)
+
+            # Generate signals for ALL strategies
+            strategy_signals = {}
+            for strat in ALL_STRATS:
+                try:
+                    sig = np.zeros(n)
+                    if strat == "sma_cross":
+                        f, s = _sma(closes, 50), _sma(closes, 200)
+                        for i in range(200, n):
+                            if not np.isnan(f[i]) and not np.isnan(s[i]):
+                                sig[i] = 1 if f[i] > s[i] else -1
+                    elif strat == "ema_cross":
+                        f, s = _ema(closes, 12), _ema(closes, 26)
+                        for i in range(26, n):
+                            if not np.isnan(f[i]) and not np.isnan(s[i]):
+                                sig[i] = 1 if f[i] > s[i] else -1
+                    elif strat == "macd":
+                        m, ms, _ = talib.MACD(closes)
+                        for i in range(35, n):
+                            if not np.isnan(m[i]) and not np.isnan(ms[i]):
+                                sig[i] = 1 if m[i] > ms[i] else -1
+                    elif strat == "rsi_ob_os":
+                        r = _rsi(closes)
+                        pos = 0
+                        for i in range(15, n):
+                            if not np.isnan(r[i]):
+                                if r[i] < 30: pos = 1
+                                elif r[i] > 70: pos = -1
+                                sig[i] = pos
+                    elif strat == "momentum":
+                        for i in range(126, n):
+                            sig[i] = 1 if closes[i] > closes[i-126] else -1
+                    elif strat == "adx_di":
+                        adx = talib.ADX(highs, lows, closes)
+                        pdi = talib.PLUS_DI(highs, lows, closes)
+                        mdi = talib.MINUS_DI(highs, lows, closes)
+                        for i in range(30, n):
+                            if not np.isnan(adx[i]) and adx[i] > 20:
+                                sig[i] = 1 if pdi[i] > mdi[i] else -1
+                    elif strat == "stochastic":
+                        k, d = talib.STOCH(highs, lows, closes)
+                        pos = 0
+                        for i in range(20, n):
+                            if not np.isnan(k[i]):
+                                if k[i] < 20: pos = 1
+                                elif k[i] > 80: pos = -1
+                                sig[i] = pos
+                    elif strat == "parabolic_sar":
+                        sar = talib.SAR(highs, lows)
+                        for i in range(5, n):
+                            if not np.isnan(sar[i]):
+                                sig[i] = 1 if closes[i] > sar[i] else -1
+                    elif strat == "ichimoku":
+                        th = talib.MAX(highs, 9)
+                        tl = talib.MIN(lows, 9)
+                        kh = talib.MAX(highs, 26)
+                        kl = talib.MIN(lows, 26)
+                        for i in range(52, n):
+                            tenkan = (th[i] + tl[i]) / 2
+                            kijun = (kh[i] + kl[i]) / 2
+                            sig[i] = 1 if closes[i] > kijun and tenkan > kijun else (-1 if closes[i] < kijun and tenkan < kijun else 0)
+                    elif strat == "obv_divergence":
+                        if volumes is not None:
+                            obv = np.zeros(n)
+                            for i in range(1, n):
+                                obv[i] = obv[i-1] + (volumes[i] if closes[i] > closes[i-1] else (-volumes[i] if closes[i] < closes[i-1] else 0))
+                            obv_sma = _sma(obv, 20)
+                            for i in range(50, n):
+                                if not np.isnan(obv_sma[i]):
+                                    sig[i] = 1 if obv[i] > obv_sma[i] else -1
+                    elif strat == "trend_mr_composite":
+                        sma200 = _sma(closes, 200)
+                        r = _rsi(closes)
+                        for i in range(200, n):
+                            if not np.isnan(sma200[i]) and not np.isnan(r[i]):
+                                if closes[i] > sma200[i] and r[i] < 40: sig[i] = 1
+                                elif closes[i] < sma200[i] and r[i] > 60: sig[i] = -1
+                    elif strat == "trend_bb_composite":
+                        sma200 = _sma(closes, 200)
+                        upper, _, lower = talib.BBANDS(closes, timeperiod=20)
+                        for i in range(200, n):
+                            if not np.isnan(sma200[i]) and not np.isnan(lower[i]):
+                                if closes[i] > sma200[i] and closes[i] < lower[i]: sig[i] = 1
+                                elif closes[i] < sma200[i] and closes[i] > upper[i]: sig[i] = -1
+                    else:
+                        continue  # skip strategies not implemented here
+                    strategy_signals[strat] = sig
+                except Exception:
+                    continue
+
+            if len(strategy_signals) < 5:
+                continue
+
+            # Compute family-level daily signals
+            warmup = 252
+            daily_rets = np.diff(closes) / closes[:-1]
+            daily_rets = np.insert(daily_rets, 0, 0)
+
+            # For each day, determine family direction
+            family_bull = np.zeros((n, len(FAMILIES)))
+            family_bear = np.zeros((n, len(FAMILIES)))
+            for fi, (fam_name, strats) in enumerate(FAMILIES.items()):
+                for strat in strats:
+                    if strat not in strategy_signals:
+                        continue
+                    sig = strategy_signals[strat]
+                    family_bull[:, fi] += (sig == 1).astype(float)
+                    family_bear[:, fi] += (sig == -1).astype(float)
+
+            # Family direction: bullish if more bull than bear
+            fam_dir = np.zeros((n, len(FAMILIES)))
+            for fi in range(len(FAMILIES)):
+                fam_dir[:, fi] = np.where(family_bull[:, fi] > family_bear[:, fi], 1,
+                                 np.where(family_bear[:, fi] > family_bull[:, fi], -1, 0))
+
+            # Confluence: count how many families agree
+            bull_fams = (fam_dir == 1).sum(axis=1)
+            bear_fams = (fam_dir == -1).sum(axis=1)
+
+            # Test different confluence levels
+            confluence_results = {}
+            for min_fam in [1, 2, 3, 4]:
+                # Signal: long when bull_fams >= min_fam, short when bear_fams >= min_fam
+                conf_sig = np.zeros(n)
+                for i in range(warmup, n):
+                    if bull_fams[i] >= min_fam:
+                        conf_sig[i] = 1
+                    elif bear_fams[i] >= min_fam:
+                        conf_sig[i] = -1
+
+                # Returns when signal is active
+                conf_rets = conf_sig[warmup:] * daily_rets[warmup:]
+                active = conf_sig[warmup:] != 0
+
+                if np.sum(active) < 20:
+                    confluence_results[min_fam] = None
+                    continue
+
+                active_rets = conf_rets[active]
+                mean_r = float(np.mean(active_rets))
+                std_r = float(np.std(active_rets, ddof=1))
+                sharpe = mean_r / std_r * ann if std_r > 0 else 0
+
+                # Win rate (daily)
+                daily_wins = np.sum(active_rets > 0)
+                daily_total = len(active_rets)
+                daily_wr = daily_wins / daily_total * 100
+
+                # Equity curve for drawdown
+                eq = np.cumprod(1 + conf_rets)
+                peak = np.maximum.accumulate(eq)
+                max_dd = float(np.min((eq / peak - 1) * 100))
+
+                # CAGR
+                years = len(conf_rets) / 252
+                cagr = (float(eq[-1]) ** (1 / max(years, 0.01)) - 1) * 100
+
+                # Time in market
+                pct_active = float(np.sum(active)) / len(active) * 100
+
+                confluence_results[min_fam] = {
+                    "sharpe": round(sharpe, 3),
+                    "cagr": round(cagr, 1),
+                    "max_dd": round(max_dd, 1),
+                    "win_rate_daily": round(daily_wr, 1),
+                    "pct_active": round(pct_active, 0),
+                    "n_days_active": int(np.sum(active)),
+                }
+
+            # Buy and hold benchmark
+            bh_rets = daily_rets[warmup:]
+            bh_mean = float(np.mean(bh_rets))
+            bh_std = float(np.std(bh_rets, ddof=1))
+            bh_sharpe = bh_mean / bh_std * ann if bh_std > 0 else 0
+            bh_eq = np.cumprod(1 + bh_rets)
+            bh_cagr = (float(bh_eq[-1]) ** (1 / max(len(bh_rets) / 252, 0.01)) - 1) * 100
+
+            results_per_ticker.append({
+                "ticker": tk,
+                "n_strategies": len(strategy_signals),
+                "n_days": n,
+                "buy_hold": {"sharpe": round(bh_sharpe, 3), "cagr": round(bh_cagr, 1)},
+                "confluence": {str(k): v for k, v in confluence_results.items()},
+            })
+
+        except Exception as e:
+            _log.warning(f"Confluence validation failed for {tk}: {e}")
+            continue
+
+    # Aggregate across all tickers
+    agg = {}
+    for min_fam in [1, 2, 3, 4]:
+        sharpes = [r["confluence"][str(min_fam)]["sharpe"] for r in results_per_ticker
+                   if r["confluence"].get(str(min_fam))]
+        cagrs = [r["confluence"][str(min_fam)]["cagr"] for r in results_per_ticker
+                 if r["confluence"].get(str(min_fam))]
+        wrs = [r["confluence"][str(min_fam)]["win_rate_daily"] for r in results_per_ticker
+               if r["confluence"].get(str(min_fam))]
+        if sharpes:
+            agg[str(min_fam)] = {
+                "avg_sharpe": round(float(np.mean(sharpes)), 3),
+                "avg_cagr": round(float(np.mean(cagrs)), 1),
+                "avg_win_rate": round(float(np.mean(wrs)), 1),
+                "n_tickers": len(sharpes),
+            }
+
+    bh_sharpes = [r["buy_hold"]["sharpe"] for r in results_per_ticker]
+    bh_avg = round(float(np.mean(bh_sharpes)), 3) if bh_sharpes else 0
+
+    return {
+        "success": True,
+        "tickers": results_per_ticker,
+        "aggregate": agg,
+        "buy_hold_avg_sharpe": bh_avg,
+        "n_tickers": len(results_per_ticker),
     }
 
 
@@ -2281,7 +2704,7 @@ async def optimize_strategy(req: OptimizeRequest, user: str = Depends(get_curren
     else:
         period_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y", 2520: "10y"}
         period = period_map.get(req.lookback_days, "5y")
-        df = yf.download(tk, period=period, progress=False, auto_adjust=True)
+        df = yf.Ticker(tk).history(period=period, auto_adjust=True)
         if df is None or len(df) < 200:
             return {"error": f"Not enough data for {tk}", "success": False}
 
@@ -2623,7 +3046,7 @@ async def strategy_scan_stream(
             if tk not in data_cache:
                 try:
                     period_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y"}
-                    df = yf.download(tk, period=period_map.get(1260, "5y"), progress=False, auto_adjust=True)
+                    df = yf.Ticker(tk).history(period=period_map.get(1260, "5y"), auto_adjust=True)
                     if df is None or len(df) < 200:
                         data_cache[tk] = None
                     else:
@@ -2815,7 +3238,7 @@ async def combo_scan(req: ComboScanRequest, user: str = Depends(get_current_user
     else:
         period_map = {252: "1y", 504: "2y", 756: "3y", 1260: "5y", 2520: "10y"}
         period = period_map.get(req.lookback_days, "5y")
-        df = yf.download(tk, period=period, progress=False, auto_adjust=True)
+        df = yf.Ticker(tk).history(period=period, auto_adjust=True)
         if df is None or len(df) < 200: return {"error": "Not enough data", "success": False}
 
     closes = df["Close"].values.astype(float).ravel()
@@ -3379,6 +3802,382 @@ async def fred_batch(
             result[sid] = data
 
     return result
+
+
+class TradeIdeaAnalysisRequest(BaseModel):
+    ideas: list[dict] = []
+    book_summary: str = ""
+    news_summary: str = ""
+
+
+@router.post("/trade-idea-analysis")
+async def trade_idea_analysis(req: TradeIdeaAnalysisRequest, user: str = Depends(get_current_user)):
+    """Generate AI analysis for trade ideas using Gemini."""
+    from src.api_keys import get_secret
+
+    if not req.ideas:
+        return {"success": False, "error": "No ideas to analyze"}
+
+    # Build context
+    ctx = "TRADE IDEAS TO ANALYZE:\n\n"
+    for i, idea in enumerate(req.ideas):
+        ctx += f"#{i+1} {idea.get('ticker','?')} {idea.get('direction','?').upper()}\n"
+        t = idea.get("trigger", {})
+        ctx += f"  Trigger: {t.get('strategy','')} flipped {t.get('signalDays','')}d ago (DSR {t.get('dsr',0)*100:.0f}%, win {t.get('winRate',0)}%)\n"
+        ctx += f"  Confluence: {idea.get('confluenceScore',0)}/{idea.get('totalFamilies',4)} scoring families confirm\n"
+        fams = idea.get("familyConfirmations", [])
+        ctx += f"  Families: {', '.join(f['label'] + ' ' + str(f['count']) + '/' + str(f['total']) for f in fams)}\n"
+        ctx += f"  Price: ${idea.get('price',0):.2f} | Stop: ${idea.get('stop',0):.2f} (-{idea.get('riskPct',0)}%) | Target: ${idea.get('target',0):.2f} (+{idea.get('targetPct',0)}%)\n"
+        ctx += f"  R:R: {idea.get('riskReward',0)}:1 | EV: ${idea.get('expectedValue',0):.2f}/trade\n"
+        ctx += f"  RSI: {idea.get('rsi',50)} | ATR: ${idea.get('atr',0):.2f}\n"
+        vol = idea.get("vol") or {}
+        if vol.get("iv"):
+            ctx += f"  IV: {vol['iv']}% | RV20: {vol.get('rv_20d','')}% | IVR: {vol.get('ivr','?')}\n"
+        if vol.get("avg_earnings_move"):
+            ctx += f"  Avg earnings move: ±{vol['avg_earnings_move']}%\n"
+        if vol.get("next_earnings_days") is not None:
+            ctx += f"  Next earnings: {vol['next_earnings_days']}d\n"
+        if idea.get("optionsSuggestion"):
+            ctx += f"  Options: {idea['optionsSuggestion']}\n"
+        warns = idea.get("warnings", [])
+        if warns:
+            ctx += f"  Warnings: {'; '.join(warns)}\n"
+        ctx += "\n"
+
+    if req.book_summary:
+        ctx += f"YOUR CURRENT POSITIONS:\n{req.book_summary}\n\n"
+
+    if req.news_summary:
+        ctx += f"TODAY'S NEWS (from live Grok search):\n{req.news_summary}\n\n"
+
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%A, %B %d, %Y")
+
+    system = f"""You are a quantitative trading analyst. Today is {today}.
+
+These trade ideas have ALREADY been filtered for positive expected value, 2+ family confirmation, and R:R >= 1.0. They passed the filters — your job is to add context, not second-guess the math.
+
+For each trade idea, write a 2-3 sentence analysis:
+1. WHY: Connect the technical signal to today's news. Does the news support or contradict the direction? (e.g., "GLD long aligns with Iran escalation driving gold demand")
+2. RISK: What specific event or condition could invalidate this trade? Reference earnings dates, news, or portfolio overlap.
+3. ACTION: Which options structure to use, citing the IV vs RV relationship. If IV > RV, sell premium. If IV < RV, buy options. Be specific with the structure.
+
+RULES:
+- Do NOT invent data. Only reference numbers from the data below. If a field is missing, say "not available" — do not guess.
+- Do NOT say "skip" — these ideas passed the quantitative filters. Your job is to provide context, not veto.
+- Connect each idea to a specific news headline if relevant.
+- If the trader holds an existing position in this ticker, note the overlap.
+- One section per idea. Use the ticker as a header (## TICKER)."""
+
+    try:
+        api_key = get_secret("GEMINI_API_KEY")
+        if not api_key:
+            return {"success": False, "error": "Gemini API key not configured"}
+
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-3.1-pro-preview",
+            contents=f"{system}\n\n{ctx}",
+            config=types.GenerateContentConfig(max_output_tokens=3000, temperature=0.2),
+        )
+        text = response.text or ""
+        # Strip preamble
+        import re as _re
+        text = _re.sub(r"^\s*(?:Okay|Here|Sure|Let me)[^\n]*\n", "", text.strip())
+        return {"success": True, "analysis": text.strip()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+class VolAnalysisRequest(BaseModel):
+    tickers: list[str] = []
+
+
+@router.post("/vol-analysis")
+async def vol_analysis(req: VolAnalysisRequest, user: str = Depends(get_current_user)):
+    """Volatility cone, IVR, and historical earnings moves per ticker."""
+    import numpy as np, yfinance as yf, logging
+    from concurrent.futures import ThreadPoolExecutor
+    _log = logging.getLogger(__name__)
+
+    tickers = [t.strip().upper() for t in req.tickers[:20] if t.strip()]
+
+    # Pre-fetch OHLCV sequentially to avoid yfinance race conditions
+    _vol_cache: dict = {}
+    for tk in tickers:
+        try:
+            _vol_cache[tk] = yf.Ticker(tk).history(period="2y", auto_adjust=True)
+        except Exception:
+            _vol_cache[tk] = None
+
+    def _analyze(ticker: str) -> dict:
+        try:
+            ytk = yf.Ticker(ticker)
+            df = _vol_cache.get(ticker)
+            if df is None or len(df) < 60:
+                return {"ticker": ticker}
+
+            closes = df["Close"].values.astype(float).ravel()
+            log_rets = np.diff(np.log(closes))
+
+            # Vol cone: realized vol at different lookbacks
+            vol_cone = {}
+            for window in [10, 20, 30, 60, 90, 180, 252]:
+                if len(log_rets) >= window:
+                    rv = float(np.std(log_rets[-window:]) * np.sqrt(252) * 100)
+                    vol_cone[f"rv_{window}d"] = round(rv, 1)
+
+            # Current 20d realized vol
+            rv_20 = float(np.std(log_rets[-20:]) * np.sqrt(252) * 100) if len(log_rets) >= 20 else 0
+
+            # IV from options chain (ATM, nearest expiry)
+            iv = None
+            ivr = None
+            try:
+                exps = ytk.options
+                if exps:
+                    chain = ytk.option_chain(exps[0])
+                    info = ytk.info or {}
+                    price = float(info.get("regularMarketPrice") or info.get("currentPrice") or closes[-1])
+                    # Find ATM call
+                    calls = chain.calls
+                    if len(calls) > 0:
+                        calls_sorted = calls.iloc[(calls["strike"] - price).abs().argsort()[:2]]
+                        iv_vals = calls_sorted["impliedVolatility"].dropna().values
+                        if len(iv_vals) > 0:
+                            iv = round(float(np.mean(iv_vals)) * 100, 1)
+
+                    # IVR: where current IV sits in 1-year range of 20d realized vol
+                    if iv and len(log_rets) >= 252:
+                        rv_series = []
+                        for i in range(20, min(len(log_rets), 252)):
+                            rv_series.append(float(np.std(log_rets[i-20:i]) * np.sqrt(252) * 100))
+                        if rv_series:
+                            rv_min = min(rv_series)
+                            rv_max = max(rv_series)
+                            rv_range = rv_max - rv_min
+                            if rv_range > 0:
+                                ivr = round((iv - rv_min) / rv_range * 100, 0)
+                                ivr = max(0, min(100, ivr))
+            except Exception:
+                pass
+
+            # Historical earnings moves + next earnings date
+            earnings_moves = []
+            next_earnings = None
+            next_earnings_days = None
+            try:
+                edates = ytk.earnings_dates
+                if edates is not None and len(edates) > 0:
+                    from datetime import datetime as _dt
+                    now = _dt.now()
+                    for d in edates.index:
+                        try:
+                            dt = d.tz_localize(None) if d.tzinfo else d
+                        except Exception:
+                            dt = d.replace(tzinfo=None) if hasattr(d, "replace") else d
+                        if dt < now:
+                            # Past earnings — compute move
+                            try:
+                                idx = df.index.get_indexer([dt], method="pad")[0]
+                                if 0 < idx < len(closes) - 1:
+                                    move_pct = abs(closes[idx + 1] - closes[idx]) / closes[idx] * 100
+                                    earnings_moves.append(round(float(move_pct), 1))
+                            except Exception:
+                                pass
+                        else:
+                            # Future earnings
+                            days = (dt - now).days
+                            if next_earnings is None or days < next_earnings_days:
+                                next_earnings = dt.strftime("%Y-%m-%d")
+                                next_earnings_days = days
+            except Exception:
+                pass
+
+            # Keep last 8 earnings moves
+            earnings_moves = earnings_moves[-8:]
+            avg_earnings_move = round(float(np.mean(earnings_moves)), 1) if earnings_moves else None
+            max_earnings_move = round(float(np.max(earnings_moves)), 1) if earnings_moves else None
+
+            # Options structure suggestion
+            suggestion = None
+            if iv is not None and ivr is not None:
+                if ivr >= 50:
+                    suggestion = "high_iv"
+                elif ivr <= 25:
+                    suggestion = "low_iv"
+                else:
+                    suggestion = "neutral_iv"
+
+            # Short interest
+            short_pct = None
+            short_ratio = None
+            try:
+                info = ytk.info or {}
+                sf = info.get("shortPercentOfFloat")
+                if sf is not None:
+                    short_pct = round(float(sf) * 100, 1)
+                sr = info.get("shortRatio")
+                if sr is not None:
+                    short_ratio = round(float(sr), 1)
+            except Exception:
+                pass
+
+            return {
+                "ticker": ticker,
+                "current_price": round(float(closes[-1]), 2),
+                "rv_20d": round(rv_20, 1),
+                "iv": iv,
+                "iv_percentile": ivr,
+                "ivr": ivr,
+                "vol_cone": vol_cone,
+                "avg_earnings_move": avg_earnings_move,
+                "max_earnings_move": max_earnings_move,
+                "n_earnings": len(earnings_moves),
+                "next_earnings": next_earnings,
+                "next_earnings_days": next_earnings_days,
+                "suggestion": suggestion,
+                "short_pct": short_pct,
+                "short_ratio": short_ratio,
+            }
+        except Exception as e:
+            _log.warning(f"Vol analysis failed for {ticker}: {e}")
+            return {"ticker": ticker}
+
+    results = []
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as pool:
+        results = list(pool.map(_analyze, tickers))
+
+    return {"success": True, "results": {r["ticker"]: r for r in results if r.get("ticker")}}
+
+
+@router.get("/polymarket")
+async def polymarket_odds(user: str = Depends(get_current_user)):
+    """Fetch market-relevant prediction odds from Polymarket. No auth required."""
+    import httpx, json, logging
+    _log = logging.getLogger(__name__)
+
+    # Curated slugs for trading-relevant events
+    CURATED_SLUGS = [
+        "fed-decision-in-april",
+        "fed-decision-in-may",
+        "fed-decision-in-june",
+        "who-will-be-confirmed-as-fed-chair",
+        "us-forces-enter-iran-by",
+        "us-x-iran-ceasefire-by",
+        "will-the-iranian-regime-fall-by-june-30",
+        "us-recession-in-2026",
+        "us-recession-in-2025",
+    ]
+
+    # Also search top active events for finance keywords
+    KEYWORDS = ["fed", "recession", "tariff", "rate cut", "inflation", "gdp",
+                "s&p", "trump", "iran", "oil", "economy", "trade war", "china",
+                "bitcoin", "treasury", "debt ceiling", "ceasefire", "sanctions"]
+
+    results = []
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Fetch top 100 events by liquidity
+            resp = await client.get(
+                "https://gamma-api.polymarket.com/events",
+                params={"active": "true", "closed": "false", "limit": 100,
+                        "order": "liquidity", "ascending": "false"},
+            )
+            resp.raise_for_status()
+            events = resp.json()
+
+            for ev in events:
+                title = ev.get("title", "")
+                title_lower = title.lower()
+                slug = ev.get("slug", "")
+
+                # Include if curated slug or keyword match
+                is_relevant = slug in CURATED_SLUGS or any(k in title_lower for k in KEYWORDS)
+                if not is_relevant:
+                    continue
+
+                markets = ev.get("markets", [])
+                outcomes = []
+                from datetime import datetime as _dt_pm, timedelta as _td_pm
+                now_pm = _dt_pm.utcnow()
+
+                for m in markets[:12]:
+                    try:
+                        prices = json.loads(m.get("outcomePrices", "[]"))
+                        label = m.get("groupItemTitle") or m.get("question", "")[:50]
+                        token_ids = json.loads(m.get("clobTokenIds", "[]"))
+                        pct = float(prices[0]) * 100 if prices else 0
+                        if pct < 2:
+                            continue
+
+                        # Parse end date to compute days until resolution
+                        end_str = m.get("endDate") or m.get("endDateIso") or ""
+                        days_out = 999
+                        try:
+                            if end_str:
+                                end_dt = _dt_pm.fromisoformat(end_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                                days_out = max(0, (end_dt - now_pm).days)
+                        except Exception:
+                            pass
+
+                        # Score: near-term + uncertain (20-80%) is most actionable
+                        # Far-out or already >90% / <10% is priced in
+                        uncertainty = 50 - abs(pct - 50)  # peaks at 50%, zero at 0/100
+                        recency = max(0, 180 - days_out) / 180  # 1.0 = today, 0.0 = 6mo+
+                        actionability = uncertainty * recency  # high = near-term + uncertain
+
+                        outcomes.append({
+                            "label": label[:40],
+                            "yes_pct": round(pct, 1),
+                            "token_id": token_ids[0] if token_ids else "",
+                            "days_out": days_out,
+                            "actionability": round(actionability, 1),
+                        })
+                    except Exception:
+                        continue
+
+                if outcomes:
+                    # Sort by actionability (near-term + uncertain first), then by pct
+                    outcomes.sort(key=lambda x: (-x["actionability"], -x["yes_pct"]))
+                    results.append({
+                        "title": title[:60],
+                        "slug": slug,
+                        "volume_24h": round(ev.get("volume24hr", 0)),
+                        "liquidity": round(ev.get("liquidity", 0)),
+                        "outcomes": outcomes[:4],
+                        "url": f"https://polymarket.com/event/{slug}",
+                    })
+
+        # Sort by 24h volume
+        results.sort(key=lambda x: -x["volume_24h"])
+
+    except Exception as e:
+        _log.warning(f"Polymarket fetch failed: {e}")
+
+    return {"success": True, "markets": results[:12]}
+
+
+@router.get("/polymarket-history")
+async def polymarket_history(token_id: str = Query(...), interval: str = Query("1m"), user: str = Depends(get_current_user)):
+    """Fetch price history for a Polymarket token. Returns [{t, p}] for sparklines."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://clob.polymarket.com/prices-history",
+                params={"market": token_id, "interval": interval, "fidelity": 360},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            history = data.get("history", [])
+            # Convert to percentage for frontend
+            points = [{"t": pt["t"], "p": round(float(pt["p"]) * 100, 1)} for pt in history]
+            return {"success": True, "points": points}
+    except Exception as e:
+        return {"success": False, "points": [], "error": str(e)}
 
 
 @router.get("/risk")

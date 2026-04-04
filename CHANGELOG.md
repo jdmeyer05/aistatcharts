@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-04-03 — Market Scan Overhaul, Position Monitor, Trade Ideas, Robinhood Integration
+
+### New Pages
+- **Position Monitor** (`/position-monitor`) — Live Robinhood positions via robin_stocks. Portfolio Greeks (Δ Γ Θ ν), scenario analysis table (P&L at ±1/3/5%), concentration risk, spread management signals (MANAGE/HOLD/CLOSE/EXPIRING), visual strike bars, profit capture bars, Monte Carlo simulation (10K paths GBM), trade outlook (theta vs delta race, recovery days, per-leg ITM probability), holdings research (Grok + yfinance fundamentals), covered call detection.
+- **Trade Ideas** (`/trade-ideas`) — 24 strategies grouped into 4 scoring families (Trend, Mean Rev, Volume, Composite). Fresh signal flips (≤10d) with family-weighted confluence. Backtest-validated ATR stops (MAE/MFE tracking, optimal stop multiplier, survival rates). Vol analysis (IV vs RV → options structure), short interest, expected value filter. Preset ticker groups (Blue Chips, Sector Rotation, High Volatility). AI trade analysis via Gemini with news + positions context.
+
+### Market Scan Overhaul
+- Grok upgraded from grok-3 (chat completions, no search) to grok-4.20-reasoning (Responses API with web_search + x_search)
+- Two-pass pipeline: grok-4-1-fast-reasoning for search → grok-4.20-reasoning for fact-checking
+- Story-level dedup: keyword clustering eliminates duplicate coverage
+- News categories: trump, iran_oil, macro, earnings, news with color-coded filter tabs
+- Polymarket integration: actionability scoring (near-term uncertain > far-out priced-in), hover sparklines via CLOB API
+- Trading Thesis: 4-section PM-style note (STANCE → TOP TRADE → RISKS → SIZING) receiving news + positions + strategy signals + Polymarket odds
+- Computed 5-Day Outlook: VIX implied range, position risk table with directional strike checking
+- Your Book strip with live RH positions + Greeks feeding into AI prompt
+- Market hours detection: weekends + NYSE holidays
+- Layout: Priority Flow (news first, thesis second, opportunities below)
+
+### Robinhood Integration
+- Login via app approval (no TOTP), session cached via robin_stocks
+- Live positions: stocks + options with P&L, Greeks per leg
+- Portfolio-level Greeks aggregated across all option legs + stock delta
+- Covered call detection: cross-references stock holdings vs short calls
+- Position data feeds into Market Scan AI thesis + Trade Ideas portfolio awareness
+
+### Confluence Validation
+- Backtested multi-family consensus signal across 8 tickers, 5 years
+- Results: 1+ family = 1.52 Sharpe, 2+ = 3.52, 3+ = 5.69 (vs 0.67 buy-and-hold)
+- Win rate: 55% (1 fam) → 63% (2 fam) → 68% (3 fam)
+- Validates the Trade Ideas page's family-weighted approach
+
+### Critical Bug Fixes
+- yf.download() thread safety: replaced all 5 concurrent yf.download() calls with sequential yf.Ticker(tk).history() pre-fetch + parallel numpy/talib backtests
+- Gamma sign: fixed abs(sign) bug that made all gamma positive (iron condor showed +479 instead of -1)
+- Directional strike checking: short calls breached when stock above, short puts when stock below (was using abs distance)
+- Robinhood P&L: fixed negative average_price handling for credit positions
+- AI note: fixed leaked self-correction text, token truncation, market hours detection
+
+### Dependencies Added
+- robin_stocks (Robinhood API)
+- pyotp (TOTP generation, installed with robin_stocks)
+
+---
+
 ## 2026-04-02/03 — Next.js Platform Overhaul + Strategy Scanner + Market Intelligence
 
 ### New Pages

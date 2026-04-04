@@ -220,25 +220,137 @@ export async function fetchDailyBriefing(watchlist: string[], accountSize = 2500
 export interface NewsItem {
   ticker: string; headline: string; source: string; source_type: string;
   impact: string; confidence: string; time: string; url: string;
-  cross_verified?: boolean; freshness?: string;
+  category?: string; verification_note?: string;
 }
 
 export interface NewsIntelResponse {
   success: boolean; error?: string; items: NewsItem[];
-  sources: { polygon_news: number; earnings: number; sec_filings: number; x_twitter: number };
-  total_raw: number; total_deduped: number;
+  sources: Record<string, number>;
+  total: number;
 }
 
 export async function fetchNewsIntel(watchlist: string[]): Promise<NewsIntelResponse> {
-  return apiFetch("/api/market/news-intel", { method: "POST", body: JSON.stringify({ watchlist }), timeoutMs: 60_000 });
+  return apiFetch("/api/market/news-intel", { method: "POST", body: JSON.stringify({ watchlist }), timeoutMs: 5 * 60_000 });
 }
 
-export async function fetchMorningNote(briefingData: DailyBriefingResult, newsItems: NewsItem[] = []): Promise<{ content: string; success: boolean }> {
+export async function fetchNewsSearch(watchlist: string[]): Promise<NewsIntelResponse> {
+  return apiFetch("/api/market/news-intel-search", { method: "POST", body: JSON.stringify({ watchlist }), timeoutMs: 2 * 60_000 });
+}
+
+export async function fetchNewsVerify(items: NewsItem[]): Promise<NewsIntelResponse> {
+  return apiFetch("/api/market/news-intel-verify", { method: "POST", body: JSON.stringify({ items }), timeoutMs: 3 * 60_000 });
+}
+
+export interface PolymarketOutcome { label: string; yes_pct: number; token_id?: string; days_out?: number; actionability?: number; }
+export interface PolymarketEvent { title: string; slug: string; volume_24h: number; liquidity: number; outcomes: PolymarketOutcome[]; url: string; }
+export interface PolymarketResponse { success: boolean; markets: PolymarketEvent[]; }
+export interface PolymarketHistoryPoint { t: number; p: number; }
+
+export async function fetchPolymarket(): Promise<PolymarketResponse> {
+  return apiFetch("/api/market/polymarket", { timeoutMs: 20_000 });
+}
+
+export async function fetchPolymarketHistory(tokenId: string, interval = "1m"): Promise<{ success: boolean; points: PolymarketHistoryPoint[] }> {
+  return apiFetch(`/api/market/polymarket-history?token_id=${encodeURIComponent(tokenId)}&interval=${interval}`, { timeoutMs: 10_000 });
+}
+
+export async function fetchMorningNote(briefingData: DailyBriefingResult, newsItems: NewsItem[] = [], polymarket: PolymarketEvent[] = [], bookSummary = "", signalSummary = ""): Promise<{ content: string; success: boolean }> {
   return apiFetch("/api/market/morning-note", {
     method: "POST",
-    body: JSON.stringify({ briefing_data: briefingData, news_items: newsItems }),
-    timeoutMs: 60_000,
+    body: JSON.stringify({ briefing_data: briefingData, news_items: newsItems, polymarket, book_summary: bookSummary, signal_summary: signalSummary }),
+    timeoutMs: 90_000,
   });
+}
+
+// ── Robinhood Positions ──
+
+export interface RHStock {
+  ticker: string; qty: number; avg_cost: number; current_price: number;
+  market_value: number; cost_basis: number; pl: number; pl_pct: number;
+  entry_date?: string; theme?: string;
+}
+
+export interface RHConcentration {
+  theme: string; value: number; pct: number; tickers: string[]; warning: string;
+}
+
+export interface RHLeg {
+  chain: string; strike: number; exp: string; opt_type: string;
+  direction: string; qty: number; avg_price: number; current_price: number;
+  pl: number; iv: number; delta: number; gamma: number; theta: number; vega: number;
+}
+
+export interface RHGreeks { delta: number; gamma: number; theta: number; vega: number; }
+
+export interface RHSpread {
+  ticker: string; type: string; strikes: string; expiration: string;
+  qty: number; legs: RHLeg[]; net_premium: number; current_value: number;
+  pl: number; stock_price: number; short_strikes: number[]; long_strikes: number[];
+  greeks: RHGreeks;
+}
+
+export interface RHPortfolioGreeks {
+  delta: number; option_delta: number; stock_delta: number;
+  gamma: number; theta: number; vega: number;
+}
+
+export interface RHPortfolio {
+  equity: number; market_value: number; cash: number;
+  stock_pl: number; option_pl: number; total_pl: number;
+}
+
+export interface RHPositionsResponse {
+  success: boolean; error?: string;
+  portfolio: RHPortfolio; stocks: RHStock[]; spreads: RHSpread[];
+  greeks: RHPortfolioGreeks; concentration?: RHConcentration[];
+}
+
+export async function fetchRobinhoodPositions(): Promise<RHPositionsResponse> {
+  return apiFetch("/api/positions/robinhood", { timeoutMs: 30_000 });
+}
+
+export interface HoldingDevelopment { headline: string; date: string; impact: string; detail: string; }
+export interface HoldingResearch {
+  ticker: string; company: string; thesis_status: string;
+  developments: HoldingDevelopment[]; outlook: string; risk: string;
+  // Fundamentals from yfinance
+  market_cap?: string; revenue_ttm?: string; revenue_growth?: string;
+  eps?: string; gross_margin?: string; operating_margin?: string;
+  pe_ratio?: number; ps_ratio?: number;
+  cash?: string; debt?: string; fcf?: string;
+  quarterly_burn?: string; cash_runway?: string;
+  analyst_target?: number; analyst_low?: number; analyst_high?: number;
+  analyst_count?: number; recommendation?: string;
+  next_earnings?: string; next_earnings_days?: number;
+}
+export interface HoldingsResearchResponse { success: boolean; error?: string; research: HoldingResearch[]; }
+
+export async function fetchHoldingsResearch(tickers: string[]): Promise<HoldingsResearchResponse> {
+  return apiFetch("/api/positions/holdings-research", { method: "POST", body: JSON.stringify({ tickers }), timeoutMs: 2 * 60_000 });
+}
+
+// ── Trade Idea Analysis ──
+
+export async function fetchTradeIdeaAnalysis(ideas: unknown[], bookSummary = "", newsSummary = ""): Promise<{ success: boolean; error?: string; analysis: string }> {
+  return apiFetch("/api/market/trade-idea-analysis", {
+    method: "POST", body: JSON.stringify({ ideas, book_summary: bookSummary, news_summary: newsSummary }), timeoutMs: 60_000,
+  });
+}
+
+// ── Vol Analysis ──
+
+export interface VolAnalysis {
+  ticker: string; current_price?: number; rv_20d?: number;
+  iv?: number; ivr?: number; iv_percentile?: number;
+  vol_cone?: Record<string, number>;
+  avg_earnings_move?: number; max_earnings_move?: number; n_earnings?: number;
+  next_earnings?: string; next_earnings_days?: number;
+  suggestion?: string;
+  short_pct?: number; short_ratio?: number;
+}
+
+export async function fetchVolAnalysis(tickers: string[]): Promise<{ success: boolean; results: Record<string, VolAnalysis> }> {
+  return apiFetch("/api/market/vol-analysis", { method: "POST", body: JSON.stringify({ tickers }), timeoutMs: 60_000 });
 }
 
 // ── Strategy Scanner ──
@@ -254,6 +366,8 @@ export interface StrategyScanResult {
   avg_wf_sharpe: number | null; pct_wf_positive: number | null;
   current_signal: string; signal_days: number;
   n_days: number; skew: number; kurtosis: number;
+  current_price?: number; atr_14?: number; high_20d?: number; low_20d?: number; rsi?: number;
+  best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number;
 }
 
 export interface StrategyScanResponse {

@@ -21,6 +21,8 @@ export const NAV_GROUPS: NavGroup[] = [
     pages: [
       { label: "Dashboard", href: "/", description: "Market pulse, signals, positions, heatmap, risk", status: "live" },
       { label: "Market Scan", href: "/daily-briefing", description: "Market intelligence, opportunities, and fact-checked news", status: "live" },
+      { label: "Position Monitor", href: "/position-monitor", description: "Live Robinhood positions, P&L, strike distance", status: "live" },
+      { label: "Trade Ideas", href: "/trade-ideas", description: "24-strategy consensus scanner — family-weighted conviction ranking", status: "live" },
     ],
   },
   {
