@@ -69,7 +69,7 @@ interface TradeIdea {
   ticker: string;
   direction: "long" | "short";
   // Trigger
-  trigger: { strategy: string; signalDays: number; dsr: number; sharpe: number; excessSharpe: number; winRate: number; trades: number; recentSharpe?: number; best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number; avgHoldDays?: number; medianHoldDays?: number };
+  trigger: { strategy: string; signalDays: number; dsr: number; sharpe: number; excessSharpe: number; winRate: number; trades: number; recentSharpe?: number; best_stop_atr?: number; avg_mae_atr?: number; avg_mfe_atr?: number; stop_2x_survival?: number; avgHoldDays?: number; medianHoldDays?: number; entryUrgency?: string; delaySharpes?: Record<string, number> };
   // Confluence
   familyConfirmations: { family: string; label: string; color: string; count: number; total: number; best: string }[];
   confluenceScore: number;
@@ -114,7 +114,7 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
 
   for (const [ticker, tickerResults] of Object.entries(byTicker)) {
     const freshSignals = tickerResults.filter(r =>
-      r.current_signal !== "Flat" && r.signal_days <= 10 && r.dsr >= dsrThreshold && r.trades >= 5
+      r.current_signal !== "Flat" && r.signal_days <= 10 && r.dsr >= dsrThreshold && r.trades >= 5 && r.sharpe > 0
     ).sort((a, b) => b.dsr - a.dsr);
 
     if (freshSignals.length === 0) continue;
@@ -129,7 +129,8 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
 
     for (const [famKey, fam] of Object.entries(SCORING_FAMILIES)) {
       const famResults = tickerResults.filter(r => fam.strategies.includes(r.strategy));
-      const matching = famResults.filter(r => r.current_signal === matchSignal);
+      // Only count strategies with positive Sharpe as confirmations (negative = proven non-performer)
+      const matching = famResults.filter(r => r.current_signal === matchSignal && r.sharpe > 0);
       const best = matching.sort((a, b) => b.dsr - a.dsr)[0];
       if (matching.length > 0) {
         confirmedScoringFamilies++;
@@ -160,12 +161,13 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
     const oppositeSignal = matchSignal === "Long" ? "Short" : "Long";
     const dissentFamilies = Object.entries(SCORING_FAMILIES).filter(([, fam]) => {
       const famResults = tickerResults.filter(r => fam.strategies.includes(r.strategy));
-      return famResults.some(r => r.current_signal === oppositeSignal);
+      // Only count positive-Sharpe strategies as meaningful dissent
+      return famResults.some(r => r.current_signal === oppositeSignal && r.sharpe > 0);
     }).length;
     if (dissentFamilies >= confirmedScoringFamilies) continue;
 
     const confirming = tickerResults
-      .filter(r => r.current_signal === matchSignal)
+      .filter(r => r.current_signal === matchSignal && r.sharpe > 0)
       .sort((a, b) => b.dsr - a.dsr);
 
     const price = trigger.current_price || 0;
@@ -244,6 +246,7 @@ function computeTradeIdeas(results: StrategyScanResult[]): TradeIdea[] {
         dsr: trigger.dsr,
         excessSharpe: trigger.excess_sharpe, sharpe: trigger.sharpe,
         avgHoldDays: trigger.avg_hold_days, medianHoldDays: trigger.median_hold_days,
+        entryUrgency: trigger.entry_urgency, delaySharpes: trigger.delay_sharpes,
         winRate: trigger.win_rate, trades: trigger.trades, recentSharpe: trigger.recent_sharpe,
         best_stop_atr: trigger.best_stop_atr,
         avg_mae_atr: trigger.avg_mae_atr,
@@ -529,6 +532,17 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
             {" "}<span className={`font-semibold ${idea.expectedValue > 0 ? "text-gain" : "text-loss"}`}>
               EV ${idea.expectedValue > 0 ? "+" : ""}{idea.expectedValue.toFixed(2)}/trade
             </span>
+            {idea.trigger.entryUrgency && idea.trigger.entryUrgency !== "neutral" && (
+              <span className={`ml-1 px-1.5 py-0.5 rounded text-[0.5rem] font-bold border ${
+                idea.trigger.entryUrgency === "urgent" ? "border-loss/40 bg-loss/10 text-loss"
+                : idea.trigger.entryUrgency === "wait" ? "border-gain/40 bg-gain/10 text-gain"
+                : "border-border text-text-muted"  // patient
+              }`}>
+                {idea.trigger.entryUrgency === "urgent" ? `ENTER NOW — edge decays fast`
+                : idea.trigger.entryUrgency === "wait" ? `WAIT — improves with delay`
+                : `PATIENT — edge persists`}
+              </span>
+            )}
           </div>
           {/* Warnings */}
           {idea.warnings.length > 0 && (

@@ -2252,6 +2252,44 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                         pos = 0
             win_rate = round(wins / max(trades, 1) * 100, 1)
 
+            # Delayed entry analysis: how does Sharpe change if you enter 1-5 days late?
+            delay_sharpes = {}
+            for delay in [0, 1, 2, 3, 5]:
+                d_pnls = []
+                # Reconstruct trades from signal flips
+                d_pos = 0
+                d_entry_i = 0
+                for i in range(1, n):
+                    if signals[i] != 0 and d_pos == 0:
+                        d_pos = int(signals[i]); d_entry_i = i
+                    elif d_pos != 0 and signals[i] != d_pos:
+                        delayed_i = d_entry_i + delay
+                        if delayed_i < i:
+                            pnl = (closes[i] / closes[delayed_i] - 1) * d_pos
+                            d_pnls.append(pnl)
+                        if signals[i] != 0:
+                            d_pos = int(signals[i]); d_entry_i = i
+                        else:
+                            d_pos = 0
+                if len(d_pnls) >= 5:
+                    d_arr = np.array(d_pnls)
+                    d_std = float(np.std(d_arr, ddof=1))
+                    d_sharpe = float(np.mean(d_arr)) / d_std * ann if d_std > 0 else 0
+                    delay_sharpes[delay] = round(d_sharpe, 2)
+
+            # Determine entry urgency from delay analysis
+            entry_urgency = "neutral"
+            if len(delay_sharpes) >= 3:
+                s0 = delay_sharpes.get(0, 0)
+                s2 = delay_sharpes.get(2, 0)
+                s5 = delay_sharpes.get(5, 0)
+                if s0 > 0 and s2 < s0 * 0.5:
+                    entry_urgency = "urgent"  # edge halves by day 2
+                elif s2 > s0 * 0.8 and s5 > s0 * 0.5:
+                    entry_urgency = "patient"  # edge persists
+                elif s2 > s0:
+                    entry_urgency = "wait"  # improves with delay
+
             # Compute optimal stop from data
             best_stop_mult = 2.0
             best_stop_ev = -999
@@ -2363,6 +2401,8 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                 "stop_2x_survival": stop_2x_survival,
                 "avg_hold_days": avg_hold,
                 "median_hold_days": median_hold,
+                "entry_urgency": entry_urgency,
+                "delay_sharpes": delay_sharpes,
             }
         except Exception:
             return None
