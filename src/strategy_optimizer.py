@@ -29,6 +29,12 @@ PARAM_SPACES = {
     "obv_divergence": {"sma_period": (10, 40, 5)},
     "trend_mr_composite": {"sma_period": (100, 300, 50), "rsi_period": (7, 21, 1), "rsi_low": (25, 45, 5), "rsi_high": (55, 75, 5)},
     "trend_bb_composite": {"sma_period": (100, 300, 50), "bb_period": (10, 30, 5), "bb_std": (1.5, 3.0, 0.25)},
+    "golden_cross": {"fast": (20, 100, 5), "slow": (100, 300, 10)},
+    "bb_breakout": {"period": (10, 40, 1), "num_std": (1.5, 3.0, 0.25)},
+    "zscore_mr": {"period": (20, 100, 5), "z_entry": (1.0, 3.0, 0.25), "z_exit": (0.0, 1.0, 0.25)},
+    "atr_trail": {"atr_period": (7, 21, 1), "multiplier": (1.5, 4.0, 0.5)},
+    "cci": {"period": (7, 30, 1), "overbought": (80, 150, 10), "oversold": (-150, -80, 10)},
+    "williams_r": {"period": (7, 28, 1), "overbought": (-30, -10, 5), "oversold": (-90, -70, 5)},
 }
 
 # Default parameters (current hardcoded values)
@@ -48,6 +54,12 @@ DEFAULT_PARAMS = {
     "obv_divergence": {"sma_period": 20},
     "trend_mr_composite": {"sma_period": 200, "rsi_period": 14, "rsi_low": 40, "rsi_high": 60},
     "trend_bb_composite": {"sma_period": 200, "bb_period": 20, "bb_std": 2.0},
+    "golden_cross": {"fast": 50, "slow": 200},
+    "bb_breakout": {"period": 20, "num_std": 2.0},
+    "zscore_mr": {"period": 50, "z_entry": 2.0, "z_exit": 0.5},
+    "atr_trail": {"atr_period": 14, "multiplier": 3.0},
+    "cci": {"period": 20, "overbought": 100, "oversold": -100},
+    "williams_r": {"period": 14, "overbought": -20, "oversold": -80},
 }
 
 
@@ -221,6 +233,62 @@ def optimize_strategy(ticker: str, strategy: str, closes, highs, lows, volumes=N
                     if not np.isnan(sma[i]) and not np.isnan(lower[i]):
                         if closes[i] > sma[i] and closes[i] < lower[i]: sig[i] = 1
                         elif closes[i] < sma[i] and closes[i] > upper[i]: sig[i] = -1
+            elif strategy == "golden_cross":
+                f, s = _sma(closes, params["fast"]), _sma(closes, params["slow"])
+                warmup = params["slow"] + 1
+                for i in range(warmup, n):
+                    if not np.isnan(f[i]) and not np.isnan(s[i]):
+                        sig[i] = 1 if closes[i] > s[i] and f[i] > s[i] else -1
+            elif strategy == "bb_breakout":
+                upper, _, lower = talib.BBANDS(closes, timeperiod=params["period"], nbdevup=params["num_std"], nbdevdn=params["num_std"])
+                for i in range(params["period"] + 1, n):
+                    if not np.isnan(upper[i]):
+                        if closes[i] > upper[i]: sig[i] = 1
+                        elif closes[i] < lower[i]: sig[i] = -1
+                        else: sig[i] = sig[i-1]
+            elif strategy == "zscore_mr":
+                sma = _sma(closes, params["period"])
+                for i in range(params["period"], n):
+                    if np.isnan(sma[i]): continue
+                    window = closes[i - params["period"] + 1:i + 1]
+                    std = float(np.std(window, ddof=1))
+                    if std > 0:
+                        z = (closes[i] - sma[i]) / std
+                        if z < -params["z_entry"]: sig[i] = 1
+                        elif z > params["z_entry"]: sig[i] = -1
+                        elif abs(z) < params["z_exit"]: sig[i] = 0
+                        else: sig[i] = sig[i-1]
+            elif strategy == "atr_trail":
+                atr = talib.ATR(highs, lows, closes, timeperiod=params["atr_period"])
+                trail = closes[0]
+                pos = 1
+                for i in range(params["atr_period"] + 1, n):
+                    if np.isnan(atr[i]): continue
+                    if pos == 1:
+                        new_trail = closes[i] - params["multiplier"] * atr[i]
+                        trail = max(trail, new_trail)
+                        if closes[i] < trail: pos = 0; trail = closes[i] + params["multiplier"] * atr[i]
+                    else:
+                        new_trail = closes[i] + params["multiplier"] * atr[i]
+                        trail = min(trail, new_trail)
+                        if closes[i] > trail: pos = 1; trail = closes[i] - params["multiplier"] * atr[i]
+                    sig[i] = pos if pos == 1 else -1
+            elif strategy == "cci":
+                c = talib.CCI(highs, lows, closes, timeperiod=params["period"])
+                pos = 0
+                for i in range(params["period"] + 1, n):
+                    if not np.isnan(c[i]):
+                        if c[i] < params["oversold"]: pos = 1
+                        elif c[i] > params["overbought"]: pos = -1
+                        sig[i] = pos
+            elif strategy == "williams_r":
+                wr = talib.WILLR(highs, lows, closes, timeperiod=params["period"])
+                pos = 0
+                for i in range(params["period"] + 1, n):
+                    if not np.isnan(wr[i]):
+                        if wr[i] < params["oversold"]: pos = 1
+                        elif wr[i] > params["overbought"]: pos = -1
+                        sig[i] = pos
         except Exception:
             pass
         return sig

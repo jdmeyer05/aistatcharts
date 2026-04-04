@@ -2003,24 +2003,26 @@ async def strategy_scan(req: StrategyScanRequest, user: str = Depends(get_curren
                 signals[i] = 1 if closes[i] > sar[i] else -1
 
         elif strategy == "cci":
-            # Commodity Channel Index mean reversion
-            # Buy when CCI < -100 (oversold), sell when CCI > 100 (overbought)
-            cci = talib.CCI(highs, lows, closes, timeperiod=20)
-            for i in range(20, n):
+            cci_period = p.get("period", 20)
+            cci_ob = p.get("overbought", 100)
+            cci_os = p.get("oversold", -100)
+            cci = talib.CCI(highs, lows, closes, timeperiod=cci_period)
+            for i in range(cci_period + 1, n):
                 if np.isnan(cci[i]): continue
-                if cci[i] < -100: signals[i] = 1
-                elif cci[i] > 100: signals[i] = -1
-                elif abs(cci[i]) < 50: signals[i] = 0  # neutral zone = exit
+                if cci[i] < cci_os: signals[i] = 1
+                elif cci[i] > cci_ob: signals[i] = -1
+                elif abs(cci[i]) < 50: signals[i] = 0
                 else: signals[i] = signals[i - 1]
 
         elif strategy == "williams_r":
-            # Williams %R fast oscillator
-            # Buy below -80 (oversold), sell above -20 (overbought)
-            willr = talib.WILLR(highs, lows, closes, timeperiod=14)
-            for i in range(14, n):
+            wr_period = p.get("period", 14)
+            wr_ob = p.get("overbought", -20)
+            wr_os = p.get("oversold", -80)
+            willr = talib.WILLR(highs, lows, closes, timeperiod=wr_period)
+            for i in range(wr_period + 1, n):
                 if np.isnan(willr[i]): continue
-                if willr[i] < -80: signals[i] = 1
-                elif willr[i] > -20: signals[i] = -1
+                if willr[i] < wr_os: signals[i] = 1
+                elif willr[i] > wr_ob: signals[i] = -1
                 else: signals[i] = signals[i - 1]
 
         elif strategy == "obv_divergence":
