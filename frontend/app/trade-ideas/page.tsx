@@ -617,37 +617,88 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
         {/* dissent shown in warnings — no duplicate here */}
       </div>
 
-      {/* Row 4: Trade structure suggestions */}
-      <div className="mt-1.5 flex flex-wrap gap-1.5">
-        {/* Stock trade */}
-        <div className="px-2 py-1 rounded border border-border text-[0.55rem] font-data">
-          <span className="text-text-muted">Stock:</span>{" "}
-          <span className="text-text">
-            {idea.direction === "long" ? "Buy" : "Short"} at ${idea.price.toFixed(2)}, stop ${idea.stop.toFixed(2)} ({idea.stopMult.toFixed(1)}×ATR{idea.trigger.stop_2x_survival != null && idea.trigger.stop_2x_survival > 50 ? " validated" : ""}), target ${idea.target.toFixed(2)}
-            {idea.trigger.medianHoldDays ? ` · ~${idea.trigger.medianHoldDays}d typical hold` : ""}
-          </span>
-        </div>
-        {/* Options trade */}
-        {idea.optionsSuggestion && (
-          <div className={`px-2 py-1 rounded border text-[0.55rem] font-data ${
-            idea.vol?.iv && idea.vol?.rv_20d && idea.vol.iv > idea.vol.rv_20d ? "border-gain/30 bg-gain/5 text-gain"
-            : idea.vol?.iv && idea.vol?.rv_20d ? "border-purple-400/30 bg-purple-400/5 text-purple-400"
-            : "border-border text-text"
-          }`}>
-            <span className="text-text-muted">Options:</span> {idea.optionsSuggestion}
+      {/* Row 4: Trade vehicle recommendation */}
+      {(() => {
+        const hold = idea.trigger.medianHoldDays || 10;
+        const iv = idea.vol?.iv;
+        const rv = idea.vol?.rv_20d;
+        const ivRich = iv && rv && iv > rv * 1.05;
+        const ivCheap = iv && rv && rv > iv * 1.05;
+        const isLong = idea.direction === "long";
+        const risk = Math.abs(idea.price - idea.stop) || 1; // guard against 0
+        const sharesFor1Pct = Math.floor((acctEquity * 0.01) / risk);
+        const shareCost = sharesFor1Pct * idea.price;
+        const needsLeverage = shareCost > acctEquity * 0.3;
+
+        // Optimal DTE: 3-4× hold period gives manageable theta decay
+        const optimalDTE = Math.max(21, Math.round(hold * 3.5));
+        const thetaDecayPct = Math.round(hold / optimalDTE * 100);
+
+        // Vehicle logic — more specific conditions first
+        let vehicle: { label: string; detail: string; color: string };
+        if (ivCheap && hold <= 15 && needsLeverage) {
+          // Cheap options + expensive stock = debit spread (capped cost + cheap vol)
+          vehicle = {
+            label: isLong ? "Bull Call Spread" : "Bear Put Spread",
+            detail: `IV ${iv}% < RV ${rv}% (cheap) + stock needs $${shareCost.toLocaleString()} (${Math.round(shareCost / acctEquity * 100)}% of account). ${optimalDTE}d DTE debit spread: cheap leverage + capped risk. ~${thetaDecayPct}% theta decay over ${hold}d.`,
+            color: "border-purple-400/30 bg-purple-400/5 text-purple-400",
+          };
+        } else if (ivCheap && hold <= 15) {
+          // Cheap options + affordable stock = buy options for leverage
+          vehicle = {
+            label: isLong ? "Buy Calls" : "Buy Puts",
+            detail: `IV ${iv}% < RV ${rv}% — options underpriced. ${optimalDTE}d DTE ${isLong ? "calls" : "puts"} give cheap leverage. ~${thetaDecayPct}% theta decay over ${hold}d.`,
+            color: "border-purple-400/30 bg-purple-400/5 text-purple-400",
+          };
+        } else if (ivRich) {
+          // Options are expensive = sell premium
+          vehicle = {
+            label: isLong ? "Sell Bull Put" : "Sell Bear Call",
+            detail: `IV ${iv}% > RV ${rv}% — collect overpriced premium. ${optimalDTE}d DTE credit spread. Theta works for you over ~${hold}d hold.`,
+            color: "border-gain/30 bg-gain/5 text-gain",
+          };
+        } else if (needsLeverage) {
+          vehicle = {
+            label: isLong ? "Bull Call Spread" : "Bear Put Spread",
+            detail: `Stock position needs $${shareCost.toLocaleString()} (${Math.round(shareCost / acctEquity * 100)}% of account). ${optimalDTE}d DTE spread is more capital efficient.`,
+            color: "border-accent/30 bg-accent/5 text-accent",
+          };
+        } else {
+          vehicle = {
+            label: "Stock",
+            detail: `${sharesFor1Pct} shares = $${shareCost.toLocaleString()} (${Math.round(shareCost / acctEquity * 100)}% of account). Simple, no theta decay.`,
+            color: "border-border",
+          };
+        }
+
+        const earnDays = idea.vol?.next_earnings_days;
+        const holdsThroughEarnings = earnDays != null && earnDays <= 21 && hold > 0 && earnDays <= hold;
+
+        return (
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <div className={`px-2 py-1 rounded border text-[0.55rem] font-data ${vehicle.color}`}>
+              <span className="font-semibold">{vehicle.label}:</span> {vehicle.detail}
+            </div>
+            <div className="px-2 py-1 rounded border border-border text-[0.55rem] font-data text-text-muted">
+              Entry ${idea.price.toFixed(2)} · Stop ${idea.stop.toFixed(2)} ({idea.stopMult.toFixed(1)}×ATR) · Target ${idea.target.toFixed(2)} · ~{hold}d hold
+            </div>
+            {idea.vol?.avg_earnings_move && (
+              <span className="px-2 py-1 rounded border border-warn/30 bg-warn/5 text-warn text-[0.55rem] font-data">
+                Avg earnings move: ±{idea.vol.avg_earnings_move}%
+              </span>
+            )}
+            {earnDays != null && earnDays <= 21 && (
+              <span className={`px-2 py-1 rounded border text-[0.55rem] font-data font-bold ${
+                holdsThroughEarnings ? "border-loss bg-loss/10 text-loss" : "border-loss/30 bg-loss/5 text-loss"
+              }`}>
+                {holdsThroughEarnings
+                  ? `!! HOLDS THROUGH EARNINGS (${earnDays}d) — typical hold is ${hold}d`
+                  : `Earnings in ${earnDays}d`}
+              </span>
+            )}
           </div>
-        )}
-        {idea.vol?.avg_earnings_move && (
-          <span className="px-2 py-1 rounded border border-warn/30 bg-warn/5 text-warn text-[0.55rem] font-data">
-            Avg earnings move: ±{idea.vol.avg_earnings_move}%
-          </span>
-        )}
-        {idea.vol?.next_earnings_days != null && idea.vol.next_earnings_days <= 21 && (
-          <span className="px-2 py-1 rounded border border-loss/30 bg-loss/5 text-loss text-[0.55rem] font-data font-bold">
-            Earnings in {idea.vol.next_earnings_days}d
-          </span>
-        )}
-      </div>
+        );
+      })()}
 
       {/* Row 5: Context */}
       <div className="flex gap-3 mt-1.5 text-[0.5rem] font-data text-text-muted flex-wrap">
@@ -664,13 +715,15 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
         </span>
         {idea.vol?.iv && <span>IV {idea.vol.iv}%</span>}
         {idea.vol?.rv_20d && <span>RV20 {idea.vol.rv_20d}%</span>}
-        {idea.vol?.iv && idea.vol?.rv_20d && (
-          <span className={idea.vol.iv > idea.vol.rv_20d ? "text-gain" : "text-loss"}>
-            {idea.vol.iv > idea.vol.rv_20d
-              ? `IV > RV by ${(idea.vol.iv - idea.vol.rv_20d).toFixed(1)}pp (sell premium)`
-              : `IV < RV by ${(idea.vol.rv_20d - idea.vol.iv).toFixed(1)}pp (buy options)`}
-          </span>
-        )}
+        {idea.vol?.iv && idea.vol?.rv_20d && (() => {
+          const diff = idea.vol!.iv! - idea.vol!.rv_20d!;
+          const absDiff = Math.abs(diff);
+          const pct = Math.max(idea.vol!.iv!, idea.vol!.rv_20d!) * 0.05;
+          if (absDiff < pct) return <span className="text-text-muted">IV ≈ RV (no edge)</span>;
+          return diff > 0
+            ? <span className="text-gain">IV &gt; RV by {absDiff.toFixed(1)}pp (sell premium)</span>
+            : <span className="text-loss">IV &lt; RV by {absDiff.toFixed(1)}pp (buy options)</span>;
+        })()}
         {idea.vol?.next_earnings && (
           <span className={idea.vol.next_earnings_days != null && idea.vol.next_earnings_days <= 14 ? "text-warn font-semibold" : ""}>
             Earn {idea.vol.next_earnings_days}d
