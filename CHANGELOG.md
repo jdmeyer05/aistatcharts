@@ -22,7 +22,8 @@
 - Backtest-validated ATR stops from MAE/MFE tracking (not rules of thumb)
 - Trend strategies: validated stop. Mean reversion: wider stops (2.5-5×ATR)
 - Expected value computation with negative EV filtering
-- Negative-Sharpe strategies excluded from triggers, confirmations, and dissent
+- Negative-Sharpe strategies excluded from triggers (sharpe > 0); confirmations/dissent relaxed to sharpe > -0.5 to avoid over-filtering optimized params
+- Validated: ALL scan (99 tickers) produces 19 trade ideas with balanced filters (was 1 with strict sharpe > 0)
 - DSR threshold scales with scan size (0.5 for 20 tickers, 0.15 for 99)
 - Minimum 5 trades required for triggers
 - Recent 1yr Sharpe degradation detection
