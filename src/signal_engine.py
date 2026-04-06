@@ -108,6 +108,72 @@ def write_signal(source: str, ticker: str, direction: str, conviction: float,
     _save_local(signals)
 
 
+def write_signals_batch(signals: list[dict]) -> None:
+    """Batch-write multiple signals in fewer Supabase calls.
+    Each dict: {source, ticker, direction, conviction, vol_view?, reasoning?}"""
+    if not signals:
+        return
+    now = datetime.now()
+    cutoff = (now - timedelta(hours=1)).isoformat()
+    uid = _user_id()
+
+    db = _db()
+    if db:
+        try:
+            # Batch cleanup: group by source for fewer DELETE calls
+            from collections import defaultdict
+            _by_source = defaultdict(list)
+            for s in signals:
+                src = s.get("source", "")
+                tk = s.get("ticker", "").upper()
+                if src and tk:
+                    _by_source[src].append(tk)
+            for src, tks in _by_source.items():
+                db.table("signals").delete().eq("source", src).in_("ticker", tks)\
+                    .eq("user_id", uid).gte("created_at", cutoff).execute()
+
+            # Batch insert all signals at once
+            rows = []
+            for s in signals:
+                direction = s.get("direction", "neutral")
+                if direction not in VALID_DIRECTIONS:
+                    direction = "neutral"
+                vol_view = s.get("vol_view", "neutral")
+                if vol_view not in VALID_VOL_VIEWS:
+                    vol_view = "neutral"
+                rows.append({
+                    "user_id": uid,
+                    "source": s.get("source", ""),
+                    "ticker": s.get("ticker", "").upper(),
+                    "direction": direction,
+                    "conviction": max(0.0, min(1.0, float(s.get("conviction", 0)))),
+                    "vol_view": vol_view,
+                    "reasoning": s.get("reasoning", "")[:500],
+                })
+            if rows:
+                db.table("signals").insert(rows).execute()
+            return
+        except Exception as e:
+            logger.warning(f"Supabase batch signal write failed: {e}")
+
+    # Local fallback
+    local_signals = _load_local()
+    for s in signals:
+        local_signals = [x for x in local_signals if not (
+            x.get("source") == s.get("source") and x.get("ticker") == s.get("ticker", "").upper()
+            and x.get("timestamp", "") > cutoff
+        )]
+        local_signals.append({
+            "source": s.get("source", ""), "ticker": s.get("ticker", "").upper(),
+            "direction": s.get("direction", "neutral"),
+            "conviction": max(0.0, min(1.0, float(s.get("conviction", 0)))),
+            "vol_view": s.get("vol_view", "neutral"),
+            "reasoning": s.get("reasoning", "")[:500],
+            "timestamp": now.isoformat(),
+        })
+    _save_local(local_signals)
+
+
 def get_signals(ticker: str = None, max_age_hours: float = 24) -> list[dict]:
     """Get all active signals, optionally filtered by ticker."""
     cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()

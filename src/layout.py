@@ -96,8 +96,7 @@ def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collap
     load_theme_preference()
     inject_global_css()
     render_header(page_key)
-    _inject_mobile_session_guard()
-    _inject_footer()
+    _inject_page_scripts()
     render_background_notifications()
 
     # Block disabled pages (even via direct URL)
@@ -132,70 +131,60 @@ def setup_page(page_key: str, layout: str = "wide", sidebar_state: str = "collap
 
 
 
-def _inject_mobile_session_guard():
-    """Auto-reload when a mobile user returns from a stale/backgrounded session.
-    Shows a refresh banner for short stale periods, auto-reloads for long ones."""
-    import streamlit.components.v1 as components
-    components.html("""
-    <script>
-    (function() {
-        if (window._staleGuardInit) return;
-        window._staleGuardInit = true;
-        var hiddenAt = null;
-        var SOFT_STALE_MS = 15000;  // 15s — show refresh banner
-        var HARD_STALE_MS = 60000;  // 60s — auto-reload
-        var IDLE_STALE_MS = 300000; // 5 min idle — show refresh banner
-        var lastInteraction = Date.now();
-
-        ['click','scroll','touchstart','keydown'].forEach(function(evt) {
-            document.addEventListener(evt, function() { lastInteraction = Date.now(); }, {passive:true});
-        });
-
-        function showBanner() {
-            if (document.getElementById('stale-banner')) return;
-            var b = document.createElement('div');
-            b.id = 'stale-banner';
-            b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#1a1a2e;' +
-                'border-bottom:2px solid #ffaa00;padding:10px 16px;text-align:center;font-size:14px;' +
-                'color:#ffaa00;cursor:pointer;font-family:sans-serif;';
-            b.textContent = 'Data may be stale — tap to refresh';
-            b.onclick = function() { window.location.reload(); };
-            document.body.prepend(b);
-        }
-
-        document.addEventListener('visibilitychange', function() {
-            if (document.hidden) {
-                hiddenAt = Date.now();
-            } else if (hiddenAt) {
-                var elapsed = Date.now() - hiddenAt;
-                hiddenAt = null;
-                if (elapsed > HARD_STALE_MS) {
-                    window.location.reload();
-                } else if (elapsed > SOFT_STALE_MS) {
-                    showBanner();
-                }
-            }
-        });
-
-        // Idle detection — check every 60s
-        setInterval(function() {
-            if (!document.hidden && (Date.now() - lastInteraction > IDLE_STALE_MS)) {
-                showBanner();
-            }
-        }, 60000);
-    })();
-    </script>
-    """, height=0)
-
-
-def _inject_footer():
-    """Inject a fixed footer on every page using JS to append to the parent document."""
-    from datetime import datetime
+def _inject_page_scripts():
+    """Inject mobile session guard + footer in a single iframe (saves ~100-200ms vs two iframes)."""
     import streamlit.components.v1 as components
     year = datetime.now().year
-    # Use JS to inject the footer into the parent Streamlit document (escapes the iframe)
     components.html(
         f"""<script>
+        // ── Mobile session guard ──
+        (function() {{
+            if (window._staleGuardInit) return;
+            window._staleGuardInit = true;
+            var hiddenAt = null;
+            var SOFT_STALE_MS = 15000;
+            var HARD_STALE_MS = 60000;
+            var IDLE_STALE_MS = 300000;
+            var lastInteraction = Date.now();
+
+            ['click','scroll','touchstart','keydown'].forEach(function(evt) {{
+                document.addEventListener(evt, function() {{ lastInteraction = Date.now(); }}, {{passive:true}});
+            }});
+
+            function showBanner() {{
+                if (document.getElementById('stale-banner')) return;
+                var b = document.createElement('div');
+                b.id = 'stale-banner';
+                b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#1a1a2e;'
+                    + 'border-bottom:2px solid #ffaa00;padding:10px 16px;text-align:center;font-size:14px;'
+                    + 'color:#ffaa00;cursor:pointer;font-family:sans-serif;';
+                b.textContent = 'Data may be stale — tap to refresh';
+                b.onclick = function() {{ window.location.reload(); }};
+                document.body.prepend(b);
+            }}
+
+            document.addEventListener('visibilitychange', function() {{
+                if (document.hidden) {{
+                    hiddenAt = Date.now();
+                }} else if (hiddenAt) {{
+                    var elapsed = Date.now() - hiddenAt;
+                    hiddenAt = null;
+                    if (elapsed > HARD_STALE_MS) {{
+                        window.location.reload();
+                    }} else if (elapsed > SOFT_STALE_MS) {{
+                        showBanner();
+                    }}
+                }}
+            }});
+
+            setInterval(function() {{
+                if (!document.hidden && (Date.now() - lastInteraction > IDLE_STALE_MS)) {{
+                    showBanner();
+                }}
+            }}, 60000);
+        }})();
+
+        // ── Footer ──
         (function() {{
             if (window.parent.document.getElementById('app-footer')) return;
             var footer = window.parent.document.createElement('div');
@@ -362,39 +351,38 @@ def render_header(current_page: str):
                     unsafe_allow_html=True,
                 )
 
-            # ── Market Status (Polygon API with hardcoded fallback) ──
+            # ── Market Status (local time logic first, Polygon cached overlay) ──
             st.markdown(f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};text-transform:uppercase;letter-spacing:1px;margin:10px 0 4px 0;">Market</div>', unsafe_allow_html=True)
-            mkt_status, mkt_color = "Unknown", "#888"
             now = datetime.now()
+            hour, weekday = now.hour, now.weekday()
+            # Fast local-time determination (no API call)
+            if weekday >= 5:
+                mkt_status, mkt_color = "Closed (Weekend)", "#888"
+            elif hour < 4:
+                mkt_status, mkt_color = "Closed", "#888"
+            elif hour < 9 or (hour == 9 and now.minute < 30):
+                mkt_status, mkt_color = "Pre-Market", "#ffaa00"
+            elif hour < 16:
+                mkt_status, mkt_color = "Market Open", "#00ff96"
+            elif hour < 20:
+                mkt_status, mkt_color = "After Hours", "#ffaa00"
+            else:
+                mkt_status, mkt_color = "Closed", "#888"
+            # Override with Polygon (cached 5min — first call per TTL window may block ~1-3s)
             try:
                 from src.data_engine import fetch_market_status
                 _ms = fetch_market_status()
-                if _ms.get("is_open"):
-                    mkt_status, mkt_color = "Market Open", "#00ff96"
-                elif _ms.get("market") == "closed":
-                    mkt_status, mkt_color = "Closed", "#888"
-                elif _ms.get("market") == "extended-hours":
-                    mkt_status, mkt_color = "Extended Hours", "#ffaa00"
-                elif _ms.get("market"):
-                    mkt_status, mkt_color = _ms["market"].title(), "#ffaa00"
+                if _ms:
+                    if _ms.get("is_open"):
+                        mkt_status, mkt_color = "Market Open", "#00ff96"
+                    elif _ms.get("market") == "closed":
+                        mkt_status, mkt_color = "Closed", "#888"
+                    elif _ms.get("market") == "extended-hours":
+                        mkt_status, mkt_color = "Extended Hours", "#ffaa00"
+                    elif _ms.get("market"):
+                        mkt_status, mkt_color = _ms["market"].title(), "#ffaa00"
             except Exception:
                 pass
-            if mkt_status == "Unknown":
-                # Fallback to hardcoded logic
-                now = datetime.now()
-                hour, weekday = now.hour, now.weekday()
-                if weekday >= 5:
-                    mkt_status, mkt_color = "Closed (Weekend)", "#888"
-                elif hour < 4:
-                    mkt_status, mkt_color = "Closed", "#888"
-                elif hour < 9 or (hour == 9 and now.minute < 30):
-                    mkt_status, mkt_color = "Pre-Market", "#ffaa00"
-                elif hour < 16:
-                    mkt_status, mkt_color = "Market Open", "#00ff96"
-                elif hour < 20:
-                    mkt_status, mkt_color = "After Hours", "#ffaa00"
-                else:
-                    mkt_status, mkt_color = "Closed", "#888"
             st.markdown(
                 f'<div style="font-size:0.78rem;">'
                 f'<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:{mkt_color};margin-right:5px;vertical-align:middle;"></span>'

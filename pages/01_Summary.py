@@ -156,22 +156,32 @@ with _mi_left:
         with error_boundary("Market News"):
             _news_content = None
             _news_age = None
-            try:
-                from src.ai_cache import get_cached_ai
-                # Try current hour, then previous hour
-                _now = datetime.now()
-                _hour_key = f"market_news_{_now.strftime('%Y%m%d_%H')}"
-                _news_content = get_cached_ai(_hour_key)
-                if _news_content:
-                    _news_age = "< 1 hour"
-                else:
-                    _prev = _now - timedelta(hours=1)
-                    _hour_key_prev = f"market_news_{_prev.strftime('%Y%m%d_%H')}"
-                    _news_content = get_cached_ai(_hour_key_prev)
+            # Session-cache news to avoid 2 Supabase queries per rerun
+            import time as _time
+            _news_cache_key = "_market_news_cache"
+            _news_cache_ts = st.session_state.get("_market_news_ts", 0)
+            _news_cached = st.session_state.get(_news_cache_key)
+            _hour_key = f"market_news_{datetime.now().strftime('%Y%m%d_%H')}"
+            if _news_cached and _news_cached.get("hour") == _hour_key and (_time.time() - _news_cache_ts) < 300:
+                _news_content = _news_cached.get("content")
+                _news_age = _news_cached.get("age")
+            else:
+                try:
+                    from src.ai_cache import get_cached_ai
+                    _now = datetime.now()
+                    _news_content = get_cached_ai(_hour_key)
                     if _news_content:
-                        _news_age = "1-2 hours"
-            except Exception:
-                pass
+                        _news_age = "< 1 hour"
+                    else:
+                        _prev = _now - timedelta(hours=1)
+                        _hour_key_prev = f"market_news_{_prev.strftime('%Y%m%d_%H')}"
+                        _news_content = get_cached_ai(_hour_key_prev)
+                        if _news_content:
+                            _news_age = "1-2 hours"
+                except Exception:
+                    pass
+                st.session_state[_news_cache_key] = {"hour": _hour_key, "content": _news_content, "age": _news_age}
+                st.session_state["_market_news_ts"] = _time.time()
 
             if _news_content:
                 _age_color = COLORS["success"] if _news_age == "< 1 hour" else COLORS["warning"]
@@ -304,109 +314,114 @@ with _mi_right:
                 logger.debug(f"Events load failed: {e}")
                 st.caption("Event calendar unavailable.")
 
-    # Risk snapshot below events (compact)
+    # Risk snapshot below events (compact) — single HTML render for all 4 cells
     with st.container(border=True):
         with error_boundary("Risk Snapshot"):
-            _risk_cols = st.columns(4)
-            # Iran conflict score
-            with _risk_cols[0]:
-                try:
-                    _conflict_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "iran_conflict_history.json")
-                    if os.path.exists(_conflict_file):
-                        with open(_conflict_file, "r") as f:
-                            _cd = json.load(f)
-                        if _cd:
-                            _bl = _cd[-1].get("blended", {})
-                            _esc = _bl.get("escalation_risk", {})
-                            _sc = _esc.get("score", 0)
-                            _ec = "#ff4444" if _sc >= 8 else "#ff6b35" if _sc >= 6 else "#ffaa00" if _sc >= 4 else "#00ff96"
-                            st.markdown(
-                                f'<div style="text-align:center;">'
-                                f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Iran</div>'
-                                f'<div style="font-size:1.3rem;font-weight:800;color:{_ec};">{_sc}/10</div>'
-                                f'</div>',
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Iran: N/A</div>', unsafe_allow_html=True)
-                except Exception:
-                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Iran: N/A</div>', unsafe_allow_html=True)
+            _risk_cells = []
 
-            # Macro regime
-            with _risk_cols[1]:
-                try:
-                    _grok_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "grok_regime_history.json")
-                    if os.path.exists(_grok_file):
-                        with open(_grok_file, "r") as f:
-                            _gd = json.load(f)
-                        if _gd:
-                            _regs = sorted(_gd[-1].get("regimes", []), key=lambda r: r.get("probability", 0), reverse=True)
-                            if _regs:
-                                _rn = _regs[0].get("name", "?")
-                                _rp = _regs[0].get("probability", 0)
-                                _regime_colors = {"Stagflation": "#ff4444", "Recession": "#ff8c00", "Soft Landing": "#00cc66",
-                                                  "Financial Crisis": "#ff0066", "Re-Acceleration": "#00d1ff", "Goldilocks": "#aa66ff"}
-                                _rc2 = _regime_colors.get(_rn, "#888")
-                                st.markdown(
-                                    f'<div style="text-align:center;">'
-                                    f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Macro</div>'
-                                    f'<div style="font-size:0.85rem;font-weight:700;color:{_rc2};">{_rn}</div>'
-                                    f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};">{_rp}%</div>'
-                                    f'</div>',
-                                    unsafe_allow_html=True,
-                                )
-                    else:
-                        st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Macro: N/A</div>', unsafe_allow_html=True)
-                except Exception:
-                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Macro: N/A</div>', unsafe_allow_html=True)
-
-            # Vol regime (SPY)
-            with _risk_cols[2]:
+            # Pre-fetch SPY snapshot once (used by vol + strategy cells)
+            # Session-cached for 5 min to avoid redundant Supabase queries on reruns
+            import time as _time
+            _spy_snap = None
+            _snap_cache = st.session_state.get("_spy_snap_cache")
+            _snap_ts = st.session_state.get("_spy_snap_ts", 0)
+            if _snap_cache is not None and (_time.time() - _snap_ts) < 300:
+                _spy_snap = _snap_cache
+            else:
                 try:
                     from src.metrics_store import get_latest_snapshot
                     _spy_snap = get_latest_snapshot("SPY")
-                    if _spy_snap and _spy_snap.get("atm_iv") is not None:
-                        _iv = _spy_snap["atm_iv"]
-                        _iv_label = "High" if _iv > 0.25 else "Low" if _iv < 0.15 else "Normal"
-                        _iv_color = COLORS["danger"] if _iv > 0.25 else COLORS["success"] if _iv < 0.15 else COLORS["warning"]
-                        st.markdown(
-                            f'<div style="text-align:center;">'
-                            f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">SPY Vol</div>'
-                            f'<div style="font-size:0.85rem;font-weight:700;color:{_iv_color};">{_iv:.0%} ({_iv_label})</div>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>', unsafe_allow_html=True)
+                    st.session_state["_spy_snap_cache"] = _spy_snap
+                    st.session_state["_spy_snap_ts"] = _time.time()
                 except Exception:
-                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>', unsafe_allow_html=True)
+                    _spy_snap = None
+
+            # Iran conflict score
+            try:
+                _conflict_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "iran_conflict_history.json")
+                if os.path.exists(_conflict_file):
+                    with open(_conflict_file, "r") as f:
+                        _cd = json.load(f)
+                    if _cd:
+                        _bl = _cd[-1].get("blended", {})
+                        _sc = _bl.get("escalation_risk", {}).get("score", 0)
+                        _ec = "#ff4444" if _sc >= 8 else "#ff6b35" if _sc >= 6 else "#ffaa00" if _sc >= 4 else "#00ff96"
+                        _risk_cells.append(
+                            f'<div style="text-align:center;flex:1;">'
+                            f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Iran</div>'
+                            f'<div style="font-size:1.3rem;font-weight:800;color:{_ec};">{_sc}/10</div></div>'
+                        )
+                if not _risk_cells:
+                    _risk_cells.append(f'<div style="text-align:center;flex:1;font-size:0.7rem;color:{COLORS["text_muted"]};">Iran: N/A</div>')
+            except Exception:
+                _risk_cells.append(f'<div style="text-align:center;flex:1;font-size:0.7rem;color:{COLORS["text_muted"]};">Iran: N/A</div>')
+
+            # Macro regime
+            try:
+                _grok_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "grok_regime_history.json")
+                _macro_html = None
+                if os.path.exists(_grok_file):
+                    with open(_grok_file, "r") as f:
+                        _gd = json.load(f)
+                    if _gd:
+                        _regs = sorted(_gd[-1].get("regimes", []), key=lambda r: r.get("probability", 0), reverse=True)
+                        if _regs:
+                            _rn = _regs[0].get("name", "?")
+                            _rp = _regs[0].get("probability", 0)
+                            _regime_colors = {"Stagflation": "#ff4444", "Recession": "#ff8c00", "Soft Landing": "#00cc66",
+                                              "Financial Crisis": "#ff0066", "Re-Acceleration": "#00d1ff", "Goldilocks": "#aa66ff"}
+                            _macro_html = (
+                                f'<div style="text-align:center;flex:1;">'
+                                f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Macro</div>'
+                                f'<div style="font-size:0.85rem;font-weight:700;color:{_regime_colors.get(_rn, "#888")};">{_rn}</div>'
+                                f'<div style="font-size:0.65rem;color:{COLORS["text_muted"]};">{_rp}%</div></div>'
+                            )
+                _risk_cells.append(_macro_html or f'<div style="text-align:center;flex:1;font-size:0.7rem;color:{COLORS["text_muted"]};">Macro: N/A</div>')
+            except Exception:
+                _risk_cells.append(f'<div style="text-align:center;flex:1;font-size:0.7rem;color:{COLORS["text_muted"]};">Macro: N/A</div>')
+
+            # Vol regime (SPY)
+            try:
+                if _spy_snap and _spy_snap.get("atm_iv") is not None:
+                    _iv = _spy_snap["atm_iv"]
+                    _iv_label = "High" if _iv > 0.25 else "Low" if _iv < 0.15 else "Normal"
+                    _iv_color = COLORS["danger"] if _iv > 0.25 else COLORS["success"] if _iv < 0.15 else COLORS["warning"]
+                    _risk_cells.append(
+                        f'<div style="text-align:center;flex:1;">'
+                        f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">SPY Vol</div>'
+                        f'<div style="font-size:0.85rem;font-weight:700;color:{_iv_color};">{_iv:.0%} ({_iv_label})</div></div>'
+                    )
+                else:
+                    _risk_cells.append(f'<div style="text-align:center;flex:1;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>')
+            except Exception:
+                _risk_cells.append(f'<div style="text-align:center;flex:1;font-size:0.7rem;color:{COLORS["text_muted"]};">Vol: N/A</div>')
 
             # Strategy regime
-            with _risk_cols[3]:
-                try:
-                    from src.metrics_store import get_latest_snapshot as _get_snap
-                    _spy_s = _get_snap("SPY")
-                    _s_iv = _spy_s.get("atm_iv", 0.20) if _spy_s else 0.20
-                    _s_vrp = _spy_s.get("vrp", 0) if _spy_s else 0
-                    # Simple regime logic
-                    if _s_iv > 0.25 and _s_vrp and _s_vrp > 0.03:
-                        _strat, _sc, _sr = "Iron Condors", COLORS["warning"], "Rich vol + VRP"
-                    elif _s_iv < 0.18:
-                        _strat, _sc, _sr = "Calendars", COLORS["accent"], "Low vol, exploit contango"
-                    elif _s_vrp and _s_vrp > 0.02:
-                        _strat, _sc, _sr = "Iron Condors", COLORS["success"], "Positive VRP edge"
-                    else:
-                        _strat, _sc, _sr = "Both viable", COLORS["text_muted"], "Normal conditions"
-                    st.markdown(
-                        f'<div style="text-align:center;">'
-                        f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Strategy</div>'
-                        f'<div style="font-size:0.8rem;font-weight:700;color:{_sc};">{_strat}</div>'
-                        f'<div style="font-size:0.55rem;color:{COLORS["text_muted"]};">{_sr}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                except Exception:
-                    st.markdown(f'<div style="text-align:center;font-size:0.7rem;color:{COLORS["text_muted"]};">Strategy: N/A</div>', unsafe_allow_html=True)
+            try:
+                _s_iv = _spy_snap.get("atm_iv", 0.20) if _spy_snap else 0.20
+                _s_vrp = _spy_snap.get("vrp", 0) if _spy_snap else 0
+                if _s_iv > 0.25 and _s_vrp and _s_vrp > 0.03:
+                    _strat, _sc, _sr = "Iron Condors", COLORS["warning"], "Rich vol + VRP"
+                elif _s_iv < 0.18:
+                    _strat, _sc, _sr = "Calendars", COLORS["accent"], "Low vol, exploit contango"
+                elif _s_vrp and _s_vrp > 0.02:
+                    _strat, _sc, _sr = "Iron Condors", COLORS["success"], "Positive VRP edge"
+                else:
+                    _strat, _sc, _sr = "Both viable", COLORS["text_muted"], "Normal conditions"
+                _risk_cells.append(
+                    f'<div style="text-align:center;flex:1;">'
+                    f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};text-transform:uppercase;">Strategy</div>'
+                    f'<div style="font-size:0.8rem;font-weight:700;color:{_sc};">{_strat}</div>'
+                    f'<div style="font-size:0.55rem;color:{COLORS["text_muted"]};">{_sr}</div></div>'
+                )
+            except Exception:
+                _risk_cells.append(f'<div style="text-align:center;flex:1;font-size:0.7rem;color:{COLORS["text_muted"]};">Strategy: N/A</div>')
+
+            # Single render: 4 cells → 1 st.markdown (was 4 st.columns + 4 st.markdown)
+            st.markdown(
+                f'<div style="display:flex;gap:8px;">{"".join(_risk_cells)}</div>',
+                unsafe_allow_html=True,
+            )
 
 
 # ═══════════════════════════════════════════════
@@ -718,27 +733,31 @@ with st.expander("Signal Track Record (30-day accuracy)"):
             from src.prediction_tracker import get_track_record, get_all_sources
             sources = get_all_sources()
             if sources:
-                _tr_cols = st.columns(min(len(sources), 4))
-                for i, src_name in enumerate(sources[:8]):
+                # Batch all track record cells into single HTML render
+                _tr_cells = []
+                for src_name in sources[:8]:
                     tr = get_track_record(src_name, horizon=30)
-                    with _tr_cols[i % min(len(sources), 4)]:
-                        if tr["evaluated"] > 0 and tr["accuracy"] is not None:
-                            acc = tr["accuracy"] * 100
-                            acc_color = COLORS["success"] if acc >= 55 else (COLORS["danger"] if acc < 45 else COLORS["warning"])
-                            st.markdown(
-                                f'<div style="text-align:center;padding:4px;">'
-                                f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{src_name.replace("_", " ").title()}</div>'
-                                f'<div style="font-size:1.1rem;font-weight:700;color:{acc_color};">{acc:.0f}%</div>'
-                                f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">{tr["evaluated"]} evaluated</div>'
-                                f'</div>', unsafe_allow_html=True,
-                            )
-                        elif tr["total_predictions"] > 0:
-                            st.markdown(
-                                f'<div style="text-align:center;padding:4px;">'
-                                f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{src_name.replace("_", " ").title()}</div>'
-                                f'<div style="font-size:0.8rem;color:{COLORS["text_muted"]};">{tr["total_predictions"]} pending</div>'
-                                f'</div>', unsafe_allow_html=True,
-                            )
+                    _label = src_name.replace("_", " ").title()
+                    if tr["evaluated"] > 0 and tr["accuracy"] is not None:
+                        acc = tr["accuracy"] * 100
+                        acc_color = COLORS["success"] if acc >= 55 else (COLORS["danger"] if acc < 45 else COLORS["warning"])
+                        _tr_cells.append(
+                            f'<div style="text-align:center;padding:4px;flex:1;">'
+                            f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{_label}</div>'
+                            f'<div style="font-size:1.1rem;font-weight:700;color:{acc_color};">{acc:.0f}%</div>'
+                            f'<div style="font-size:0.6rem;color:{COLORS["text_muted"]};">{tr["evaluated"]} evaluated</div></div>'
+                        )
+                    elif tr["total_predictions"] > 0:
+                        _tr_cells.append(
+                            f'<div style="text-align:center;padding:4px;flex:1;">'
+                            f'<div style="font-size:0.7rem;color:{COLORS["text_muted"]};">{_label}</div>'
+                            f'<div style="font-size:0.8rem;color:{COLORS["text_muted"]};">{tr["total_predictions"]} pending</div></div>'
+                        )
+                if _tr_cells:
+                    st.markdown(
+                        f'<div style="display:flex;flex-wrap:wrap;gap:4px;">{"".join(_tr_cells)}</div>',
+                        unsafe_allow_html=True,
+                    )
                 if st.button("Full Track Record →", key="goto_track", use_container_width=True):
                     st.switch_page("pages/47_Track_Record.py")
             else:
@@ -826,10 +845,11 @@ with error_boundary("Watchlist"):
 
     with st.expander(f"Watchlist ({len(watchlist)} tickers)"):
         if watchlist:
+            _wl_snaps = polygon_batch_snapshot(list(watchlist.keys()))
             wl_cols = st.columns(min(len(watchlist), 4))
             for i, (wl_t, wl_cfg) in enumerate(watchlist.items()):
                 with wl_cols[i % min(len(watchlist), 4)]:
-                    snap = polygon_batch_snapshot([wl_t]).get(wl_t)
+                    snap = _wl_snaps.get(wl_t)
                     if snap and snap.get("price"):
                         chg = snap.get("change", 0)
                         chg_color = COLORS["success"] if chg >= 0 else COLORS["danger"]

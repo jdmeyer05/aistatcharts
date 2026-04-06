@@ -2954,7 +2954,17 @@ def fetch_eia_oil_price(eia_key: str):
 
 
 # --- FETCH DATA (parallelized) ---
-with fun_loader("data"):
+# Session-cache all fetched data for 5 min to skip thread overhead on reruns
+import time as _time
+_iran_cache_key = "_iran_data_cache"
+_iran_cache_ts = st.session_state.get("_iran_data_ts", 0)
+_iran_use_cache = (
+    _iran_cache_key in st.session_state
+    and (_time.time() - _iran_cache_ts) < 300
+)
+
+if not _iran_use_cache:
+  with fun_loader("data"):
     import threading
 
     gdelt_queries = {
@@ -3003,11 +3013,19 @@ with fun_loader("data"):
         _results["market_context"] = ctx
 
     def _fetch_stocks():
+        """Fetch defense + energy stock history in parallel (6 tickers × 180d)."""
+        tickers = ["LMT", "RTX", "NOC", "XLE", "USO", "XOP"]
         data = {}
-        for ticker in ["LMT", "RTX", "NOC", "XLE", "USO", "XOP"]:
-            px = fetch_massive_data(ticker, 180)
-            if px is not None and not px.empty:
-                data[ticker] = px
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(fetch_massive_data, tk, 180): tk for tk in tickers}
+            for fut in concurrent.futures.as_completed(futures, timeout=15):
+                tk = futures[fut]
+                try:
+                    px = fut.result()
+                    if px is not None and not px.empty:
+                        data[tk] = px
+                except Exception:
+                    pass
         _results["stocks"] = data
 
     def _fetch_infra_validation():
@@ -3072,9 +3090,9 @@ with fun_loader("data"):
     df_oil = _results.get("oil", pd.DataFrame())
     stock_data = _results.get("stocks", {})
 
-    # Give deferred threads a short grace period to finish (most will be done by now)
+    # Give deferred threads a short grace period (most are cached, finish in <1s)
     for t in deferred_threads:
-        t.join(timeout=5)
+        t.join(timeout=3)
 
     df_acled, acled_source = _results.get("acled", (pd.DataFrame(), None))
     market_context = _results.get("market_context", {})
@@ -3139,6 +3157,39 @@ with fun_loader("data"):
                 pass
         threading.Thread(target=_bg_gdelt, daemon=True).start()
 
+    # Save fetched data to session cache (exclude df_gdelt_bulk — 484MB, always load from parquet)
+    st.session_state[_iran_cache_key] = {
+        "gdelt_data": gdelt_data, "df_tone": df_tone, "df_oil": df_oil,
+        "stock_data": stock_data, "df_acled": df_acled, "acled_source": acled_source,
+        "market_context": market_context, "prefetched_infra": _prefetched_infra,
+        "live_timeline": live_timeline, "situation_briefing": situation_briefing,
+        "polymarket_data": polymarket_data, "oil_curve": oil_curve,
+        "breaking_news": breaking_news, "lng_prices": lng_prices,
+        "cot_data": cot_data, "treasury_data": treasury_data,
+        "defense_data": defense_data,
+        "defense_tickers": defense_tickers, "energy_tickers": energy_tickers,
+    }
+    st.session_state["_iran_data_ts"] = _time.time()
+else:
+    # Restore from session cache (fast path, no threads)
+    _c = st.session_state[_iran_cache_key]
+    gdelt_data = _c["gdelt_data"]; df_tone = _c["df_tone"]; df_oil = _c["df_oil"]
+    stock_data = _c["stock_data"]; df_acled = _c["df_acled"]; acled_source = _c["acled_source"]
+    market_context = _c["market_context"]; _prefetched_infra = _c["prefetched_infra"]
+    live_timeline = _c["live_timeline"]; situation_briefing = _c["situation_briefing"]
+    polymarket_data = _c["polymarket_data"]; oil_curve = _c["oil_curve"]
+    breaking_news = _c["breaking_news"]; lng_prices = _c["lng_prices"]
+    cot_data = _c["cot_data"]; treasury_data = _c["treasury_data"]
+    defense_data = _c["defense_data"]
+    defense_tickers = _c["defense_tickers"]; energy_tickers = _c["energy_tickers"]
+    # Always reload GDELT bulk from parquet (too large for session_state)
+    df_gdelt_bulk = pd.DataFrame()
+    _gdelt_parquet = os.path.join(os.path.dirname(__file__), "..", "data", "gdelt_events", "iran_conflict_events.parquet")
+    if os.path.exists(_gdelt_parquet):
+        try:
+            df_gdelt_bulk = pd.read_parquet(_gdelt_parquet)
+        except Exception:
+            pass
 
 # --- ESCALATION METRICS ---
 main_data = gdelt_data.get("Iran Military/War")

@@ -88,9 +88,9 @@ def load_theme_preference():
             st.session_state["_theme_mode"] = "dark"
 
 
-def inject_global_css():
-    """Inject global CSS classes used across all pages. Call once per page."""
-    st.markdown(f"""<style>
+def _build_dark_css() -> str:
+    """Pre-build the dark mode CSS string once at module load (avoids re-formatting 600+ lines per page)."""
+    return f"""<style>
     /* ── Max-width cap for widescreen monitors ── */
     .main .block-container {{
         max-width: 1100px !important;
@@ -698,12 +698,46 @@ def inject_global_css():
         }}
     }}
 </style>
-""", unsafe_allow_html=True)
+"""
 
-    # Light mode override — comprehensive CSS override for all Streamlit elements
+# Pre-build dark CSS once at import time (COLORS is always COLORS_DARK)
+_DARK_CSS = _build_dark_css()
+
+# Pre-build the Plotly scrollZoom guard JS (static, never changes)
+_PLOTLY_JS = """<script>
+(function() {
+    if (window._plotlyScrollGuard) return;
+    window._plotlyScrollGuard = true;
+    var obs = new MutationObserver(function() {
+        var plots = document.querySelectorAll('.js-plotly-plot');
+        plots.forEach(function(p) {
+            if (p._fullLayout && p._fullLayout.scrollZoom !== false) {
+                Plotly.relayout(p, {scrollZoom: false});
+            }
+        });
+    });
+    obs.observe(document.body, {childList: true, subtree: true});
+})();
+</script>"""
+
+
+def inject_global_css():
+    """Inject global CSS classes used across all pages. Call once per page."""
+    # Dark CSS is pre-built at import time — no f-string formatting per call
+    st.markdown(_DARK_CSS, unsafe_allow_html=True)
+
+    # Light mode override — pre-built at import time like dark CSS
     if _is_light_mode():
-        _L = COLORS_LIGHT
-        st.markdown(f"""<style>
+        st.markdown(_LIGHT_CSS, unsafe_allow_html=True)
+
+    # Plotly scrollZoom guard — pre-built at import time
+    st.markdown(_PLOTLY_JS, unsafe_allow_html=True)
+
+
+def _build_light_css() -> str:
+    """Pre-build light mode CSS override at module load."""
+    _L = COLORS_LIGHT
+    return f"""<style>
         /* ── Base app background ── */
         .stApp {{
             background: {_L['bg_primary']} !important;
@@ -893,21 +927,7 @@ def inject_global_css():
             padding-bottom: 8px;
             margin-bottom: 8px;
         }}
-        </style>""", unsafe_allow_html=True)
+        </style>"""
 
-    # Disable Plotly scrollZoom globally via JS (prevents mobile scroll hijack)
-    st.markdown("""<script>
-(function() {
-    if (window._plotlyScrollGuard) return;
-    window._plotlyScrollGuard = true;
-    var obs = new MutationObserver(function() {
-        var plots = document.querySelectorAll('.js-plotly-plot');
-        plots.forEach(function(p) {
-            if (p._fullLayout && p._fullLayout.scrollZoom !== false) {
-                Plotly.relayout(p, {scrollZoom: false});
-            }
-        });
-    });
-    obs.observe(document.body, {childList: true, subtree: true});
-})();
-</script>""", unsafe_allow_html=True)
+# Pre-build light CSS once at import time (COLORS_LIGHT is a constant)
+_LIGHT_CSS = _build_light_css()

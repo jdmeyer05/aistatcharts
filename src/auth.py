@@ -624,27 +624,49 @@ def render_token_purchase():
                 st.link_button(f"Buy {pack['name']}", link, use_container_width=True)
 
 
+def _render_payment_failure_banner():
+    """Render the payment failure warning banner."""
+    st.markdown(
+        '<div style="background:rgba(255,68,68,0.1);border:1px solid #ff4444;'
+        'border-radius:8px;padding:12px;text-align:center;margin:8px 0;">'
+        '<span style="color:#ff4444;font-weight:bold;">Payment Failed</span> — '
+        'Your last payment could not be processed. Please update your payment method to avoid losing access. '
+        f'<a href="{STRIPE_LINKS.get("portal", "#")}" target="_blank" style="color:#00d1ff;">Update Payment</a>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def check_payment_failures() -> bool:
-    """Check if the user has unresolved payment failures. Returns True if there's a problem."""
+    """Check if the user has unresolved payment failures. Returns True if there's a problem.
+    Cached in session_state for 5 minutes to avoid hitting Supabase on every page load."""
+    import time
+    _cache_key = "_payment_fail_cache"
+    _cache_ts_key = "_payment_fail_ts"
+    cached = st.session_state.get(_cache_key)
+    cached_ts = st.session_state.get(_cache_ts_key, 0)
+    if cached is not None and (time.time() - cached_ts) < 300:
+        if cached:
+            _render_payment_failure_banner()
+        return cached
+
     email = st.session_state.get("user_email", "")
     supabase = init_supabase()
     if not supabase or not email:
+        st.session_state[_cache_key] = False
+        st.session_state[_cache_ts_key] = time.time()
         return False
     try:
         result = supabase.table("payment_failures").select("*").eq("email", email).eq("resolved", False).execute()
         if result.data:
-            st.markdown(
-                '<div style="background:rgba(255,68,68,0.1);border:1px solid #ff4444;'
-                'border-radius:8px;padding:12px;text-align:center;margin:8px 0;">'
-                '<span style="color:#ff4444;font-weight:bold;">Payment Failed</span> — '
-                'Your last payment could not be processed. Please update your payment method to avoid losing access. '
-                f'<a href="{STRIPE_LINKS.get("portal", "#")}" target="_blank" style="color:#00d1ff;">Update Payment</a>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
+            _render_payment_failure_banner()
+            st.session_state[_cache_key] = True
+            st.session_state[_cache_ts_key] = time.time()
             return True
     except Exception:
         pass
+    st.session_state[_cache_key] = False
+    st.session_state[_cache_ts_key] = time.time()
     return False
 
 

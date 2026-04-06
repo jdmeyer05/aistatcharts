@@ -14,7 +14,7 @@ from src.layout import setup_page, error_boundary, fun_loader, freshness_bar
 from src.styles import COLORS
 from src.data_engine import fetch_options_chain, polygon_batch_snapshot, fetch_massive_data
 from src.options_models import black_scholes, bs_greeks, bs_higher_greeks
-from src.metrics_store import save_snapshot, percentile_rank, get_metric_timeseries
+from src.metrics_store import save_snapshot, save_batch, percentile_rank, get_metric_timeseries
 
 logger = logging.getLogger(__name__)
 
@@ -489,15 +489,13 @@ def _enrich_ivr_vrp(r, px):
         hv_vals = hv_series.values
         ivr = float(np.sum(hv_vals <= current_iv) / len(hv_vals) * 100)
 
-    try:
-        _snapshot = {"ticker": ticker, "atm_iv": current_iv}
-        if hv20 is not None:
-            _snapshot["hv20"] = hv20 / 100
-        if vrp is not None:
-            _snapshot["vrp"] = vrp / 100
-        save_snapshot(ticker, _snapshot)
-    except Exception:
-        pass
+    # Build snapshot for batch save (collected and written after loop)
+    _snapshot = {"ticker": ticker, "atm_iv": current_iv}
+    if hv20 is not None:
+        _snapshot["hv20"] = hv20 / 100
+    if vrp is not None:
+        _snapshot["vrp"] = vrp / 100
+    r["_metrics_snapshot"] = _snapshot
 
     r["ivr"] = round(ivr, 1) if ivr is not None else None
     r["vrp"] = round(vrp, 1) if vrp is not None else None
@@ -686,7 +684,15 @@ if scan and tickers:
                     _enrich_ivr_vrp(r, price_cache.get(r["ticker"]))
                 except Exception:
                     pass
+            # Batch save all metrics snapshots (1 Supabase call instead of N)
+            _snapshots = [r.pop("_metrics_snapshot") for r in results if "_metrics_snapshot" in r]
+            if _snapshots:
+                try:
+                    save_batch(_snapshots)
+                except Exception:
+                    pass
 
+            for r in results:
                 # Earnings enrichment
                 tk = r["ticker"]
                 earn = earnings_cache.get(tk)

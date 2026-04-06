@@ -1422,25 +1422,26 @@ with tab_comp, error_boundary("Composite Ranking"):
 
     weighted_composite = weighted_composite / total_weight_per_asset.replace(0, np.nan)
 
-    # Track top/bottom predictions for accuracy measurement
+    # Track top/bottom predictions for accuracy measurement (batch: 2 Supabase calls instead of 20)
     try:
-        from src.prediction_tracker import record_prediction
+        from src.prediction_tracker import record_predictions_batch
         _top5 = weighted_composite.dropna().nlargest(5)
         _bot5 = weighted_composite.dropna().nsmallest(5)
+        _universe_size = len(weighted_composite.dropna())
+        _pred_batch = []
         for _tk, _score in _top5.items():
-            record_prediction(
-                source="signal_scanner", ticker=_tk,
-                prediction={"direction": "Bullish", "score": round(float(_score), 1), "quintile": "Top"},
-                spot=0,  # scanner doesn't track individual prices
-                metadata={"universe": len(weighted_composite.dropna())},
-            )
+            _pred_batch.append({
+                "source": "signal_scanner", "ticker": _tk, "spot": 0,
+                "prediction": {"direction": "Bullish", "score": round(float(_score), 1), "quintile": "Top"},
+                "metadata": {"universe": _universe_size},
+            })
         for _tk, _score in _bot5.items():
-            record_prediction(
-                source="signal_scanner", ticker=_tk,
-                prediction={"direction": "Bearish", "score": round(float(_score), 1), "quintile": "Bottom"},
-                spot=0,
-                metadata={"universe": len(weighted_composite.dropna())},
-            )
+            _pred_batch.append({
+                "source": "signal_scanner", "ticker": _tk, "spot": 0,
+                "prediction": {"direction": "Bearish", "score": round(float(_score), 1), "quintile": "Bottom"},
+                "metadata": {"universe": _universe_size},
+            })
+        record_predictions_batch(_pred_batch)
     except Exception:
         pass
 
@@ -1463,16 +1464,20 @@ with tab_comp, error_boundary("Composite Ranking"):
                             _scores_dict[_tk][gname] = round(float(_gv), 1)
         write_context("signal_scanner", {"scores": _scores_dict})
 
-        # Write signals for top/bottom tickers
-        from src.signal_engine import write_signal
+        # Write signals for top/bottom tickers (batch: 1 insert instead of 10)
+        from src.signal_engine import write_signals_batch
+        _signal_batch = []
         for _tk in _comp_sorted.tail(5).index:
             _sc = float(weighted_composite[_tk])
-            write_signal("signal_scanner", _tk, "bull", min(1.0, _sc / 100),
-                         reasoning=f"Composite score {_sc:.0f} — top-ranked by multi-factor scan")
+            _signal_batch.append({"source": "signal_scanner", "ticker": _tk, "direction": "bull",
+                                  "conviction": min(1.0, _sc / 100),
+                                  "reasoning": f"Composite score {_sc:.0f} — top-ranked by multi-factor scan"})
         for _tk in _comp_sorted.head(5).index:
             _sc = float(weighted_composite[_tk])
-            write_signal("signal_scanner", _tk, "bear", min(1.0, abs(_sc) / 100),
-                         reasoning=f"Composite score {_sc:.0f} — bottom-ranked by multi-factor scan")
+            _signal_batch.append({"source": "signal_scanner", "ticker": _tk, "direction": "bear",
+                                  "conviction": min(1.0, abs(_sc) / 100),
+                                  "reasoning": f"Composite score {_sc:.0f} — bottom-ranked by multi-factor scan"})
+        write_signals_batch(_signal_batch)
     except Exception:
         pass
 

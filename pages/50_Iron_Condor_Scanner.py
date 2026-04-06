@@ -13,7 +13,7 @@ from src.layout import setup_page, error_boundary, fun_loader, freshness_bar
 from src.styles import COLORS
 from src.data_engine import fetch_options_chain, polygon_batch_snapshot, fetch_massive_data
 from src.options_models import black_scholes
-from src.metrics_store import save_snapshot, percentile_rank
+from src.metrics_store import save_snapshot, save_batch, percentile_rank
 from src.api_keys import get_secret
 from src.economic_calendar import FOMC_DATES, FOMC_SEP_DATES
 
@@ -871,16 +871,13 @@ def _enrich_ivr_vrp(r: dict, px: pd.DataFrame | None) -> None:
         hv_vals = hv_series.values
         ivr = float(np.sum(hv_vals <= current_iv) / len(hv_vals) * 100)
 
-    # Save today's ATM IV to metrics_store (builds history for future IVR lookups)
-    try:
-        _snapshot = {"ticker": ticker, "atm_iv": current_iv}
-        if hv20 is not None:
-            _snapshot["hv20"] = hv20 / 100
-        if vrp is not None:
-            _snapshot["vrp"] = vrp / 100
-        save_snapshot(ticker, _snapshot)
-    except Exception:
-        pass
+    # Build snapshot for batch save (collected and written after loop)
+    _snapshot = {"ticker": ticker, "atm_iv": current_iv}
+    if hv20 is not None:
+        _snapshot["hv20"] = hv20 / 100
+    if vrp is not None:
+        _snapshot["vrp"] = vrp / 100
+    r["_metrics_snapshot"] = _snapshot
 
     r["ivr"] = round(ivr, 1) if ivr is not None else None
     r["vrp"] = round(vrp, 1) if vrp is not None else None
@@ -953,7 +950,15 @@ if scan and tickers:
                     _enrich_ivr_vrp(r, price_cache.get(r["ticker"]))
                 except Exception as e:
                     logger.debug(f"IVR/VRP enrichment failed for {r['ticker']}: {e}")
+            # Batch save all metrics snapshots (1 Supabase call instead of N)
+            _snapshots = [r.pop("_metrics_snapshot") for r in results if "_metrics_snapshot" in r]
+            if _snapshots:
+                try:
+                    save_batch(_snapshots)
+                except Exception:
+                    pass
 
+            for r in results:
                 # Earnings enrichment
                 tk = r["ticker"]
                 earn = earnings_cache.get(tk)
@@ -961,13 +966,10 @@ if scan and tickers:
                     r["earnings_date"] = earn["date"]
                     r["earnings_days"] = earn["days"]
                     r["earnings_before_exp"] = True
-                    # Expected move from ATM straddle price approximation
-                    # Using BS: ATM straddle ≈ 2 × S × σ × √(T/365) × 0.8 (rule of thumb)
                     avg_iv_dec = r["avg_iv"] / 100
                     if avg_iv_dec > 0:
                         exp_move_pct = avg_iv_dec * np.sqrt(r["dte"] / 365) * 100
                         r["expected_move_pct"] = round(exp_move_pct, 1)
-                        # Check if expected move exceeds distance to short strikes
                         sp_dist = (r["spot"] - r["short_put"]) / r["spot"] * 100
                         sc_dist = (r["short_call"] - r["spot"]) / r["spot"] * 100
                         r["strikes_inside_em"] = exp_move_pct > min(sp_dist, sc_dist)
@@ -990,29 +992,22 @@ if scan and tickers:
                 r["hist_winrate"] = hist_wr  # dict or None
 
                 # ── Position sizing (Kelly Criterion) ──
-                # Win = profit at target. Loss = stop_multiplier × credit.
-                # Use historical managed WR if available, otherwise POP + bump
                 pop_dec = r["pop"] / 100
                 if hist_wr and hist_wr.get("win_rate", 0) > 0:
                     managed_wr = min(0.95, hist_wr["win_rate"] / 100)
                 else:
                     managed_wr = min(0.95, pop_dec + win_rate_bump / 100)
                 q = 1 - managed_wr
-                profit_at_target_per = r["profit_at_target_100"]  # win per contract ($)
+                profit_at_target_per = r["profit_at_target_100"]
                 stop_loss_per = min(r["credit_100"] * stop_multiplier, r["max_risk_100"])
 
                 if stop_loss_per > 0 and profit_at_target_per > 0 and managed_wr > 0:
-                    b = profit_at_target_per / stop_loss_per  # win/loss payout ratio
+                    b = profit_at_target_per / stop_loss_per
                     full_kelly = (managed_wr * b - q) / b if b > 0 else 0
-                    # Kelly can be negative (meaning negative edge) — record raw value
                     adj_kelly = max(0, full_kelly) * kelly_fraction
-                    # Hard cap — use this as the sizing basis (Kelly may be 0 for asymmetric payouts)
                     capped_pct = min(adj_kelly, max_risk_pct / 100) if adj_kelly > 0 else max_risk_pct / 100
-                    # Contracts from sizing — don't force min 1 if account can't support it
                     size_dollars = account_size * capped_pct
                     contracts = int(size_dollars / stop_loss_per) if stop_loss_per > 0 else 0
-
-                    # Reg-T margin: for defined-risk spreads, margin = max loss per contract
                     margin_per = r["max_risk_100"]
                     total_margin = margin_per * contracts
                     total_risk = stop_loss_per * contracts

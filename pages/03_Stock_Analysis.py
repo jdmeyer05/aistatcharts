@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from src.data_engine import polygon_history, polygon_ticker_details, polygon_snapshot, polygon_financials, fetch_insider_transactions, fetch_analyst_recommendations
+from src.data_engine import polygon_history, polygon_ticker_details, polygon_snapshot, polygon_batch_snapshot, polygon_financials, fetch_insider_transactions, fetch_analyst_recommendations
 from src.edgar import calculate_financial_ratios, get_ratio_history, fetch_recent_8k, score_insider_transactions
 import logging
 import json
@@ -1754,11 +1754,12 @@ if analyze_btn or f"stock_analysis_{ticker}" in st.session_state:
                 _peers = fetch_related_companies(ticker)
                 if _peers and len(_peers) >= 2:
                     _peer_list = [ticker] + [p for p in _peers[:5] if p != ticker]
+                    _peer_snaps = polygon_batch_snapshot(_peer_list)
                     _peer_rows = []
                     for _pt in _peer_list:
                         try:
                             _pi = polygon_ticker_details(_pt) or {}
-                            _ps = polygon_snapshot(_pt)
+                            _ps = _peer_snaps.get(_pt, {})
                             _price = _ps.get("price", 0) if _ps else 0
                             _pe = _pi.get("trailingPE") or _pi.get("forwardPE") or 0
                             _pb = _pi.get("priceToBook") or 0

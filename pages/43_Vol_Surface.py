@@ -356,7 +356,16 @@ try:
         "ts_slope": _front_atm - _back_atm if len(expirations) >= 2 else 0,
         "spot": spot,
     })
-    _pctiles = percentile_ranks_all(ticker_display)
+    # Session-cache percentile ranks per ticker (avoids Supabase RTT on reruns)
+    import time as _time
+    _pct_key = f"_vol_pctile_{ticker_display}"
+    _pct_ts = st.session_state.get(f"{_pct_key}_ts", 0)
+    if (_time.time() - _pct_ts) < 300 and _pct_key in st.session_state:
+        _pctiles = st.session_state[_pct_key]
+    else:
+        _pctiles = percentile_ranks_all(ticker_display)
+        st.session_state[_pct_key] = _pctiles
+        st.session_state[f"{_pct_key}_ts"] = _time.time()
 except Exception:
     _pctiles = {}
 

@@ -330,9 +330,9 @@ def save_grok_result(result: dict) -> None:
     except Exception:
         pass
 
-    # Write signal for consensus engine
+    # Write signal for consensus engine (batch: 1 insert instead of N)
     try:
-        from src.signal_engine import write_signal
+        from src.signal_engine import write_signals_batch
         _regimes_s = result.get("regimes", [])
         if _regimes_s:
             _top_s = max(_regimes_s, key=lambda r: r.get("probability", 0))
@@ -351,8 +351,11 @@ def save_grok_result(result: dict) -> None:
             _conv = min(1.0, _prob / 100.0)
             _reason = f"Top regime: {_top_s.get('name', '?')} ({_prob}%)"
             _tickers = ticker_list or ["SPY"]
-            for _tk in _tickers:
-                write_signal("scenario_analysis", _tk, _dir, _conv, reasoning=_reason)
+            write_signals_batch([
+                {"source": "scenario_analysis", "ticker": _tk, "direction": _dir,
+                 "conviction": _conv, "reasoning": _reason}
+                for _tk in _tickers
+            ])
     except Exception:
         pass
 

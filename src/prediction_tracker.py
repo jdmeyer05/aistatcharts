@@ -103,6 +103,73 @@ def record_prediction(source: str, ticker: str, prediction: dict, spot: float,
     return pred_id
 
 
+def record_predictions_batch(predictions: list[dict]) -> int:
+    """Batch-record predictions in fewer Supabase calls.
+    Each dict: {source, ticker, prediction, spot, metadata?}
+    Returns number of new predictions recorded."""
+    if not predictions:
+        return 0
+    now = datetime.now()
+    recent_cutoff = (now - timedelta(hours=1)).isoformat()
+    uid = _user_id()
+
+    db = _db()
+    if db:
+        try:
+            # Batch dedup: query is a cross-product but filtered to exact pairs below
+            sources = list({p.get("source", "") for p in predictions})
+            tickers = list({p.get("ticker", "").upper() for p in predictions})
+            existing_result = db.table("predictions").select("source, ticker")\
+                .in_("source", sources).in_("ticker", tickers)\
+                .eq("user_id", uid).gte("created_at", recent_cutoff).execute()
+            # Filter to exact pairs (in_ is a cross-product, not a paired match)
+            existing_pairs = {(r["source"], r["ticker"]) for r in (existing_result.data or [])}
+
+            rows = []
+            for p in predictions:
+                src = p.get("source", "")
+                tk = p.get("ticker", "").upper()
+                if (src, tk) in existing_pairs:
+                    continue
+                rows.append({
+                    "id": str(uuid.uuid4())[:8], "user_id": uid,
+                    "source": src, "ticker": tk,
+                    "prediction": json.dumps(p.get("prediction", {})),
+                    "spot_at_prediction": p.get("spot", 0),
+                    "metadata": json.dumps(p.get("metadata") or {}),
+                    "outcomes": json.dumps({}),
+                    "evaluated_days": [],
+                })
+            if rows:
+                db.table("predictions").insert(rows).execute()
+            return len(rows)
+        except Exception as e:
+            logger.warning(f"Supabase batch prediction insert failed: {e}")
+
+    # Local fallback
+    local_preds = _load_local()
+    count = 0
+    for p in predictions:
+        src = p.get("source", "")
+        tk = p.get("ticker", "").upper()
+        dup = any(
+            x["source"] == src and x["ticker"] == tk and x.get("timestamp", "") > recent_cutoff
+            for x in local_preds
+        )
+        if not dup:
+            local_preds.append({
+                "id": str(uuid.uuid4())[:8], "timestamp": now.isoformat(),
+                "source": src, "ticker": tk,
+                "prediction": p.get("prediction", {}),
+                "spot_at_prediction": p.get("spot", 0),
+                "metadata": p.get("metadata") or {},
+                "outcomes": {}, "evaluated_days": [],
+            })
+            count += 1
+    _save_local(local_preds)
+    return count
+
+
 def _get_all_predictions() -> list[dict]:
     """Get all predictions from Supabase or local."""
     db = _db()

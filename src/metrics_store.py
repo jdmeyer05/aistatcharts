@@ -85,13 +85,42 @@ def save_snapshot(ticker: str, metrics: dict) -> bool:
 
 
 def save_batch(metrics_list: list[dict]) -> int:
-    """Save snapshots for multiple tickers."""
-    count = 0
+    """Save snapshots for multiple tickers in a single Supabase upsert."""
+    if not metrics_list:
+        return 0
+
+    today = date.today().isoformat()
+    uid = _user_id()
+    rows = []
     for m in metrics_list:
-        ticker = m.get("ticker")
-        if ticker and save_snapshot(ticker, m):
-            count += 1
-    return count
+        ticker = (m.get("ticker") or "").upper()
+        if not ticker:
+            continue
+        row = {"ticker": ticker, "date": m.get("date", today), "user_id": uid}
+        for field in METRIC_FIELDS:
+            val = m.get(field)
+            row[field] = float(val) if val is not None and not (isinstance(val, float) and np.isnan(val)) else None
+        rows.append(row)
+
+    if not rows:
+        return 0
+
+    db = _db()
+    if db:
+        try:
+            db.table("metrics_history").upsert(rows, on_conflict="user_id,ticker,date").execute()
+            return len(rows)
+        except Exception as e:
+            logger.warning(f"Supabase batch metrics save failed: {e}")
+
+    # Local fallback
+    for row in rows:
+        ticker = row["ticker"]
+        history = _load_local(ticker)
+        history = [r for r in history if r.get("date") != row["date"]]
+        history.append(row)
+        _save_local(ticker, history)
+    return len(rows)
 
 
 def load_history(ticker: str, days: int = 252) -> pd.DataFrame:

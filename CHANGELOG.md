@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-04-05 — Performance Optimization: Streamlit Speed Overhaul
+
+### Infrastructure — Core Rendering Pipeline
+- **Pre-built CSS at import time** — 20KB dark CSS + 6KB light CSS + Plotly JS guard pre-formatted once at module load. Eliminates f-string formatting of 600+ lines on every page load.
+- **Merged 2 iframes → 1** — Combined mobile session guard + footer into single `components.html` call (~100-200ms saved per page).
+- **Cached `check_payment_failures()`** — Session-state cached with 5-min TTL. Was hitting Supabase on every Summary page load.
+- **Local-first market status** — Header renders market open/closed from local time instantly; Polygon API overlays when cached.
+- **DRY payment failure banner** — Extracted `_render_payment_failure_banner()` to eliminate 3× duplicated HTML.
+
+### Infrastructure — Batch Database Operations
+- **`save_batch()` in metrics_store** — Single Supabase upsert for N tickers (was N individual upserts). Used by Iron Condor + Calendar Spread scanners.
+- **`write_signals_batch()` in signal_engine** — 1 DELETE (grouped by source with `.in_()`) + 1 INSERT for N signals (was N×DELETE + N×INSERT).
+- **`record_predictions_batch()` in prediction_tracker** — 1 SELECT dedup + 1 INSERT for N predictions (was N×SELECT + N×INSERT).
+
+### Summary Page (01_Summary.py)
+- **Session-cached SPY snapshot** (5-min TTL) — Was querying Supabase metrics_history on every rerun.
+- **Session-cached market news** (5-min TTL, keyed by hour) — Was making 2 Supabase queries per rerun.
+- **Batched watchlist snapshots** — Was calling `polygon_batch_snapshot([single_ticker])` in a loop; now 1 batch call.
+- **Deduplicated SPY snapshot** — Risk Snapshot was calling `get_latest_snapshot("SPY")` twice.
+- **Batched risk snapshot HTML** — 4 `st.columns` + 8 `st.markdown` → 1 flex div `st.markdown`.
+- **Batched track record HTML** — N `st.columns` + N `st.markdown` → 1 flex div `st.markdown`.
+
+### Iran Conflict Page (19_Iran_Conflict.py)
+- **Session-cached entire data fetch** (5-min TTL) — 15 parallel threads fetch GDELT, ACLED, oil, stocks, Polymarket, Grok briefings on first load. Reruns restore from session_state instantly (no threads, no fun_loader).
+- **Excluded 484MB GDELT bulk DataFrame** from session cache — Always loads from local parquet instead.
+- **Parallelized stock fetches** — `_fetch_stocks()` was 6 sequential `fetch_massive_data` calls; now `ThreadPoolExecutor(max_workers=6)`.
+- **Reduced deferred join timeout** — 5s → 3s (most threads finish in <1s when cached).
+
+### Other Pages
+- **Stock Analysis** — Peer comparison: 6 sequential `polygon_snapshot` calls → 1 `polygon_batch_snapshot`.
+- **Signal Scanner** — Signal writes: 20 Supabase calls → 2 (1 batch DELETE + 1 batch INSERT). Prediction writes: 20 → 2 (1 dedup SELECT + 1 batch INSERT).
+- **Scenario Analysis** — Signal writes batched via `write_signals_batch`.
+- **Vol Surface** — Session-cached `percentile_ranks_all` per ticker (5-min TTL).
+- **Iron Condor Scanner** — Metrics saves: 57 individual upserts → 1 batch upsert. Fixed critical bug where earnings enrichment, historical winrate, and Kelly sizing were accidentally nested inside `if _snapshots:` block.
+- **Calendar Spread Scanner** — Metrics saves batched (same pattern as Iron Condor).
+
+### Bug Fixes
+- **Iron Condor Scanner regression** — Batch save refactor accidentally nested earnings enrichment + historical winrate + Kelly position sizing inside `if _snapshots:`. If no snapshots were created, scanner output had no earnings warnings, no win rates, and no position sizing.
+- **styles.py light mode** — Half-refactored `st.markdown` closing was left inline during CSS pre-build extraction. Fixed by properly extracting `_build_light_css()`. Removed duplicate Plotly JS injection.
+
+---
+
 ## 2026-04-03/04 — Full Trading Platform: Market Scan, Position Monitor, Trade Ideas
 
 ### Infrastructure
