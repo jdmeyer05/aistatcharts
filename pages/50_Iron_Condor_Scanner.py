@@ -72,8 +72,8 @@ with st.form("ic_scan_form", border=True):
         short_delta = st.number_input("Short strike delta", value=0.25, min_value=0.05, max_value=0.45, step=0.02, format="%.2f",
                                        help="Delta for short legs. 0.16 ≈ 1σ, 0.25 ≈ standard, 0.30 ≈ aggressive. Higher = more credit, lower POP.")
     with cc4:
-        wing_width = st.number_input("Wing width ($)", value=10, min_value=1, max_value=100, step=1,
-                                      help="Distance between short and long strikes. Wider = more credit but more risk. ~1/10th of underlying is optimal.")
+        wing_width = st.number_input("Preferred width ($)", value=5, min_value=1, max_value=100, step=1,
+                                      help="Preferred wing width. Scanner tests multiple widths (0.5%-10% of price) and picks the best score. Your preference is always included.")
     with cc5:
         profit_target_pct = st.number_input("Profit target (%)", value=50, min_value=10, max_value=90, step=5,
                                              help="Close when this % of max credit is captured. 50% is the standard playbook.")
@@ -637,6 +637,7 @@ def _compute_theta_path(r: dict) -> list:
 def _scan_ticker(ticker: str, spot: float, dte_min: int, dte_max: int, delta: float,
                   width: float, profit_target: int = 50) -> dict | None:
     """Scan a single ticker for best iron condor.
+    Tests multiple wing widths and picks the one with the best score.
     Spot price from batch snapshot; falls back to price history or chain midpoint."""
     try:
         chain = fetch_options_chain(ticker)
@@ -652,21 +653,37 @@ def _scan_ticker(ticker: str, spot: float, dte_min: int, dte_max: int, delta: fl
             except Exception:
                 pass
         if not spot or spot <= 0:
-            # Last resort: midpoint of the chain's strike range near ATM
             _strikes = chain["strike_price"].dropna()
             if not _strikes.empty:
                 spot = float(_strikes.median())
         if not spot or spot <= 0:
             return None
 
-        result = _find_best_condor(chain, spot, dte_min, dte_max, delta, width, profit_target)
-        if result:
-            result["ticker"] = ticker
-            result["ivr"] = None
-            result["vrp"] = None
-            result["hv20"] = None
-            result["ivr_band"] = "N/A"
-        return result
+        # Test multiple wing widths: the user-selected width, plus adaptive candidates
+        # based on the underlying price (e.g., $1/$2.5/$5/$10/$15/$20/$25)
+        _standard_widths = [1, 2.5, 5, 10, 15, 20, 25, 50]
+        # Filter to widths that make sense for this underlying (0.5%-10% of spot)
+        _min_w = max(1, round(spot * 0.005))   # ~0.5% of spot
+        _max_w = max(5, round(spot * 0.10))     # ~10% of spot
+        _candidates = sorted(set(
+            [width] + [w for w in _standard_widths if _min_w <= w <= _max_w]
+        ))
+
+        best_result = None
+        best_score = -999
+        for w in _candidates:
+            r = _find_best_condor(chain, spot, dte_min, dte_max, delta, w, profit_target)
+            if r and r.get("score", 0) > best_score and r.get("ev_per_contract", 0) >= 0:
+                best_score = r["score"]
+                best_result = r
+
+        if best_result:
+            best_result["ticker"] = ticker
+            best_result["ivr"] = None
+            best_result["vrp"] = None
+            best_result["hv20"] = None
+            best_result["ivr_band"] = "N/A"
+        return best_result
     except Exception as e:
         logger.warning(f"Iron condor scan failed for {ticker}: {e}")
         return None

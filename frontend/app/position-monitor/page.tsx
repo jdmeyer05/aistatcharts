@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { fetchRobinhoodPositions, fetchHoldingsResearch, type RHStock, type RHSpread, type RHPortfolioGreeks, type HoldingResearch } from "@/lib/api";
+import { fetchRobinhoodPositions, fetchHoldingsResearch, fetchTradeArchitect, fetchHoldingDeepDive, type RHStock, type RHSpread, type RHPortfolioGreeks, type HoldingResearch, type StructuredTrade, type HoldingDiveResponse } from "@/lib/api";
+import { MatrixLoader } from "@/components/matrix-loader";
 
 // ── P/L at expiration from actual legs ──
 function computeSpreadPL(spread: RHSpread) {
@@ -230,6 +231,118 @@ function SpreadPLChart({ spread }: { spread: RHSpread }) {
   );
 }
 
+// ── Trade Architect P/L chart + tooltip ──
+function computeTradePL(t: StructuredTrade): { prices: number[]; pls: number[]; breakevens: number[] } {
+  if (t.type === "stock") {
+    const entry = t.entry;
+    const lo = entry * 0.92, hi = entry * 1.08, pts = 80;
+    const step = (hi - lo) / pts;
+    const prices: number[] = [], pls: number[] = [];
+    const qty = t.legs[0]?.qty ?? 1;
+    for (let i = 0; i <= pts; i++) {
+      const s = lo + i * step;
+      prices.push(s); pls.push((s - entry) * qty);
+    }
+    return { prices, pls, breakevens: [entry] };
+  }
+  const optLegs = t.legs.filter(l => l.instrument !== "shares");
+  const stockLegs = t.legs.filter(l => l.instrument === "shares");
+  const strikes = optLegs.map(l => l.strike ?? 0).filter(s => s > 0);
+  const allPrices = [...strikes, ...stockLegs.map(l => l.price)].filter(p => p > 0);
+  if (allPrices.length < 1) return { prices: [], pls: [], breakevens: [] };
+  const minP = Math.min(...allPrices), maxP = Math.max(...allPrices);
+  const span = (maxP - minP) || minP * 0.1 || 1;
+  const lo = minP - span * 2, hi = maxP + span * 2, pts = 100;
+  const step = (hi - lo) / pts;
+  const prices: number[] = [], pls: number[] = [], breakevens: number[] = [];
+  for (let i = 0; i <= pts; i++) {
+    const s = lo + i * step;
+    let pl = 0;
+    for (const leg of optLegs) {
+      const sign = leg.action === "sell" ? 1 : -1;
+      const strike = leg.strike ?? 0;
+      const intrinsic = leg.instrument === "call" ? Math.max(s - strike, 0) : Math.max(strike - s, 0);
+      pl += (sign * leg.price - sign * intrinsic) * 100 * leg.qty;
+    }
+    for (const leg of stockLegs) { pl += (s - leg.price) * leg.qty; }
+    prices.push(s); pls.push(pl);
+  }
+  for (let i = 1; i < pls.length; i++) {
+    if ((pls[i - 1] <= 0 && pls[i] > 0) || (pls[i - 1] >= 0 && pls[i] < 0)) {
+      const ratio = Math.abs(pls[i - 1]) / (Math.abs(pls[i - 1]) + Math.abs(pls[i]));
+      breakevens.push(prices[i - 1] + ratio * (prices[i] - prices[i - 1]));
+    }
+  }
+  return { prices, pls, breakevens };
+}
+
+let _tradePlId = 0;
+function TradePLChart({ trade }: { trade: StructuredTrade }) {
+  const [clipId] = useState(() => `tpl-clip-${++_tradePlId}`);
+  const { prices, pls, breakevens } = computeTradePL(trade);
+  if (prices.length < 2) return null;
+  const W = 300, topM = 12, botM = 14, chartH = 65, H = topM + chartH + botM;
+  const padX = 4, w = W - padX * 2;
+  const rawMin = Math.min(...pls), rawMax = Math.max(...pls);
+  const absMax = Math.max(Math.abs(rawMin), Math.abs(rawMax), 1);
+  const minP = Math.min(rawMin, -absMax * 0.2);
+  const maxP = Math.max(rawMax, absMax * 0.2);
+  const range = maxP - minP || 1;
+  const zeroY = topM + chartH - ((0 - minP) / range) * chartH;
+  const pMin = prices[0], pMax2 = prices[prices.length - 1], pRange = pMax2 - pMin || 1;
+  const toX = (i: number) => padX + (i / (prices.length - 1)) * w;
+  const priceToX = (p: number) => padX + ((p - pMin) / pRange) * w;
+  const toY = (pl: number) => topM + chartH - ((pl - minP) / range) * chartH;
+  const pathD = prices.map((_, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(pls[i]).toFixed(1)}`).join(" ");
+  const fillD = pathD + `L${toX(prices.length - 1)},${zeroY}L${toX(0)},${zeroY}Z`;
+  const spot = trade.entry;
+  const spotInRange = spot >= pMin && spot <= pMax2;
+  return (
+    <svg width={W} height={H} style={{ display: "block" }}>
+      <defs>
+        <clipPath id={`${clipId}-a`}><rect x={padX} y={topM} width={w} height={Math.max(0, zeroY - topM)} /></clipPath>
+        <clipPath id={`${clipId}-b`}><rect x={padX} y={zeroY} width={w} height={Math.max(0, topM + chartH - zeroY)} /></clipPath>
+      </defs>
+      <text x={padX} y={topM - 3} fill="#22c55e" fontSize="8" fontFamily="monospace">+${trade.max_profit.toLocaleString()}</text>
+      <text x={W - padX} y={topM - 3} fill="#ef4444" fontSize="8" fontFamily="monospace" textAnchor="end">-${trade.max_risk.toLocaleString()}</text>
+      <line x1={padX} x2={W - padX} y1={zeroY} y2={zeroY} stroke="#555" strokeWidth="0.5" strokeDasharray="3,3" />
+      <path d={fillD} fill="rgba(34,197,94,0.12)" clipPath={`url(#${clipId}-a)`} />
+      <path d={fillD} fill="rgba(239,68,68,0.12)" clipPath={`url(#${clipId}-b)`} />
+      <path d={pathD} fill="none" stroke="#888" strokeWidth="1.5" strokeLinejoin="round" />
+      {breakevens.map((be, i) => (
+        <g key={i}>
+          <circle cx={priceToX(be)} cy={zeroY} r="3" fill="#888" />
+          <text x={priceToX(be)} y={topM + chartH + 10} fill="#888" fontSize="7" fontFamily="monospace" textAnchor="middle">BE ${be.toFixed(0)}</text>
+        </g>
+      ))}
+      {spotInRange && (
+        <>
+          <line x1={priceToX(spot)} x2={priceToX(spot)} y1={topM} y2={topM + chartH} stroke="#6366f1" strokeWidth="1" strokeDasharray="2,2" />
+          <text x={priceToX(spot)} y={topM + 10} fill="#6366f1" fontSize="8" fontFamily="monospace" textAnchor="middle">${spot.toFixed(0)}</text>
+        </>
+      )}
+    </svg>
+  );
+}
+
+function TradeTooltip({ trade }: { trade: StructuredTrade }) {
+  return (
+    <div className="absolute z-50 bottom-full left-0 mb-1 p-2.5 rounded-lg border border-border-strong bg-surface shadow-xl" style={{ minWidth: 320 }}>
+      <div className="text-[0.65rem] font-semibold text-text mb-1">{trade.label} — P/L at Expiration</div>
+      <TradePLChart trade={trade} />
+      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1.5 text-[0.55rem] font-data">
+        <span className="text-text-muted">Max Profit</span><span className="text-gain font-semibold">${trade.max_profit.toLocaleString()}</span>
+        <span className="text-text-muted">Max Risk</span><span className="text-loss font-semibold">${trade.max_risk.toLocaleString()}</span>
+        <span className="text-text-muted">Breakeven</span><span>${trade.breakeven.toFixed(2)}</span>
+        {trade.pop != null && <><span className="text-text-muted">POP</span><span>{trade.pop}%</span></>}
+        <span className="text-text-muted">R:R</span><span>{trade.rr_ratio}x</span>
+        <span className="text-text-muted">Delta</span><span>{trade.greeks.delta.toFixed(1)}</span>
+        <span className="text-text-muted">Theta/day</span><span>${trade.greeks.theta.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function PositionMonitor() {
   const { data, isLoading, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ["rh-positions"],
@@ -245,6 +358,38 @@ export default function PositionMonitor() {
 
   const [research, setResearch] = useState<HoldingResearch[]>([]);
   const [researchError, setResearchError] = useState("");
+
+  // Trade Architect
+  const [archInput, setArchInput] = useState("");
+  const [archResult, setArchResult] = useState("");
+  const [archTrades, setArchTrades] = useState<StructuredTrade[]>([]);
+  const [archSources, setArchSources] = useState<string[]>([]);
+  const [archLoading, setArchLoading] = useState(false);
+  const [archError, setArchError] = useState("");
+  const [archRisk, setArchRisk] = useState<"conservative" | "moderate" | "aggressive">("moderate");
+  const [archStrategy, setArchStrategy] = useState<"auto" | "sell" | "buy">("auto");
+  const [archDirection, setArchDirection] = useState<"" | "bullish" | "bearish" | "neutral">("");
+  const accountEquity = portfolio?.equity ?? 0;
+
+  const submitArchitect = useCallback((deep = false) => {
+    if (!archInput.trim() || archLoading) return;
+    if (accountEquity <= 0) { setArchError("Portfolio data still loading — wait a moment."); return; }
+    setArchLoading(true); setArchError(""); setArchResult(""); setArchTrades([]);
+    const heldTickers = stocks.map(s => s.ticker);
+    const portfolioCtx = stocks.map(s =>
+      `${s.ticker}: ${s.qty} sh @ $${s.avg_cost.toFixed(2)} (now $${s.current_price.toFixed(2)}, ${s.pl_pct >= 0 ? "+" : ""}${s.pl_pct.toFixed(1)}%, $${s.market_value.toLocaleString()})`
+    ).join("\n");
+    fetchTradeArchitect(archInput, [], portfolioCtx, heldTickers, accountEquity, deep, archRisk, archStrategy, archDirection).then(res => {
+      if (res.success) {
+        setArchResult(res.analysis ?? "");
+        setArchTrades(res.trades ?? []);
+        setArchSources(res.context_sources ?? []);
+      } else {
+        setArchError(res.error || "Analysis failed.");
+      }
+    }).catch(e => setArchError(e instanceof Error ? e.message : "Request failed"))
+      .finally(() => setArchLoading(false));
+  }, [archInput, archLoading, accountEquity, stocks, archRisk, archStrategy, archDirection]);
   const researchMutation = useMutation({
     mutationFn: () => {
       const tickers = (data?.stocks ?? []).map(s => s.ticker);
@@ -257,7 +402,8 @@ export default function PositionMonitor() {
   });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 relative">
+      {/* Matrix loader only for Trade Architect, not initial page load */}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -352,7 +498,7 @@ export default function PositionMonitor() {
                         const stockPx = s.stock_price || 0;
                         return (
                           <tr key={`s-${i}`} className="border-t border-border/50">
-                            <td className="py-1 pr-2 text-text">{s.ticker} <span className="text-text-muted">{s.type.slice(0, 10)}</span></td>
+                            <td className="py-1 pr-2 text-text">{s.ticker} <span className="text-text-muted">{s.type.replace("Iron Condor", "IC").replace("Covered Call", "CC").replace("Bear Call", "BC").replace("Bull Put", "BP")}</span></td>
                             {[-5, -3, -1, 0, 1, 3, 5].map(pct => {
                               if (pct === 0) return <td key={pct} className="text-right py-1 px-1.5 text-text font-bold">${s.pl.toFixed(0)}</td>;
                               const move = stockPx * (pct / 100);
@@ -476,6 +622,301 @@ export default function PositionMonitor() {
             </div>
           )}
 
+          {/* Trade Architect */}
+          <div className="card">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="metric-label">Trade Architect</span>
+              <span className="text-[0.5rem] text-text-muted">Claude Opus · 14 data sources</span>
+              {archSources.length > 0 && (
+                <span className="text-[0.45rem] text-text-muted">[{archSources.join(", ")}]</span>
+              )}
+              {archTrades.length > 0 && !archLoading && (
+                <button onClick={() => submitArchitect(false)}
+                  className="ml-auto text-[0.5rem] text-text-muted hover:text-accent px-1.5 py-0.5 border border-border rounded">
+                  Refresh Prices
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <input type="text" value={archInput}
+                onChange={e => setArchInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") submitArchitect(false); }}
+                placeholder="e.g. 'hedge my RGTI' or 'sell premium on SPY' or 'balance my portfolio'"
+                className="flex-1 px-3 py-2 border border-border rounded-lg text-sm bg-surface placeholder:text-text-muted"
+                disabled={archLoading} />
+              <button onClick={() => submitArchitect(false)} disabled={archLoading || !archInput.trim()}
+                className="px-3 py-2 bg-accent text-white text-sm font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 whitespace-nowrap">
+                {archLoading ? "Analyzing..." : "Analyze"}
+              </button>
+              <button onClick={() => submitArchitect(true)} disabled={archLoading || !archInput.trim()}
+                title="Claude Opus — deeper reasoning, slower"
+                className="px-3 py-2 border border-accent/40 text-accent text-[0.65rem] font-semibold rounded-lg hover:bg-accent/10 disabled:opacity-50 whitespace-nowrap">
+                Deep Analyze
+              </button>
+            </div>
+            {/* Parameter controls */}
+            <div className="flex items-center gap-3 mt-1.5">
+              <div className="flex items-center gap-1">
+                <span className="text-[0.55rem] text-text-muted">Risk:</span>
+                {(["conservative", "moderate", "aggressive"] as const).map(r => (
+                  <button key={r} onClick={() => setArchRisk(r)}
+                    className={`px-1.5 py-0.5 text-[0.5rem] rounded ${archRisk === r ? "bg-accent/15 text-accent font-semibold" : "text-text-muted hover:text-text"}`}>
+                    {r.charAt(0).toUpperCase() + r.slice(1)}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[0.55rem] text-text-muted">Strategy:</span>
+                {([["auto", "Auto"], ["sell", "Sell Premium"], ["buy", "Buy Premium"]] as const).map(([v, label]) => (
+                  <button key={v} onClick={() => setArchStrategy(v as typeof archStrategy)}
+                    className={`px-1.5 py-0.5 text-[0.5rem] rounded ${archStrategy === v ? "bg-accent/15 text-accent font-semibold" : "text-text-muted hover:text-text"}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[0.55rem] text-text-muted">Direction:</span>
+                {([["", "Auto"], ["bullish", "Bull"], ["bearish", "Bear"], ["neutral", "Neutral"]] as const).map(([v, label]) => (
+                  <button key={v} onClick={() => setArchDirection(v as typeof archDirection)}
+                    className={`px-1.5 py-0.5 text-[0.5rem] rounded ${archDirection === v
+                      ? v === "bullish" ? "bg-gain/15 text-gain font-semibold"
+                      : v === "bearish" ? "bg-loss/15 text-loss font-semibold"
+                      : "bg-accent/15 text-accent font-semibold"
+                      : "text-text-muted hover:text-text"}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {archLoading && (
+              <div className="relative mt-3" style={{ minHeight: 320 }}>
+                <MatrixLoader loading={true} status="GATHERING 14 DATA SOURCES... STRUCTURING TRADES..." />
+              </div>
+            )}
+            {archError && <div className="text-xs text-loss mt-2">{archError}</div>}
+            {archTrades.length > 0 && (
+              <div className="mt-3 border-t border-border pt-3 space-y-3">
+                {/* Context strip */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.55rem] font-data text-text-muted">
+                  {archTrades[0]?.direction && (
+                    <span className={`font-semibold ${archTrades[0].direction === "bullish" ? "text-gain" : archTrades[0].direction === "bearish" ? "text-loss" : "text-accent"}`}>
+                      {archTrades[0].direction.toUpperCase()}
+                    </span>
+                  )}
+                  {archTrades[0]?.vol_suggestion && <span>{archTrades[0].vol_suggestion}</span>}
+                  {archTrades[0]?.signal_consensus && <span>Signal: <span className="text-accent">{archTrades[0].signal_consensus}</span></span>}
+                  {archTrades[0]?.portfolio_delta_before != null && (
+                    <span>Portfolio Δ: {archTrades[0].portfolio_delta_before.toFixed(0)}</span>
+                  )}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[0.6rem] font-data">
+                    <thead>
+                      <tr className="text-text-muted border-b border-border">
+                        <th className="text-left py-1 pr-2">Trade</th>
+                        <th className="text-right px-2">Profit</th>
+                        <th className="text-right px-2">Risk</th>
+                        <th className="text-right px-2">R:R</th>
+                        <th className="text-right px-2">POP</th>
+                        <th className="text-right px-2">Delta</th>
+                        <th className="text-right pl-2">Acct %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const bestFit = Math.max(...archTrades.map(x => x.account_fit ?? 0));
+                        const tied = archTrades.filter(x => (x.account_fit ?? 0) === bestFit);
+                        const winner = tied.sort((a, b) => b.rr_ratio - a.rr_ratio)[0];
+                        const bestIdx = archTrades.indexOf(winner);
+                        return archTrades.map((t, i) => (
+                          <tr key={i} className={`border-b border-border/50 ${i === bestIdx ? "bg-accent/5" : ""}`}>
+                            <td className="py-1.5 pr-2 font-semibold text-text">
+                              {t.label}
+                              {i === bestIdx && <span className="ml-1 text-[0.45rem] text-accent font-bold">BEST{t.account_fit != null ? ` · Fit ${t.account_fit}` : ""}</span>}
+                            </td>
+                            <td className="text-right px-2 text-gain">${t.max_profit.toLocaleString()}</td>
+                            <td className="text-right px-2 text-loss">${t.max_risk.toLocaleString()}</td>
+                            <td className="text-right px-2 font-semibold">{t.rr_ratio}x</td>
+                            <td className="text-right px-2">{t.pop != null ? `${t.pop}%` : "—"}</td>
+                            <td className="text-right px-2">{t.greeks.delta.toFixed(1)}</td>
+                            <td className={`text-right pl-2 ${t.risk_pct_of_account && t.risk_pct_of_account > 5 ? "text-loss" : ""}`}>
+                              {t.risk_pct_of_account != null ? `${t.risk_pct_of_account.toFixed(1)}%` : "—"}
+                            </td>
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+                <div className={`grid grid-cols-1 ${archTrades.length >= 3 ? "md:grid-cols-3" : "md:grid-cols-2"} gap-2`}>
+                  {archTrades.map((t, i) => {
+                    const colors: Record<string, string> = { stock: "border-[#58a6ff]", options: "border-[#a371f7]", combination: "border-[#d29922]" };
+                    const icons: Record<string, string> = { stock: "S", options: "O", combination: "C" };
+                    return (
+                      <div key={i} className={`relative group rounded-lg border-l-4 ${colors[t.type] || "border-border"} border border-border p-3 bg-surface`}>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="w-6 h-6 rounded-full flex items-center justify-center text-[0.6rem] font-bold bg-surface-alt text-text-muted">
+                            {icons[t.type] || "?"}
+                          </span>
+                          <span className="text-[0.7rem] font-bold text-text">{t.label}</span>
+                          <button onClick={(e) => {
+                            const text = t.legs.map(l =>
+                              l.instrument === "shares" ? `${l.action} ${l.qty} ${l.ticker} @ $${l.price}`
+                              : `${l.action} ${l.qty}× ${l.ticker} $${l.strike} ${l.instrument} ${l.exp} @ $${l.price}`
+                            ).join("\n");
+                            navigator.clipboard.writeText(text);
+                            const btn = e.currentTarget; btn.textContent = "Copied!";
+                            setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+                          }} className="ml-auto text-[0.5rem] text-text-muted hover:text-accent px-1.5 py-0.5 border border-border rounded">Copy</button>
+                        </div>
+                        <div className="space-y-0.5 mb-2">
+                          {t.legs.map((l, li) => (
+                            <div key={li} className="flex items-center gap-2 text-[0.6rem] font-data">
+                              <span className={`font-semibold ${l.action === "buy" ? "text-gain" : "text-loss"}`}>{l.action.toUpperCase()}</span>
+                              <span className="text-text">
+                                {l.qty}× {l.instrument === "shares" ? `${l.ticker} shares` : `${l.ticker} $${l.strike} ${l.instrument}`}
+                                {l.exp && <span className="text-text-muted ml-1">{l.exp}</span>}
+                              </span>
+                              <span className="text-text-muted ml-auto">${l.price.toFixed(2)}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[0.55rem] font-data border-t border-border/50 pt-1.5">
+                          <span className="text-text-muted">Profit</span><span className="text-gain text-right">${t.max_profit.toLocaleString()}</span>
+                          <span className="text-text-muted">Risk</span><span className="text-loss text-right">${t.max_risk.toLocaleString()}</span>
+                          <span className="text-text-muted">R:R</span><span className="text-right">{t.rr_ratio}x</span>
+                          {t.pop != null && <><span className="text-text-muted">POP</span><span className="text-right">{t.pop}%</span></>}
+                          {t.breakeven > 0 && <><span className="text-text-muted">Breakeven</span><span className="text-right">${t.breakeven.toFixed(2)}{t.breakeven_upper ? ` / $${t.breakeven_upper.toFixed(2)}` : ""}</span></>}
+                          {t.stop != null && <><span className="text-text-muted">Stop</span><span className="text-right text-loss">${t.stop.toFixed(2)}</span></>}
+                          {t.target != null && <><span className="text-text-muted">Target</span><span className="text-right text-gain">${t.target.toFixed(2)}</span></>}
+                          <span className="text-text-muted">Timeframe</span><span className="text-right">{t.timeframe}</span>
+                          {t.risk_pct_of_account != null && (
+                            <><span className="text-text-muted">Account Risk</span>
+                            <span className={`text-right font-semibold ${t.risk_pct_of_account > 3 ? "text-loss" : "text-text"}`}>{t.risk_pct_of_account.toFixed(1)}%</span></>
+                          )}
+                        </div>
+                        {/* Greeks */}
+                        <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1.5 pt-1.5 border-t border-border/50 text-[0.5rem] font-data text-text-muted">
+                          <span>Δ {t.greeks.delta.toFixed(1)}</span>
+                          <span>Θ ${t.greeks.theta.toFixed(2)}/d</span>
+                          <span>Γ {t.greeks.gamma.toFixed(3)}</span>
+                          <span>V {t.greeks.vega.toFixed(1)}</span>
+                          {t.portfolio_delta_before != null && (
+                            <span className="text-text-secondary">
+                              Port Δ: {t.portfolio_delta_before.toFixed(0)} → <span className="text-text font-semibold">{t.portfolio_delta_after!.toFixed(0)}</span>
+                            </span>
+                          )}
+                        </div>
+                        {/* Account fit + backtest + save */}
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {t.account_fit != null && (
+                            <span className={`text-[0.45rem] px-1 py-0.5 rounded ${t.account_fit >= 70 ? "bg-gain-bg text-gain" : t.account_fit >= 40 ? "bg-warn-bg text-warn" : "bg-loss-bg text-loss"}`}>
+                              Fit: {t.account_fit}/100
+                            </span>
+                          )}
+                          {t.hist_winrate != null && (
+                            <span className={`text-[0.45rem] px-1 py-0.5 rounded ${t.hist_winrate >= 65 ? "bg-gain-bg text-gain" : t.hist_winrate >= 50 ? "bg-warn-bg text-warn" : "bg-loss-bg text-loss"}`}>
+                              Backtest: {t.hist_winrate}% WR ({t.hist_trials} trials)
+                            </span>
+                          )}
+                          <button onClick={() => {
+                            const saved = JSON.parse(localStorage.getItem("saved_trades") || "[]");
+                            saved.unshift({
+                              ticker: t.legs[0]?.ticker || "?", label: t.label, type: t.type,
+                              max_profit: t.max_profit, max_risk: t.max_risk, rr_ratio: t.rr_ratio,
+                              pop: t.pop, breakeven: t.breakeven, timeframe: t.timeframe,
+                              legs: t.legs.map(l => `${l.action} ${l.qty}× ${l.instrument === "shares" ? "shares" : `$${l.strike} ${l.instrument}`}`).join(", "),
+                              thesis: archInput, timestamp: new Date().toISOString(),
+                            });
+                            localStorage.setItem("saved_trades", JSON.stringify(saved.slice(0, 20)));
+                          const b = document.querySelector(`[data-save-idx="${i}"]`) as HTMLButtonElement;
+                          if (b) { b.textContent = "Saved!"; setTimeout(() => { b.textContent = "Save"; }, 1500); }
+                          }} data-save-idx={i} className="text-[0.45rem] text-text-muted hover:text-accent px-1 py-0.5 border border-border rounded">
+                            Save
+                          </button>
+                        </div>
+                        {/* P/L tooltip on hover */}
+                        <div className="hidden group-hover:block">
+                          <TradeTooltip trade={t} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {archResult && (
+              <div className="mt-3 border-t border-border pt-3">
+                <div className="text-[0.65rem] font-bold text-accent uppercase tracking-wider mb-2">AI Assessment</div>
+                <div className="text-xs leading-relaxed text-text arch-assessment"
+                  dangerouslySetInnerHTML={{ __html: (() => {
+                    let h = archResult
+                      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                      .replace(/^\s*---+\s*$/gm, "")
+                      .replace(/^#{1,3}\s+(.+)$/gm, '<div class="arch-h">$1</div>')
+                      .replace(/^([A-Z]+(?:\s+[A-Z:]+){1,6})$/gm, (m) => m.length >= 8 ? `<div class="arch-h">${m}</div>` : m)
+                      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                      .replace(/\*([^*]{4,})\*/g, '<em>$1</em>')
+                      .replace(/[\u{FFFD}\u{FE0F}]/gu, "")
+                      .replace(/^[\u{1F534}\u{1F7E1}\u{26A0}\u{2022}\u{FFFD}•\-\*]\s*[\u{FE0F}]?\s*(.+)$/gmu, (_, content) => {
+                        const isRisk = /risk|warn|cpi|nfp|earn|liquid|slippage/i.test(content);
+                        const cleaned = content.replace(/^[\u{1F534}\u{1F7E1}\u{26A0}\u{FFFD}\u{FE0F}]\s*/gu, "");
+                        return `<div class="${isRisk ? "arch-risk" : "arch-bullet"}">${cleaned}</div>`;
+                      })
+                      // Markdown tables
+                      .replace(/(\|.+\|[\n])+/g, (tableBlock: string) => {
+                        const rows = tableBlock.trim().split("\n").filter((r: string) => r.includes("|"));
+                        if (rows.length < 2) return tableBlock;
+                        const parseRow = (r: string) => r.split("|").filter((c: string) => c.trim()).map((c: string) => c.trim());
+                        const isSep = (r: string) => /^\|[\s\-:]+\|$/.test(r.trim());
+                        const headers = parseRow(rows[0]);
+                        const dataRows = rows.filter((r: string) => !isSep(r)).slice(1);
+                        return '<table class="arch-table"><thead><tr>' +
+                          headers.map((h: string) => `<th>${h}</th>`).join("") +
+                          '</tr></thead><tbody>' +
+                          dataRows.map((r: string) => '<tr>' + parseRow(r).map((c: string) => `<td>${c}</td>`).join("") + '</tr>').join("") +
+                          '</tbody></table>';
+                      })
+                      .replace(/\n\n+/g, '</p><p class="arch-p">')
+                      .replace(/^/, '<p class="arch-p">') + '</p>';
+                    h = h.replace(/<p class="arch-p">\s*<\/p>/g, "");
+                    return h;
+                  })()}} />
+                <style jsx>{`
+                  .arch-assessment :global(.arch-h) {
+                    font-size: 0.7rem; font-weight: 700; color: var(--color-accent);
+                    text-transform: uppercase; letter-spacing: 0.05em;
+                    margin-top: 0.85rem; margin-bottom: 0.3rem;
+                    padding-bottom: 0.2rem; border-bottom: 1px solid var(--color-border);
+                  }
+                  .arch-assessment :global(.arch-h:first-child) { margin-top: 0; }
+                  .arch-assessment :global(.arch-p) { margin-bottom: 0.4rem; line-height: 1.6; }
+                  .arch-assessment :global(.arch-risk) {
+                    padding: 0.3rem 0.5rem; margin: 0.2rem 0;
+                    border-left: 2px solid var(--color-loss); background: var(--color-loss-bg);
+                    border-radius: 0 4px 4px 0; font-size: 0.7rem; line-height: 1.5;
+                  }
+                  .arch-assessment :global(.arch-bullet) {
+                    padding: 0.2rem 0 0.2rem 0.65rem; margin: 0.1rem 0;
+                    border-left: 2px solid var(--color-border); line-height: 1.5;
+                  }
+                  .arch-assessment :global(strong) { color: var(--color-text); }
+                  .arch-assessment :global(.arch-table) {
+                    width: 100%; border-collapse: collapse; font-size: 0.65rem;
+                    font-family: var(--font-mono); margin: 0.5rem 0;
+                  }
+                  .arch-assessment :global(.arch-table th) {
+                    text-align: left; padding: 0.25rem 0.5rem; font-weight: 700;
+                    border-bottom: 1px solid var(--color-border); color: var(--color-text-secondary);
+                  }
+                  .arch-assessment :global(.arch-table td) {
+                    padding: 0.2rem 0.5rem; border-bottom: 1px solid var(--color-border);
+                  }
+                `}</style>
+              </div>
+            )}
+          </div>
+
           {/* Options Spreads */}
           {spreads.length > 0 && (
             <div className="card">
@@ -499,7 +940,7 @@ export default function PositionMonitor() {
               </div>
               <div className="space-y-1">
                 {stocks.map((s) => (
-                  <StockRow key={s.ticker} stock={s} />
+                  <StockRow key={s.ticker} stock={s} equity={portfolio.equity} />
                 ))}
               </div>
             </div>
@@ -516,9 +957,10 @@ export default function PositionMonitor() {
                 </button>
               </div>
               {researchMutation.isPending && (
-                <div className="flex items-center gap-2 py-4">
-                  <div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                  <span className="text-xs text-text-muted">Grok searching recent developments for {stocks.length} holdings...</span>
+                <div className="flex flex-col items-center gap-3 py-8">
+                  <div className="w-8 h-8 border-3 border-accent border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm text-text-secondary font-semibold">Researching {stocks.length} holdings...</span>
+                  <span className="text-xs text-text-muted">Grok searching X + yfinance fundamentals</span>
                 </div>
               )}
               {(researchMutation.isError || researchError) && (
@@ -561,36 +1003,73 @@ function GreeksDisplay({ greeks }: { greeks: RHPortfolioGreeks }) {
   );
 }
 
-function StockRow({ stock }: { stock: RHStock }) {
+function StockRow({ stock, equity }: { stock: RHStock; equity: number }) {
   const plColor = stock.pl >= 0 ? "text-gain" : "text-loss";
   const priceColor = stock.current_price >= stock.avg_cost ? "text-gain" : "text-loss";
   const daysHeld = stock.entry_date ? Math.max(0, Math.round((Date.now() - new Date(stock.entry_date).getTime()) / 86400000)) : null;
+
+  // Position analysis
+  const concentration = equity > 0 ? (stock.market_value / equity) * 100 : 0;
+  const distFromEntry = ((stock.current_price - stock.avg_cost) / stock.avg_cost) * 100;
+
+  // Verdict
+  let signal: { text: string; color: string };
+  let action = "";
+  if (stock.pl_pct <= -40) {
+    signal = { text: "REVIEW", color: "text-loss" };
+    action = `Down ${Math.abs(stock.pl_pct).toFixed(0)}% from entry. Consider tax-loss harvesting or cutting to reduce drawdown.`;
+  } else if (stock.pl_pct <= -20) {
+    signal = { text: "UNDERWATER", color: "text-warn" };
+    action = `${Math.abs(distFromEntry).toFixed(0)}% below cost basis. ${concentration > 20 ? "Position oversized — consider trimming." : "Monitor for support break."}`;
+  } else if (stock.pl_pct >= 30) {
+    signal = { text: "PROFITABLE", color: "text-gain" };
+    action = `Up ${stock.pl_pct.toFixed(0)}%. Consider selling ${Math.round(stock.qty * 0.3)} shares to lock in gains.`;
+  } else if (concentration > 25) {
+    signal = { text: "CONCENTRATED", color: "text-warn" };
+    action = `${concentration.toFixed(0)}% of portfolio — consider reducing to < 15%.`;
+  } else if (stock.pl >= 0) {
+    signal = { text: "HOLD", color: "text-gain" };
+    action = "";
+  } else {
+    signal = { text: "HOLD", color: "text-text-muted" };
+    action = "";
+  }
+
   return (
-    <div className={`flex items-center gap-3 px-3 py-2 rounded-lg border text-xs font-data ${
+    <div className={`rounded-lg border px-3 py-2 text-xs font-data ${
       stock.pl_pct < -15 ? "border-loss/30" : stock.pl_pct > 15 ? "border-gain/30" : "border-border"
     }`}>
-      <span className="font-bold text-sm w-14">{stock.ticker}</span>
-      <span className="text-text-muted">{Math.round(stock.qty)} sh</span>
-      <span className="text-text-muted">${stock.avg_cost.toFixed(2)}</span>
-      <span className={priceColor}>${stock.current_price.toFixed(2)}</span>
-      {stock.theme && <span className="text-[0.5rem] text-text-muted">{stock.theme}</span>}
-      {daysHeld !== null && <span className="text-[0.5rem] text-text-muted">{daysHeld}d held</span>}
-      <span className="ml-auto" />
-      <span className="text-text-muted">${stock.market_value.toLocaleString()}</span>
-      <span className={`font-semibold ${plColor}`}>
-        {stock.pl >= 0 ? "+" : ""}${stock.pl.toFixed(0)}
-      </span>
-      <span className={`text-[0.6rem] ${plColor}`}>
-        {stock.pl_pct >= 0 ? "+" : ""}{stock.pl_pct.toFixed(1)}%
-      </span>
+      <div className="flex items-center gap-3">
+        <span className="font-bold text-sm w-14">{stock.ticker}</span>
+        <span className="text-text-muted">{Math.round(stock.qty)} sh</span>
+        <span className="text-text-muted">${stock.avg_cost.toFixed(2)}</span>
+        <span className={priceColor}>${stock.current_price.toFixed(2)}</span>
+        {stock.theme && <span className="text-[0.5rem] text-text-muted">{stock.theme}</span>}
+        {daysHeld !== null && <span className="text-[0.5rem] text-text-muted">{daysHeld}d</span>}
+        <span className="ml-auto" />
+        <span className="text-text-muted">${stock.market_value.toLocaleString()}</span>
+        <span className={`font-semibold ${plColor}`}>
+          {stock.pl >= 0 ? "+" : ""}${stock.pl.toFixed(0)}
+        </span>
+        <span className={`text-[0.6rem] ${plColor}`}>
+          {stock.pl_pct >= 0 ? "+" : ""}{stock.pl_pct.toFixed(1)}%
+        </span>
+        <span className={`text-[0.5rem] font-semibold ${signal.color}`}>{signal.text}</span>
+      </div>
+      {action && (
+        <div className={`text-[0.55rem] mt-1 ${signal.color === "text-loss" ? "text-loss" : signal.color === "text-warn" ? "text-warn" : "text-text-muted"}`}>
+          → {action}
+          {concentration > 10 && <span className="text-text-muted ml-2">({concentration.toFixed(0)}% of portfolio)</span>}
+        </div>
+      )}
     </div>
   );
 }
 
 function SpreadRow({ spread }: { spread: RHSpread }) {
   const [hovered, setHovered] = useState(false);
-  // Lightweight MC for the card (1000 sims, cached)
-  const [quickMC] = useState(() => monteCarloSpread(spread, 1000));
+  // Lightweight MC for the card (1000 sims, recomputed when spread data changes)
+  const quickMC = useMemo(() => monteCarloSpread(spread, 1000), [spread]);
   const plColor = spread.pl >= 0 ? "text-gain" : "text-loss";
   const dte = Math.max(0, Math.round((new Date(spread.expiration + "T16:00:00").getTime() - Date.now()) / 86400000));
 
@@ -608,10 +1087,47 @@ function SpreadRow({ spread }: { spread: RHSpread }) {
   const worstDanger = shortDistances.length > 0 ? Math.max(...shortDistances.map(d => d.dangerDist)) : -99;
   const borderColor = worstDanger > 1 ? "border-loss/50" : worstDanger > -3 ? "border-warn/50" : spread.pl >= 0 ? "border-gain/30" : "border-border";
 
-  // % of max profit captured
-  const maxProfit = Math.abs(spread.net_premium); // credit collected = max profit for credit spreads
-  const pctCaptured = maxProfit > 0 ? (spread.pl / maxProfit) * 100 : 0;
+  // Credit vs debit spread detection
+  const isCredit = spread.net_premium > 0;
   const costToClose = Math.abs(spread.current_value);
+  const isNaked = spread.legs.length === 1;
+  const isDefined = spread.legs.length >= 2; // defined-risk (vertical, IC, etc.)
+
+  // Spread width calculation (for multi-leg spreads, find widest wing)
+  const callLegs = spread.legs.filter(l => l.opt_type === "call").map(l => l.strike).sort((a, b) => a - b);
+  const putLegs = spread.legs.filter(l => l.opt_type === "put").map(l => l.strike).sort((a, b) => a - b);
+  const callWidth = callLegs.length >= 2 ? Math.abs(callLegs[callLegs.length - 1] - callLegs[0]) : 0;
+  const putWidth = putLegs.length >= 2 ? Math.abs(putLegs[putLegs.length - 1] - putLegs[0]) : 0;
+  const spreadWidth = Math.max(callWidth, putWidth, Math.abs((spread.legs[0]?.strike || 0) - (spread.legs[1]?.strike || spread.legs[0]?.strike || 0)));
+  const totalWidth = spreadWidth * 100 * spread.qty;
+
+  // Max profit / max loss depend on position type
+  let maxProfit: number;
+  let maxLossAtExp: number;
+  if (isNaked && isCredit) {
+    // Naked short: max profit = credit, max loss = undefined (use 0 to flag)
+    maxProfit = spread.net_premium;
+    maxLossAtExp = 0; // undefined risk — handled specially in verdicts
+  } else if (isNaked && !isCredit) {
+    // Naked long call: max profit = unlimited, naked long put: max profit = strike × 100 × qty - debit
+    // Use 0 to indicate unlimited/unknown
+    const leg = spread.legs[0];
+    maxProfit = leg?.opt_type === "put" ? (leg.strike * 100 * spread.qty) - Math.abs(spread.net_premium) : 0;
+    maxLossAtExp = Math.abs(spread.net_premium); // debit paid = max loss
+  } else if (isCredit && isDefined) {
+    // Defined-risk credit spread: max profit = credit, max loss = width - credit
+    maxProfit = spread.net_premium;
+    maxLossAtExp = totalWidth - spread.net_premium;
+  } else {
+    // Defined-risk debit spread: max profit = width - debit, max loss = debit
+    maxProfit = totalWidth > 0 ? totalWidth - Math.abs(spread.net_premium) : 0;
+    maxLossAtExp = Math.abs(spread.net_premium);
+  }
+  const pctCaptured = maxProfit > 0 ? (spread.pl / maxProfit) * 100 : 0;
+
+  // Mark-to-market loss
+  const mtmLoss = spread.pl < 0 ? Math.abs(spread.pl) : 0;
+  const pctOfMaxRisk = maxLossAtExp > 0 ? (mtmLoss / maxLossAtExp) * 100 : 0;
 
   // Trade outlook — computed from Greeks
   const expDate = spread.expiration.slice(5);
@@ -638,30 +1154,65 @@ function SpreadRow({ spread }: { spread: RHSpread }) {
   // Theta vs delta race: is daily theta collecting more than delta loses on an avg move?
   const thetaWinning = dailyTheta > 0 && Math.abs(posDelta * dailyMove) < dailyTheta;
 
+  // Theta recovery math
+  const thetaNeededPerDay = spread.pl < 0 && dte > 0 ? Math.abs(spread.pl) / dte : 0;
+  const thetaDeficit = thetaNeededPerDay > 0 && dailyTheta > 0 ? thetaNeededPerDay - dailyTheta : 0;
+
+  // Breakeven via theta: days for theta to recover the loss
+  const breakEvenDays = spread.pl < 0 && dailyTheta > 0 ? Math.ceil(Math.abs(spread.pl) / dailyTheta) : null;
+
   // Verdict
   let signal: { text: string; color: string };
   let verdict: string;
+  let action = "";  // specific action recommendation
+  // MTM loss exceeds max expiration loss = time value inflating close cost
+  const mtmExceedsMax = mtmLoss > 0 && maxLossAtExp > 0 && mtmLoss > maxLossAtExp;
+
   if (worstDanger > 0 && !canRecover) {
     signal = { text: "MANAGE", color: "text-loss" };
-    verdict = `Breached and theta can't recover in time${thetaRecoveryDays ? ` (need ${thetaRecoveryDays}d, have ${dte}d)` : ""}. Roll or close.`;
+    if (isNaked && isCredit) {
+      // Naked short — undefined max loss, NEVER advise holding through a breach
+      verdict = `Breached — UNDEFINED RISK. ${dte}d left. Theta deficit $${thetaDeficit.toFixed(0)}/d.`;
+      action = `Close immediately for $${mtmLoss.toLocaleString()} loss. Naked position — loss can grow without limit.`;
+    } else if (mtmExceedsMax && isDefined) {
+      // Defined-risk only: closing NOW locks in a worse loss than holding — time value inflating cost
+      verdict = `Breached — MTM loss $${mtmLoss.toLocaleString()} exceeds max expiration loss $${maxLossAtExp.toLocaleString()}. Time value inflating close cost. ${dte}d left.`;
+      action = `HOLD preferred — closing locks in $${mtmLoss.toLocaleString()} loss vs $${maxLossAtExp.toLocaleString()} max at expiration. Theta deficit $${thetaDeficit.toFixed(0)}/d (need $${thetaNeededPerDay.toFixed(0)}, collecting $${dailyTheta.toFixed(0)}).`;
+    } else if (spread.type.includes("Call") && spread.stock_price) {
+      const rollStrike = Math.ceil(spread.stock_price * 1.05);
+      verdict = `Breached — need $${thetaNeededPerDay.toFixed(0)}/d theta, collecting $${dailyTheta.toFixed(0)}/d (deficit $${thetaDeficit.toFixed(0)}/d). ${dte}d left.`;
+      action = `Close for $${mtmLoss.toLocaleString()} loss${maxLossAtExp > 0 ? ` (max at exp $${maxLossAtExp.toLocaleString()})` : ""}, or roll short strike to $${rollStrike}+ (next monthly).`;
+    } else {
+      verdict = `Breached — need $${thetaNeededPerDay.toFixed(0)}/d theta, collecting $${dailyTheta.toFixed(0)}/d (deficit $${thetaDeficit.toFixed(0)}/d). ${dte}d left.`;
+      action = maxLossAtExp > 0
+        ? `Close for $${mtmLoss.toLocaleString()} loss. Max at expiration: $${maxLossAtExp.toLocaleString()} (${pctOfMaxRisk.toFixed(0)}% consumed).`
+        : `Close for $${mtmLoss.toLocaleString()} loss.`;
+    }
   } else if (worstDanger > 0 && canRecover) {
     signal = { text: "HOLD — recoverable", color: "text-warn" };
-    verdict = `Breached but theta recovers in ${thetaRecoveryDays}d (${dte}d left). ${thetaWinning ? "Theta is winning the race." : "Watch closely — delta could overrun theta."}`;
+    verdict = `Breached but theta recovers in ${thetaRecoveryDays}d (${dte}d left). ${thetaWinning ? "Theta winning the race." : "Delta could overrun — watch closely."}`;
+    if (breakEvenDays) action = `Breakeven in ~${breakEvenDays}d at current theta rate.`;
   } else if (dte <= 5) {
     signal = { text: "EXPIRING", color: "text-loss" };
     verdict = `${dte}d to ${expDate}. ${pctCaptured >= 0 ? `Close for ${pctCaptured.toFixed(0)}% profit.` : "Close to limit further loss."}`;
-  } else if (pctCaptured >= 50) {
+    action = pctCaptured >= 0 ? "Close now — gamma risk accelerates." : `Close for $${mtmLoss.toLocaleString()} loss to avoid assignment risk.`;
+  } else if (pctCaptured >= 50 && isCredit) {
     signal = { text: "CLOSE", color: "text-gain" };
     verdict = `${pctCaptured.toFixed(0)}% of max profit captured. Standard management = take the win.`;
+    action = `GTC limit to close at $${(maxProfit * 0.5 / (100 * spread.qty)).toFixed(2)} debit.`;
   } else if (thetaWinning && spread.pl < 0) {
     signal = { text: "HOLD — theta winning", color: "text-text-muted" };
-    verdict = `Underwater ${pctCaptured.toFixed(0)}% but theta ($${dailyTheta.toFixed(0)}/d) > avg delta loss ($${Math.abs(posDelta * dailyMove).toFixed(0)}/d). Recovery in ~${thetaRecoveryDays || "?"}d.`;
+    verdict = `Underwater ${pctCaptured.toFixed(0)}% but theta ($${dailyTheta.toFixed(0)}/d) > avg delta loss ($${Math.abs(posDelta * dailyMove).toFixed(0)}/d).`;
+    if (breakEvenDays) action = `Breakeven in ~${breakEvenDays}d at current theta. ${breakEvenDays < dte ? "On track." : "Tight — may need to manage."}`;
   } else if (spread.pl >= 0) {
     signal = { text: "HOLD — profitable", color: "text-gain" };
-    verdict = `${pctCaptured.toFixed(0)}% captured, target 50%. ${dte}d left. ${thetaWinning ? "Theta accelerating." : ""}`;
+    verdict = `${pctCaptured.toFixed(0)}% captured, target 50%. ${dte}d left.${thetaWinning ? " Theta accelerating." : ""}`;
+    const daysToTarget = dailyTheta > 0 ? Math.ceil((maxProfit * 0.5 - spread.pl) / dailyTheta) : null;
+    if (daysToTarget && daysToTarget > 0) action = `Target 50% ($${(maxProfit * 0.5).toFixed(0)}) in ~${daysToTarget}d at current theta.`;
   } else {
     signal = { text: "HOLD", color: "text-text-muted" };
     verdict = `${pctCaptured.toFixed(0)}% captured. ${dte}d to ${expDate}. ${dailyTheta > 0 ? `Collecting $${dailyTheta.toFixed(0)}/d theta.` : ""}`;
+    if (breakEvenDays && dailyTheta > 0) action = `Breakeven in ~${breakEvenDays}d at $${dailyTheta.toFixed(0)}/d theta.`;
   }
 
   // Strike bar visual — wider padding for tight spreads
@@ -702,6 +1253,11 @@ function SpreadRow({ spread }: { spread: RHSpread }) {
           </div>
           <div className={`text-[0.6rem] font-semibold mt-0.5 ${signal.color}`}>{signal.text}</div>
           <div className="text-[0.55rem] text-text-muted mt-0.5">{verdict}</div>
+          {action && (
+            <div className={`text-[0.55rem] mt-0.5 font-semibold ${signal.color === "text-loss" ? "text-loss" : signal.color === "text-gain" ? "text-gain" : "text-accent"}`}>
+              → {action}
+            </div>
+          )}
           <div className="flex gap-3 mt-0.5 text-[0.5rem] font-data flex-wrap">
             {quickMC && (
               <>
@@ -783,20 +1339,25 @@ function SpreadRow({ spread }: { spread: RHSpread }) {
       <div className="mb-2">
         <div className="flex items-center gap-2 text-[0.55rem] font-data">
           <span className="text-text-muted shrink-0">Profit</span>
-          <div className="flex-1 h-1.5 rounded-full bg-surface-alt border border-border relative overflow-hidden">
-            {pctCaptured > 0 ? (
-              <div className="absolute inset-y-0 left-0 bg-gain rounded-full" style={{ width: `${Math.min(pctCaptured, 100)}%` }} />
-            ) : pctCaptured < 0 ? (
-              <div className="absolute inset-y-0 left-0 bg-loss rounded-full" style={{ width: `${Math.min(Math.abs(pctCaptured), 100)}%` }} />
-            ) : null}
-            {/* 50% target marker */}
-            <div className="absolute inset-y-0 w-px bg-text-muted" style={{ left: "50%" }} />
-          </div>
-          <span className={`shrink-0 font-semibold ${pctCaptured >= 50 ? "text-gain" : pctCaptured < 0 ? "text-loss" : "text-text"}`}>
-            {pctCaptured.toFixed(0)}%
-          </span>
+          {maxProfit > 0 ? (
+            <>
+              <div className="flex-1 h-1.5 rounded-full bg-surface-alt border border-border relative overflow-hidden">
+                {pctCaptured > 0 ? (
+                  <div className="absolute inset-y-0 left-0 bg-gain rounded-full" style={{ width: `${Math.min(pctCaptured, 100)}%` }} />
+                ) : pctCaptured < 0 ? (
+                  <div className="absolute inset-y-0 left-0 bg-loss rounded-full" style={{ width: `${Math.min(Math.abs(pctCaptured), 100)}%` }} />
+                ) : null}
+                {isCredit && <div className="absolute inset-y-0 w-px bg-text-muted" style={{ left: "50%" }} />}
+              </div>
+              <span className={`shrink-0 font-semibold ${pctCaptured >= 50 ? "text-gain" : pctCaptured < 0 ? "text-loss" : "text-text"}`}>
+                {pctCaptured.toFixed(0)}%
+              </span>
+            </>
+          ) : (
+            <span className="text-text-muted text-[0.5rem]">unlimited upside</span>
+          )}
           <span className="text-text-muted shrink-0">
-            ${spread.net_premium.toFixed(0)} in · ${costToClose.toFixed(0)} out
+            ${Math.abs(spread.net_premium).toFixed(0)} {isCredit ? "in" : "out"} · ${costToClose.toFixed(0)} {isCredit ? "out" : "in"}
           </span>
         </div>
       </div>
@@ -891,12 +1452,14 @@ function SpreadRow({ spread }: { spread: RHSpread }) {
 
 const THESIS_COLORS: Record<string, { bg: string; text: string; label: string }> = {
   intact: { bg: "bg-surface-alt", text: "text-text", label: "INTACT" },
-  strengthened: { bg: "bg-gain/10", text: "text-gain", label: "STRENGTHENED" },
-  weakened: { bg: "bg-warn/10", text: "text-warn", label: "WEAKENED" },
-  broken: { bg: "bg-loss/10", text: "text-loss", label: "BROKEN" },
+  strengthened: { bg: "bg-gain-bg", text: "text-gain", label: "STRENGTHENED" },
+  weakened: { bg: "bg-warn-bg", text: "text-warn", label: "WEAKENED" },
+  broken: { bg: "bg-loss-bg", text: "text-loss", label: "BROKEN" },
 };
 
 function ResearchCard({ research: r, stock }: { research: HoldingResearch; stock?: RHStock }) {
+  const [dive, setDive] = useState<HoldingDiveResponse | null>(null);
+  const [diveLoading, setDiveLoading] = useState(false);
   const thesis = THESIS_COLORS[r.thesis_status] || THESIS_COLORS.intact;
   const borderColor = r.thesis_status === "broken" ? "border-loss/50"
     : r.thesis_status === "weakened" ? "border-warn/50"
@@ -1010,6 +1573,103 @@ function ResearchCard({ research: r, stock }: { research: HoldingResearch; stock
       {/* Risk */}
       <div className="text-[0.55rem] text-loss">
         Risk: {r.risk}
+      </div>
+
+      {/* Deep Dive */}
+      <div className="mt-2 pt-2 border-t border-border/50">
+        {!dive && !diveLoading && stock && (
+          <button
+            onClick={async () => {
+              setDiveLoading(true);
+              try {
+                const res = await fetchHoldingDeepDive(stock);
+                setDive(res);
+              } catch { setDive({ success: false, ticker: r.ticker, verdict: "", error: "Request failed" }); }
+              finally { setDiveLoading(false); }
+            }}
+            className="text-[0.55rem] font-semibold text-accent hover:text-accent-hover transition-colors">
+            Deep Dive — hold, add, trim, or close?
+          </button>
+        )}
+        {diveLoading && (
+          <div className="flex items-center gap-2 py-2">
+            <div className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+            <span className="text-[0.55rem] text-text-muted">Analyzing {r.ticker} with 5 data sources + Claude...</span>
+          </div>
+        )}
+        {dive && dive.success && (
+          <div className="mt-2 rounded-lg border border-border bg-surface p-3">
+            {/* Verdict badge */}
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`inline-block px-2.5 py-1 rounded text-[0.65rem] font-bold ${
+                dive.verdict === "CLOSE" ? "bg-loss-bg text-loss border border-loss/30" :
+                dive.verdict === "TRIM" ? "bg-warn-bg text-warn border border-warn/30" :
+                dive.verdict === "ADD" ? "bg-gain-bg text-gain border border-gain/30" :
+                "bg-info-bg text-info border border-info/30"
+              }`}>
+                {dive.verdict}
+              </span>
+              <span className="text-[0.55rem] text-text-muted">Claude analysis · {dive.sources?.length ?? 0} sources</span>
+              <button onClick={() => { setDive(null); }} className="text-[0.5rem] text-text-muted hover:text-accent ml-auto">Re-analyze</button>
+            </div>
+            {/* Analysis text — structured rendering */}
+            {(() => {
+              let text = dive.analysis ?? "";
+              // Strip verdict header (shown as badge)
+              text = text.replace(/^##?\s*VERDICT:?\s*\w+\s*/im, "").replace(/^\s*---+\s*$/gm, "").trim();
+
+              // Split into: body paragraphs + KEY RISKS section
+              // Handle **Key Risks**, ## Key Risks, Key Risks:, etc.
+              const riskMatch = text.match(/\*{0,2}\s*#{0,2}\s*Key\s*Risks?\s*\*{0,2}:?\s*\n?([\s\S]*$)/i);
+              const bodyText = riskMatch && riskMatch.index != null ? text.slice(0, riskMatch.index).trim() : text;
+              const risksText = riskMatch ? riskMatch[1].trim() : "";
+
+              // Parse risks into array — handle ** bold markers as bullet prefixes
+              const risks = risksText
+                .split(/\n(?=\*{1,2}[^*]|[•\-]|\d\.)/g)
+                .map(r => r.replace(/^\*{1,2}\s*/, "").replace(/^[•\-]\s*/, "").replace(/^\d+\.\s*/, "").replace(/\*{1,2}\s*$/, "").trim())
+                .filter(r => r.length > 10);
+
+              return (
+                <>
+                  <div className="text-xs leading-relaxed text-text mb-2"
+                    dangerouslySetInnerHTML={{ __html: bodyText
+                      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                      .replace(/\*{2,}/g, "")  // strip orphaned ** markers
+                    }} />
+                  {risks.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="text-[0.6rem] font-bold text-loss uppercase tracking-wider">Key Risks</div>
+                      {risks.map((risk, ri) => {
+                        // Split on colon to get title + detail
+                        const colonIdx = risk.indexOf(":");
+                        const title = colonIdx > 0 ? risk.slice(0, colonIdx).trim() : "";
+                        const detail = colonIdx > 0 ? risk.slice(colonIdx + 1).trim() : risk;
+                        return (
+                          <div key={ri} className="pl-2 border-l-2 border-loss/30 text-[0.65rem] leading-relaxed">
+                            {title && <strong className="text-loss">{title}:</strong>}{" "}
+                            <span className="text-text" dangerouslySetInnerHTML={{ __html: detail
+                              .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                              .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                              .replace(/\*{2,}/g, "")
+                            }} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+            {dive.sources && (
+              <div className="text-[0.5rem] text-text-muted mt-2 pt-1.5 border-t border-border/50">Sources: {dive.sources.join(" · ")}</div>
+            )}
+          </div>
+        )}
+        {dive && !dive.success && (
+          <div className="text-[0.55rem] text-loss mt-1">{dive.error}</div>
+        )}
       </div>
     </div>
   );

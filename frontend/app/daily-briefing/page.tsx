@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useRef, useCallback, Fragment } from "react";
+import { useState, useRef, useCallback, useEffect, Fragment } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { fetchDailyBriefing, fetchMorningNote, fetchNewsSearch, fetchNewsVerify, fetchPolymarket, fetchPolymarketHistory, fetchRobinhoodPositions, fetchStrategyScan, fetchVolAnalysis, addPosition, type DailyBriefingResult, type NewsItem, type PolymarketEvent, type PolymarketHistoryPoint, type RHSpread, type RHStock, type StrategyScanResult, type VolAnalysis } from "@/lib/api";
+import { fetchDailyBriefing, fetchMorningNote, fetchNewsSearch, fetchNewsVerify, fetchNewsAnalysis, fetchTradeArchitect, fetchPolymarket, fetchPolymarketHistory, fetchRobinhoodPositions, fetchStrategyScan, fetchVolAnalysis, addPosition, type DailyBriefingResult, type NewsItem, type PolymarketEvent, type PolymarketHistoryPoint, type RHSpread, type RHStock, type StrategyScanResult, type VolAnalysis } from "@/lib/api";
+import { TradingViewChart } from "@/components/tradingview-chart";
+import { LightweightChart } from "@/components/lightweight-chart";
+import { MatrixLoader } from "@/components/matrix-loader";
 
 const DEFAULT_WATCHLIST = ["SPY","QQQ","AAPL","MSFT","NVDA","TSLA","AMD","AMZN","META","GOOGL","NFLX","GLD","SMH","XLF","TLT","JPM","BA"];
 
@@ -354,7 +357,7 @@ function OppRow({ opp, i, isBooked, onBook }: { opp: OppData & Record<string, un
   const [hovered, setHovered] = useState(false);
   return (
     <div className="relative" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
-      <div className={`border rounded-lg p-2.5 ${i === 0 ? "border-accent bg-accent-light" : "border-border"}`}>
+      <div className={`border rounded-lg p-2.5 bg-surface ${i === 0 ? "border-accent" : "border-border"}`}>
         <div className="flex justify-between items-start">
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -407,6 +410,221 @@ function OppList({ opps, booked, onBook }: { opps: any[]; booked: Set<string>; o
 }
 
 // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+// Trade Card P/L Tooltip
+// ═══════════════════════════════════════════
+function computeTradePL(t: import("@/lib/api").StructuredTrade): { prices: number[]; pls: number[]; breakevens: number[] } {
+  if (t.type === "stock") {
+    const entry = t.entry;
+    const lo = entry * 0.92, hi = entry * 1.08, pts = 80;
+    const step = (hi - lo) / pts;
+    const prices: number[] = [], pls: number[] = [];
+    const qty = t.legs[0]?.qty ?? 1;
+    for (let i = 0; i <= pts; i++) {
+      const s = lo + i * step;
+      prices.push(s); pls.push((s - entry) * qty);
+    }
+    return { prices, pls, breakevens: [entry] };
+  }
+
+  // Options + combination: compute from all legs
+  const optLegs = t.legs.filter(l => l.instrument !== "shares");
+  const stockLegs = t.legs.filter(l => l.instrument === "shares");
+  const strikes = optLegs.map(l => l.strike ?? 0).filter(s => s > 0);
+  const allPrices = [...strikes, ...stockLegs.map(l => l.price)].filter(p => p > 0);
+  if (allPrices.length < 1) return { prices: [], pls: [], breakevens: [] };
+
+  const minP = Math.min(...allPrices), maxP = Math.max(...allPrices);
+  const span = (maxP - minP) || minP * 0.1 || 1;
+  const lo = minP - span * 2, hi = maxP + span * 2, pts = 100;
+  const step = (hi - lo) / pts;
+  const prices: number[] = [], pls: number[] = [], breakevens: number[] = [];
+
+  for (let i = 0; i <= pts; i++) {
+    const s = lo + i * step;
+    let pl = 0;
+    // Option legs: each leg's qty already reflects contracts
+    for (const leg of optLegs) {
+      const sign = leg.action === "sell" ? 1 : -1;
+      const strike = leg.strike ?? 0;
+      const intrinsic = leg.instrument === "call" ? Math.max(s - strike, 0) : Math.max(strike - s, 0);
+      pl += (sign * leg.price - sign * intrinsic) * 100 * leg.qty;
+    }
+    // Stock legs
+    for (const leg of stockLegs) {
+      pl += (s - leg.price) * leg.qty;
+    }
+    prices.push(s); pls.push(pl);
+  }
+
+  // Find breakevens
+  for (let i = 1; i < pls.length; i++) {
+    if ((pls[i - 1] <= 0 && pls[i] > 0) || (pls[i - 1] >= 0 && pls[i] < 0)) {
+      const ratio = Math.abs(pls[i - 1]) / (Math.abs(pls[i - 1]) + Math.abs(pls[i]));
+      breakevens.push(prices[i - 1] + ratio * (prices[i] - prices[i - 1]));
+    }
+  }
+
+  return { prices, pls, breakevens };
+}
+
+function TradePLChart({ trade }: { trade: import("@/lib/api").StructuredTrade }) {
+  const [clipId] = useState(() => `tpl-clip-${++_plChartId}`);
+  const { prices, pls, breakevens } = computeTradePL(trade);
+  if (prices.length < 2) return null;
+
+  const W = 300, topM = 12, botM = 14, chartH = 65, H = topM + chartH + botM;
+  const padX = 4, w = W - padX * 2;
+  const rawMin = Math.min(...pls), rawMax = Math.max(...pls);
+  const absMax = Math.max(Math.abs(rawMin), Math.abs(rawMax), 1);
+  const minP = Math.min(rawMin, -absMax * 0.2);
+  const maxP = Math.max(rawMax, absMax * 0.2);
+  const range = maxP - minP || 1;
+  const zeroY = topM + chartH - ((0 - minP) / range) * chartH;
+  const pMin = prices[0], pMax2 = prices[prices.length - 1], pRange = pMax2 - pMin || 1;
+
+  const toX = (i: number) => padX + (i / (prices.length - 1)) * w;
+  const priceToX = (p: number) => padX + ((p - pMin) / pRange) * w;
+  const toY = (pl: number) => topM + chartH - ((pl - minP) / range) * chartH;
+
+  const pathD = prices.map((_, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(pls[i]).toFixed(1)}`).join(" ");
+  const fillD = pathD + `L${toX(prices.length - 1)},${zeroY}L${toX(0)},${zeroY}Z`;
+
+  const spot = trade.entry;
+  const spotInRange = spot >= pMin && spot <= pMax2;
+
+  return (
+    <svg width={W} height={H} style={{ display: "block" }}>
+      <defs>
+        <clipPath id={`${clipId}-a`}><rect x={padX} y={topM} width={w} height={Math.max(0, zeroY - topM)} /></clipPath>
+        <clipPath id={`${clipId}-b`}><rect x={padX} y={zeroY} width={w} height={Math.max(0, topM + chartH - zeroY)} /></clipPath>
+      </defs>
+      <text x={padX} y={topM - 3} fill="#22c55e" fontSize="8" fontFamily="monospace">+${trade.max_profit.toLocaleString()}</text>
+      <text x={W - padX} y={topM - 3} fill="#ef4444" fontSize="8" fontFamily="monospace" textAnchor="end">-${trade.max_risk.toLocaleString()}</text>
+      <line x1={padX} x2={W - padX} y1={zeroY} y2={zeroY} stroke="#555" strokeWidth="0.5" strokeDasharray="3,3" />
+      <path d={fillD} fill="rgba(34,197,94,0.12)" clipPath={`url(#${clipId}-a)`} />
+      <path d={fillD} fill="rgba(239,68,68,0.12)" clipPath={`url(#${clipId}-b)`} />
+      <path d={pathD} fill="none" stroke="#888" strokeWidth="1.5" strokeLinejoin="round" />
+      {breakevens.map((be, i) => (
+        <g key={i}>
+          <circle cx={priceToX(be)} cy={zeroY} r="3" fill="#888" />
+          <text x={priceToX(be)} y={topM + chartH + 10} fill="#888" fontSize="7" fontFamily="monospace" textAnchor="middle">BE ${be.toFixed(0)}</text>
+        </g>
+      ))}
+      {spotInRange && (
+        <>
+          <line x1={priceToX(spot)} x2={priceToX(spot)} y1={topM} y2={topM + chartH} stroke="#6366f1" strokeWidth="1" strokeDasharray="2,2" />
+          <text x={priceToX(spot)} y={topM + 10} fill="#6366f1" fontSize="8" fontFamily="monospace" textAnchor="middle">${spot.toFixed(0)}</text>
+        </>
+      )}
+    </svg>
+  );
+}
+
+function TradeTooltip({ trade }: { trade: import("@/lib/api").StructuredTrade }) {
+  return (
+    <div className="absolute z-50 bottom-full left-0 mb-1 p-2.5 rounded-lg border border-border-strong bg-surface shadow-xl" style={{ minWidth: 320 }}>
+      <div className="text-[0.65rem] font-semibold text-text mb-1">{trade.label} — P/L at Expiration</div>
+      <TradePLChart trade={trade} />
+      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1.5 text-[0.55rem] font-data">
+        <span className="text-text-muted">Max Profit</span><span className="text-gain font-semibold">${trade.max_profit.toLocaleString()}</span>
+        <span className="text-text-muted">Max Risk</span><span className="text-loss font-semibold">${trade.max_risk.toLocaleString()}</span>
+        <span className="text-text-muted">Breakeven</span><span>${trade.breakeven.toFixed(2)}</span>
+        {trade.pop != null && <><span className="text-text-muted">POP</span><span>{trade.pop}%</span></>}
+        <span className="text-text-muted">R:R</span><span>{trade.rr_ratio}x</span>
+        <span className="text-text-muted">Delta</span><span>{trade.greeks.delta.toFixed(1)}</span>
+        <span className="text-text-muted">Theta/day</span><span>${trade.greeks.theta.toFixed(2)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// News Hover Tooltip — lazy AI analysis on hover
+// ═══════════════════════════════════════════
+const _analysisCache = new Map<string, string>();
+
+function NewsTooltip({ item, onTickerClick }: { item: NewsItem; onTickerClick?: (ticker: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [analysis, setAnalysis] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRef = useRef(false); // guards against stale fetch results
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [above, setAbove] = useState(false); // flip tooltip above if near bottom
+
+  const handleEnter = useCallback(() => {
+    activeRef.current = true;
+    timeoutRef.current = setTimeout(async () => {
+      if (!activeRef.current) return;
+      // Flip tooltip above if row is in the bottom third of viewport
+      if (rowRef.current) {
+        const rect = rowRef.current.getBoundingClientRect();
+        setAbove(rect.bottom > window.innerHeight * 0.7);
+      }
+      setOpen(true);
+      const cacheKey = item.headline.slice(0, 200);
+      if (_analysisCache.has(cacheKey)) {
+        setAnalysis(_analysisCache.get(cacheKey)!);
+        return;
+      }
+      setLoading(true);
+      try {
+        const res = await fetchNewsAnalysis(item.headline, item.ticker, item.source, item.impact);
+        if (!activeRef.current) return; // user already left
+        _analysisCache.set(cacheKey, res.analysis);
+        setAnalysis(res.analysis);
+      } catch {
+        if (activeRef.current) setAnalysis("Analysis unavailable.");
+      } finally {
+        if (activeRef.current) setLoading(false);
+      }
+    }, 400);
+  }, [item.headline, item.ticker, item.source, item.impact]);
+
+  const handleLeave = useCallback(() => {
+    activeRef.current = false;
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setOpen(false);
+  }, []);
+
+  const cat = item.category || "news";
+  const style = CAT_STYLE[cat] || CAT_STYLE.news;
+
+  return (
+    <div ref={rowRef} className="relative" onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
+      <div className="flex items-baseline gap-1.5 flex-wrap">
+        <span className="font-bold text-[0.7rem] cursor-pointer hover:text-accent transition-colors"
+          onClick={() => onTickerClick?.(item.ticker)}>{item.ticker}</span>
+        {style.label && <span className={`text-[0.45rem] font-bold ${style.color}`}>{style.label}</span>}
+        <span className={`text-[0.5rem] ${item.impact === "bull" ? "text-gain" : item.impact === "bear" ? "text-loss" : "text-text-muted"}`}>
+          {item.impact}
+        </span>
+        {item.confidence === "verified" && <span className="text-gain text-[0.5rem]">✓</span>}
+        {item.confidence === "likely" && <span className="text-warn text-[0.5rem]">◐</span>}
+        {item.confidence === "unverified" && <span className="text-text-muted text-[0.5rem]">○</span>}
+        <span className="text-text flex-1">{item.headline}</span>
+        <span className="text-text-muted text-[0.5rem] shrink-0">{item.source} · {item.time}</span>
+        {item.url && <a href={item.url} target="_blank" rel="noopener" className="text-accent text-[0.5rem] shrink-0 hover:underline">→</a>}
+      </div>
+      {item.verification_note && <div className="text-[0.5rem] text-text-muted mt-0.5 italic pl-0.5">{item.verification_note}</div>}
+      {open && (
+        <div className={`absolute left-0 z-50 w-80 p-2.5 rounded-md border border-border-strong bg-surface shadow-xl backdrop-blur-sm text-[0.7rem] leading-relaxed ${above ? "bottom-full mb-1" : "top-full mt-1"}`}>
+          {loading ? (
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+              <span className="text-text-muted">Analyzing...</span>
+            </div>
+          ) : (
+            <div className="text-text">{analysis}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
 // Main Page
 // ═══════════════════════════════════════════
 export default function DailyBriefing() {
@@ -423,6 +641,36 @@ export default function DailyBriefing() {
   const [runningAll, setRunningAll] = useState(false);
   const [signalSummary, setSignalSummary] = useState("");
   const [newsCatFilter, setNewsCatFilter] = useState("all");
+  const [chartTicker, setChartTicker] = useState("SPY");
+  const [chartInput, setChartInput] = useState("");
+  const [chartMode, setChartMode] = useState<"tradingview" | "custom">("custom");
+
+  // Trade Architect
+  const [archInput, setArchInput] = useState("");
+  const [archResult, setArchResult] = useState("");
+  const [archTrades, setArchTrades] = useState<import("@/lib/api").StructuredTrade[]>([]);
+  const [archSources, setArchSources] = useState<string[]>([]);
+  const [archLoading, setArchLoading] = useState(false);
+  const [archError, setArchError] = useState("");
+  const [archRisk, setArchRisk] = useState<"conservative" | "moderate" | "aggressive">("moderate");
+  const [archStrategy, setArchStrategy] = useState<"auto" | "sell" | "buy">("auto");
+  const [archDirection, setArchDirection] = useState<"" | "bullish" | "bearish" | "neutral">("");
+
+  const submitArchitect = useCallback((deep = false) => {
+    if (!archInput.trim() || archLoading) return;
+    setArchLoading(true); setArchError(""); setArchResult(""); setArchTrades([]);
+    fetchTradeArchitect(archInput, [], "", [], accountSize, deep, archRisk, archStrategy, archDirection).then(res => {
+      if (res.success) {
+        setArchResult(res.analysis ?? "");
+        setArchTrades(res.trades ?? []);
+        setArchSources(res.context_sources ?? []);
+        if (res.tickers?.[0]) setChartTicker(res.tickers[0]);
+      } else {
+        setArchError(res.error || "Analysis failed.");
+      }
+    }).catch(e => setArchError(e instanceof Error ? e.message : "Request failed"))
+      .finally(() => setArchLoading(false));
+  }, [archInput, archLoading, accountSize, archRisk, archStrategy, archDirection]);
 
   const polyQuery = useQuery({ queryKey: ["polymarket"], queryFn: fetchPolymarket, staleTime: 5 * 60_000 });
   const polyMarkets = polyQuery.data?.markets ?? [];
@@ -538,27 +786,54 @@ export default function DailyBriefing() {
   const filteredOpps = data?.opportunities.filter(o => typeFilter === "all" || o.type === typeFilter) ?? [];
 
   const runNews = async () => {
+    if (newsPhase === "searching") return; // don't double-fetch if pre-fetch is running
     const tkList = watchlist.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
     setNewsPhase("searching"); setNewsError(""); setNewsItems([]); setNewsCatFilter("all");
     try {
       const searchRes = await fetchNewsSearch(tkList);
       if (!searchRes.success) { setNewsError(searchRes.error || "Search failed"); setNewsPhase("idle"); return; }
+      // Show results immediately (unverified) — don't wait for verification
       setNewsItems(searchRes.items); setNewsSources(searchRes.sources);
       newsDoneRef.current = searchRes.items; maybeAutoAI();
+      setNewsPhase("done");
+      // Verify in background — update items silently when done
       if (searchRes.items.length > 0) {
-        setNewsPhase("verifying");
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          const verifyRes = await fetchNewsVerify(searchRes.items);
+        fetchNewsVerify(searchRes.items).then(verifyRes => {
           if (verifyRes.success && verifyRes.items.length > 0) {
             setNewsItems(verifyRes.items); setNewsSources(verifyRes.sources);
             newsDoneRef.current = verifyRes.items;
           }
-        } catch {}
+        }).catch(() => {});
       }
-      setNewsPhase("done");
     } catch (e) { setNewsError((e as Error).message); setNewsPhase("idle"); }
   };
+
+  // Pre-fetch news on page mount (runs once, results cached 30 min on backend)
+  const newsPrefetchedRef = useRef(false);
+  useEffect(() => {
+    if (newsPrefetchedRef.current) return;
+    newsPrefetchedRef.current = true;
+    const tkList = watchlist.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
+    // Don't set "searching" immediately — if cached, response is instant and we avoid a flash
+    const phaseTimer = setTimeout(() => { if (newsItems.length === 0) setNewsPhase("searching"); }, 500);
+    fetchNewsSearch(tkList).then(res => {
+      clearTimeout(phaseTimer);
+      if (res.success && res.items.length > 0) {
+        setNewsItems(res.items); setNewsSources(res.sources);
+        newsDoneRef.current = res.items;
+        setNewsPhase("done");
+        // Background verify
+        fetchNewsVerify(res.items).then(v => {
+          if (v.success && v.items.length > 0) {
+            setNewsItems(v.items); setNewsSources(v.sources);
+            newsDoneRef.current = v.items;
+          }
+        }).catch(() => {});
+      } else {
+        setNewsPhase("idle");
+      }
+    }).catch(() => setNewsPhase("idle"));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const runAll = async () => {
     setRunningAll(true); aiTriggeredRef.current = false;
@@ -593,7 +868,14 @@ export default function DailyBriefing() {
   const filteredNews = newsCatFilter === "all" ? newsItems : newsItems.filter(n => (n.category || "news") === newsCatFilter);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 relative">
+      <MatrixLoader loading={isLoading || archLoading}
+        status={archLoading ? "GATHERING 14 DATA SOURCES... STRUCTURING WITH CLAUDE..."
+          : scan.isPending ? "SCANNING MARKET... RUNNING 22 STRATEGIES..."
+          : newsPhase === "searching" ? "SEARCHING WEB + X FOR NEWS..."
+          : newsPhase === "verifying" ? "CROSS-VERIFYING SOURCES..."
+          : aiMutation.isPending ? "AI SYNTHESIZING MARKET NOTE..."
+          : "INITIALIZING SYSTEM..."} />
       {/* ═══ 1. Controls ═══ */}
       <div className="card card-compact">
         <div className="flex flex-wrap items-end gap-3">
@@ -632,6 +914,383 @@ export default function DailyBriefing() {
       </div>
 
       {scan.isError && <div className="card border-loss/30 bg-loss-bg text-loss text-sm">{(scan.error as Error).message}</div>}
+
+      {/* ═══ Trade Architect ═══ */}
+      <div className="card">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="metric-label">Trade Architect</span>
+          <span className="text-[0.5rem] text-text-muted">Claude Opus · 14 data sources</span>
+          {archSources.length > 0 && (
+            <span className="text-[0.45rem] text-text-muted">[{archSources.join(", ")}]</span>
+          )}
+          {archTrades.length > 0 && !archLoading && (
+            <button onClick={() => submitArchitect(false)}
+              className="ml-auto text-[0.5rem] text-text-muted hover:text-accent px-1.5 py-0.5 border border-border rounded">
+              Refresh Prices
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <input type="text" value={archInput}
+            onChange={e => setArchInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") submitArchitect(false); }}
+            placeholder="e.g. 'NVDA bullish into earnings' or 'sell premium on SPY, VIX is elevated'"
+            className="flex-1 px-3 py-2 border border-border rounded-lg text-sm bg-surface placeholder:text-text-muted"
+            disabled={archLoading} />
+          <button onClick={() => submitArchitect(false)} disabled={archLoading || !archInput.trim()}
+            className="px-3 py-2 bg-accent text-white text-sm font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 whitespace-nowrap">
+            {archLoading ? "Analyzing..." : "Analyze"}
+          </button>
+          <button onClick={() => submitArchitect(true)} disabled={archLoading || !archInput.trim()}
+            title="Claude Opus — deeper reasoning, slower"
+            className="px-3 py-2 border border-accent/40 text-accent text-[0.65rem] font-semibold rounded-lg hover:bg-accent/10 disabled:opacity-50 whitespace-nowrap">
+            Deep Analyze
+          </button>
+        </div>
+        {/* Parameter controls */}
+        <div className="flex items-center gap-3 mt-1.5">
+          <div className="flex items-center gap-1">
+            <span className="text-[0.55rem] text-text-muted">Risk:</span>
+            {(["conservative", "moderate", "aggressive"] as const).map(r => (
+              <button key={r} onClick={() => setArchRisk(r)}
+                className={`px-1.5 py-0.5 text-[0.5rem] rounded ${archRisk === r ? "bg-accent/15 text-accent font-semibold" : "text-text-muted hover:text-text"}`}>
+                {r.charAt(0).toUpperCase() + r.slice(1)}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[0.55rem] text-text-muted">Strategy:</span>
+            {([["auto", "Auto"], ["sell", "Sell Premium"], ["buy", "Buy Premium"]] as const).map(([v, label]) => (
+              <button key={v} onClick={() => setArchStrategy(v as typeof archStrategy)}
+                className={`px-1.5 py-0.5 text-[0.5rem] rounded ${archStrategy === v ? "bg-accent/15 text-accent font-semibold" : "text-text-muted hover:text-text"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[0.55rem] text-text-muted">Direction:</span>
+            {([["", "Auto"], ["bullish", "Bull"], ["bearish", "Bear"], ["neutral", "Neutral"]] as const).map(([v, label]) => (
+              <button key={v} onClick={() => setArchDirection(v as typeof archDirection)}
+                className={`px-1.5 py-0.5 text-[0.5rem] rounded ${archDirection === v
+                  ? v === "bullish" ? "bg-gain/15 text-gain font-semibold"
+                  : v === "bearish" ? "bg-loss/15 text-loss font-semibold"
+                  : "bg-accent/15 text-accent font-semibold"
+                  : "text-text-muted hover:text-text"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {archLoading && (
+          <div className="relative mt-3" style={{ minHeight: 320 }}>
+            <MatrixLoader loading={true}
+              status={archLoading ? "GATHERING 14 DATA SOURCES... STRUCTURING TRADES..."
+                : "INITIALIZING..."} />
+          </div>
+        )}
+        {archError && <div className="text-xs text-loss mt-2">{archError}</div>}
+        {/* Structured trade cards */}
+        {archTrades.length > 0 && (
+          <div className="mt-3 border-t border-border pt-3 space-y-3">
+            {/* Context strip */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.55rem] font-data text-text-muted">
+              {archTrades[0]?.direction && (
+                <span className={`font-semibold ${archTrades[0].direction === "bullish" ? "text-gain" : archTrades[0].direction === "bearish" ? "text-loss" : "text-accent"}`}>
+                  {archTrades[0].direction.toUpperCase()}
+                </span>
+              )}
+              {archTrades[0]?.vol_suggestion && <span>{archTrades[0].vol_suggestion}</span>}
+              {archTrades[0]?.signal_consensus && <span>Signal: <span className="text-accent">{archTrades[0].signal_consensus}</span></span>}
+              {archTrades[0]?.portfolio_delta_before != null && (
+                <span>Portfolio Δ: {archTrades[0].portfolio_delta_before.toFixed(0)}</span>
+              )}
+            </div>
+            {/* Comparison table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-[0.6rem] font-data">
+                <thead>
+                  <tr className="text-text-muted border-b border-border">
+                    <th className="text-left py-1 pr-2">Trade</th>
+                    <th className="text-right px-2">Max Profit</th>
+                    <th className="text-right px-2">Max Risk</th>
+                    <th className="text-right px-2">R:R</th>
+                    <th className="text-right px-2">POP</th>
+                    <th className="text-right px-2">Breakeven</th>
+                    <th className="text-right px-2">Delta</th>
+                    <th className="text-right px-2">Theta/day</th>
+                    <th className="text-right pl-2">Acct %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    // Best = highest account fit. Tie-break: highest R:R.
+                    const bestFit = Math.max(...archTrades.map(t => t.account_fit ?? 0));
+                    const bestTrades = archTrades.filter(t => (t.account_fit ?? 0) === bestFit);
+                    const bestIdx = bestTrades.length === 1
+                      ? archTrades.indexOf(bestTrades[0])
+                      : archTrades.indexOf(bestTrades.sort((a, b) => b.rr_ratio - a.rr_ratio)[0]);
+                    return archTrades.map((t, i) => (
+                      <tr key={i} className={`border-b border-border/50 ${i === bestIdx ? "bg-accent/5" : ""}`}>
+                        <td className="py-1.5 pr-2 font-semibold text-text">
+                          {t.label}
+                          {i === bestIdx && <span className="ml-1 text-[0.45rem] text-accent font-bold">BEST{t.account_fit != null ? ` · Fit ${t.account_fit}` : ""}</span>}
+                        </td>
+                        <td className="text-right px-2 text-gain">${t.max_profit.toLocaleString()}</td>
+                        <td className="text-right px-2 text-loss">${t.max_risk.toLocaleString()}</td>
+                        <td className="text-right px-2 font-semibold">{t.rr_ratio}x</td>
+                        <td className="text-right px-2">{t.pop != null ? `${t.pop}%` : "—"}</td>
+                        <td className="text-right px-2">${t.breakeven.toFixed(2)}</td>
+                        <td className="text-right px-2">{t.greeks.delta.toFixed(1)}</td>
+                        <td className="text-right px-2">{t.greeks.theta !== 0 ? `$${t.greeks.theta.toFixed(2)}` : "—"}</td>
+                        <td className={`text-right pl-2 ${t.risk_pct_of_account && t.risk_pct_of_account > 5 ? "text-loss" : ""}`}>
+                          {t.risk_pct_of_account != null ? `${t.risk_pct_of_account.toFixed(1)}%` : "—"}
+                        </td>
+                      </tr>
+                    ));
+                  })()}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Trade cards */}
+            <div className={`grid grid-cols-1 ${archTrades.length >= 3 ? "md:grid-cols-3" : "md:grid-cols-2"} gap-2`}>
+              {archTrades.map((t, i) => {
+                const colors: Record<string, string> = { stock: "border-[#58a6ff]", options: "border-[#a371f7]", combination: "border-[#d29922]" };
+                const icons: Record<string, string> = { stock: "S", options: "O", combination: "C" };
+                return (
+                  <div key={i} className={`relative rounded-lg border-l-4 ${colors[t.type] || "border-border"} border border-border p-3 bg-surface`}
+                    onMouseEnter={(e) => { const tt = e.currentTarget.querySelector("[data-trade-tooltip]") as HTMLElement; if (tt) tt.style.display = "block"; }}
+                    onMouseLeave={(e) => { const tt = e.currentTarget.querySelector("[data-trade-tooltip]") as HTMLElement; if (tt) tt.style.display = "none"; }}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full flex items-center justify-center text-[0.6rem] font-bold bg-surface-alt text-text-muted">
+                          {icons[t.type] || "?"}
+                        </span>
+                        <span className="text-[0.7rem] font-bold text-text">{t.label}</span>
+                      </div>
+                      <button onClick={(e) => {
+                        const text = t.legs.map(l =>
+                          l.instrument === "shares" ? `${l.action} ${l.qty} ${l.ticker} @ $${l.price}`
+                          : `${l.action} ${l.qty}× ${l.ticker} $${l.strike} ${l.instrument} ${l.exp} @ $${l.price}`
+                        ).join("\n");
+                        navigator.clipboard.writeText(text);
+                        const btn = e.currentTarget;
+                        btn.textContent = "Copied!";
+                        setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+                      }} className="text-[0.5rem] text-text-muted hover:text-accent px-1.5 py-0.5 border border-border rounded">
+                        Copy
+                      </button>
+                    </div>
+
+                    {/* Legs */}
+                    <div className="space-y-0.5 mb-2">
+                      {t.legs.map((l, li) => (
+                        <div key={li} className="flex items-center gap-2 text-[0.6rem] font-data">
+                          <span className={`font-semibold ${l.action === "buy" ? "text-gain" : "text-loss"}`}>
+                            {l.action.toUpperCase()}
+                          </span>
+                          <span className="text-text">
+                            {l.qty}× {l.instrument === "shares" ? `${l.ticker} shares` : `${l.ticker} $${l.strike} ${l.instrument}`}
+                            {l.exp && <span className="text-text-muted ml-1">{l.exp}</span>}
+                          </span>
+                          <span className="text-text-muted ml-auto">${l.price.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Key metrics grid */}
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[0.55rem] font-data border-t border-border/50 pt-1.5">
+                      <span className="text-text-muted">Max Profit</span>
+                      <span className="text-gain text-right font-semibold">${t.max_profit.toLocaleString()}</span>
+                      <span className="text-text-muted">Max Risk</span>
+                      <span className="text-loss text-right font-semibold">${t.max_risk.toLocaleString()}</span>
+                      <span className="text-text-muted">Breakeven</span>
+                      <span className="text-right">${t.breakeven.toFixed(2)}{t.breakeven_upper ? ` / $${t.breakeven_upper.toFixed(2)}` : ""}</span>
+                      {t.pop != null && <><span className="text-text-muted">POP</span><span className="text-right">{t.pop}%</span></>}
+                      <span className="text-text-muted">R:R</span>
+                      <span className="text-right">{t.rr_ratio}x</span>
+                      {t.stop && <><span className="text-text-muted">Stop</span><span className="text-right text-loss">${t.stop.toFixed(2)}</span></>}
+                      {t.target && <><span className="text-text-muted">Target</span><span className="text-right text-gain">${t.target.toFixed(2)}</span></>}
+                      <span className="text-text-muted">Timeframe</span>
+                      <span className="text-right">{t.timeframe}</span>
+                      {t.risk_pct_of_account != null && (
+                        <><span className="text-text-muted">Account Risk</span>
+                        <span className={`text-right font-semibold ${t.risk_pct_of_account > 3 ? "text-loss" : "text-text"}`}>
+                          {t.risk_pct_of_account.toFixed(1)}%
+                        </span></>
+                      )}
+                    </div>
+
+                    {/* Greeks + portfolio impact */}
+                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1.5 pt-1.5 border-t border-border/50 text-[0.5rem] font-data text-text-muted">
+                      <span>Δ {t.greeks.delta.toFixed(1)}</span>
+                      <span>Θ ${t.greeks.theta.toFixed(2)}/d</span>
+                      <span>Γ {t.greeks.gamma.toFixed(3)}</span>
+                      <span>V {t.greeks.vega.toFixed(1)}</span>
+                      {t.portfolio_delta_before != null && (
+                        <span className="text-text-secondary">
+                          Port Δ: {t.portfolio_delta_before.toFixed(0)} → <span className="text-text font-semibold">{t.portfolio_delta_after!.toFixed(0)}</span>
+                        </span>
+                      )}
+                    </div>
+                    {/* Account fit + historical winrate */}
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {t.account_fit != null && (
+                        <span className={`text-[0.45rem] px-1 py-0.5 rounded ${t.account_fit >= 70 ? "bg-gain-bg text-gain" : t.account_fit >= 40 ? "bg-warn-bg text-warn" : "bg-loss-bg text-loss"}`}>
+                          Fit: {t.account_fit}/100
+                        </span>
+                      )}
+                      {t.hist_winrate != null && (
+                        <span className={`text-[0.45rem] px-1 py-0.5 rounded ${t.hist_winrate >= 65 ? "bg-gain-bg text-gain" : t.hist_winrate >= 50 ? "bg-warn-bg text-warn" : "bg-loss-bg text-loss"}`}>
+                          Backtest: {t.hist_winrate}% WR ({t.hist_trials} trials)
+                        </span>
+                      )}
+                      <button onClick={() => {
+                        const saved = JSON.parse(localStorage.getItem("saved_trades") || "[]");
+                        saved.unshift({
+                          ticker: t.legs[0]?.ticker || "?", label: t.label, type: t.type,
+                          max_profit: t.max_profit, max_risk: t.max_risk, rr_ratio: t.rr_ratio,
+                          pop: t.pop, breakeven: t.breakeven, timeframe: t.timeframe,
+                          legs: t.legs.map(l => `${l.action} ${l.qty}× ${l.instrument === "shares" ? "shares" : `$${l.strike} ${l.instrument}`}`).join(", "),
+                          thesis: archInput, timestamp: new Date().toISOString(),
+                        });
+                        localStorage.setItem("saved_trades", JSON.stringify(saved.slice(0, 20)));
+                        const b = document.querySelector(`[data-save-idx="${i}"]`) as HTMLButtonElement;
+                        if (b) { b.textContent = "Saved!"; setTimeout(() => { b.textContent = "Save"; }, 1500); }
+                      }} data-save-idx={i} className="text-[0.45rem] text-text-muted hover:text-accent px-1 py-0.5 border border-border rounded">
+                        Save
+                      </button>
+                    </div>
+
+                    {/* P/L tooltip on hover */}
+                    <div data-trade-tooltip style={{ display: "none" }}>
+                      <TradeTooltip trade={t} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* AI Assessment (from Claude) */}
+        {archResult && (
+          <div className="mt-3 border-t border-border pt-3">
+            <div className="text-[0.65rem] font-bold text-accent uppercase tracking-wider mb-2">AI Assessment</div>
+            <div className="text-xs leading-relaxed text-text arch-assessment"
+              dangerouslySetInnerHTML={{ __html: (() => {
+                let h = archResult
+                  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                  // Strip --- rules
+                  .replace(/^\s*---+\s*$/gm, "")
+                  // Headers (## or all-caps lines ending with colon)
+                  .replace(/^#{1,3}\s+(.+)$/gm, '<div class="arch-h">$1</div>')
+                  .replace(/^([A-Z]+(?:\s+[A-Z:]+){1,6})$/gm, (m) => m.length >= 8 ? `<div class="arch-h">${m}</div>` : m)
+                  // Bold then italic
+                  .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                  .replace(/\*([^*]{4,})\*/g, '<em>$1</em>')
+                  // Strip stray emoji/replacement chars
+                  .replace(/[\u{FFFD}\u{FE0F}]/gu, "")
+                  // Risk bullets (emoji, •, -, * at line start)
+                  .replace(/^[\u{1F534}\u{1F7E1}\u{26A0}\u{2022}\u{FFFD}•\-\*]\s*[\u{FE0F}]?\s*(.+)$/gmu, (_, content) => {
+                    const isRisk = /risk|warn|cpi|nfp|earn|liquid|slippage/i.test(content);
+                    const cleaned = content.replace(/^[\u{1F534}\u{1F7E1}\u{26A0}\u{FFFD}\u{FE0F}]\s*/gu, "");
+                    return `<div class="${isRisk ? "arch-risk" : "arch-bullet"}">${cleaned}</div>`;
+                  })
+                  // Markdown tables: |col|col| → HTML table
+                  .replace(/(\|.+\|[\n])+/g, (tableBlock) => {
+                    const rows = tableBlock.trim().split("\n").filter(r => r.includes("|"));
+                    if (rows.length < 2) return tableBlock;
+                    const parseRow = (r: string) => r.split("|").filter(c => c.trim()).map(c => c.trim());
+                    const isSep = (r: string) => /^\|[\s\-:]+\|$/.test(r.trim());
+                    const headers = parseRow(rows[0]);
+                    const dataRows = rows.filter(r => !isSep(r)).slice(1);
+                    return '<table class="arch-table"><thead><tr>' +
+                      headers.map(h => `<th>${h}</th>`).join("") +
+                      '</tr></thead><tbody>' +
+                      dataRows.map(r => '<tr>' + parseRow(r).map(c => `<td>${c}</td>`).join("") + '</tr>').join("") +
+                      '</tbody></table>';
+                  })
+                  // Paragraphs
+                  .replace(/\n\n+/g, '</p><p class="arch-p">')
+                  .replace(/^/, '<p class="arch-p">') + '</p>';
+                // Clean empty paragraphs
+                h = h.replace(/<p class="arch-p">\s*<\/p>/g, "");
+                return h;
+              })()}} />
+            <style jsx>{`
+              .arch-assessment :global(.arch-h) {
+                font-size: 0.7rem; font-weight: 700; color: var(--color-accent);
+                text-transform: uppercase; letter-spacing: 0.05em;
+                margin-top: 0.85rem; margin-bottom: 0.3rem;
+                padding-bottom: 0.2rem; border-bottom: 1px solid var(--color-border);
+              }
+              .arch-assessment :global(.arch-h:first-child) { margin-top: 0; }
+              .arch-assessment :global(.arch-p) { margin-bottom: 0.4rem; line-height: 1.6; }
+              .arch-assessment :global(.arch-risk) {
+                padding: 0.3rem 0.5rem; margin: 0.2rem 0;
+                border-left: 2px solid var(--color-loss); background: var(--color-loss-bg);
+                border-radius: 0 4px 4px 0; font-size: 0.7rem; line-height: 1.5;
+              }
+              .arch-assessment :global(.arch-bullet) {
+                padding: 0.2rem 0 0.2rem 0.65rem; margin: 0.1rem 0;
+                border-left: 2px solid var(--color-border); line-height: 1.5;
+              }
+              .arch-assessment :global(strong) { color: var(--color-text); }
+              .arch-assessment :global(.arch-table) {
+                width: 100%; border-collapse: collapse; font-size: 0.65rem;
+                font-family: var(--font-mono); margin: 0.5rem 0;
+              }
+              .arch-assessment :global(.arch-table th) {
+                text-align: left; padding: 0.25rem 0.5rem; font-weight: 700;
+                border-bottom: 1px solid var(--color-border); color: var(--color-text-secondary);
+              }
+              .arch-assessment :global(.arch-table td) {
+                padding: 0.2rem 0.5rem; border-bottom: 1px solid var(--color-border);
+              }
+            `}</style>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ Saved Trades ═══ */}
+      {(() => {
+        // Only read on client, avoid SSR + avoid re-parse every render by checking length
+        if (typeof window === "undefined") return null;
+        let saved: Record<string, unknown>[] = [];
+        try { saved = JSON.parse(localStorage.getItem("saved_trades") || "[]"); } catch { return null; }
+        if (!saved.length) return null;
+        return (
+          <details className="card">
+            <summary className="metric-label cursor-pointer select-none">Saved Trades ({saved.length})</summary>
+            <div className="space-y-1.5 mt-2">
+              {saved.slice(0, 10).map((s, i) => (
+                <div key={i} className="flex items-center justify-between text-[0.6rem] font-data px-2 py-1.5 rounded border border-border">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-bold text-text">{s.ticker as string}</span>
+                    <span className="text-text-muted">{s.label as string}</span>
+                    <span className="font-data">R:R {s.rr_ratio as number}x</span>
+                    {s.pop != null && <span className="text-text-muted">POP {s.pop as number}%</span>}
+                    {s.thesis && <span className="text-[0.5rem] text-text-muted italic truncate max-w-[200px]">&ldquo;{s.thesis as string}&rdquo;</span>}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[0.5rem] text-text-muted">{new Date(s.timestamp as string).toLocaleDateString()}</span>
+                    <button onClick={() => {
+                      try {
+                        const all = JSON.parse(localStorage.getItem("saved_trades") || "[]");
+                        all.splice(i, 1);
+                        localStorage.setItem("saved_trades", JSON.stringify(all));
+                      } catch {}
+                      window.location.reload();
+                    }} className="text-[0.5rem] text-text-muted hover:text-loss px-1">×</button>
+                  </div>
+                </div>
+              ))}
+              {saved.length > 10 && <div className="text-[0.5rem] text-text-muted text-center">+ {saved.length - 10} more</div>}
+            </div>
+          </details>
+        );
+      })()}
 
       {/* ═══ 2. Context Strip + Polymarket + Regime ═══ */}
       {data && (
@@ -693,6 +1352,45 @@ export default function DailyBriefing() {
         </div>
       )}
 
+      {/* ═══ Chart ═══ */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            {/* Chart mode toggle */}
+            <button onClick={() => setChartMode("custom")}
+              className={`px-2 py-0.5 text-[0.6rem] font-semibold rounded-l border ${chartMode === "custom" ? "bg-accent/15 text-accent border-accent" : "border-border text-text-muted hover:text-text"}`}>
+              Chart
+            </button>
+            <button onClick={() => setChartMode("tradingview")}
+              className={`px-2 py-0.5 text-[0.6rem] font-semibold rounded-r border border-l-0 ${chartMode === "tradingview" ? "bg-accent/15 text-accent border-accent" : "border-border text-text-muted hover:text-text"}`}>
+              TradingView
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            {["SPY","QQQ","NVDA","AAPL","TSLA","GLD","TLT"].map(tk => (
+              <button key={tk} onClick={() => setChartTicker(tk)}
+                className={`px-1.5 py-0.5 text-[0.55rem] rounded border ${chartTicker === tk ? "border-accent text-accent bg-accent/10" : "border-border text-text-muted hover:border-text-muted"}`}>
+                {tk}
+              </button>
+            ))}
+            <input
+              type="text" value={chartInput} onChange={e => setChartInput(e.target.value.toUpperCase())}
+              onKeyDown={e => { if (e.key === "Enter" && chartInput.trim()) { setChartTicker(chartInput.trim()); } }}
+              placeholder="Ticker"
+              className="w-16 px-1.5 py-0.5 text-[0.55rem] rounded border border-border bg-transparent text-text placeholder:text-text-muted"
+            />
+          </div>
+        </div>
+        {chartMode === "custom" ? (
+          <LightweightChart symbol={chartTicker} height={500} showVolume
+            positions={{ stocks: rhStocks, spreads: rhSpreads }} />
+        ) : (
+          <div style={{ height: 500 }}>
+            <TradingViewChart symbol={chartTicker} theme="dark" height={500} />
+          </div>
+        )}
+      </div>
+
       {/* ═══ News Feed ═══ */}
       {(newsItems.length > 0 || newsPhase !== "idle") && (
         <div className="card">
@@ -735,20 +1433,7 @@ export default function DailyBriefing() {
               const style = CAT_STYLE[cat] || CAT_STYLE.news;
               return (
                 <div key={i} className={`pl-2 border-l-2 ${style.border} py-1 text-xs`}>
-                  <div className="flex items-baseline gap-1.5 flex-wrap">
-                    <span className="font-bold text-[0.7rem]">{item.ticker}</span>
-                    {style.label && <span className={`text-[0.45rem] font-bold ${style.color}`}>{style.label}</span>}
-                    <span className={`text-[0.5rem] ${item.impact === "bull" ? "text-gain" : item.impact === "bear" ? "text-loss" : "text-text-muted"}`}>
-                      {item.impact}
-                    </span>
-                    {item.confidence === "verified" && <span className="text-gain text-[0.5rem]">✓</span>}
-                    {item.confidence === "likely" && <span className="text-warn text-[0.5rem]">◐</span>}
-                    {item.confidence === "unverified" && <span className="text-text-muted text-[0.5rem]">○</span>}
-                    <span className="text-text flex-1">{item.headline}</span>
-                    <span className="text-text-muted text-[0.5rem] shrink-0">{item.source} · {item.time}</span>
-                    {item.url && <a href={item.url} target="_blank" rel="noopener" className="text-accent text-[0.5rem] shrink-0 hover:underline">→</a>}
-                  </div>
-                  {item.verification_note && <div className="text-[0.5rem] text-text-muted mt-0.5 italic pl-0.5">{item.verification_note}</div>}
+                  <NewsTooltip item={item} onTickerClick={setChartTicker} />
                 </div>
               );
             })}

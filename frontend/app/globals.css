@@ -50,36 +50,473 @@
    Activated via .dark class on <html> (next-themes)
    ═══════════════════════════════════════════════ */
 
-.dark {
-  --color-bg: #0d1117;
-  --color-surface: #161b22;
-  --color-surface-alt: #1c2128;
+html.dark, .dark {
+  --color-bg: #0a0e14;
+  --color-surface: #12161e;
+  --color-surface-alt: #1a1f2b;
 
-  --color-navy: #c9d1d9;
-  --color-navy-light: #8b949e;
+  --color-navy: #d4dae3;
+  --color-navy-light: #9ba4b0;
   --color-navy-muted: #6e7681;
 
-  --color-border: #30363d;
-  --color-border-strong: #484f58;
+  --color-border: #252d38;
+  --color-border-strong: #3d4754;
 
-  --color-text: #e6edf3;
-  --color-text-secondary: #b1bac4;
-  --color-text-muted: #8b949e;
+  --color-text: #eaf0f6;
+  --color-text-secondary: #b8c4d0;
+  --color-text-muted: #7d8a99;
 
-  --color-accent: #58a6ff;
-  --color-accent-hover: #79c0ff;
-  --color-accent-light: #152238;
+  --color-accent: #4d9fff;
+  --color-accent-hover: #6db5ff;
+  --color-accent-light: #111d30;
 
-  --color-gain: #3fb950;
-  --color-gain-bg: #122117;
-  --color-loss: #f85149;
-  --color-loss-bg: #2d1214;
-  --color-warn: #d29922;
-  --color-warn-bg: #2a1e0c;
-  --color-info: #58a6ff;
-  --color-info-bg: #152238;
+  --color-gain: #34d058;
+  --color-gain-bg: #0d2818;
+  --color-loss: #f44747;
+  --color-loss-bg: #2c0f0f;
+  --color-warn: #e8a317;
+  --color-warn-bg: #291e08;
+  --color-info: #4d9fff;
+  --color-info-bg: #111d30;
 
   color-scheme: dark;
+}
+
+/* ═══════════════════════════════════════════════
+   RETRO MODE — 1980s trading desk / CRT terminal
+   Phosphor green on black, scanlines, amber accents
+   ═══════════════════════════════════════════════ */
+
+html.retro, .retro {
+  --color-bg: #0a0a0a;
+  --color-surface: #111111;
+  --color-surface-alt: #1a1a1a;
+
+  --color-navy: #33ff33;
+  --color-navy-light: #22aa22;
+  --color-navy-muted: #116611;
+
+  --color-border: #1a3a1a;
+  --color-border-strong: #2a5a2a;
+
+  --color-text: #33ff33;
+  --color-text-secondary: #22cc22;
+  --color-text-muted: #118811;
+
+  --color-accent: #ffaa00;
+  --color-accent-hover: #ffcc33;
+  --color-accent-light: #1a1500;
+
+  --color-gain: #33ff33;
+  --color-gain-bg: #0a1a0a;
+  --color-loss: #ff3333;
+  --color-loss-bg: #1a0a0a;
+  --color-warn: #ffaa00;
+  --color-warn-bg: #1a1500;
+  --color-info: #ffaa00;
+  --color-info-bg: #1a1500;
+
+  --font-sans: "Courier New", "Lucida Console", monospace;
+  --font-mono: "Courier New", "Lucida Console", monospace;
+
+  color-scheme: dark;
+}
+
+/* CRT phosphor glow on all text */
+.retro, .retro * {
+  text-shadow: 0 0 2px rgba(51, 255, 51, 0.25);
+}
+
+/* Force monospace on all text */
+.retro body {
+  font-family: "Courier New", "Lucida Console", monospace !important;
+}
+
+.retro .card {
+  border-color: #1a3a1a;
+  box-shadow: 0 0 8px rgba(51, 255, 51, 0.05), inset 0 0 30px rgba(0, 0, 0, 0.3);
+}
+
+.retro .metric-value {
+  text-shadow: 0 0 6px rgba(51, 255, 51, 0.4);
+}
+
+.retro .badge {
+  border: 1px solid currentColor;
+  background: transparent;
+}
+
+.retro input, .retro select, .retro textarea {
+  background: #0a0a0a !important;
+  border-color: #1a3a1a !important;
+  color: #33ff33 !important;
+  font-family: "Courier New", monospace !important;
+}
+
+.retro input::placeholder {
+  color: #116611 !important;
+}
+
+.retro button {
+  text-shadow: 0 0 3px rgba(255, 170, 0, 0.3);
+}
+
+/* Scanlines — visible but not distracting */
+.retro body::after {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 20, 0, 0.18) 0px,
+    rgba(0, 20, 0, 0.18) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  pointer-events: none;
+  z-index: 40;
+}
+
+/* CRT vignette */
+.retro body::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.4) 100%);
+  pointer-events: none;
+  z-index: 39;
+}
+
+/* Retro header — black with green border */
+.retro header {
+  background: #0a0a0a !important;
+  border-color: #1a3a1a !important;
+}
+.retro header a, .retro nav a {
+  color: #ffaa00 !important;
+}
+
+/* Table borders glow */
+.retro table {
+  border-color: #1a3a1a;
+}
+.retro th, .retro td {
+  border-color: #1a3a1a;
+}
+
+/* Scrollbar */
+.retro ::-webkit-scrollbar { width: 8px; }
+.retro ::-webkit-scrollbar-track { background: #0a0a0a; }
+.retro ::-webkit-scrollbar-thumb { background: #1a3a1a; border-radius: 4px; }
+.retro ::-webkit-scrollbar-thumb:hover { background: #2a5a2a; }
+
+/* Subtle text flicker — like a real CRT with imperfect refresh */
+@keyframes crt-flicker {
+  0%, 100% { opacity: 1; }
+  92% { opacity: 1; }
+  93% { opacity: 0.92; }
+  94% { opacity: 1; }
+}
+.retro body {
+  animation: crt-flicker 4s infinite;
+}
+
+/* Blinking cursor on inputs */
+.retro input:focus, .retro textarea:focus {
+  caret-color: #33ff33;
+  outline: 1px solid #33ff33 !important;
+  box-shadow: 0 0 8px rgba(51, 255, 51, 0.2) !important;
+}
+
+/* Card hover — phosphor glow intensifies */
+.retro .card:hover {
+  box-shadow: 0 0 12px rgba(51, 255, 51, 0.1), inset 0 0 20px rgba(0, 0, 0, 0.2);
+  border-color: #2a5a2a;
+}
+
+/* Buttons glow on hover */
+.retro button:hover {
+  box-shadow: 0 0 10px rgba(255, 170, 0, 0.2);
+}
+
+/* ═══════════════════════════════════════════════
+   DARK MODE ENHANCEMENTS — glass + glow + depth
+   ═══════════════════════════════════════════════ */
+
+/* Animated gradient mesh background */
+@keyframes dark-gradient-shift {
+  0%, 100% { background-position: 0% 0%; }
+  25% { background-position: 100% 0%; }
+  50% { background-position: 100% 100%; }
+  75% { background-position: 0% 100%; }
+}
+.dark body {
+  background:
+    radial-gradient(ellipse at 20% 20%, rgba(77, 159, 255, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(163, 113, 247, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, rgba(52, 208, 88, 0.02) 0%, transparent 40%),
+    #0a0e14;
+  background-size: 200% 200%;
+  animation: dark-gradient-shift 30s ease infinite;
+}
+
+/* Dark mode cards — solid bg, subtle hover */
+.dark .card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.dark .card:hover {
+  border-color: rgba(77, 159, 255, 0.15);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* ═══════════════════════════════════════════════
+   DARK THEME OVERRIDES — force correct colors
+   Tailwind v4 @theme inline can override CSS vars;
+   these !important rules guarantee dark bg/text.
+   ═══════════════════════════════════════════════ */
+
+/* All bg-surface elements */
+html.dark .bg-surface { background-color: #12161e !important; }
+html.dark .bg-surface-alt { background-color: #1a1f2b !important; }
+html.dark .bg-bg { background-color: #0a0e14 !important; }
+html.dark .bg-accent-light { background-color: #111d30 !important; }
+html.dark .border-border { border-color: #252d38 !important; }
+html.dark .text-text { color: #eaf0f6 !important; }
+html.dark .text-text-muted { color: #8d97a5 !important; }
+html.dark .text-text-secondary { color: #c0cad6 !important; }
+
+html.retro .bg-surface { background-color: #111111 !important; }
+html.retro .bg-surface-alt { background-color: #1a1a1a !important; }
+html.retro .bg-bg { background-color: #0a0a0a !important; }
+html.retro .border-border { border-color: #1a3a1a !important; }
+html.retro .text-text { color: #33ff33 !important; }
+html.retro .text-text-muted { color: #118811 !important; }
+
+html.matrix .bg-surface { background-color: #0a100a !important; }
+html.matrix .bg-surface-alt { background-color: #0f180f !important; }
+html.matrix .bg-bg { background-color: #000000 !important; }
+html.matrix .border-border { border-color: #1a3a1a !important; }
+html.matrix .text-text { color: #33ff33 !important; }
+html.matrix .text-text-muted { color: #22aa22 !important; }
+html.matrix .text-text-secondary { color: #28cc28 !important; }
+
+/* Select dropdowns (Windows renders white by default) */
+html.dark select, html.dark option,
+html.retro select, html.retro option,
+html.matrix select, html.matrix option {
+  background-color: var(--color-surface) !important;
+  color: var(--color-text) !important;
+}
+
+/* Accent glow on interactive elements */
+.dark button:hover {
+  box-shadow: 0 0 12px rgba(77, 159, 255, 0.15);
+  transition: box-shadow 0.2s;
+}
+
+/* Dark form elements — explicit bg + text color (fixes white dropdowns on Windows) */
+.dark input, .dark select, .dark textarea {
+  background: var(--color-surface) !important;
+  color: var(--color-text) !important;
+  border-color: var(--color-border) !important;
+}
+.dark select option {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.dark input:focus, .dark textarea:focus, .dark select:focus {
+  border-color: rgba(77, 159, 255, 0.4) !important;
+  box-shadow: 0 0 0 2px rgba(77, 159, 255, 0.1);
+  outline: none;
+}
+
+/* Badge glow for gain/loss */
+.dark .badge-gain {
+  box-shadow: 0 0 6px rgba(52, 208, 88, 0.15);
+}
+.dark .badge-loss {
+  box-shadow: 0 0 6px rgba(244, 71, 71, 0.15);
+}
+
+/* Scrollbar */
+.dark ::-webkit-scrollbar { width: 6px; }
+.dark ::-webkit-scrollbar-track { background: transparent; }
+.dark ::-webkit-scrollbar-thumb { background: #252d38; border-radius: 3px; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #3d4754; }
+
+/* Metric value — no text-shadow in dark mode (causes fuzzy text) */
+
+/* Table row hover */
+/* Font rendering — sharper text in dark themes */
+.dark body, .retro body, .matrix body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Table row hover — all themes */
+tr:hover { background: rgba(0, 0, 0, 0.02); }
+.dark tr:hover { background: rgba(77, 159, 255, 0.03); }
+.retro tr:hover { background: rgba(51, 255, 51, 0.05); }
+
+/* ═══════════════════════════════════════════════
+   MATRIX MODE — digital rain, neon green, the One
+   ═══════════════════════════════════════════════ */
+
+html.matrix, .matrix {
+  --color-bg: #000000;
+  --color-surface: #0a100a;
+  --color-surface-alt: #0f180f;
+
+  --color-navy: #33ff33;
+  --color-navy-light: #22aa22;
+  --color-navy-muted: #22aa22;
+
+  --color-border: #1a3a1a;
+  --color-border-strong: #2a5a2a;
+
+  --color-text: #33ff33;
+  --color-text-secondary: #28cc28;
+  --color-text-muted: #22aa22;
+
+  --color-accent: #00ff41;
+  --color-accent-hover: #33ff66;
+  --color-accent-light: #001a00;
+
+  --color-gain: #00ff41;
+  --color-gain-bg: #001a00;
+  --color-loss: #ff0040;
+  --color-loss-bg: #1a0008;
+  --color-warn: #ccff00;
+  --color-warn-bg: #0f1a00;
+  --color-info: #00ff41;
+  --color-info-bg: #001a00;
+
+  --font-sans: "Courier New", "Lucida Console", monospace;
+  --font-mono: "Courier New", "Lucida Console", monospace;
+
+  color-scheme: dark;
+}
+
+/* Matrix digital rain background — CSS-only falling characters */
+@keyframes matrix-rain-1 {
+  0% { transform: translateY(-100vh); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+@keyframes matrix-rain-2 {
+  0% { transform: translateY(-100vh); opacity: 0; }
+  15% { opacity: 0.7; }
+  85% { opacity: 0.7; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+
+.matrix body {
+  font-family: "Courier New", monospace !important;
+  overflow-x: hidden;
+}
+
+/* Background rain canvas is injected by MatrixBackground component */
+/* Fallback: subtle grid + vignette for when JS hasn't loaded */
+.matrix body::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background:
+    /* Vertical column lines */
+    repeating-linear-gradient(90deg,
+      transparent 0px, transparent 19px,
+      rgba(0, 255, 65, 0.02) 19px, rgba(0, 255, 65, 0.02) 20px
+    ),
+    /* Subtle vignette */
+    radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.3) 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Green phosphor glow — only on headings and large text, not body text */
+.matrix h1, .matrix h2, .matrix h3,
+.matrix .metric-value, .matrix .text-2xl, .matrix .text-xl, .matrix .text-lg {
+  text-shadow: 0 0 4px rgba(0, 255, 65, 0.3), 0 0 8px rgba(0, 255, 65, 0.1);
+}
+
+/* Cards — dark with green edge glow */
+.matrix .card {
+  background: rgba(5, 10, 5, 0.85);
+  border: 1px solid #1a3a1a;
+  box-shadow: 0 0 10px rgba(0, 255, 65, 0.04), inset 0 1px 0 rgba(0, 255, 65, 0.05);
+}
+.matrix .card:hover {
+  border-color: #2a5a2a;
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.08), 0 0 2px rgba(0, 255, 65, 0.2);
+}
+
+/* Inputs */
+.matrix input, .matrix select, .matrix textarea {
+  background: #050a05 !important;
+  border-color: #1a3a1a !important;
+  color: #33ff33 !important;
+  font-family: "Courier New", monospace !important;
+}
+.matrix input::placeholder {
+  color: #1a6a1a !important;
+}
+.matrix input:focus, .matrix textarea:focus {
+  border-color: #00ff41 !important;
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.2) !important;
+  outline: none;
+}
+
+/* Badges — outlined, neon */
+.matrix .badge {
+  border: 1px solid currentColor;
+  background: transparent;
+  text-shadow: 0 0 4px currentColor;
+}
+
+/* Buttons */
+.matrix button {
+  text-shadow: 0 0 4px rgba(0, 255, 65, 0.3);
+}
+.matrix button:hover {
+  box-shadow: 0 0 15px rgba(0, 255, 65, 0.15);
+}
+
+/* Header */
+.matrix header {
+  background: #000000 !important;
+  border-color: #1a3a1a !important;
+  box-shadow: 0 1px 0 rgba(0, 255, 65, 0.1);
+}
+
+/* Tables */
+.matrix table { border-color: #1a3a1a; }
+.matrix th, .matrix td { border-color: #1a3a1a; }
+.matrix tr:hover { background: rgba(0, 255, 65, 0.04); }
+
+/* Metrics glow */
+.matrix .metric-value {
+  text-shadow: 0 0 8px rgba(0, 255, 65, 0.5), 0 0 16px rgba(0, 255, 65, 0.15);
+}
+
+/* Loss values — red glow */
+.matrix .text-loss {
+  text-shadow: 0 0 4px rgba(255, 0, 64, 0.4), 0 0 8px rgba(255, 0, 64, 0.1);
+}
+
+/* Scrollbar */
+.matrix ::-webkit-scrollbar { width: 6px; }
+.matrix ::-webkit-scrollbar-track { background: #000000; }
+.matrix ::-webkit-scrollbar-thumb { background: #1a3a1a; border-radius: 3px; }
+.matrix ::-webkit-scrollbar-thumb:hover { background: #2a5a2a; }
+
+/* Smooth theme transitions — scoped to layout elements only (not charts, spinners, tooltips) */
+body, .card, header, nav, .badge, .metric-label, .metric-value,
+input, select, textarea, table, th, td {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.15s ease;
 }
 
 body {
@@ -87,8 +524,17 @@ body {
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Readability: minimum text sizes for dense financial content */
+.card { line-height: 1.5; }
+.card .text-xs { font-size: 0.8rem; }       /* 12px → 12.8px */
+.card .text-\[0\.6rem\] { font-size: 0.65rem; }  /* 9.6px → 10.4px */
+.card .text-\[0\.55rem\] { font-size: 0.6rem; }   /* 8.8px → 9.6px */
+.card .text-\[0\.5rem\] { font-size: 0.55rem; }    /* 8px → 8.8px */
+.card .text-\[0\.45rem\] { font-size: 0.5rem; }    /* 7.2px → 8px */
 
 /* ─── Monospace numbers ─────────────────────── */
 .font-data {
@@ -165,11 +611,11 @@ body {
 
 /* ─── Metric ────────────────────────────────── */
 .metric-label {
-  font-size: 0.6rem;
+  font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 .metric-value {

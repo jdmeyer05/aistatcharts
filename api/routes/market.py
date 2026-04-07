@@ -34,6 +34,140 @@ async def price_history(
     return {"ticker": ticker, "data": df.to_dict(orient="records")}
 
 
+@router.get("/ohlcv/{ticker}")
+async def ohlcv_history(
+    ticker: str,
+    days: int = Query(365, ge=1, le=5040),
+    interval: str = Query("1d", description="Bar interval: 1m, 5m, 15m, 1h, 1d"),
+    user: str = Depends(get_current_user),
+):
+    """Get OHLCV candlestick data from Polygon. Supports intraday (1m/5m/15m/1h) and daily."""
+    import requests
+    from datetime import date, datetime, timedelta
+    from src.api_keys import get_secret
+    from src.data_engine import format_massive_ticker
+
+    api_key = get_secret("MASSIVE_API_KEY")
+    if not api_key:
+        return {"ticker": ticker, "data": []}
+
+    formatted = format_massive_ticker(ticker.upper())
+    end = date.today()
+
+    # Map interval to Polygon multiplier/timespan + sensible day limits
+    _INTERVALS = {
+        "1m":  (1, "minute", min(days, 1)),     # max 1 day of 1min bars
+        "5m":  (5, "minute", min(days, 5)),     # max 5 days
+        "15m": (15, "minute", min(days, 10)),   # max 10 days
+        "1h":  (1, "hour", min(days, 30)),      # max 30 days
+        "1d":  (1, "day", days),
+    }
+    mult, timespan, effective_days = _INTERVALS.get(interval, (1, "day", days))
+    start = end - timedelta(days=effective_days)
+
+    try:
+        url = f"https://api.polygon.io/v2/aggs/ticker/{formatted}/range/{mult}/{timespan}/{start.isoformat()}/{end.isoformat()}"
+        r = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50000, "adjusted": "true"}, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        bars = []
+        for bar in results:
+            bars.append({
+                "time": int(bar["t"] / 1000),
+                "open": bar.get("o", 0),
+                "high": bar.get("h", 0),
+                "low": bar.get("l", 0),
+                "close": bar.get("c", 0),
+                "volume": bar.get("v", 0),
+            })
+
+        # Compute TA-Lib indicators
+        indicators = {}
+        try:
+            import numpy as np
+            import talib
+            closes = np.array([b["close"] for b in bars], dtype=float)
+            highs = np.array([b["high"] for b in bars], dtype=float)
+            lows = np.array([b["low"] for b in bars], dtype=float)
+            times = [b["time"] for b in bars]
+
+            def _series(values):
+                """Convert numpy array to [{time, value}] with NaN filtered."""
+                return [{"time": t, "value": round(float(v), 4)}
+                        for t, v in zip(times, values) if not np.isnan(v)]
+
+            # EMAs
+            indicators["ema9"] = _series(talib.EMA(closes, timeperiod=9))
+            indicators["ema21"] = _series(talib.EMA(closes, timeperiod=21))
+            indicators["ema50"] = _series(talib.EMA(closes, timeperiod=50))
+            indicators["ema200"] = _series(talib.EMA(closes, timeperiod=200))
+
+            # RSI
+            indicators["rsi"] = _series(talib.RSI(closes, timeperiod=14))
+
+            # MACD
+            macd, signal, hist = talib.MACD(closes, fastperiod=12, slowperiod=26, signalperiod=9)
+            indicators["macd"] = _series(macd)
+            indicators["macd_signal"] = _series(signal)
+            indicators["macd_hist"] = _series(hist)
+
+            # Bollinger Bands
+            upper, middle, lower = talib.BBANDS(closes, timeperiod=20, nbdevup=2, nbdevdn=2)
+            indicators["bb_upper"] = _series(upper)
+            indicators["bb_middle"] = _series(middle)
+            indicators["bb_lower"] = _series(lower)
+
+            # VWAP approximation (cumulative typical price × volume / cumulative volume)
+            typical = (highs + lows + closes) / 3
+            volumes = np.array([b["volume"] for b in bars], dtype=float)
+            cum_tpv = np.cumsum(typical * volumes)
+            cum_vol = np.cumsum(volumes)
+            vwap = np.where(cum_vol > 0, cum_tpv / cum_vol, np.nan)
+            indicators["vwap"] = _series(vwap)
+
+        except ImportError:
+            pass  # TA-Lib not installed — return bars without indicators
+        except Exception:
+            pass
+
+        return {"ticker": ticker, "data": bars, "indicators": indicators}
+    except Exception as e:
+        # Fallback 1: yfinance OHLCV (real candles, free, no API key)
+        try:
+            import yfinance as yf
+            period_map = {1: "5d", 5: "5d", 10: "1mo", 30: "1mo", 90: "3mo",
+                          180: "6mo", 365: "1y", 730: "2y", 1825: "5y"}
+            yf_period = period_map.get(days, "1y")
+            tk = yf.Ticker(ticker.upper())
+            df = tk.history(period=yf_period, interval="1d" if interval == "1d" else interval.replace("m", "m").replace("h", "h"))
+            if df is not None and not df.empty:
+                bars = []
+                for dt, row in df.iterrows():
+                    ts = int(dt.timestamp())
+                    bars.append({
+                        "time": ts, "open": float(row["Open"]), "high": float(row["High"]),
+                        "low": float(row["Low"]), "close": float(row["Close"]),
+                        "volume": float(row.get("Volume", 0)),
+                    })
+                return {"ticker": ticker, "data": bars}
+        except Exception:
+            pass
+
+        # Fallback 2: close-only from Supabase cache
+        from src.data_engine import fetch_massive_data
+        df = fetch_massive_data(ticker.upper(), days)
+        if df is not None and not df.empty:
+            df = df.reset_index()
+            bars = []
+            for _, row in df.iterrows():
+                dt = row.iloc[0]
+                c = float(row["Close"])
+                ts = int(dt.timestamp()) if hasattr(dt, 'timestamp') else 0
+                bars.append({"time": ts, "open": c, "high": c, "low": c, "close": c, "volume": 0})
+            return {"ticker": ticker, "data": bars}
+        return {"ticker": ticker, "data": [], "error": str(e)}
+
+
 @router.get("/history-batch")
 async def price_history_batch(
     tickers: str = Query(..., description="Comma-separated tickers"),
@@ -574,9 +708,9 @@ STOCK_MODEL_CONFIGS = {
         "color": "#4285f4",
     },
     "claude": {
-        "name": "Claude Sonnet",
+        "name": "Claude Opus",
         "base_url": "anthropic",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-opus-4-6",
         "key_name": "ANTHROPIC_API_KEY",
         "extra": "Use your knowledge to assess the latest market conditions, analyst consensus, and any recent news.",
         "color": "#d4a574",
@@ -1317,6 +1451,9 @@ def _grok_helpers(grok_key: str):
 
     def _extract_json_array(text: str) -> list:
         cleaned = text.strip()
+        # Strip Grok citation tags and web references before JSON parsing
+        cleaned = re.sub(r'<grok:render[^>]*>.*?</grok:render>', '', cleaned)
+        cleaned = re.sub(r'\[web:\d+\]', '', cleaned)
         cleaned = re.sub(r"^```json?\s*\n?", "", cleaned)
         cleaned = re.sub(r"\n?\s*```\s*$", "", cleaned)
         start = cleaned.find("[")
@@ -1452,19 +1589,36 @@ Return ONLY a JSON array. Return 20-40 items. More is better — duplicates will
 
 @router.post("/news-intel-search")
 async def news_intel_search(req: NewsIntelRequest, user: str = Depends(get_current_user)):
-    """Pass 1: Fast search via grok-4-1-fast-reasoning. Returns unverified items immediately."""
+    """Pass 1: Fast search via grok-4-1-fast-reasoning. Cached 30 min in Supabase."""
     import json, re, logging
     from src.api_keys import get_secret
 
     _log = logging.getLogger(__name__)
-    grok_key = get_secret("GROK_API_KEY")
-    if not grok_key:
-        return {"success": False, "error": "GROK_API_KEY not configured", "items": []}
 
     from datetime import datetime as _dt
     tickers = [t.strip().upper() for t in req.watchlist[:20] if t.strip()]
     today = _dt.utcnow().strftime("%A, %B %d, %Y")
     tickers_str = ", ".join(tickers[:15])
+
+    # Check Supabase cache (30 min TTL)
+    try:
+        from src.ai_cache import get_cached_ai, cache_ai_response
+        import hashlib
+        # 30-min bucket: floor minutes to 0 or 30
+        _now = _dt.now()
+        _bucket = _now.strftime('%Y%m%d_%H') + ("00" if _now.minute < 30 else "30")
+        cache_key = hashlib.md5(f"news_search:{_bucket}:{tickers_str}".encode()).hexdigest()
+        cached = get_cached_ai(cache_key)
+        if cached:
+            cached_data = json.loads(cached)
+            _log.info(f"News search cache hit: {len(cached_data.get('items', []))} items")
+            return cached_data
+    except Exception:
+        pass
+
+    grok_key = get_secret("GROK_API_KEY")
+    if not grok_key:
+        return {"success": False, "error": "GROK_API_KEY not configured", "items": []}
 
     _grok_request, _extract_json_array, _finalize, _make_sources = _grok_helpers(grok_key)
 
@@ -1481,13 +1635,22 @@ async def news_intel_search(req: NewsIntelRequest, user: str = Depends(get_curre
     if not items:
         return {"success": True, "items": [], "sources": _make_sources([]), "total": 0}
 
-    # Mark all as unverified
     for item in items:
         item["confidence"] = "unverified"
         item["verification_note"] = ""
 
     items = _finalize(items)
-    return {"success": True, "items": items[:40], "sources": _make_sources(items), "total": len(items)}
+    result = {"success": True, "items": items[:40], "sources": _make_sources(items), "total": len(items)}
+
+    # Cache in Supabase for 30 min
+    try:
+        cache_ai_response(cache_key, json.dumps(result), model="grok-4-1-fast",
+                          source_page="news_search", ticker="NEWS",
+                          ttl_hours=0.5, prompt_summary="News search results")
+    except Exception:
+        pass
+
+    return result
 
 
 class NewsVerifyRequest(BaseModel):
@@ -4010,47 +4173,145 @@ async def trade_idea_analysis(req: TradeIdeaAnalysisRequest, user: str = Depends
         ctx += f"YOUR CURRENT POSITIONS:\n{req.book_summary}\n\n"
 
     if req.news_summary:
-        ctx += f"TODAY'S NEWS (from live Grok search):\n{req.news_summary}\n\n"
+        # Strip Grok citation tags from news
+        import re as _re
+        cleaned_news = _re.sub(r'\[web:\d+\]', '', req.news_summary)
+        cleaned_news = _re.sub(r'<grok:render[^>]*>.*?</grok:render>', '', cleaned_news)
+        ctx += f"TODAY'S NEWS (from live search):\n{cleaned_news}\n\n"
+
+    # Add macro context
+    try:
+        import yfinance as yf
+        macro_parts = []
+        for sym, label in [("SPY", "SPY"), ("^VIX", "VIX")]:
+            hist = yf.Ticker(sym).history(period="5d")
+            if hist is not None and len(hist) >= 2:
+                p = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2])
+                chg = (p / prev - 1) * 100
+                macro_parts.append(f"{label}: {'$' if sym != '^VIX' else ''}{p:.2f} ({chg:+.1f}%)")
+        if macro_parts:
+            ctx += f"MARKET: {' | '.join(macro_parts)}\n\n"
+    except Exception: pass
 
     from datetime import datetime as _dt
     today = _dt.now().strftime("%A, %B %d, %Y")
+    n_ideas = len(req.ideas)
 
     system = f"""You are a quantitative trading analyst. Today is {today}.
 
 These trade ideas have ALREADY been filtered for positive expected value, 2+ family confirmation, and R:R >= 1.0. They passed the filters — your job is to add context, not second-guess the math.
 
-For each trade idea, write a 2-3 sentence analysis:
-1. WHY: Connect the technical signal to today's news. Does the news support or contradict the direction? (e.g., "GLD long aligns with Iran escalation driving gold demand")
+For EACH of the {n_ideas} trade ideas, write a 2-3 sentence analysis:
+1. WHY: Connect the technical signal to today's macro environment and news. Does the news support or contradict the direction? (e.g., "GLD long aligns with Iran escalation driving gold demand")
 2. RISK: What specific event or condition could invalidate this trade? Reference earnings dates, news, or portfolio overlap.
-3. ACTION: Which options structure to use, citing the IV vs RV relationship. If IV > RV, sell premium. If IV < RV, buy options. Be specific with the structure.
+3. ACTION: Which options structure to use, citing the IV vs RV relationship. If IV > RV, sell premium. If IV < RV, buy options. If IV/RV data is not available, recommend stock or ATM options and state "vol data unavailable." Be specific.
 
 RULES:
+- COMPLETE ALL {n_ideas} IDEAS. Do not stop early or truncate any analysis.
 - Do NOT invent data. Only reference numbers from the data below. If a field is missing, say "not available" — do not guess.
-- Do NOT say "skip" — these ideas passed the quantitative filters. Your job is to provide context, not veto.
+- Do NOT say "skip" — these ideas passed the quantitative filters.
 - Connect each idea to a specific news headline if relevant.
 - If the trader holds an existing position in this ticker, note the overlap.
-- One section per idea. Use the ticker as a header (## TICKER)."""
+- One section per idea. Use the ticker + direction as a header (## TICKER DIRECTION)."""
 
     try:
         api_key = get_secret("GEMINI_API_KEY")
         if not api_key:
             return {"success": False, "error": "Gemini API key not configured"}
 
-        from google import genai
-        from google.genai import types
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model="gemini-3.1-pro-preview",
-            contents=f"{system}\n\n{ctx}",
-            config=types.GenerateContentConfig(max_output_tokens=3000, temperature=0.2),
+        # Use Claude Sonnet for reliability + speed (Gemini thinking models can be slow)
+        import anthropic
+        claude = anthropic.Anthropic(api_key=get_secret("ANTHROPIC_API_KEY"))
+        max_tokens = max(2000, n_ideas * 250 + 500)
+        response = claude.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": ctx}],
         )
-        text = response.text or ""
-        # Strip preamble
-        import re as _re
-        text = _re.sub(r"^\s*(?:Okay|Here|Sure|Let me)[^\n]*\n", "", text.strip())
+        text = response.content[0].text.strip() if response.content else ""
+        # Strip citation tags
+        import re as _re2
+        text = _re2.sub(r'\[web:\d+\]', '', text)
         return {"success": True, "analysis": text.strip()}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+class TradeIdeaQuickRequest(BaseModel):
+    ticker: str
+    direction: str = "long"
+    trigger: str = ""
+    signal_days: int = 0
+    confluence: int = 0
+    total_families: int = 4
+    price: float = 0
+    stop: float = 0
+    target: float = 0
+    rr: float = 0
+    ev: float = 0
+    win_rate: float = 0
+    iv: float = 0
+    rv: float = 0
+    rsi: float = 50
+    warnings: list[str] = []
+    book_summary: str = ""
+
+
+@router.post("/trade-idea-quick")
+async def trade_idea_quick(req: TradeIdeaQuickRequest, user: str = Depends(get_current_user)):
+    """Fast per-idea AI verdict: ENTER / WAIT / SKIP with 2-3 sentence reasoning."""
+    from src.api_keys import get_secret
+    import anthropic
+
+    ctx = (
+        f"TRADE IDEA: {req.ticker} {req.direction.upper()}\n"
+        f"  Trigger: {req.trigger} flipped {req.signal_days}d ago | Win rate: {req.win_rate}%\n"
+        f"  Confluence: {req.confluence}/{req.total_families} families confirm\n"
+        f"  Price: ${req.price:.2f} | Stop: ${req.stop:.2f} | Target: ${req.target:.2f}\n"
+        f"  R:R: {req.rr:.1f}:1 | EV: ${req.ev:+.2f}/trade\n"
+        f"  RSI: {req.rsi:.0f}"
+    )
+    if req.iv > 0:
+        ctx += f" | IV: {req.iv:.1f}%"
+    if req.rv > 0:
+        ctx += f" | RV20: {req.rv:.1f}%"
+    if req.iv > 0 and req.rv > 0:
+        edge = "sell premium" if req.iv > req.rv * 1.05 else "buy options" if req.rv > req.iv * 1.05 else "no vol edge"
+        ctx += f" ({edge})"
+    if req.warnings:
+        ctx += f"\n  Warnings: {'; '.join(req.warnings)}"
+    if req.book_summary:
+        ctx += f"\n  Portfolio: {req.book_summary}"
+
+    try:
+        api_key = get_secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            return {"success": False, "error": "API key not configured"}
+
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=250,
+            system=(
+                "You are a quant trader. Give a clear VERDICT: ENTER, WAIT, or SKIP. "
+                "Then 2-3 sentences WHY referencing the data. "
+                "If IV > RV, say sell premium (put credit spread for long, call credit spread for short). "
+                "If RV > IV, say buy options. If no vol data, say stock or ATM spread. "
+                "Be terse and specific. No preamble."
+            ),
+            messages=[{"role": "user", "content": ctx}],
+        )
+        text = response.content[0].text.strip()
+        verdict = "WAIT"
+        for v in ["ENTER", "SKIP", "WAIT"]:
+            if v in text[:50].upper():
+                verdict = v
+                break
+        return {"success": True, "ticker": req.ticker, "verdict": verdict, "analysis": text}
+    except Exception as e:
+        return {"success": False, "error": str(e)[:200]}
 
 
 class VolAnalysisRequest(BaseModel):
@@ -4412,3 +4673,1681 @@ async def risk_snapshot(user: str = Depends(get_current_user)):
         pass
 
     return result
+
+
+# ── News hover analysis (lightweight, cached) ──
+
+class NewsAnalyzeRequest(BaseModel):
+    headline: str
+    ticker: str = ""
+    source: str = ""
+    impact: str = ""
+
+@router.post("/news-analyze")
+async def news_analyze(req: NewsAnalyzeRequest, user: str = Depends(get_current_user)):
+    """Quick 1-2 sentence AI analysis of a news headline. Cached by headline hash."""
+    import hashlib
+    cache_key = hashlib.md5(f"news_hover:{req.headline[:200]}".encode()).hexdigest()
+
+    # Check cache first
+    try:
+        from src.ai_cache import get_cached_ai, cache_ai_response
+        cached = get_cached_ai(cache_key)
+        if cached:
+            return {"analysis": cached, "cached": True}
+    except Exception:
+        pass
+
+    # Call Gemini Flash (fast + cheap)
+    try:
+        from src.api_keys import get_secret
+        key = get_secret("GEMINI_API_KEY")
+        if not key:
+            return {"analysis": "AI analysis unavailable — no API key.", "cached": False}
+
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=key)
+        prompt = (
+            f"You are a senior trader's assistant. In 2 concise sentences, analyze the market impact of this headline.\n\n"
+            f"Headline: {req.headline}\n"
+            f"{'Ticker: ' + req.ticker if req.ticker else ''}\n"
+            f"{'Source: ' + req.source if req.source else ''}\n"
+            f"{'Sentiment: ' + req.impact if req.impact else ''}\n\n"
+            f"Cover: (1) what it means for the stock/sector, (2) whether to act or ignore. "
+            f"Be direct — no hedging, no 'it remains to be seen'."
+        )
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(max_output_tokens=200, temperature=0.3),
+        )
+        analysis = resp.text.strip() if resp.text else "Analysis unavailable."
+
+        # Cache for 2 hours
+        try:
+            cache_ai_response(cache_key, analysis, model="gemini-2.5-flash",
+                              source_page="news_hover", ticker=req.ticker or "NEWS",
+                              ttl_hours=2, prompt_summary="News hover analysis")
+        except Exception:
+            pass
+
+        return {"analysis": analysis, "cached": False}
+    except Exception as e:
+        return {"analysis": f"Analysis failed: {str(e)[:100]}", "cached": False}
+
+
+# ── Holding Deep Dive — focused position analysis ──
+
+class HoldingDiveRequest(BaseModel):
+    ticker: str
+    qty: float = 0
+    avg_cost: float = 0
+    current_price: float = 0
+    market_value: float = 0
+    pl: float = 0
+    pl_pct: float = 0
+    entry_date: str = ""
+
+@router.post("/holding-deep-dive")
+async def holding_deep_dive(req: HoldingDiveRequest, user: str = Depends(get_current_user)):
+    """Focused analysis of a single held position. Fast (5 parallel fetches + Sonnet)."""
+    import concurrent.futures
+    from src.api_keys import get_secret
+
+    ticker = req.ticker.upper()
+    ctx = {}
+
+    def _technicals():
+        try:
+            import numpy as np, talib, requests
+            from src.data_engine import format_massive_ticker
+            from datetime import date, timedelta
+            api_key = get_secret("MASSIVE_API_KEY")
+            formatted = format_massive_ticker(ticker)
+            end = date.today(); start = end - timedelta(days=400)
+            r = requests.get(
+                f"https://api.polygon.io/v2/aggs/ticker/{formatted}/range/1/day/{start.isoformat()}/{end.isoformat()}",
+                params={"apiKey": api_key, "sort": "asc", "limit": 50000, "adjusted": "true"}, timeout=10)
+            bars = r.json().get("results", [])
+            if not bars: return
+            c = np.array([b["c"] for b in bars], dtype=float)
+            price = c[-1]
+            ema21 = talib.EMA(c, 21)[-1]
+            ema50 = talib.EMA(c, 50)[-1]
+            rsi = talib.RSI(c, 14)[-1]
+            trend = "Bullish" if price > ema21 > ema50 else "Bearish" if price < ema21 < ema50 else "Mixed"
+            hi_52w, lo_52w = float(c[-252:].max()), float(c[-252:].min())
+            ctx["technicals"] = f"TECHNICALS: ${price:.2f} | Trend: {trend} | RSI: {rsi:.0f} | 52w: ${lo_52w:.2f}-${hi_52w:.2f}"
+        except Exception: pass
+
+    def _signals():
+        try:
+            from src.signal_engine import compute_composite
+            comp = compute_composite(ticker)
+            if comp:
+                ctx["signals"] = f"SIGNAL ENGINE: {comp['overall_direction']} {comp['overall_conviction']:.0%} ({comp['n_signals']} signals)"
+        except Exception: pass
+
+    def _vol():
+        try:
+            from src.metrics_store import get_latest_snapshot, percentile_ranks_all
+            snap = get_latest_snapshot(ticker)
+            if snap:
+                pct = percentile_ranks_all(ticker)
+                iv = snap.get("atm_iv", 0)
+                vrp = snap.get("vrp", 0)
+                ctx["vol"] = f"VOL: IV {iv:.1%} ({pct.get('atm_iv', '?')}th pctile) | VRP {vrp:+.1%}"
+        except Exception: pass
+
+    def _insider():
+        try:
+            from src.data_engine import fetch_insider_transactions
+            from src.edgar import score_insider_transactions, fetch_recent_8k
+            txns = fetch_insider_transactions(ticker, limit=20)
+            if txns is not None and not txns.empty:
+                score = score_insider_transactions(txns)
+                ctx["insider"] = f"INSIDER: Score {score.get('score', 0)}/100 | Buys: {score.get('buys', 0)} Sells: {score.get('sells', 0)}"
+            else:
+                ctx["insider"] = "INSIDER: No recent transactions (normal for small/mid-caps)"
+            events = fetch_recent_8k(ticker, days=30)
+            if events:
+                ctx["events"] = "RECENT 8-K: " + " | ".join(f"{e.get('date','?')}: {e.get('description','')[:60]}" for e in events[:3])
+            else:
+                ctx["events"] = "RECENT 8-K: No material filings in last 30 days (routine — not a red flag)"
+        except Exception: pass
+
+    def _fundamentals():
+        try:
+            import yfinance as yf
+            tk = yf.Ticker(ticker)
+            info = tk.info or {}
+            parts = []
+            for key, label in [("targetMeanPrice", "Analyst Target"), ("recommendationKey", "Rating"),
+                                ("trailingPE", "P/E"), ("revenueGrowth", "Rev Growth"),
+                                ("shortPercentOfFloat", "Short Float")]:
+                val = info.get(key)
+                if val is not None:
+                    if key == "targetMeanPrice": parts.append(f"{label}: ${val:.2f}")
+                    elif "Growth" in label or "Float" in label: parts.append(f"{label}: {val*100:.1f}%")
+                    else: parts.append(f"{label}: {val}")
+            # Earnings
+            next_earn = _safe_next_earnings(tk)
+            if next_earn:
+                parts.append(f"Next earnings: {next_earn}")
+            if parts:
+                ctx["fundamentals"] = "FUNDAMENTALS: " + " | ".join(parts)
+        except Exception: pass
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        futs = [pool.submit(fn) for fn in [_technicals, _signals, _vol, _insider, _fundamentals]]
+        concurrent.futures.wait(futs, timeout=12)
+
+    # Build position context — include market value so AI has exact equity numbers
+    mkt_val = req.market_value if req.market_value > 0 else req.qty * req.current_price
+    position_ctx = (
+        f"POSITION: {req.qty:.0f} shares of {ticker} @ ${req.avg_cost:.2f}"
+        f" | Current: ${req.current_price:.2f} | Market Value: ${mkt_val:,.0f}"
+        f" | P/L: ${req.pl:+,.0f} ({req.pl_pct:+.1f}%)"
+        + (f" | Entry: {req.entry_date}" if req.entry_date else "")
+    )
+
+    context = position_ctx + "\n\n" + "\n".join(v for v in ctx.values() if v)
+
+    prompt = f"""{context}
+
+Analyze this position. Give a clear VERDICT: HOLD, ADD, TRIM, or CLOSE.
+Then explain why in 3-4 sentences referencing the data above.
+If TRIM or ADD, suggest sizing. If CLOSE, explain urgency.
+When referencing selling proceeds or position value, use the EXACT Market Value from the data above — do NOT estimate or approximate.
+End with 2 bullet KEY RISKS specific to this holding.
+
+NOTE: If 8-K event descriptions are missing or show "unknown", this means the SEC filing parser
+couldn't extract the item type — it does NOT mean there's a mystery event. Treat missing 8-K
+descriptions as "no material events" rather than as a red flag."""
+
+    try:
+        api_key = get_secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            return {"success": False, "error": "API key not configured"}
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=800,
+            system="You are a portfolio manager reviewing a client's position. Be direct and specific. Reference the data provided. No hedging — give a clear verdict.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        analysis = response.content[0].text.strip()
+
+        # Extract verdict from first line
+        verdict = "HOLD"
+        for v in ["CLOSE", "TRIM", "ADD", "HOLD"]:
+            if v in analysis[:100].upper():
+                verdict = v
+                break
+
+        return {
+            "success": True,
+            "ticker": ticker,
+            "verdict": verdict,
+            "analysis": analysis,
+            "sources": list(ctx.keys()),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)[:200]}
+
+
+# ── Trade Architect — AI-powered trade structuring ──
+
+class ArchitectMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+class TradeArchitectRequest(BaseModel):
+    thesis: str = ""
+    messages: list[ArchitectMessage] = []
+    context: str = ""
+    tickers: list[str] = []
+    account_size: float = 25000
+    deep: bool = False
+    risk: str = "moderate"     # conservative / moderate / aggressive
+    strategy: str = "auto"     # auto / sell / buy
+    direction: str = ""        # bullish / bearish / neutral / "" (auto-detect)
+
+def _detect_direction(thesis: str) -> str:
+    """Detect bullish/bearish/neutral from thesis text.
+    Options-aware: 'sell puts' / 'put credit spread' = bullish, 'sell calls' / 'bear call' = bearish."""
+    t = thesis.lower()
+
+    # Options-specific phrases (highest priority — these are unambiguous)
+    bull_phrases = ["sell put", "put credit", "bull put", "cash secured put", "buy call", "call debit", "bull call", "covered call"]
+    bear_phrases = ["sell call", "call credit", "bear call", "buy put", "put debit", "bear put",
+                    "protective put", "hedge", "protect", "balance", "reduce risk", "tail risk",
+                    "diversify", "too long", "overweight", "de-risk"]
+    neutral_phrases = ["sell premium", "iron condor", "range bound", "sideways", "theta gang",
+                       "income strategy", "straddle", "strangle", "iron butterfly"]
+
+    bull = sum(2 for p in bull_phrases if p in t)
+    bear = sum(2 for p in bear_phrases if p in t)
+    neutral = sum(2 for p in neutral_phrases if p in t)
+
+    # General directional words (lower weight, after stripping matched phrases)
+    t_clean = t
+    for p in bull_phrases + bear_phrases + neutral_phrases:
+        t_clean = t_clean.replace(p, "")
+    neutral += sum(1 for w in ["neutral", "flat", "premium", "theta"] if w in t_clean)
+    bull += sum(1 for w in ["bullish","long","buy","upside","rally","run","breakout","support","bounce","recovery","higher","moon","bull"] if w in t_clean)
+    bear += sum(1 for w in ["bearish","short","downside","crash","sell","drop","breakdown","fade","lower","tank","dump","bear"] if w in t_clean)
+
+    if neutral > max(bull, bear): return "neutral"
+    if bear > bull: return "bearish"
+    if bull > 0: return "bullish"
+    return "bullish"
+
+def _compute_structured_trades(primary: str, account_size: float,
+                                risk: str = "moderate", strategy: str = "auto",
+                                thesis: str = "", direction_override: str = "",
+                                portfolio_greeks: dict = None) -> list[dict]:
+    """Compute structured trades from real market data. Direction-aware, vol-regime-aware,
+    portfolio-impact-aware."""
+    import numpy as np
+    import requests
+    from datetime import date, timedelta
+    from src.api_keys import get_secret
+    from src.data_engine import format_massive_ticker, fetch_options_chain
+    import pandas as pd
+
+    direction = direction_override if direction_override in ("bullish", "bearish", "neutral") else (_detect_direction(thesis) if thesis else "bullish")
+    is_bull = direction == "bullish"
+    is_bear = direction == "bearish"
+    is_neutral = direction == "neutral"
+
+    trades = []
+    api_key = get_secret("MASSIVE_API_KEY")
+
+    # ── Fetch OHLCV for technicals ──
+    price, atr, bars = 0.0, 0.0, []
+    hi_20d, lo_20d, ema200 = 0.0, 0.0, 0.0
+    try:
+        formatted = format_massive_ticker(primary)
+        end = date.today(); start = end - timedelta(days=300)
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/{formatted}/range/1/day/{start.isoformat()}/{end.isoformat()}",
+            params={"apiKey": api_key, "sort": "asc", "limit": 50000, "adjusted": "true"}, timeout=10)
+        bars = r.json().get("results", [])
+        if bars:
+            import talib
+            h = np.array([b["h"] for b in bars], dtype=float)
+            l = np.array([b["l"] for b in bars], dtype=float)
+            c = np.array([b["c"] for b in bars], dtype=float)
+            price = c[-1]
+            atr = float(talib.ATR(h, l, c, 14)[-1])
+            ema200 = float(talib.EMA(c, 200)[-1]) if len(c) >= 200 else price * 0.95
+            hi_20d = float(h[-20:].max())
+            lo_20d = float(l[-20:].min())
+    except Exception:
+        pass
+
+    if not price:
+        return trades
+
+    _RISK_PCT = {"conservative": 0.015, "moderate": 0.03, "aggressive": 0.05}
+    max_risk_dollars = account_size * _RISK_PCT.get(risk, 0.03)
+
+    # For hedging theses, detect the position size and allow larger contract counts
+    _is_hedge = direction == "bearish" and any(w in (thesis or "").lower() for w in ["hedge", "protect", "cover", "offset"])
+    _position_contracts = 0
+    if _is_hedge and portfolio_greeks:
+        # Use pre-fetched stock positions from endpoint (no extra RH login)
+        stock_positions = portfolio_greeks.get("stock_positions", {})
+        qty = stock_positions.get(primary, 0)
+        if qty > 0:
+            _position_contracts = int(qty / 100)
+
+    # ── TRADE 1: STOCK (direction-aware) ──
+    if is_bull or is_neutral:
+        stop_price = round(max(ema200 - atr * 0.5, price - atr * 2), 2)
+        target_price = round(hi_20d if hi_20d > price else price + atr * 3, 2)
+        shares = int(max_risk_dollars / max(price - stop_price, 1))
+    else:  # bearish — short stock
+        stop_price = round(min(hi_20d + atr * 0.5, price + atr * 2), 2)
+        target_price = round(lo_20d if lo_20d < price else price - atr * 3, 2)
+        shares = int(max_risk_dollars / max(stop_price - price, 1))
+    _max_position_pct = {"conservative": 0.2, "moderate": 0.35, "aggressive": 0.5}
+    shares = max(1, min(shares, int(account_size * _max_position_pct.get(risk, 0.35) / price)))
+    stock_action = "buy" if (is_bull or is_neutral) else "short"
+    # If bearish but user holds shares, recommend selling (trim), not shorting additional
+    _held_qty = portfolio_greeks.get("stock_positions", {}).get(primary, 0) if portfolio_greeks else 0
+    if stock_action == "short" and _held_qty > 0:
+        stock_action = "sell"
+        if _is_hedge:
+            # Explicit hedge request: trim 50% of position (up to 75%)
+            trim_target = int(_held_qty * 0.5)
+            shares = max(shares, trim_target)
+            shares = min(shares, int(_held_qty * 0.75))
+        else:
+            # Bearish thesis while holding: cap sell at held quantity
+            shares = min(shares, int(_held_qty))
+        shares = max(1, shares)
+    # Compute P/L AFTER final share count is set
+    stock_risk = round(shares * abs(price - stop_price), 2)
+    stock_profit = round(shares * abs(target_price - price), 2)
+    trades.append({
+        "type": "stock", "label": f"{'Buy' if stock_action == 'buy' else 'Sell' if stock_action == 'sell' else 'Short'} {shares} Shares",
+        "legs": [{"action": stock_action, "instrument": "shares", "ticker": primary, "qty": shares, "price": price}],
+        "entry": price, "stop": stop_price, "target": target_price,
+        "max_profit": stock_profit, "max_risk": stock_risk,
+        "breakeven": price, "pop": None,
+        "rr_ratio": round(stock_profit / stock_risk, 2) if stock_risk > 0 else 0,
+        "greeks": {"delta": shares if stock_action == "buy" else -shares, "theta": 0, "gamma": 0, "vega": 0},
+        "timeframe": "2-3 weeks",
+    })
+
+    # ── Fetch options chain ──
+    try:
+        chain = fetch_options_chain(primary)
+        if chain is None or chain.empty:
+            return trades
+        chain["dte"] = (pd.to_datetime(chain["expiration_date"]) - pd.Timestamp.now()).dt.days
+
+        monthly = chain[(chain["dte"] >= 20) & (chain["dte"] <= 50)]
+        if monthly.empty: monthly = chain[chain["dte"] >= 7]
+        if monthly.empty: monthly = chain[chain["dte"] >= 1]  # last resort: any expiration
+        if monthly.empty: return trades
+        dte_by_exp = monthly.groupby("expiration_date")["dte"].first().dropna()
+        if dte_by_exp.empty: return trades
+        exp = dte_by_exp.idxmin()
+        ec = monthly[monthly["expiration_date"] == exp]
+        dte = int(ec["dte"].iloc[0])
+        calls = ec[ec["contract_type"] == "call"].sort_values("strike_price")
+        puts = ec[ec["contract_type"] == "put"].sort_values("strike_price")
+        if calls.empty or puts.empty: return trades
+
+        def mid(row):
+            b, a = float(row.get("bid", 0) or 0), float(row.get("ask", 0) or 0)
+            return round((b + a) / 2, 2) if b > 0 and a > 0 else round(float(row.get("last_price", 0) or 0), 2)
+
+        def greek(row, field):
+            v = row.get(field, 0)
+            try: return float(v) if v and not np.isnan(float(v)) else 0.0
+            except: return 0.0
+
+        # Vol regime
+        atm_c = calls.iloc[(calls["strike_price"] - price).abs().argmin()]
+        atm_p = puts.iloc[(puts["strike_price"] - price).abs().argmin()]
+        _civ = float(atm_c.get("implied_volatility", 0) or 0)
+        _piv = float(atm_p.get("implied_volatility", 0) or 0)
+        atm_iv = (_civ + _piv) / 2 if (_civ + _piv) > 0 else 0.3
+        hv20 = float(np.std(np.diff(np.log(np.array([b["c"] for b in bars[-22:]], dtype=float)))) * np.sqrt(252)) if len(bars) >= 22 else atm_iv
+        vol_rich = atm_iv > hv20 * 1.05
+        sell_premium = vol_rich if strategy == "auto" else (strategy == "sell")
+
+        # Earnings check
+        earnings_in_window = False
+        _next_earn_str = None
+        try:
+            import yfinance as yf
+            _next_earn_str = _safe_next_earnings(yf.Ticker(primary))
+            if _next_earn_str:
+                next_earn = pd.to_datetime(_next_earn_str)
+                if (next_earn - pd.Timestamp.now()).days <= dte:
+                    earnings_in_window = True
+        except Exception: pass
+
+        target_width = max(5, round(price * 0.01))
+
+        def find_otm(opts, side, target_delta=0.25):
+            """Find OTM option near target delta."""
+            otm = opts[(opts["strike_price"] < price) if side == "put" else (opts["strike_price"] > price)]
+            if otm.empty: return None
+            otm = otm.copy()
+            otm["_ad"] = otm["delta"].abs()
+            near = otm[(otm["_ad"] >= 0.10) & (otm["_ad"] <= 0.40)]
+            if not near.empty:
+                return near.iloc[(near["_ad"] - target_delta).abs().argmin()]
+            return otm.iloc[-1] if side == "put" else otm.iloc[0]
+
+        def find_wing(opts, anchor_strike, side):
+            """Find long wing at target_width from anchor."""
+            if side == "put":
+                cands = opts[opts["strike_price"] <= anchor_strike - target_width + 1]
+                if cands.empty: cands = opts[opts["strike_price"] < anchor_strike - 1]
+            else:
+                cands = opts[opts["strike_price"] >= anchor_strike + target_width - 1]
+                if cands.empty: cands = opts[opts["strike_price"] > anchor_strike + 1]
+            if cands.empty: return None
+            target = anchor_strike - target_width if side == "put" else anchor_strike + target_width
+            return cands.iloc[(cands["strike_price"] - target).abs().argmin()]
+
+        def build_spread(short_row, long_row, spread_type, s_inst, l_inst):
+            """Build a vertical spread trade dict."""
+            ss, ls = float(short_row["strike_price"]), float(long_row["strike_price"])
+            width = abs(ss - ls)
+            cr = round(mid(short_row) - mid(long_row), 2)
+            is_credit = cr > 0
+            if is_credit:
+                mp = round(cr * 100, 0); mr = round((width - cr) * 100, 0)
+            else:
+                mr = round(abs(cr) * 100, 0); mp = round((width - abs(cr)) * 100, 0)
+            if mr <= 0 or mp <= 0: return None
+            _max_c = max(10, _position_contracts) if _is_hedge and _position_contracts > 0 else 10
+            contracts = max(1, min(int(max_risk_dollars / max(mr, 1)), _max_c))
+            if _is_hedge and _position_contracts > 0:
+                contracts = max(contracts, _position_contracts)
+            sd = abs(greek(short_row, "delta"))
+            pop = round((1 - sd) * 100, 1) if is_credit else round(sd * 100 * 0.7, 1)
+            # Breakeven
+            if spread_type.startswith("Bull Put"):
+                be = round(ss - cr, 2)
+            elif spread_type.startswith("Bear Call"):
+                be = round(ss + cr, 2)
+            elif spread_type.startswith("Bull Call"):
+                be = round(ls + abs(cr), 2)
+            else:
+                be = round(ls - abs(cr), 2)
+            lo_s, hi_s = min(ss, ls), max(ss, ls)
+            return {
+                "type": "options", "label": f"{spread_type} ${lo_s:g}/${hi_s:g}",
+                "legs": [
+                    {"action": "sell", "instrument": s_inst, "ticker": primary, "strike": ss, "exp": best_exp, "qty": contracts, "price": mid(short_row)},
+                    {"action": "buy", "instrument": l_inst, "ticker": primary, "strike": ls, "exp": best_exp, "qty": contracts, "price": mid(long_row)},
+                ],
+                "entry": cr, "stop": None, "target": None,
+                "max_profit": mp * contracts, "max_risk": mr * contracts,
+                "breakeven": be, "pop": pop,
+                "rr_ratio": round(mp / mr, 2) if mr > 0 else 0,
+                "greeks": {
+                    "delta": round((greek(short_row, "delta") * -1 + greek(long_row, "delta")) * contracts * 100, 1),
+                    "theta": round((greek(short_row, "theta") * -1 + greek(long_row, "theta")) * contracts * 100, 2),
+                    "gamma": round((greek(short_row, "gamma") * -1 + greek(long_row, "gamma")) * contracts * 100, 3),
+                    "vega": round((greek(short_row, "vega") * -1 + greek(long_row, "vega")) * contracts * 100, 2),
+                },
+                "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
+                "contracts": contracts, "width": width,
+                "short_strike": ss, "long_strike": ls,
+                "short_oi": int(short_row.get("open_interest", 0) or 0),
+                "long_oi": int(long_row.get("open_interest", 0) or 0),
+            }
+
+        # ── Earnings-aware expiration selection ──
+        # If earnings are within the current expiration, try to find a pre-earnings exp
+        best_exp, best_dte, best_ec, best_calls, best_puts = exp, dte, ec, calls, puts
+        if earnings_in_window:
+            all_exps = sorted(chain["expiration_date"].unique())
+            for alt_exp in all_exps:
+                alt_ec = chain[chain["expiration_date"] == alt_exp]
+                alt_dte = int(alt_ec["dte"].iloc[0])
+                if 7 <= alt_dte < dte:  # shorter exp that avoids earnings
+                    try:
+                        # Reuse earnings date from earlier check (no redundant yfinance call)
+                        next_earn_days = (pd.to_datetime(_next_earn_str) - pd.Timestamp.now()).days if _next_earn_str else 999
+                        if alt_dte < next_earn_days:
+                            best_exp = alt_exp
+                            best_dte = alt_dte
+                            best_ec = alt_ec
+                            best_calls = alt_ec[alt_ec["contract_type"] == "call"].sort_values("strike_price")
+                            best_puts = alt_ec[alt_ec["contract_type"] == "put"].sort_values("strike_price")
+                            earnings_in_window = False  # found a clean exp
+                            break
+                    except Exception: pass
+
+        # ── TRADE 2: OPTIONS — optimizer (test multiple deltas × widths, pick best score) ──
+        opt_trade = None
+        best_score = -1
+
+        if is_neutral:
+            # Iron condor: test multiple delta targets
+            for d_target in [0.15, 0.20, 0.25]:
+                sp = find_otm(best_puts, "put", d_target)
+                sc = find_otm(best_calls, "call", d_target)
+                if sp is None or sc is None: continue
+                for tw in [target_width, target_width * 0.6, target_width * 1.5]:
+                    tw = max(1, round(tw))
+                    lp = find_wing(best_puts, float(sp["strike_price"]), "put")
+                    lc = find_wing(best_calls, float(sc["strike_price"]), "call")
+                    if lp is None or lc is None: continue
+                    sp_s, sc_s = float(sp["strike_price"]), float(sc["strike_price"])
+                    lp_s, lc_s = float(lp["strike_price"]), float(lc["strike_price"])
+                    cr = round(mid(sp) + mid(sc) - mid(lp) - mid(lc), 2)
+                    put_w = sp_s - lp_s; call_w = lc_s - sc_s
+                    mr = round((max(put_w, call_w) - cr) * 100, 0)
+                    mp = round(cr * 100, 0)
+                    if mr <= 0 or mp <= 0 or cr <= 0.05: continue
+                    pop = round((1 - abs(greek(sp, "delta")) - abs(greek(sc, "delta"))) * 100, 1)
+                    if pop < 30 or pop > 95: continue  # skip degenerate setups
+                    score = min(mp / mr, 5.0) * (pop / 100) if mr > 0 else 0
+                    if score > best_score:
+                        best_score = score
+                        _max_c = max(10, _position_contracts) if _is_hedge and _position_contracts > 0 else 10
+                        contracts = max(1, min(int(max_risk_dollars / max(mr, 1)), _max_c))
+                        if _is_hedge and _position_contracts > 0:
+                            contracts = max(contracts, _position_contracts)
+                        opt_trade = {
+                            "type": "options", "label": f"Iron Condor ${lp_s:g}/${sp_s:g}/${sc_s:g}/${lc_s:g}",
+                            "legs": [
+                                {"action": "sell", "instrument": "put", "ticker": primary, "strike": sp_s, "exp": best_exp, "qty": contracts, "price": mid(sp)},
+                                {"action": "buy", "instrument": "put", "ticker": primary, "strike": lp_s, "exp": best_exp, "qty": contracts, "price": mid(lp)},
+                                {"action": "sell", "instrument": "call", "ticker": primary, "strike": sc_s, "exp": best_exp, "qty": contracts, "price": mid(sc)},
+                                {"action": "buy", "instrument": "call", "ticker": primary, "strike": lc_s, "exp": best_exp, "qty": contracts, "price": mid(lc)},
+                            ],
+                            "entry": cr, "stop": None, "target": None,
+                            "max_profit": mp * contracts, "max_risk": mr * contracts,
+                            "breakeven": round(sp_s - cr, 2), "breakeven_upper": round(sc_s + cr, 2), "pop": pop,
+                            "rr_ratio": round(mp / mr, 2),
+                            "greeks": {
+                                "delta": round((-greek(sp, "delta") + greek(lp, "delta") - greek(sc, "delta") + greek(lc, "delta")) * contracts * 100, 1),
+                                "theta": round((-greek(sp, "theta") + greek(lp, "theta") - greek(sc, "theta") + greek(lc, "theta")) * contracts * 100, 2),
+                                "gamma": round((-greek(sp, "gamma") + greek(lp, "gamma") - greek(sc, "gamma") + greek(lc, "gamma")) * contracts * 100, 3),
+                                "vega": round((-greek(sp, "vega") + greek(lp, "vega") - greek(sc, "vega") + greek(lc, "vega")) * contracts * 100, 2),
+                            },
+                            "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
+                            "contracts": contracts,
+                        }
+        else:
+            # Vertical spreads: test delta targets × widths, pick best
+            _DELTAS = [0.15, 0.20, 0.25, 0.30, 0.35]
+            _WIDTHS = [max(1, round(price * p)) for p in [0.005, 0.01, 0.015, 0.025]]
+
+            for d_target in _DELTAS:
+                for tw_test in _WIDTHS:
+                    if is_bull and sell_premium:
+                        short_row = find_otm(best_puts, "put", d_target)
+                        if short_row is None: continue
+                        ss = float(short_row["strike_price"])
+                        lp_cands = best_puts[best_puts["strike_price"] <= ss - tw_test + 1]
+                        if lp_cands.empty: continue
+                        long_row = lp_cands.iloc[(lp_cands["strike_price"] - (ss - tw_test)).abs().argmin()]
+                        spread = build_spread(short_row, long_row, "Bull Put Spread", "put", "put")
+                    elif is_bull and not sell_premium:
+                        long_row = find_otm(best_calls, "call", d_target)
+                        if long_row is None: continue
+                        ls = float(long_row["strike_price"])
+                        sc_cands = best_calls[best_calls["strike_price"] >= ls + tw_test - 1]
+                        if sc_cands.empty: continue
+                        short_row = sc_cands.iloc[(sc_cands["strike_price"] - (ls + tw_test)).abs().argmin()]
+                        spread = build_spread(short_row, long_row, "Bull Call Spread", "call", "call")
+                    elif is_bear and sell_premium:
+                        short_row = find_otm(best_calls, "call", d_target)
+                        if short_row is None: continue
+                        ss = float(short_row["strike_price"])
+                        lc_cands = best_calls[best_calls["strike_price"] >= ss + tw_test - 1]
+                        if lc_cands.empty: continue
+                        long_row = lc_cands.iloc[(lc_cands["strike_price"] - (ss + tw_test)).abs().argmin()]
+                        spread = build_spread(short_row, long_row, "Bear Call Spread", "call", "call")
+                    else:  # bearish debit
+                        long_row = find_otm(best_puts, "put", d_target)
+                        if long_row is None: continue
+                        ls = float(long_row["strike_price"])
+                        sp_cands = best_puts[best_puts["strike_price"] <= ls - tw_test + 1]
+                        if sp_cands.empty: continue
+                        short_row = sp_cands.iloc[(sp_cands["strike_price"] - (ls - tw_test)).abs().argmin()]
+                        spread = build_spread(short_row, long_row, "Bear Put Spread", "put", "put")
+
+                    if spread is None: continue
+                    # Score: (credit_or_profit / risk) × POP
+                    s_pop = spread.get("pop", 50) / 100
+                    s_rr = spread.get("rr_ratio", 0)
+                    # Score: R:R × POP, but penalize extremes (POP < 30% or > 95% are degenerate)
+                    if s_pop < 0.30 or s_pop > 0.95: continue
+                    score = min(s_rr, 5.0) * s_pop  # cap R:R contribution to avoid penny-picking
+                    if score > best_score:
+                        best_score = score
+                        spread["timeframe"] = f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else "")
+                        opt_trade = spread
+
+        if opt_trade:
+            # ── Historical backtest on the recommended spread ──
+            if bars and len(bars) >= best_dte + 30 and opt_trade.get("legs"):
+                try:
+                    closes = np.array([b["c"] for b in bars], dtype=float)
+                    legs = opt_trade["legs"]
+                    # Extract strike distances as % of spot
+                    short_legs = [l for l in legs if l["action"] == "sell" and l["instrument"] != "shares"]
+                    if short_legs:
+                        s_strike = short_legs[0]["strike"]
+                        dist_pct = abs(price - s_strike) / price
+                        credit_pct = abs(opt_trade["entry"]) / price if opt_trade["entry"] else 0
+                        # Simulate: for each historical entry, did price stay within the distance?
+                        wins, total = 0, 0
+                        for i in range(len(closes) - best_dte):
+                            entry_p = closes[i]
+                            window = closes[i+1:i+best_dte+1]
+                            if len(window) < 2: continue
+                            total += 1
+                            # For credit spreads: win if price stays beyond short strike distance
+                            if is_bull or is_neutral:
+                                if window.min() > entry_p * (1 - dist_pct): wins += 1
+                            else:
+                                if window.max() < entry_p * (1 + dist_pct): wins += 1
+                        if total >= 20:
+                            opt_trade["hist_winrate"] = round(wins / total * 100, 1)
+                            opt_trade["hist_trials"] = total
+                except Exception: pass
+            trades.append(opt_trade)
+
+        # ── TRADE 3: COMBINATION — defined-risk only (no naked options) ──
+        # Isolated try/except so a bug here doesn't kill vol suggestion / portfolio impact
+        try:
+          # Choose structure based on direction + what makes sense for the account:
+          # Bullish: wider bull put spread (different width than trade 2) or long call + put hedge
+        # Bearish: wider bear call spread or long put + call hedge
+        # Neutral: wider iron condor (different deltas than trade 2)
+        combo_trade = None
+        if opt_trade:
+            # Build an alternative spread at a different delta/width than the optimizer picked
+            alt_delta = 0.35 if sell_premium else 0.30  # further OTM or closer to ATM
+            alt_width = round(target_width * 1.5)
+            if is_bull:
+                if sell_premium:
+                    sr = find_otm(best_puts, "put", alt_delta)
+                    if sr:
+                        lr_c = best_puts[best_puts["strike_price"] <= float(sr["strike_price"]) - alt_width + 1]
+                        if not lr_c.empty:
+                            lr = lr_c.iloc[(lr_c["strike_price"] - (float(sr["strike_price"]) - alt_width)).abs().argmin()]
+                            combo_trade = build_spread(sr, lr, "Wide Bull Put Spread", "put", "put")
+                            if combo_trade: combo_trade["type"] = "combination"
+                else:
+                    # Long call (defined risk, leveraged upside)
+                    lc_row = find_otm(best_calls, "call", 0.40)
+                    if lc_row:
+                        lc_price = mid(lc_row)
+                        lc_strike = float(lc_row["strike_price"])
+                        if lc_price > 0:
+                            contracts = max(1, min(int(max_risk_dollars / (lc_price * 100)), 5))
+                            combo_trade = {
+                                "type": "combination", "label": f"Long ${lc_strike:g} Call",
+                                "legs": [{"action": "buy", "instrument": "call", "ticker": primary, "strike": lc_strike,
+                                          "exp": best_exp, "qty": contracts, "price": lc_price}],
+                                "entry": lc_price, "stop": None, "target": None,
+                                "max_profit": round(price * 0.1 * 100 * contracts, 0),
+                                "max_risk": round(lc_price * 100 * contracts, 0),
+                                "breakeven": round(lc_strike + lc_price, 2),
+                                "pop": round(abs(greek(lc_row, "delta")) * max(0.4, 1 - lc_price / price) * 100, 1),
+                                "rr_ratio": round(price * 0.1 / lc_price, 2) if lc_price > 0 else 0,
+                                "greeks": {
+                                    "delta": round(greek(lc_row, "delta") * contracts * 100, 1),
+                                    "theta": round(greek(lc_row, "theta") * contracts * 100, 2),
+                                    "gamma": round(greek(lc_row, "gamma") * contracts * 100, 3),
+                                    "vega": round(greek(lc_row, "vega") * contracts * 100, 2),
+                                },
+                                "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
+                                "contracts": contracts,
+                            }
+            elif is_bear:
+                if sell_premium:
+                    sr = find_otm(best_calls, "call", alt_delta)
+                    if sr:
+                        lr_c = best_calls[best_calls["strike_price"] >= float(sr["strike_price"]) + alt_width - 1]
+                        if not lr_c.empty:
+                            lr = lr_c.iloc[(lr_c["strike_price"] - (float(sr["strike_price"]) + alt_width)).abs().argmin()]
+                            combo_trade = build_spread(sr, lr, "Wide Bear Call Spread", "call", "call")
+                            if combo_trade: combo_trade["type"] = "combination"
+                else:
+                    lp_row = find_otm(best_puts, "put", 0.40)
+                    if lp_row:
+                        lp_price = mid(lp_row)
+                        lp_strike = float(lp_row["strike_price"])
+                        if lp_price > 0:
+                            contracts = max(1, min(int(max_risk_dollars / (lp_price * 100)), 5))
+                            combo_trade = {
+                                "type": "combination", "label": f"Long ${lp_strike:g} Put",
+                                "legs": [{"action": "buy", "instrument": "put", "ticker": primary, "strike": lp_strike,
+                                          "exp": best_exp, "qty": contracts, "price": lp_price}],
+                                "entry": lp_price, "stop": None, "target": None,
+                                "max_profit": round(lp_strike * 0.1 * 100 * contracts, 0),
+                                "max_risk": round(lp_price * 100 * contracts, 0),
+                                "breakeven": round(lp_strike - lp_price, 2),
+                                "pop": round(abs(greek(lp_row, "delta")) * max(0.4, 1 - lp_price / price) * 100, 1),
+                                "rr_ratio": round(lp_strike * 0.1 / lp_price, 2) if lp_price > 0 else 0,
+                                "greeks": {
+                                    "delta": round(greek(lp_row, "delta") * contracts * 100, 1),
+                                    "theta": round(greek(lp_row, "theta") * contracts * 100, 2),
+                                    "gamma": round(greek(lp_row, "gamma") * contracts * 100, 3),
+                                    "vega": round(greek(lp_row, "vega") * contracts * 100, 2),
+                                },
+                                "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
+                                "contracts": contracts,
+                            }
+        # Fallback combo: if the wide spread didn't work, try a long option (always defined risk)
+        if not combo_trade and not is_neutral:
+            if is_bull:
+                lc_row = find_otm(best_calls, "call", 0.40)
+                if lc_row:
+                    lc_price = mid(lc_row)
+                    lc_strike = float(lc_row["strike_price"])
+                    if lc_price > 0:
+                        contracts = max(1, min(int(max_risk_dollars / (lc_price * 100)), 5))
+                        combo_trade = {
+                            "type": "combination", "label": f"Long ${lc_strike:g} Call",
+                            "legs": [{"action": "buy", "instrument": "call", "ticker": primary, "strike": lc_strike,
+                                      "exp": best_exp, "qty": contracts, "price": lc_price}],
+                            "entry": lc_price, "stop": None, "target": None,
+                            "max_profit": round(price * 0.1 * 100 * contracts, 0),
+                            "max_risk": round(lc_price * 100 * contracts, 0),
+                            "breakeven": round(lc_strike + lc_price, 2),
+                            "pop": round(abs(greek(lc_row, "delta")) * max(0.4, 1 - lc_price / price) * 100, 1),
+                            "rr_ratio": round(price * 0.1 / lc_price, 2) if lc_price > 0 else 0,
+                            "greeks": {
+                                "delta": round(greek(lc_row, "delta") * contracts * 100, 1),
+                                "theta": round(greek(lc_row, "theta") * contracts * 100, 2),
+                                "gamma": round(greek(lc_row, "gamma") * contracts * 100, 3),
+                                "vega": round(greek(lc_row, "vega") * contracts * 100, 2),
+                            },
+                            "timeframe": f"{best_dte}d (exp {best_exp})",
+                            "contracts": contracts,
+                        }
+            else:
+                lp_row = find_otm(best_puts, "put", 0.40)
+                if lp_row:
+                    lp_price = mid(lp_row)
+                    lp_strike = float(lp_row["strike_price"])
+                    if lp_price > 0:
+                        contracts = max(1, min(int(max_risk_dollars / (lp_price * 100)), 5))
+                        combo_trade = {
+                            "type": "combination", "label": f"Long ${lp_strike:g} Put",
+                            "legs": [{"action": "buy", "instrument": "put", "ticker": primary, "strike": lp_strike,
+                                      "exp": best_exp, "qty": contracts, "price": lp_price}],
+                            "entry": lp_price, "stop": None, "target": None,
+                            "max_profit": round(lp_strike * 0.1 * 100 * contracts, 0),
+                            "max_risk": round(lp_price * 100 * contracts, 0),
+                            "breakeven": round(lp_strike - lp_price, 2),
+                            "pop": round(abs(greek(lp_row, "delta")) * max(0.4, 1 - lp_price / price) * 100, 1),
+                            "rr_ratio": round(lp_strike * 0.1 / lp_price, 2) if lp_price > 0 else 0,
+                            "greeks": {
+                                "delta": round(greek(lp_row, "delta") * contracts * 100, 1),
+                                "theta": round(greek(lp_row, "theta") * contracts * 100, 2),
+                                "gamma": round(greek(lp_row, "gamma") * contracts * 100, 3),
+                                "vega": round(greek(lp_row, "vega") * contracts * 100, 2),
+                            },
+                            "timeframe": f"{best_dte}d (exp {best_exp})",
+                            "contracts": contracts,
+                        }
+        except Exception:
+            pass  # combo builder failed — stock + options trades still valid
+        if combo_trade:
+            trades.append(combo_trade)
+
+        # ── Vol suggestion (from trade ideas page logic) ──
+        vol_suggestion = ""
+        if atm_iv and hv20:
+            iv_pct = atm_iv * 100; rv_pct = hv20 * 100
+            if atm_iv > hv20 * 1.05:
+                vol_suggestion = f"IV {iv_pct:.0f}% > RV {rv_pct:.0f}% → vol rich, favor selling premium"
+            elif hv20 > atm_iv * 1.05:
+                vol_suggestion = f"IV {iv_pct:.0f}% < RV {rv_pct:.0f}% → vol cheap, favor buying premium"
+            else:
+                vol_suggestion = f"IV {iv_pct:.0f}% ≈ RV {rv_pct:.0f}% → neutral, either structure viable"
+        for t in trades:
+            t["vol_suggestion"] = vol_suggestion
+            t["direction"] = direction
+
+        # ── Portfolio impact (before/after Greeks) ──
+        pg = portfolio_greeks or {}
+        port_delta = pg.get("delta", 0)
+        port_theta = pg.get("theta", 0)
+        port_equity = pg.get("equity", account_size)
+        for t in trades:
+            t["portfolio_equity"] = port_equity
+            t["risk_pct_of_account"] = round(t["max_risk"] / port_equity * 100, 1) if port_equity > 0 else 0
+            td = t["greeks"]["delta"]
+            tt = t["greeks"]["theta"]
+            t["portfolio_delta_before"] = round(port_delta, 1)
+            t["portfolio_delta_after"] = round(port_delta + td, 1)
+            t["portfolio_theta_before"] = round(port_theta, 1)
+            t["portfolio_theta_after"] = round(port_theta + tt, 1)
+
+            # Account fit score: penalize trades that increase directional concentration
+            # Score: 100 = perfect fit, 0 = terrible (doubles existing exposure)
+            fit = 100
+            if port_delta != 0 and td != 0:
+                same_direction = (port_delta > 0 and td > 0) or (port_delta < 0 and td < 0)
+                if same_direction:
+                    concentration = abs(td) / max(abs(port_delta), 1) * 100
+                    fit -= min(concentration * 2, 40)  # up to -40 for adding to concentrated direction
+                else:
+                    fit += 10  # bonus for hedging
+            # Penalize oversized risk (cap penalty at 50 — don't zero out undefined-risk trades)
+            risk_pct = t["risk_pct_of_account"]
+            if risk_pct > 5: fit -= min((risk_pct - 5) * 2, 50)
+            t["account_fit"] = max(0, min(100, round(fit)))
+
+    except Exception:
+        pass
+
+    # ── Portfolio impact (runs on ALL trades, even if options chain failed) ──
+    pg = portfolio_greeks or {}
+    port_delta = pg.get("delta", 0)
+    port_theta = pg.get("theta", 0)
+    port_equity = pg.get("equity", account_size)
+    for t in trades:
+        if "risk_pct_of_account" not in t:
+            t["portfolio_equity"] = port_equity
+            t["risk_pct_of_account"] = round(t["max_risk"] / port_equity * 100, 1) if port_equity > 0 else 0
+            td = t["greeks"]["delta"]
+            tt = t["greeks"]["theta"]
+            t["portfolio_delta_before"] = round(port_delta, 1)
+            t["portfolio_delta_after"] = round(port_delta + td, 1)
+            t["portfolio_theta_before"] = round(port_theta, 1)
+            t["portfolio_theta_after"] = round(port_theta + tt, 1)
+            fit = 100
+            if port_delta != 0 and td != 0:
+                same_direction = (port_delta > 0 and td > 0) or (port_delta < 0 and td < 0)
+                if same_direction:
+                    concentration = abs(td) / max(abs(port_delta), 1) * 100
+                    fit -= min(concentration * 2, 40)
+                else:
+                    fit += 10
+            risk_pct = t["risk_pct_of_account"]
+            if risk_pct > 5: fit -= min((risk_pct - 5) * 2, 50)
+            t["account_fit"] = max(0, min(100, round(fit)))
+
+    # ── Signal engine composite ──
+    try:
+        from src.signal_engine import compute_composite
+        comp = compute_composite(primary)
+        if comp:
+            signal_text = f"{comp['overall_direction']} {comp['overall_conviction']:.0%} ({comp['n_signals']} signals)"
+            for t in trades:
+                t["signal_consensus"] = signal_text
+    except Exception: pass
+
+    return trades
+
+
+_SECTOR_MAP: dict[str, list[str]] = {
+    "agriculture": ["MOO", "CF", "MOS", "DE", "ADM", "CORN", "WEAT"],
+    "farming": ["MOO", "CF", "MOS", "DE", "ADM"],
+    "fertilizer": ["CF", "MOS", "NTR"],
+    "energy": ["XLE", "XOP", "USO", "CVX", "XOM", "SLB", "CL"],
+    "oil": ["USO", "XLE", "XOP", "CVX", "XOM", "CL"],
+    "natural gas": ["UNG", "AR", "EQT", "SWN", "NG"],
+    "gold": ["GLD", "GDX", "NEM", "GOLD", "AEM"],
+    "silver": ["SLV", "PAAS", "AG"],
+    "bitcoin": ["BTC", "MSTR", "COIN", "MARA", "RIOT"],
+    "crypto": ["BTC", "ETH", "COIN", "MSTR", "MARA"],
+    "ai": ["NVDA", "AMD", "SMCI", "AVGO", "MSFT", "GOOGL", "SMH"],
+    "semiconductor": ["SMH", "NVDA", "AMD", "AVGO", "INTC", "TSM", "QCOM"],
+    "chip": ["SMH", "NVDA", "AMD", "AVGO", "INTC", "TSM"],
+    "quantum": ["RGTI", "IONQ", "QUBT", "QBTS"],
+    "defense": ["LMT", "RTX", "NOC", "GD", "BA", "ITA"],
+    "military": ["LMT", "RTX", "NOC", "GD", "ITA"],
+    "bank": ["XLF", "JPM", "BAC", "GS", "MS", "C", "WFC"],
+    "financial": ["XLF", "JPM", "GS", "MS", "BRK.B", "V", "MA"],
+    "healthcare": ["XLV", "UNH", "JNJ", "PFE", "MRK", "ABBV", "LLY"],
+    "biotech": ["XBI", "MRNA", "REGN", "VRTX", "AMGN"],
+    "real estate": ["XLRE", "VNQ", "AMT", "PLD", "SPG"],
+    "utilities": ["XLU", "NEE", "DUK", "SO", "AEP"],
+    "consumer": ["XLY", "AMZN", "TSLA", "HD", "MCD", "NKE"],
+    "retail": ["XRT", "WMT", "COST", "TGT", "AMZN"],
+    "tech": ["XLK", "QQQ", "AAPL", "MSFT", "GOOGL", "META"],
+    "cloud": ["SNOW", "NET", "DDOG", "CRWD", "ZS"],
+    "cyber": ["CRWD", "PANW", "ZS", "FTNT", "HACK"],
+    "industrial": ["XLI", "CAT", "HON", "UPS", "GE"],
+    "uranium": ["URA", "CCJ", "UUUU", "DNN"],
+    "clean energy": ["ICLN", "TAN", "ENPH", "FSLR", "RUN"],
+    "cannabis": ["MSOS", "TLRY", "CGC"],
+    "china": ["FXI", "KWEB", "BABA", "JD", "PDD"],
+    "emerging": ["EEM", "VWO", "IEMG"],
+    "bond": ["TLT", "IEF", "LQD", "HYG", "AGG"],
+    "treasury": ["TLT", "IEF", "SHY", "TIP"],
+}
+
+def _extract_tickers(text: str) -> list[str]:
+    """Extract tickers from text. Handles sector/theme keywords + explicit tickers."""
+    import re
+    t = text.lower()
+
+    # Check sector/theme keywords first
+    sector_tickers: list[str] = []
+    for keyword, tickers in _SECTOR_MAP.items():
+        if keyword in t:
+            sector_tickers.extend(tickers)
+
+    # Also look for explicit tickers
+    _KNOWN = {"SPY","QQQ","AAPL","MSFT","NVDA","TSLA","AMD","AMZN","META","GOOGL","NFLX",
+               "GLD","TLT","XLE","XLF","XLK","RGTI","USO","BA","JPM","GS","MA","DIS",
+               "COST","WMT","HD","UNH","JNJ","PFE","MRK","ABBV","LLY","SMCI","COIN","MSTR",
+               "PLTR","SOFI","ARM","SNOW","NET","CRWD","PANW","ZS","DDOG","SHOP","SQ","ROKU",
+               "IWM","DIA","EEM","EFA","HYG","LQD","SMH","XBI","ARKK","VIX","UVXY",
+               "QUBT","QBTS","IONQ","UAMY","XOP","XLU","XLV","XLI","XLB","XLC","XLY","XLP",
+               "XLRE","TNA","SOXL","TQQQ","SQQQ","SPXU","BTC","ETH",
+               "MOO","CF","MOS","DE","ADM","CORN","WEAT","NTR",
+               "CVX","XOM","SLB","UNG","AR","EQT","SLV","PAAS","AG",
+               "MARA","RIOT","AVGO","INTC","TSM","QCOM",
+               "LMT","RTX","NOC","GD","ITA","BAC","MS","WFC","BRK.B",
+               "MRNA","REGN","VRTX","AMGN","VNQ","AMT","PLD","SPG",
+               "NEE","DUK","SO","AEP","MCD","NKE","TGT","XRT",
+               "CAT","HON","UPS","GE","CCJ","UUUU","DNN",
+               "ICLN","TAN","ENPH","FSLR","FTNT","HACK",
+               "MSOS","TLRY","CGC","FXI","KWEB","BABA","JD","PDD",
+               "VWO","IEMG","IEF","SHY","TIP","AGG"}
+    explicit = []
+    for c in re.findall(r'\b([A-Z]{1,5})\b', text.upper()):
+        if c in _KNOWN: explicit.append(c)
+
+    # Combine: explicit tickers first, then sector suggestions
+    seen, out = set(), []
+    for tk in explicit + sector_tickers:
+        if tk not in seen:
+            out.append(tk); seen.add(tk)
+            if len(out) >= 5: break
+
+    return out
+
+
+_ARCHITECT_SYSTEM = """You are an elite institutional trade structurer at a top-tier prop desk.
+The user gives you a trading thesis. Your job: find the BEST way to express that thesis
+using ALL available market data. You have real-time technicals, a live options chain with
+actual bids/asks, vol regime data, current portfolio positions, news, signal engine
+consensus, insider activity, fundamentals, macro calendar, peer comparisons, pre-computed
+scanner results, and Black-Scholes Greeks.
+
+This is a CONVERSATION. The user may ask follow-up questions to refine the trade.
+Adjust your recommendations based on their feedback while keeping the original data context.
+
+OUTPUT FORMAT for initial analysis (follow EXACTLY — the frontend parses these headers):
+
+**THESIS ASSESSMENT**
+1-2 sentences: is this thesis well-timed? What does data support or contradict?
+
+**TRADE 1: STOCK**
+Best pure stock expression.
+- Action: Buy/Sell/Short [X] shares of [TICKER] at $[price]
+- Stop: $[level] ([X]% risk, based on ATR/support)
+- Target: $[level] ([X]% upside, based on resistance/technicals)
+- Timeframe: [days/weeks]
+- Risk: $[max dollar loss] ([X]% of account)
+
+**TRADE 2: OPTIONS**
+Best pure options expression. Use REAL strikes from the chain.
+- Structure: [exact legs with strikes, expiration, bid-ask midpoint prices]
+- Max profit: $[amount] | Max risk: $[amount]
+- Breakeven: $[level] | POP: [X]%
+- Greeks: Δ=[X] Θ=$[X]/day
+- Why this structure: [vol regime, skew, term structure justify the choice]
+
+**TRADE 3: COMBINATION**
+Best stock + options combo (covered call, protective put, collar, etc).
+- Exact structure with shares + options legs
+- Net cost basis / breakeven
+- Why the combo beats pure stock or pure options
+
+**BEST TRADE**
+Which of the three is the SINGLE best expression and why. 1-2 sentences.
+
+**KEY RISKS**
+2-3 specific risks flagged by the data.
+
+**EDGE**
+What gives this trade an edge vs random entry.
+
+For FOLLOW-UP responses: respond naturally. If the user asks to adjust, give the revised
+trade with the same specificity. You don't need all headers for follow-ups — just address
+what changed.
+
+RULES:
+- Use REAL strikes and prices from the options chain data
+- Account for existing positions — flag doubling exposure
+- If vol is rich (VRP > 2%), favor selling premium. If cheap, favor buying.
+- Never risk more than 5% of account on one trade
+- Be SPECIFIC — exact strikes, exact prices, exact quantities
+- If scanner results are provided, reference them (they're pre-optimized)"""
+
+
+# Server-side context cache: {ticker: (context_str, sources, timestamp)}
+_architect_cache: dict[str, tuple[str, list[str], float]] = {}
+_ARCHITECT_CACHE_TTL = 300  # 5 min
+
+def _safe_next_earnings(ticker_obj) -> str | None:
+    """Safely extract next earnings date from yfinance Ticker.calendar (handles dict or DataFrame)."""
+    try:
+        cal = ticker_obj.calendar
+        if cal is None:
+            return None
+        if isinstance(cal, dict):
+            # Newer yfinance: dict with 'Earnings Date' key
+            ed = cal.get("Earnings Date") or cal.get("earnings_date")
+            if ed:
+                return str(ed[0]) if isinstance(ed, (list, tuple)) else str(ed)
+            return None
+        # Older yfinance: DataFrame
+        if hasattr(cal, "empty") and not cal.empty and len(cal.columns) > 0:
+            return str(cal.iloc[0, 0])
+    except Exception:
+        pass
+    return None
+
+def _gather_architect_context(primary: str, tickers: list[str], account_size: float) -> tuple[str, list[str]]:
+    """Gather all 14+ data sources for the Trade Architect. Returns (context_str, source_list).
+    Results are cached per-ticker for 5 minutes."""
+    import time
+    cache_key = f"{primary}:{','.join(sorted(tickers))}"
+    cached = _architect_cache.get(cache_key)
+    if cached and (time.time() - cached[2]) < _ARCHITECT_CACHE_TTL:
+        return cached[0], cached[1]
+
+    import concurrent.futures
+    import numpy as np
+    import pandas as pd
+    import requests
+    from datetime import date, datetime, timedelta
+    from src.api_keys import get_secret
+    from src.data_engine import format_massive_ticker
+
+    ctx = {}
+    api_key = get_secret("MASSIVE_API_KEY")
+
+    # ── Gather ALL platform data in parallel ──
+    ctx = {}
+
+    def _technicals():
+        try:
+            formatted = format_massive_ticker(primary)
+            end = date.today(); start = end - timedelta(days=365)
+            api_key = get_secret("MASSIVE_API_KEY")
+            r = requests.get(
+                f"https://api.polygon.io/v2/aggs/ticker/{formatted}/range/1/day/{start.isoformat()}/{end.isoformat()}",
+                params={"apiKey": api_key, "sort": "asc", "limit": 50000, "adjusted": "true"}, timeout=15)
+            results = r.json().get("results", [])
+            if not results: return
+
+            import talib
+            h = np.array([b["h"] for b in results], dtype=float)
+            l = np.array([b["l"] for b in results], dtype=float)
+            c = np.array([b["c"] for b in results], dtype=float)
+            v = np.array([b["v"] for b in results], dtype=float)
+            price = c[-1]
+
+            ema9, ema21, ema50 = talib.EMA(c, 9)[-1], talib.EMA(c, 21)[-1], talib.EMA(c, 50)[-1]
+            ema200 = talib.EMA(c, 200)[-1] if len(c) >= 200 else None
+            rsi = talib.RSI(c, 14)[-1]
+            _, _, macd_hist = talib.MACD(c)
+            atr = talib.ATR(h, l, c, 14)[-1]
+            hv20 = float(np.std(np.diff(np.log(c[-21:]))) * np.sqrt(252) * 100) if len(c) >= 21 else 0
+            hv60 = float(np.std(np.diff(np.log(c[-61:]))) * np.sqrt(252) * 100) if len(c) >= 61 else hv20
+            avg_vol_20 = float(v[-20:].mean())
+            # Support/resistance from recent pivots
+            hi_52w, lo_52w = float(c[-252:].max()), float(c[-252:].min())
+            hi_20d, lo_20d = float(h[-20:].max()), float(l[-20:].min())
+
+            trend = "Bullish" if price > ema21 > ema50 else "Bearish" if price < ema21 < ema50 else "Mixed"
+            ctx["technicals"] = (
+                f"TECHNICALS ({primary} ${price:.2f}):\n"
+                f"  Trend: {trend} | EMA9={ema9:.2f} EMA21={ema21:.2f} EMA50={ema50:.2f}"
+                + (f" EMA200={ema200:.2f}" if ema200 else "") + "\n"
+                f"  RSI(14)={rsi:.1f} | MACD hist={macd_hist[-1]:.3f} | ATR(14)=${atr:.2f}\n"
+                f"  HV20={hv20:.1f}% HV60={hv60:.1f}% | Avg vol 20d: {avg_vol_20/1e6:.1f}M\n"
+                f"  52w: ${lo_52w:.2f}-${hi_52w:.2f} | 20d: ${lo_20d:.2f}-${hi_20d:.2f}\n"
+                f"  Key levels: support ~${lo_20d:.2f}, resistance ~${hi_20d:.2f}"
+            )
+            ctx["_price"] = price
+            ctx["_atr"] = atr
+        except Exception as e:
+            ctx["technicals"] = f"Technicals unavailable: {e}"
+
+    def _options_chain():
+        try:
+            from src.data_engine import fetch_options_chain
+            chain = fetch_options_chain(primary)
+            if chain is None or chain.empty: return
+            chain["dte"] = (pd.to_datetime(chain["expiration_date"]) - pd.Timestamp.now()).dt.days
+
+            # All available expirations
+            exps = sorted(chain["expiration_date"].unique())[:8]
+            dte_list = [(e, int(chain[chain["expiration_date"] == e]["dte"].iloc[0])) for e in exps]
+            exp_str = ", ".join(f"{e} ({d}d)" for e, d in dte_list)
+
+            # Nearest monthly chain
+            monthly = chain[(chain["dte"] >= 20) & (chain["dte"] <= 50)]
+            if monthly.empty: monthly = chain[chain["dte"] >= 7]
+            if monthly.empty: return
+            exp = monthly.groupby("expiration_date")["dte"].first().idxmin()
+            ec = monthly[monthly["expiration_date"] == exp]
+            dte = int(ec["dte"].iloc[0])
+            calls = ec[ec["contract_type"] == "call"].sort_values("strike_price")
+            puts = ec[ec["contract_type"] == "put"].sort_values("strike_price")
+            if calls.empty or puts.empty: return
+
+            spot_approx = float(calls["strike_price"].median())
+            # ATM IV
+            atm_c = calls.iloc[(calls["strike_price"] - spot_approx).abs().argmin()]
+            atm_p = puts.iloc[(puts["strike_price"] - spot_approx).abs().argmin()]
+            _c_iv = float(atm_c.get("implied_volatility", 0) or 0)
+            _p_iv = float(atm_p.get("implied_volatility", 0) or 0)
+            atm_iv = (_c_iv + _p_iv) / 2 * 100 if (_c_iv + _p_iv) > 0 else 0
+
+            # Build strike table: 10 strikes nearest ATM with bid/ask/IV/delta/OI
+            def _strike_row(row, side):
+                return (f"  {side} ${row['strike_price']:.0f}: "
+                        f"bid ${row.get('bid', 0) or 0:.2f} ask ${row.get('ask', 0) or 0:.2f} "
+                        f"IV={float(row.get('implied_volatility', 0) or 0)*100:.1f}% "
+                        f"Δ={float(row.get('delta', 0) or 0):.2f} "
+                        f"OI={int(row.get('open_interest', 0) or 0)}")
+
+            # 5 nearest ATM calls + 5 nearest ATM puts
+            near_calls = calls.iloc[(calls["strike_price"] - spot_approx).abs().argsort()[:7]]
+            near_puts = puts.iloc[(puts["strike_price"] - spot_approx).abs().argsort()[:7]]
+
+            strike_table = "\n".join(
+                [_strike_row(row, "C") for _, row in near_calls.iterrows()] +
+                [_strike_row(row, "P") for _, row in near_puts.iterrows()]
+            )
+
+            # Put skew
+            otm_puts = puts[puts["strike_price"] < spot_approx * 0.95]
+            put_skew = float(otm_puts["implied_volatility"].mean() / (atm_iv / 100)) if not otm_puts.empty and atm_iv > 0 else 1.0
+
+            ctx["options"] = (
+                f"OPTIONS CHAIN ({primary}, nearest monthly exp {exp} = {dte}d):\n"
+                f"  ATM IV: {atm_iv:.1f}% | Put skew: {put_skew:.2f}x\n"
+                f"  Expirations available: {exp_str}\n"
+                f"  Calls OI: {int(calls['open_interest'].sum())} | Puts OI: {int(puts['open_interest'].sum())}\n"
+                f"  --- Strike Table (nearest ATM, exp {exp}) ---\n{strike_table}"
+            )
+        except Exception as e:
+            ctx["options"] = f"Options unavailable: {e}"
+
+    def _vol_regime():
+        try:
+            from src.metrics_store import get_latest_snapshot, percentile_ranks_all
+            snap = get_latest_snapshot(primary)
+            if not snap: return
+            pct = percentile_ranks_all(primary)
+            iv = snap.get("atm_iv", 0); vrp = snap.get("vrp", 0); skew = snap.get("put_skew", 0)
+            hv20 = snap.get("hv20", 0)
+            regime = "Rich vol — favor selling premium" if vrp and vrp > 0.02 else \
+                     "Cheap vol — favor buying premium" if vrp and vrp < -0.02 else "Neutral VRP"
+            ctx["vol"] = (
+                f"VOL REGIME ({primary}):\n"
+                f"  ATM IV: {iv:.1%} ({pct.get('atm_iv', '?')}th pctile) | HV20: {hv20:.1%}\n"
+                f"  VRP: {vrp:+.1%} ({pct.get('vrp', '?')}th pctile) | Skew: {skew:.2f}x\n"
+                f"  Regime: {regime}"
+            )
+        except Exception: pass
+
+    def _positions():
+        try:
+            import robin_stocks.robinhood as rh
+            rh_user, rh_pass = get_secret("ROBINHOOD_USERNAME"), get_secret("ROBINHOOD_PASSWORD")
+            if not rh_user or not rh_pass: return
+            rh.login(rh_user, rh_pass, store_session=True)
+            parts = []
+            for pos in rh.account.get_open_stock_positions():
+                tk = rh.stocks.get_symbol_by_url(pos.get("instrument", ""))
+                qty = float(pos.get("quantity", 0)); avg = float(pos.get("average_buy_price", 0))
+                if tk and qty > 0:
+                    parts.append(f"  {tk}: {qty:.0f} shares @ ${avg:.2f}")
+            for pos in rh.options.get_open_option_positions():
+                tk = pos.get("chain_symbol", "")
+                if not tk: continue
+                qty = float(pos.get("quantity", 0)); strike = float(pos.get("strike_price", 0))
+                opt_type = pos.get("option_type", "?"); exp = pos.get("expiration_date", "?")
+                avg = float(pos.get("average_price", 0)) / 100
+                parts.append(f"  {tk}: {'long' if qty > 0 else 'short'} {abs(qty):.0f}× ${strike} {opt_type} exp {exp} @ ${avg:.2f}")
+            if parts:
+                ctx["positions"] = "CURRENT POSITIONS (all):\n" + "\n".join(parts)
+            profile = rh.profiles.load_portfolio_profile()
+            ctx["portfolio"] = f"PORTFOLIO: ${float(profile.get('equity', 0) or 0):,.0f} equity"
+        except Exception: pass
+
+    def _signals():
+        try:
+            from src.signal_engine import compute_composite, get_top_trade_ideas
+            comp = compute_composite(primary)
+            ideas = get_top_trade_ideas(10)
+            parts = []
+            if comp:
+                parts.append(f"  {primary}: {comp['overall_direction']} {comp['overall_conviction']:.0%} ({comp['n_signals']} sources)")
+            for t in ideas:
+                if t["ticker"] != primary and t["ticker"] in tickers:
+                    parts.append(f"  {t['ticker']}: {t['overall_direction']} {t['overall_conviction']:.0%} ({t['n_signals']} signals)")
+            if parts:
+                ctx["signals"] = "SIGNAL ENGINE CONSENSUS:\n" + "\n".join(parts)
+        except Exception: pass
+
+    def _cross_context():
+        try:
+            from src.cross_context import build_ai_context
+            cross = build_ai_context(primary)
+            if cross and len(cross) > 50:
+                ctx["cross_intel"] = f"CROSS-PAGE INTELLIGENCE ({primary}):\n{cross[:1200]}"
+        except Exception: pass
+
+    def _fundamentals():
+        try:
+            import yfinance as yf
+            tk = yf.Ticker(primary)
+            info = tk.info or {}
+            parts = []
+            for key, label in [("marketCap", "Mkt Cap"), ("trailingPE", "P/E"), ("forwardPE", "Fwd P/E"),
+                                ("priceToBook", "P/B"), ("revenueGrowth", "Rev Growth"), ("profitMargins", "Margin"),
+                                ("targetMeanPrice", "Analyst Target"), ("recommendationKey", "Rating"),
+                                ("shortPercentOfFloat", "Short Float")]:
+                val = info.get(key)
+                if val is not None:
+                    if key == "marketCap":
+                        parts.append(f"  {label}: ${val/1e9:.1f}B")
+                    elif "Growth" in label or "Margin" in label or "Float" in label:
+                        parts.append(f"  {label}: {val*100:.1f}%")
+                    elif key == "targetMeanPrice":
+                        parts.append(f"  {label}: ${val:.2f}")
+                    else:
+                        parts.append(f"  {label}: {val}")
+            # Earnings
+            next_earn = _safe_next_earnings(tk)
+            if next_earn:
+                parts.append(f"  Next earnings: {next_earn}")
+            # Analyst recommendations
+            recs = tk.recommendations
+            if recs is not None and not recs.empty:
+                latest = recs.tail(3)
+                for _, row in latest.iterrows():
+                    parts.append(f"  Analyst: {row.get('Firm', '?')} → {row.get('To Grade', '?')}")
+            if parts:
+                ctx["fundamentals"] = f"FUNDAMENTALS ({primary}):\n" + "\n".join(parts)
+        except Exception: pass
+
+    def _insider_edgar():
+        try:
+            from src.edgar import fetch_recent_8k, score_insider_transactions
+            from src.data_engine import fetch_insider_transactions
+            txns = fetch_insider_transactions(primary, limit=20)
+            if txns is not None and not txns.empty:
+                score = score_insider_transactions(txns)
+                ctx["insider"] = (
+                    f"INSIDER ACTIVITY ({primary}):\n"
+                    f"  Score: {score.get('score', 0)}/100 | Buys: {score.get('buys', 0)} Sells: {score.get('sells', 0)}\n"
+                    f"  Net: {'Bullish bias' if score.get('score', 0) > 60 else 'Bearish bias' if score.get('score', 0) < 40 else 'Neutral'}"
+                )
+            events = fetch_recent_8k(primary, days=30)
+            if events:
+                ctx["edgar_8k"] = f"RECENT 8-K FILINGS ({primary}, last 30d):\n" + "\n".join(
+                    f"  {e.get('date', '?')}: {e.get('items', '?')} — {e.get('description', '')[:80]}" for e in events[:5]
+                )
+        except Exception: pass
+
+    def _macro_events():
+        try:
+            from src.economic_calendar import find_events_near_date, get_next_fomc
+            events = find_events_near_date(date.today().isoformat(), window_days=14)
+            fomc = get_next_fomc()
+            parts = []
+            if fomc:
+                days = (pd.to_datetime(fomc).date() - date.today()).days
+                parts.append(f"  FOMC: {fomc} ({days}d away)")
+            for e in (events or [])[:8]:
+                parts.append(f"  {e.get('date', '?')}: {e['name']} ({e.get('days_away', '?')}d)")
+            if parts:
+                ctx["macro_events"] = "UPCOMING MACRO EVENTS (next 14d):\n" + "\n".join(parts)
+        except Exception: pass
+
+    def _market_macro():
+        """Broad market context: SPY, VIX regime, term structure, treasuries."""
+        try:
+            import yfinance as yf
+            parts = []
+            # SPY + QQQ via .history() (fast, reliable)
+            for sym, label in [("SPY", "SPY"), ("QQQ", "QQQ")]:
+                hist = yf.Ticker(sym).history(period="5d")
+                if hist is not None and len(hist) >= 2:
+                    price = float(hist["Close"].iloc[-1])
+                    prev = float(hist["Close"].iloc[-2])
+                    chg = (price / prev - 1) * 100
+                    ret_5d = (price / float(hist["Close"].iloc[0]) - 1) * 100
+                    parts.append(f"  {label}: ${price:.2f} ({chg:+.2f}% today, {ret_5d:+.1f}% 5d)")
+            # VIX via .history() (NOT .info which is slow/unreliable for indices)
+            vix_hist = yf.Ticker("^VIX").history(period="2d")
+            vix_price = float(vix_hist["Close"].iloc[-1]) if vix_hist is not None and len(vix_hist) >= 1 else 0
+            if vix_price:
+                regime = "Low" if vix_price < 15 else "Normal" if vix_price < 20 else "Elevated" if vix_price < 30 else "High" if vix_price < 40 else "Extreme"
+                parts.append(f"  VIX: {vix_price:.1f} ({regime})")
+                # Term structure
+                try:
+                    vix3m_hist = yf.Ticker("^VIX3M").history(period="2d")
+                    vix3m_price = float(vix3m_hist["Close"].iloc[-1]) if vix3m_hist is not None and len(vix3m_hist) >= 1 else 0
+                    if vix3m_price and vix_price:
+                        ratio = vix_price / vix3m_price
+                        structure = "Backwardation (fear)" if ratio > 1.05 else "Contango (normal)" if ratio < 0.95 else "Flat"
+                        parts.append(f"  VIX term structure: {structure} (VIX/VIX3M = {ratio:.2f})")
+                except Exception: pass
+            # 10Y Treasury yield via .history()
+            try:
+                tnx_hist = yf.Ticker("^TNX").history(period="2d")
+                yield_10y = float(tnx_hist["Close"].iloc[-1]) if tnx_hist is not None and len(tnx_hist) >= 1 else 0
+                if yield_10y:
+                    parts.append(f"  10Y yield: {yield_10y:.2f}%")
+            except Exception: pass
+            if parts:
+                ctx["market_macro"] = "MARKET ENVIRONMENT:\n" + "\n".join(parts)
+        except Exception: pass
+
+    def _news():
+        try:
+            from src.ai_cache import get_cached_ai
+            for offset in range(3):
+                dt = datetime.now() - timedelta(hours=offset)
+                cached = get_cached_ai(f"market_news_{dt.strftime('%Y%m%d_%H')}")
+                if cached:
+                    ctx["news"] = f"RECENT NEWS ({offset}h ago):\n{cached[:1000]}"
+                    break
+        except Exception: pass
+
+    def _track_record():
+        try:
+            from src.prediction_tracker import get_track_record
+            tr = get_track_record("signal_scanner")
+            if tr and tr.get("evaluated", 0) > 5:
+                ctx["track_record"] = (
+                    f"SIGNAL TRACK RECORD:\n"
+                    f"  Scanner accuracy: {tr.get('accuracy', 0)*100:.0f}% ({tr['evaluated']} evaluated)"
+                )
+        except Exception: pass
+
+    def _peers():
+        try:
+            from src.data_engine import fetch_related_companies, polygon_batch_snapshot, fetch_massive_data
+            import numpy as _np
+            # Relative strength vs SPY
+            parts = []
+            try:
+                spy_df = fetch_massive_data("SPY", 30)
+                tk_df = fetch_massive_data(primary, 30)
+                if spy_df is not None and tk_df is not None and not spy_df.empty and not tk_df.empty:
+                    spy_ret = (spy_df["Close"].iloc[-1] / spy_df["Close"].iloc[0] - 1) * 100
+                    tk_ret = (tk_df["Close"].iloc[-1] / tk_df["Close"].iloc[0] - 1) * 100
+                    rel = tk_ret - spy_ret
+                    parts.append(f"  vs SPY (30d): {primary} {tk_ret:+.1f}% vs SPY {spy_ret:+.1f}% → {'Outperforming' if rel > 1 else 'Underperforming' if rel < -1 else 'In line'} ({rel:+.1f}%)")
+            except Exception: pass
+
+            # Peer tickers
+            peers = fetch_related_companies(primary)
+            if peers and len(peers) >= 2:
+                peer_list = [p for p in peers[:4] if p != primary]
+                snaps = polygon_batch_snapshot([primary] + peer_list)
+                for tk in peer_list:
+                    s = snaps.get(tk)
+                    if s:
+                        parts.append(f"  {tk}: ${s['price']:.2f} ({s.get('change', 0):+.1f}%)")
+
+            # Sector earnings calendar
+            try:
+                import yfinance as yf
+                check_tickers = [primary] + (tickers[1:4] if len(tickers) > 1 else [])
+                for ctk in check_tickers:
+                    next_earn = _safe_next_earnings(yf.Ticker(ctk))
+                    if next_earn:
+                        parts.append(f"  {ctk} earnings: {next_earn}")
+            except Exception: pass
+
+            if parts:
+                ctx["peers"] = "RELATIVE STRENGTH + PEERS:\n" + "\n".join(parts)
+        except Exception: pass
+
+    def _vol_surface_ideas():
+        """Pull pre-computed Gemini vol surface trade ideas from cache."""
+        try:
+            from src.ai_cache import get_cached_ai, build_cache_key_from_metrics
+            from src.metrics_store import get_latest_snapshot
+            snap = get_latest_snapshot(primary)
+            if not snap: return
+            # Check if cached trade ideas exist for current vol state
+            cache_key = build_cache_key_from_metrics(
+                "vol_surface_full_scan", primary,
+                spot=ctx.get("_price", 0), iv=snap.get("atm_iv", 0),
+                skew=snap.get("put_skew", 0), vrp=snap.get("vrp", 0)
+            )
+            cached = get_cached_ai(cache_key)
+            if cached:
+                # Truncate to key trades only (skip preamble)
+                ctx["vol_surface_ideas"] = f"PRE-COMPUTED VOL SURFACE TRADE IDEAS ({primary}, Gemini):\n{cached[:1500]}"
+        except Exception: pass
+
+    def _options_greeks_context():
+        """Compute BS Greeks for ATM options to give Claude concrete numbers."""
+        try:
+            from src.options_models import bs_greeks, bs_higher_greeks
+            price = ctx.get("_price", 0)
+            if not price: return
+            from src.metrics_store import get_latest_snapshot
+            snap = get_latest_snapshot(primary)
+            iv = snap.get("atm_iv", 0.3) if snap else 0.3
+            # Compute Greeks for ATM call + put at ~30 DTE
+            T = 30 / 365
+            r = 0.045
+            call_g = bs_greeks(price, price, T, r, iv, "call")
+            put_g = bs_greeks(price, price, T, r, iv, "put")
+            higher = bs_higher_greeks(price, price, T, r, iv, "call")
+            ctx["atm_greeks"] = (
+                f"ATM GREEKS ({primary}, ~30 DTE, IV={iv:.1%}):\n"
+                f"  Call: Δ={call_g['delta']:.3f} Γ={call_g['gamma']:.4f} Θ=${call_g['theta']:.2f}/day V={call_g['vega']:.2f}\n"
+                f"  Put:  Δ={put_g['delta']:.3f} Γ={put_g['gamma']:.4f} Θ=${put_g['theta']:.2f}/day V={put_g['vega']:.2f}\n"
+                f"  Higher: Vanna={higher.get('vanna', 0):.4f} Charm={higher.get('charm', 0):.4f} Vomma={higher.get('vomma', 0):.4f}"
+            )
+        except Exception: pass
+
+    # ── Run all fetchers in parallel (12s timeout — skip stragglers) ──
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as pool:
+        futs = [pool.submit(fn) for fn in [
+            _technicals, _options_chain, _vol_regime, _positions, _signals,
+            _cross_context, _fundamentals, _insider_edgar, _macro_events,
+            _market_macro, _news, _track_record, _peers, _vol_surface_ideas,
+            _options_greeks_context,
+        ]]
+        concurrent.futures.wait(futs, timeout=12)
+
+    context = "\n\n".join(v for k, v in ctx.items() if v and not k.startswith("_"))
+    sources = [k for k in ctx if not k.startswith("_") and ctx[k]]
+
+    # Cache for reuse
+    import time
+    _architect_cache[cache_key] = (context, sources, time.time())
+    # Evict old entries
+    now = time.time()
+    for k in list(_architect_cache):
+        if now - _architect_cache[k][2] > _ARCHITECT_CACHE_TTL * 2:
+            del _architect_cache[k]
+
+    return context, sources
+
+@router.post("/trade-architect")
+async def trade_architect(req: TradeArchitectRequest, user: str = Depends(get_current_user)):
+    """Conversational AI Trade Architect. First call gathers context; follow-ups reuse it."""
+    from src.api_keys import get_secret
+
+    # Determine the user message
+    user_msg = req.thesis.strip() if req.thesis.strip() else (
+        req.messages[-1].content if req.messages and req.messages[-1].role == "user" else ""
+    )
+    if not user_msg:
+        return {"success": False, "error": "No message provided."}
+
+    # Extract tickers
+    tickers = [t.upper() for t in req.tickers if t.strip()]
+    if not tickers:
+        all_text = user_msg + " " + " ".join(m.content for m in req.messages)
+        tickers = _extract_tickers(all_text)
+    if not tickers:
+        tickers = ["SPY"]
+    primary = tickers[0]
+
+    # First call: gather context + compute trades. Follow-ups: reuse.
+    if req.context:
+        context = req.context
+        sources = []
+    else:
+        context, sources = _gather_architect_context(primary, tickers, req.account_size)
+
+    # Compute structured trades from real chain data
+    # Fetch portfolio Greeks for impact analysis
+    _port_greeks = {}
+    try:
+        import robin_stocks.robinhood as rh
+        from src.api_keys import get_secret as _gs
+        _ru, _rp = _gs("ROBINHOOD_USERNAME"), _gs("ROBINHOOD_PASSWORD")
+        if _ru and _rp:
+            rh.login(_ru, _rp, store_session=True)
+            _profile = rh.profiles.load_portfolio_profile()
+            _port_greeks["equity"] = float(_profile.get("equity", 0) or 0)
+            # Aggregate option Greeks from open positions
+            _total_d, _total_t, _total_g, _total_v = 0.0, 0.0, 0.0, 0.0
+            _stock_positions = {}
+            for pos in rh.account.get_open_stock_positions():
+                _qty = float(pos.get("quantity", 0))
+                _total_d += _qty  # stock delta = qty
+                _tk = rh.stocks.get_symbol_by_url(pos.get("instrument", ""))
+                if _tk: _stock_positions[_tk.upper()] = _qty
+            _port_greeks["stock_positions"] = _stock_positions
+            # Options Greeks: fetch live market data in parallel (RH positions lack Greeks)
+            _opt_positions = rh.options.get_open_option_positions()
+            def _fetch_opt_greeks(pos):
+                _qty = float(pos.get("quantity", 0))
+                _sign = -1 if pos.get("type", "") == "short" else 1
+                try:
+                    _mark = rh.options.get_option_market_data_by_id(pos.get("option_id", ""))
+                    if isinstance(_mark, list): _mark = _mark[0] if _mark else {}
+                    return (
+                        float(_mark.get("delta", 0) or 0) * 100 * _qty * _sign,
+                        float(_mark.get("theta", 0) or 0) * 100 * _qty * _sign,
+                        float(_mark.get("gamma", 0) or 0) * 100 * _qty * _sign,
+                        float(_mark.get("vega", 0) or 0) * 100 * _qty * _sign,
+                    )
+                except Exception: return (0, 0, 0, 0)
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            with _TPE(max_workers=min(len(_opt_positions), 10)) as _pool:
+                for _d, _t, _g, _v in _pool.map(_fetch_opt_greeks, _opt_positions):
+                    _total_d += _d; _total_t += _t; _total_g += _g; _total_v += _v
+            _port_greeks.update({"delta": _total_d, "theta": _total_t, "gamma": _total_g, "vega": _total_v})
+    except Exception:
+        pass
+
+    structured_trades = _compute_structured_trades(
+        primary, req.account_size, req.risk, req.strategy, user_msg,
+        direction_override=req.direction, portfolio_greeks=_port_greeks
+    )
+
+    # Format trades for Claude context
+    trades_text = ""
+    if structured_trades:
+        trades_text = "\n\nPRE-COMPUTED TRADES (from real chain data — use these exact numbers):\n"
+        for t in structured_trades:
+            trades_text += f"\n{t['type'].upper()}: {t['label']}\n"
+            for leg in t["legs"]:
+                trades_text += f"  {leg['action']} {leg['qty']}× {leg.get('ticker', primary)} "
+                if leg["instrument"] == "shares":
+                    trades_text += f"shares @ ${leg['price']:.2f}\n"
+                else:
+                    trades_text += f"${leg.get('strike', 0):.0f} {leg['instrument']} exp {leg.get('exp', '?')} @ ${leg['price']:.2f}\n"
+            trades_text += f"  Max profit: ${t['max_profit']:,.0f} | Max risk: ${t['max_risk']:,.0f}"
+            if t.get("breakeven"): trades_text += f" | BE: ${t['breakeven']:.2f}"
+            if t.get("pop"): trades_text += f" | POP: {t['pop']}%"
+            trades_text += f" | R:R: {t['rr_ratio']}x"
+            if t.get("risk_pct_of_account"): trades_text += f" | Account risk: {t['risk_pct_of_account']:.1f}%"
+            trades_text += "\n"
+            g = t.get("greeks", {})
+            trades_text += f"  Greeks: Δ={g.get('delta', 0):.1f} Θ=${g.get('theta', 0):.2f}/day"
+            if t.get("short_oi") is not None:
+                trades_text += f" | OI: short={t['short_oi']} long={t.get('long_oi', 0)}"
+            trades_text += "\n"
+            if t.get("portfolio_delta_before") is not None:
+                trades_text += f"  Portfolio impact: delta {t['portfolio_delta_before']:.0f} → {t['portfolio_delta_after']:.0f} | theta {t['portfolio_theta_before']:.1f} → {t['portfolio_theta_after']:.1f}\n"
+            if t.get("account_fit") is not None:
+                trades_text += f"  Account fit score: {t['account_fit']}/100"
+                if t['account_fit'] < 50: trades_text += " (POOR — increases concentration)"
+                elif t['account_fit'] >= 80: trades_text += " (GOOD)"
+                trades_text += "\n"
+            if t.get("signal_consensus"):
+                trades_text += f"  Signal engine: {t['signal_consensus']}\n"
+            if t.get("vol_suggestion"):
+                trades_text += f"  Vol regime: {t['vol_suggestion']}\n"
+
+    # Build Claude messages
+    claude_messages = []
+    first_user = f"""TICKERS: {', '.join(tickers)}
+ACCOUNT SIZE: ${req.account_size:,.0f}
+
+{context}{trades_text}
+
+USER THESIS: {user_msg}
+
+The user sees the structured trade cards with all numbers. Your job:
+1. 3-5 sentences assessing the thesis (data supports? contradicts? relative strength vs SPY?)
+2. Factor in the MARKET ENVIRONMENT and UPCOMING MACRO EVENTS — if VIX is elevated, FOMC is imminent, or CPI/NFP is within the trade window, explicitly address how this affects the trade (e.g. "FOMC in 3d adds event risk — consider waiting or widening stops")
+3. Name which trade is BEST and why in 1-2 sentences
+4. EXIT STRATEGY: profit target % (e.g. "close at 50% of max profit"), stop loss, max days to hold. ALWAYS include this.
+5. 2-3 bullet KEY RISKS (include macro event risk if any events fall within the trade timeframe)
+6. If OI on legs is thin (under 100), warn about liquidity/slippage
+Be terse — the numbers are already displayed, don't repeat them."""
+
+    if req.messages:
+        # Conversation mode: rebuild history with context in first message
+        for i, m in enumerate(req.messages):
+            if i == 0 and m.role == "user":
+                # Inject context into first user message
+                claude_messages.append({
+                    "role": "user",
+                    "content": f"TICKERS: {', '.join(tickers)}\nACCOUNT SIZE: ${req.account_size:,.0f}\n\n{context}\n\nUSER THESIS: {m.content}",
+                })
+            else:
+                claude_messages.append({"role": m.role, "content": m.content})
+        # Add latest message if not already in history
+        if req.thesis.strip() and (not req.messages or req.messages[-1].content != req.thesis.strip()):
+            claude_messages.append({"role": "user", "content": req.thesis.strip()})
+    else:
+        claude_messages = [{"role": "user", "content": first_user}]
+
+    # Call Claude Opus
+    try:
+        api_key = get_secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            return {"success": False, "error": "Anthropic API key not configured."}
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-opus-4-6" if req.deep else "claude-sonnet-4-6",
+            max_tokens=3000,
+            system=_ARCHITECT_SYSTEM,
+            messages=claude_messages,
+        )
+        analysis = response.content[0].text.strip()
+
+        return {
+            "success": True,
+            "analysis": analysis,
+            "trades": structured_trades,
+            "tickers": tickers,
+            "context": context,
+            "context_sources": sources,
+        }
+    except Exception as e:
+        # Fallback to Gemini
+        try:
+            gemini_key = get_secret("GEMINI_API_KEY")
+            if gemini_key:
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=gemini_key)
+                # Gemini: flatten to single prompt
+                flat = _ARCHITECT_SYSTEM + "\n\n" + "\n\n".join(
+                    f"{'USER' if m['role'] == 'user' else 'ASSISTANT'}: {m['content']}"
+                    for m in claude_messages
+                )
+                resp = client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=flat,
+                    config=types.GenerateContentConfig(max_output_tokens=3000, temperature=0.2),
+                )
+                return {
+                    "success": True,
+                    "analysis": resp.text.strip(),
+                    "trades": structured_trades,
+                    "tickers": tickers,
+                    "context": context,
+                    "context_sources": sources,
+                    "model": "gemini-3.1-pro",
+                }
+        except Exception:
+            pass
+        return {"success": False, "error": f"AI call failed: {str(e)[:200]}"}

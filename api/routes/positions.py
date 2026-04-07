@@ -501,6 +501,21 @@ Be specific. Cite actual events with dates. Return ONLY the JSON array."""}],
             except Exception as e:
                 _log.warning(f"Holdings research thread failed: {e}")
 
+    # ── Strip Grok citation tags from all text fields ──
+    def _strip_grok_tags(obj):
+        """Recursively strip <grok:render>...</grok:render> XML tags from strings."""
+        if isinstance(obj, str):
+            cleaned = re.sub(r'<grok:render[^>]*>.*?</grok:render>', '', obj)
+            cleaned = re.sub(r'\[web:\d+\]', '', cleaned)
+            return cleaned.strip()
+        if isinstance(obj, dict):
+            return {k: _strip_grok_tags(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_strip_grok_tags(item) for item in obj]
+        return obj
+
+    grok_results = _strip_grok_tags(grok_results)
+
     # ── Merge fundamentals + Grok research ──
     research = []
     grok_map = {r.get("ticker", ""): r for r in grok_results}

@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { fetchStrategyScan, fetchVolAnalysis, fetchRobinhoodPositions, fetchTradeIdeaAnalysis, fetchNewsSearch, type StrategyScanResult, type VolAnalysis } from "@/lib/api";
+import { fetchStrategyScan, fetchVolAnalysis, fetchRobinhoodPositions, fetchTradeIdeaAnalysis, fetchTradeIdeaQuick, fetchNewsSearch, type StrategyScanResult, type VolAnalysis } from "@/lib/api";
 
 // ── Strategy families ──
 // Scoring families — only these count toward confluence
@@ -326,7 +326,7 @@ export default function TradeIdeas() {
   const [watchlist, setWatchlist] = useState(DEFAULT_TICKERS.join(", "));
   const [volData, setVolData] = useState<Record<string, VolAnalysis>>({});
   const rhQuery = useQuery({ queryKey: ["rh-positions"], queryFn: fetchRobinhoodPositions, staleTime: 5 * 60_000 });
-  const accountEquity = rhQuery.data?.portfolio?.equity || 12500;
+  const accountEquity = rhQuery.data?.portfolio?.equity || 0;
 
   // Dynamic holdings from RH
   const rhTickers = [...new Set([
@@ -342,7 +342,7 @@ export default function TradeIdeas() {
   const scan = useMutation({
     mutationFn: async () => {
       const tickers = watchlist.split(",").map(t => t.trim().toUpperCase()).filter(Boolean);
-      setAnalysis(""); // clear old analysis on re-scan
+      setAnalysis(""); setNewsSummary(""); // clear stale data on re-scan
       const [scanRes, volRes] = await Promise.all([
         fetchStrategyScan(tickers, ALL_STRATEGIES, 2520),  // 10yr — max data, cached so no cost
         fetchVolAnalysis(tickers).catch(() => ({ success: false, results: {} })),
@@ -379,6 +379,7 @@ export default function TradeIdeas() {
       return fetchTradeIdeaAnalysis(ideas, bookSummary, news);
     },
     onSuccess: (r) => { if (r.success) setAnalysis(r.analysis); else setAnalysis(`Error: ${r.error}`); },
+    onError: (e) => { setAnalysis(`Error: ${e instanceof Error ? e.message : "Request failed"}`); },
   });
 
   const heldTickers = new Set([
@@ -471,14 +472,58 @@ export default function TradeIdeas() {
             </div>
           )}
           {analysis && (
-            <div className="text-xs leading-relaxed" dangerouslySetInnerHTML={{
-              __html: analysis
-                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/^#+\s*(.+)$/gm, '<div class="mt-3 mb-1 text-[0.7rem] font-bold text-accent border-b border-accent/20 pb-0.5">$1</div>')
-                .replace(/\n\n/g, '</p><p class="mt-1.5">')
-                .replace(/\n/g, "<br/>"),
-            }} />
+            <div className="space-y-4">
+              {analysis.split(/^##\s+/m).filter(Boolean).map((block, i) => {
+                const lines = block.trim().split("\n");
+                const header = lines[0].trim();
+                const body = lines.slice(1).join("\n").trim();
+                // Parse ticker and direction from header
+                const hMatch = header.match(/^(\w+)\s+(LONG|SHORT|long|short)/i);
+                const ticker = hMatch?.[1] || header;
+                const dir = hMatch?.[2]?.toUpperCase() || "";
+                const isLong = dir === "LONG";
+
+                // Parse WHY/RISK/ACTION sections using matchAll (avoids split capture group misalignment)
+                const sections: { label: string; text: string }[] = [];
+                const sectionRe = /\*{0,2}(WHY|RISK|ACTION)\*{0,2}[:\s—–-]*/gi;
+                const matches = [...body.matchAll(sectionRe)];
+                for (let j = 0; j < matches.length; j++) {
+                  const start = (matches[j].index ?? 0) + matches[j][0].length;
+                  const end = j + 1 < matches.length ? matches[j + 1].index : body.length;
+                  const text = body.slice(start, end).trim()
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*{2,}/g, "");
+                  if (text) sections.push({ label: matches[j][1].toUpperCase(), text });
+                }
+                // Fallback if no sections parsed
+                if (sections.length === 0 && body) {
+                  sections.push({ label: "", text: body.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*{2,}/g, "") });
+                }
+
+                return (
+                  <div key={i} className="rounded-lg border border-border p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="font-bold text-sm">{ticker}</span>
+                      {dir && <span className={`badge text-[0.5rem] font-bold ${isLong ? "badge-gain" : "badge-loss"}`}>{dir}</span>}
+                    </div>
+                    <div className="space-y-1.5">
+                      {sections.map((s, si) => (
+                        <div key={si} className="text-[0.65rem] leading-relaxed">
+                          {s.label && (
+                            <span className={`font-bold mr-1.5 ${
+                              s.label === "WHY" ? "text-accent" :
+                              s.label === "RISK" ? "text-loss" :
+                              s.label === "ACTION" ? "text-gain" : "text-text-muted"
+                            }`}>{s.label}</span>
+                          )}
+                          <span className="text-text" dangerouslySetInnerHTML={{ __html: s.text }} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
           {!analysis && !analysisMutation.isPending && (
             <p className="text-xs text-text-muted">
@@ -491,14 +536,21 @@ export default function TradeIdeas() {
 
       {/* Ideas */}
       <div className="space-y-3">
-        {ideas.map((idea) => <IdeaCard key={idea.ticker} idea={idea} acctEquity={accountEquity} />)}
+        {ideas.map((idea) => <IdeaCard key={idea.ticker} idea={idea} acctEquity={accountEquity} bookSummary={
+          rhQuery.data?.portfolio
+            ? `$${rhQuery.data.portfolio.equity.toLocaleString()} equity, ` +
+              (rhQuery.data.stocks ?? []).map(s => `${s.ticker} ${Math.round(s.qty)}sh`).join(", ")
+            : ""
+        } />)}
       </div>
     </div>
   );
 }
 
-function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number }) {
+function IdeaCard({ idea, acctEquity, bookSummary }: { idea: TradeIdea; acctEquity: number; bookSummary: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [quickVerdict, setQuickVerdict] = useState<{ verdict: string; analysis: string } | null>(null);
+  const [quickLoading, setQuickLoading] = useState(false);
   const isLong = idea.direction === "long";
 
   return (
@@ -552,10 +604,40 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
               ))}
             </div>
           )}
+          {/* Quick AI Verdict */}
+          {quickVerdict && (
+            <div className={`mt-1.5 px-2.5 py-1.5 rounded text-[0.6rem] leading-relaxed border ${
+              quickVerdict.verdict === "ENTER" ? "border-gain/30 bg-gain/5" :
+              quickVerdict.verdict === "SKIP" ? "border-loss/30 bg-loss/5" :
+              "border-warn/30 bg-warn/5"
+            }`}>
+              <span className={`font-bold mr-1.5 ${
+                quickVerdict.verdict === "ENTER" ? "text-gain" :
+                quickVerdict.verdict === "SKIP" ? "text-loss" : "text-warn"
+              }`}>{quickVerdict.verdict}</span>
+              <span className="text-text">{quickVerdict.analysis.replace(/^(ENTER|WAIT|SKIP)[:\s—–-]*/i, "")}</span>
+            </div>
+          )}
         </div>
-        <div className="text-right font-data">
-          <div className="text-lg font-bold">${idea.price.toFixed(2)}</div>
-          <div className="text-[0.5rem] text-text-muted">RSI {idea.rsi}</div>
+        <div className="text-right font-data flex flex-col items-end gap-1">
+          <div>
+            <div className="text-lg font-bold">${idea.price.toFixed(2)}</div>
+            <div className="text-[0.5rem] text-text-muted">RSI {idea.rsi}</div>
+          </div>
+          <button
+            onClick={async () => {
+              setQuickLoading(true);
+              try {
+                const res = await fetchTradeIdeaQuick(idea as unknown as Record<string, unknown>, bookSummary);
+                if (res.success) setQuickVerdict({ verdict: res.verdict, analysis: res.analysis || "" });
+                else setQuickVerdict({ verdict: "ERROR", analysis: res.error || "Analysis failed" });
+              } catch { setQuickVerdict({ verdict: "ERROR", analysis: "Request failed" }); }
+              setQuickLoading(false);
+            }}
+            disabled={quickLoading}
+            className="text-[0.5rem] px-2 py-0.5 border border-border rounded hover:border-accent hover:text-accent disabled:opacity-50">
+            {quickLoading ? "..." : quickVerdict ? quickVerdict.verdict : "AI Verdict"}
+          </button>
         </div>
       </div>
 
@@ -611,9 +693,8 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
         }`}>
           {idea.riskReward}:1 R:R
         </div>
-        {(() => {
-          const acct = acctEquity;
-          const riskDollars = acct * 0.01;
+        {acctEquity > 0 && (() => {
+          const riskDollars = acctEquity * 0.01;
           const riskPerShare = Math.abs(idea.price - idea.stop);
           const shares = riskPerShare > 0 ? Math.floor(riskDollars / riskPerShare) : 0;
           const contracts = Math.floor(shares / 100);
@@ -654,7 +735,7 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
           // Cheap options + expensive stock = debit spread (capped cost + cheap vol)
           vehicle = {
             label: isLong ? "Bull Call Spread" : "Bear Put Spread",
-            detail: `IV ${iv}% < RV ${rv}% (cheap) + stock needs $${shareCost.toLocaleString()} (${Math.round(shareCost / acctEquity * 100)}% of account). ${optimalDTE}d DTE debit spread: cheap leverage + capped risk. ~${thetaDecayPct}% theta decay over ${hold}d.`,
+            detail: `IV ${iv}% < RV ${rv}% (cheap) + stock needs $${shareCost.toLocaleString()} (${Math.round(acctEquity > 0 ? shareCost / acctEquity * 100 : 0)}% of account). ${optimalDTE}d DTE debit spread: cheap leverage + capped risk. ~${thetaDecayPct}% theta decay over ${hold}d.`,
             color: "border-purple-400/30 bg-purple-400/5 text-purple-400",
           };
         } else if (ivCheap && hold <= 15) {
@@ -674,13 +755,13 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
         } else if (needsLeverage) {
           vehicle = {
             label: isLong ? "Bull Call Spread" : "Bear Put Spread",
-            detail: `Stock position needs $${shareCost.toLocaleString()} (${Math.round(shareCost / acctEquity * 100)}% of account). ${optimalDTE}d DTE spread is more capital efficient.`,
+            detail: `Stock position needs $${shareCost.toLocaleString()} (${Math.round(acctEquity > 0 ? shareCost / acctEquity * 100 : 0)}% of account). ${optimalDTE}d DTE spread is more capital efficient.`,
             color: "border-accent/30 bg-accent/5 text-accent",
           };
         } else {
           vehicle = {
             label: "Stock",
-            detail: `${sharesFor1Pct} shares = $${shareCost.toLocaleString()} (${Math.round(shareCost / acctEquity * 100)}% of account). Simple, no theta decay.`,
+            detail: `${sharesFor1Pct} shares = $${shareCost.toLocaleString()} (${Math.round(acctEquity > 0 ? shareCost / acctEquity * 100 : 0)}% of account). Simple, no theta decay.`,
             color: "border-border",
           };
         }
@@ -738,8 +819,8 @@ function IdeaCard({ idea, acctEquity }: { idea: TradeIdea; acctEquity: number })
             ? <span className="text-gain">IV &gt; RV by {absDiff.toFixed(1)}pp (sell premium)</span>
             : <span className="text-loss">IV &lt; RV by {absDiff.toFixed(1)}pp (buy options)</span>;
         })()}
-        {idea.vol?.next_earnings && (
-          <span className={idea.vol.next_earnings_days != null && idea.vol.next_earnings_days <= 14 ? "text-warn font-semibold" : ""}>
+        {idea.vol?.next_earnings_days != null && (
+          <span className={idea.vol.next_earnings_days <= 14 ? "text-warn font-semibold" : ""}>
             Earn {idea.vol.next_earnings_days}d
           </span>
         )}

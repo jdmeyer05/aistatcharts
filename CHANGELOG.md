@@ -1,5 +1,65 @@
 # Changelog
 
+## 2026-04-07 — Deep Audit, AI Upgrades, Trade Architect Parity, Calculation Fixes
+
+### Trade Architect — Position Monitor Parity
+- **Risk/Strategy/Direction controls** added to Position Monitor (was missing; daily-briefing had them)
+- **Refresh Prices button** — re-run analysis with same input after trades load
+- **Stop & Target fields** — now shown in trade card metrics grid
+- **P/L chart + tooltip on hover** — `TradePLChart` and `TradeTooltip` ported from daily-briefing, shows SVG P/L-at-expiration with breakeven markers
+- **Holdings context passed to API** — Trade Architect on Position Monitor now sends held tickers + portfolio summary with market values (was sending empty arrays)
+- **Iron condor dual breakevens** — now reports both lower and upper breakeven (was only showing lower)
+- **Strike labels no longer round** — `$16.5/$17.5` instead of `$16/$18` (was using `:.0f`, now `:g`)
+
+### Trade Ideas Page
+- **Per-idea AI Verdict button** — each card gets ENTER/WAIT/SKIP from Claude Sonnet with 2-3 sentence reasoning
+- **Bulk analysis upgraded to Claude Opus** — switched from Gemini 2.5 Flash (was timing out at 60s) to Claude Opus 4.6 with 120s timeout
+- **Structured card-based analysis rendering** — each idea gets its own bordered card with color-coded WHY/RISK/ACTION sections (was one wall of markdown text)
+- **Fixed section parser bug** — `String.split()` with capture groups was misaligning WHY/RISK/ACTION content; replaced with `matchAll`
+- **Fixed NaN% in vehicle recommendation** — `shareCost / acctEquity` produced NaN when portfolio not loaded
+- **Stale news on re-scan** — `newsSummary` now cleared alongside `analysis` when re-scanning
+- **Error handling** — analysis mutation and quick verdict errors now display to user (were silently swallowed)
+
+### Spread Management (Position Monitor)
+- **Credit vs debit spread detection** — `maxProfit` and `maxLossAtExp` now computed correctly for both types (debit spreads were using premium paid as max profit instead of width - debit)
+- **Naked position handling** — naked short options get "Close immediately — loss can grow without limit" instead of dangerous "HOLD preferred" advice; naked long calls show "unlimited upside" instead of misleading 0% capture bar
+- **MTM vs expiration loss distinction** — when mark-to-market loss exceeds max expiration loss (time value inflation), MANAGE verdict explains the difference and recommends holding defined-risk positions
+- **GTC debit price corrected** — now divides by `100 * qty` for per-share order price (was wrong for multi-contract positions)
+- **50% close rule limited to credit spreads** — `pctCaptured >= 50` CLOSE signal no longer fires for debit spreads
+- **Profit capture bar** — shows "unlimited upside" for naked long positions, correct in/out labels for credit vs debit
+
+### AI Model Upgrades
+- **Holding Deep Dive** — upgraded Sonnet → Opus 4.6 (portfolio decisions deserve best reasoning)
+- **Market Scan blended analysis** — upgraded Sonnet 4 (old ID) → Opus 4.6
+- **Trade Ideas bulk analysis** — Gemini → Opus 4.6 (was timing out)
+- **Trade Ideas per-idea verdict** — Claude Sonnet 4.6 (fast 250-token verdicts)
+- **Trade Architect normal/deep** — kept Sonnet/Opus split (speed vs depth)
+
+### Context & Data Quality
+- **Market environment context** — Trade Architect now gets SPY, QQQ, VIX level + regime, VIX term structure (contango/backwardation), 10Y Treasury yield
+- **Macro events in Claude prompt** — AI assessment now required to address FOMC, CPI, NFP if they fall within trade timeframe
+- **52-week range fixed** — deep dive was fetching 200 days but labeling as "52w"; now fetches 400 days and slices to last 252 trading days
+- **Market value in deep dive** — frontend now sends `market_value` to holding deep dive endpoint so AI uses exact equity numbers (was guessing "$1,400-$1,800" when UAMY had $3K+)
+- **8 macro events** shown instead of 5 in architect context
+
+### Bug Fixes
+- **`[web:NNN]` citation tags stripped** — Grok web citations now removed in both `positions.py` and `market.py`
+- **yfinance `.calendar` compatibility** — created `_safe_next_earnings()` helper that handles both dict (new yfinance) and DataFrame (old yfinance) returns; fixed 5 call sites
+- **Earnings loop re-fetch eliminated** — was calling `yf.Ticker().calendar` inside a loop (8+ redundant yfinance calls); now reuses cached result
+- **`_market_macro` uses `.history()` not `.info`** — `.info` on index tickers (^VIX, ^VIX3M, ^TNX) is slow/unreliable; switched to `.history(period="2d")`
+- **NaN IV propagation** — ATM IV calculation now guards against NaN/None with `or 0` fallback
+- **HV20 with insufficient data** — returns 0 instead of computing meaningless volatility from <21 bars
+- **Long option POP overstated** — was using raw delta as POP; now applies premium-hurdle discount factor
+- **Stock trade says "Sell" not "Short" when you hold shares** — any bearish direction on a held stock now recommends trimming, not shorting (was only detecting explicit "hedge" keyword)
+- **Combo trade builder isolated** — wrapped in own try/except so a bug doesn't kill vol suggestion + portfolio impact for stock/options trades
+- **Monte Carlo stale data** — `quickMC` changed from `useState` (runs once) to `useMemo` (recomputes on spread data refresh)
+- **Stock position cap scales with risk** — conservative=20%, moderate=35%, aggressive=50% of account (was hardcoded 50%)
+- **Deep dive markdown `**` artifacts** — Key Risks header and risk bullets with bold markers now parsed correctly; orphaned `**` stripped
+- **Hardcoded $12,500 equity fallback removed** — Position Monitor and Trade Ideas now show 0 / block submission until portfolio loads
+- **Earnings display `undefinedd`** — guard changed to check `next_earnings_days` (number) instead of `next_earnings` (string)
+
+---
+
 ## 2026-04-05 — Performance Optimization: Streamlit Speed Overhaul
 
 ### Infrastructure — Core Rendering Pipeline

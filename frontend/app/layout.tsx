@@ -4,6 +4,7 @@ import "./globals.css";
 import { Header } from "@/components/layout/header";
 import { Providers } from "@/components/providers";
 import { AuthGate } from "@/components/auth-gate";
+// import { MatrixBackground } from "@/components/matrix-background";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

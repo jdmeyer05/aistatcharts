@@ -61,6 +61,39 @@ export interface PriceBar {
   Volume: number;
 }
 
+export interface OHLCVBar {
+  time: number; // unix seconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface IndicatorPoint { time: number; value: number; }
+export interface ChartIndicators {
+  ema9?: IndicatorPoint[];
+  ema21?: IndicatorPoint[];
+  ema50?: IndicatorPoint[];
+  ema200?: IndicatorPoint[];
+  rsi?: IndicatorPoint[];
+  macd?: IndicatorPoint[];
+  macd_signal?: IndicatorPoint[];
+  macd_hist?: IndicatorPoint[];
+  bb_upper?: IndicatorPoint[];
+  bb_middle?: IndicatorPoint[];
+  bb_lower?: IndicatorPoint[];
+  vwap?: IndicatorPoint[];
+}
+
+export async function fetchOHLCV(
+  ticker: string,
+  days = 365,
+  interval = "1d",
+): Promise<{ ticker: string; data: OHLCVBar[]; indicators?: ChartIndicators }> {
+  return apiFetch(`/api/market/ohlcv/${ticker}?days=${days}&interval=${interval}`);
+}
+
 export async function fetchPriceHistory(
   ticker: string,
   days = 252
@@ -233,6 +266,14 @@ export async function fetchNewsIntel(watchlist: string[]): Promise<NewsIntelResp
   return apiFetch("/api/market/news-intel", { method: "POST", body: JSON.stringify({ watchlist }), timeoutMs: 5 * 60_000 });
 }
 
+export async function fetchNewsAnalysis(headline: string, ticker: string, source: string, impact: string): Promise<{ analysis: string; cached: boolean }> {
+  return apiFetch("/api/market/news-analyze", {
+    method: "POST",
+    body: JSON.stringify({ headline, ticker, source, impact }),
+    timeoutMs: 15_000,
+  });
+}
+
 export async function fetchNewsSearch(watchlist: string[]): Promise<NewsIntelResponse> {
   return apiFetch("/api/market/news-intel-search", { method: "POST", body: JSON.stringify({ watchlist }), timeoutMs: 2 * 60_000 });
 }
@@ -263,6 +304,75 @@ export async function fetchMorningNote(briefingData: DailyBriefingResult, newsIt
 }
 
 // ── Robinhood Positions ──
+
+export interface ArchitectMessage { role: "user" | "assistant"; content: string; }
+
+export interface StructuredTradeLeg {
+  action: string; instrument: string; ticker: string;
+  qty: number; price: number; strike?: number; exp?: string;
+}
+export interface StructuredTrade {
+  type: "stock" | "options" | "combination";
+  label: string; legs: StructuredTradeLeg[];
+  entry: number; stop: number | null; target: number | null;
+  max_profit: number; max_risk: number;
+  breakeven: number; breakeven_upper?: number; pop: number | null; rr_ratio: number;
+  greeks: { delta: number; theta: number; gamma: number; vega: number };
+  timeframe: string; contracts?: number; width?: number;
+  short_strike?: number; long_strike?: number;
+  portfolio_equity?: number; risk_pct_of_account?: number;
+  portfolio_delta_before?: number; portfolio_delta_after?: number;
+  portfolio_theta_before?: number; portfolio_theta_after?: number;
+  account_fit?: number; vol_suggestion?: string; signal_consensus?: string;
+  direction?: string;
+  hist_winrate?: number; hist_trials?: number;
+}
+export interface TradeArchitectResponse {
+  success: boolean;
+  analysis?: string;
+  trades?: StructuredTrade[];
+  tickers?: string[];
+  context?: string;
+  context_sources?: string[];
+  model?: string;
+  error?: string;
+}
+
+export async function fetchTradeArchitect(
+  thesis: string,
+  messages: ArchitectMessage[] = [],
+  context = "",
+  tickers: string[] = [],
+  accountSize = 25000,
+  deep = false,
+  risk: "conservative" | "moderate" | "aggressive" = "moderate",
+  strategy: "auto" | "sell" | "buy" = "auto",
+  direction: "" | "bullish" | "bearish" | "neutral" = "",
+): Promise<TradeArchitectResponse> {
+  return apiFetch("/api/market/trade-architect", {
+    method: "POST",
+    body: JSON.stringify({ thesis, messages, context, tickers, account_size: accountSize, deep, risk, strategy, direction }),
+    timeoutMs: deep ? 120_000 : 75_000,
+  });
+}
+
+export interface HoldingDiveResponse {
+  success: boolean; ticker: string; verdict: string;
+  analysis?: string; sources?: string[]; error?: string;
+}
+
+export async function fetchHoldingDeepDive(stock: RHStock): Promise<HoldingDiveResponse> {
+  return apiFetch("/api/market/holding-deep-dive", {
+    method: "POST",
+    body: JSON.stringify({
+      ticker: stock.ticker, qty: stock.qty, avg_cost: stock.avg_cost,
+      current_price: stock.current_price, market_value: stock.market_value,
+      pl: stock.pl, pl_pct: stock.pl_pct,
+      entry_date: stock.entry_date || "",
+    }),
+    timeoutMs: 30_000,
+  });
+}
 
 export interface RHStock {
   ticker: string; qty: number; avg_cost: number; current_price: number;
@@ -333,7 +443,30 @@ export async function fetchHoldingsResearch(tickers: string[]): Promise<Holdings
 
 export async function fetchTradeIdeaAnalysis(ideas: unknown[], bookSummary = "", newsSummary = ""): Promise<{ success: boolean; error?: string; analysis: string }> {
   return apiFetch("/api/market/trade-idea-analysis", {
-    method: "POST", body: JSON.stringify({ ideas, book_summary: bookSummary, news_summary: newsSummary }), timeoutMs: 60_000,
+    method: "POST", body: JSON.stringify({ ideas, book_summary: bookSummary, news_summary: newsSummary }), timeoutMs: 120_000,
+  });
+}
+
+export interface TradeIdeaQuickResponse {
+  success: boolean; ticker: string; verdict: string; analysis?: string; error?: string;
+}
+
+export async function fetchTradeIdeaQuick(idea: Record<string, unknown>, bookSummary = ""): Promise<TradeIdeaQuickResponse> {
+  return apiFetch("/api/market/trade-idea-quick", {
+    method: "POST",
+    body: JSON.stringify({
+      ticker: idea.ticker, direction: idea.direction,
+      trigger: (idea.trigger as Record<string, unknown>)?.strategy || "",
+      signal_days: (idea.trigger as Record<string, unknown>)?.signalDays || 0,
+      confluence: idea.confluenceScore, total_families: idea.totalFamilies,
+      price: idea.price, stop: idea.stop, target: idea.target,
+      rr: idea.riskReward, ev: idea.expectedValue, win_rate: (idea.trigger as Record<string, unknown>)?.winRate || 0,
+      iv: (idea.vol as Record<string, unknown>)?.iv || 0,
+      rv: (idea.vol as Record<string, unknown>)?.rv_20d || 0,
+      rsi: idea.rsi, warnings: idea.warnings || [],
+      book_summary: bookSummary,
+    }),
+    timeoutMs: 15_000,
   });
 }
 
