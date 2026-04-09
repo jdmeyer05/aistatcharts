@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-04-08 — Trump Decoder (New Page), Market Scan Cleanup, Indentation Fix
+
+### New Page: Trump Decoder (`/trump-decoder`)
+Full psychological profiling + behavioral analysis tool for decoding Trump's market-moving statements. 3-model AI orchestration with Supabase persistence.
+
+#### 5 Tabs
+- **Decode Statement** — paste text or screenshot of a Trump tweet/post. Claude Sonnet OCR extracts text from screenshots. Grok searches historical analogs + current mood → Claude Opus decodes psychology + bluff scores → Gemini models market impact. Cross-references Robinhood positions for risk alerts. Output: decoded meaning, bluff score (0-100), market impact (-5 to +5), probability distribution, historical analogs, position risk alerts, affected sectors/tickers, signals to watch.
+- **Predict Response** — describe a hypothetical scenario, get predicted Trump behavior with probabilities, historical precedent, and recommended positioning. Grok analog search → Claude Opus game theory prediction.
+- **Live Monitor** — manual refresh, Grok searches last 24h of Truth Social/X posts with AI interpretation, market relevance scoring (0-10), mood summary, escalation trend, breaking developments. Date-aware prompts ensure recency.
+- **Pattern Database** — search historical Trump statement-to-outcome cycles (2017-present). Grok builds the database dynamically, patterns persist in Supabase and accumulate across sessions. Filterable by category (tariffs, china, fed, iran, etc.).
+- **Psych Profile** — Claude Sonnet (structured JSON: MBTI, Big Five, Dark Triad, negotiation patterns, bluff detection rubric) + Claude Opus (narrative deep-dive) + Grok (current behavioral snapshot) run in parallel. Cached 30 days in Supabase.
+
+#### Screenshot Support (Decode Tab)
+- **Ctrl+V paste** — paste a screenshot directly from clipboard
+- **Drag & drop** — drag an image onto the textarea
+- **Upload button** — file picker for screenshots
+- Claude Sonnet extracts text via vision API before feeding into the 3-model decode pipeline
+
+#### AI Model Split
+| Model | Role |
+|-------|------|
+| **Grok 4 Fast** | Real-time X/Truth Social search, historical analog search, mood/frequency analysis |
+| **Claude Opus** | Deep psychological decode, game theory, bluff scoring, probability distribution, narrative profile |
+| **Claude Sonnet** | Screenshot OCR, structured profile JSON (fast) |
+| **Gemini 3.1 Pro** | Quantitative market impact modeling, sector/ticker impact, price ranges |
+
+#### Position-Aware Risk Alerts
+- Pulls Robinhood positions via existing `fetchRobinhoodPositions`
+- Passes portfolio summary (tickers, types, strikes, P&L, Greeks) to Claude and Gemini
+- AI flags specific positions at risk with recommendations (e.g. "Your SPY $540P is SHORT into a likely reversal")
+
+#### Supabase Schema (4 tables)
+- `trump_psych_profile` — cached psychological profiles (30-day TTL, versioned)
+- `trump_decoded_statements` — every decode with outcome tracking (user can mark what actually happened)
+- `trump_pattern_history` — accumulated historical statement-to-outcome cycles
+- `trump_monitor_posts` — archived posts with interpretation and market relevance
+
+#### Performance
+- Psych profile: 3 parallel calls (Sonnet + Opus + Grok) instead of sequential Opus (~30s vs ~90s)
+- Decode: Grok fast-reasoning for analog search (~10s), then Claude + Gemini in parallel (~15-20s)
+- In-memory psych profile cache (5-min TTL) avoids DB roundtrip on every decode
+- Pattern DB returns cached patterns instantly; Grok only fires on explicit search
+
+### Market Scan (daily-briefing)
+- **Removed MatrixLoader animation overlay** — page now loads content progressively without blocking animation layer
+
+### Bug Fixes
+- **FastAPI startup crash** — `IndentationError` in `api/routes/market.py` line 5332: combo trade builder block had mixed 2-space/8-space indentation inside `try` statement. Re-indented lines 5338-5466 to be properly inside the try block.
+- **`raw` reference error** in psych profile save — referenced undefined variable after parallel refactor
+- **`raise None` crash** in `_grok_request` — initialized `last_err` with proper ValueError
+- **Stale model names** in attribution — updated from `grok-4.20-reasoning` to `grok-4-1-fast-reasoning`
+- **Monitor missing `breaking_developments`** field — was in prompt but not extracted from response
+- **`market_impact.toFixed(1)` crash** — null guard added with `?? 0` fallback
+- **Decode history null guards** — `bluff_score` and `market_impact` protected against null
+- **Dead imports** — removed unused `hashlib`, `as_completed`, `Fragment`, `PatternQuery`
+
+---
+
 ## 2026-04-07 — Deep Audit, AI Upgrades, Trade Architect Parity, Calculation Fixes
 
 ### Trade Architect — Position Monitor Parity

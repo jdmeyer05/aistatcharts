@@ -5332,138 +5332,138 @@ def _compute_structured_trades(primary: str, account_size: float,
         try:
           # Choose structure based on direction + what makes sense for the account:
           # Bullish: wider bull put spread (different width than trade 2) or long call + put hedge
-        # Bearish: wider bear call spread or long put + call hedge
-        # Neutral: wider iron condor (different deltas than trade 2)
-        combo_trade = None
-        if opt_trade:
-            # Build an alternative spread at a different delta/width than the optimizer picked
-            alt_delta = 0.35 if sell_premium else 0.30  # further OTM or closer to ATM
-            alt_width = round(target_width * 1.5)
-            if is_bull:
-                if sell_premium:
-                    sr = find_otm(best_puts, "put", alt_delta)
-                    if sr:
-                        lr_c = best_puts[best_puts["strike_price"] <= float(sr["strike_price"]) - alt_width + 1]
-                        if not lr_c.empty:
-                            lr = lr_c.iloc[(lr_c["strike_price"] - (float(sr["strike_price"]) - alt_width)).abs().argmin()]
-                            combo_trade = build_spread(sr, lr, "Wide Bull Put Spread", "put", "put")
-                            if combo_trade: combo_trade["type"] = "combination"
-                else:
-                    # Long call (defined risk, leveraged upside)
-                    lc_row = find_otm(best_calls, "call", 0.40)
-                    if lc_row:
-                        lc_price = mid(lc_row)
-                        lc_strike = float(lc_row["strike_price"])
-                        if lc_price > 0:
-                            contracts = max(1, min(int(max_risk_dollars / (lc_price * 100)), 5))
-                            combo_trade = {
-                                "type": "combination", "label": f"Long ${lc_strike:g} Call",
-                                "legs": [{"action": "buy", "instrument": "call", "ticker": primary, "strike": lc_strike,
-                                          "exp": best_exp, "qty": contracts, "price": lc_price}],
-                                "entry": lc_price, "stop": None, "target": None,
-                                "max_profit": round(price * 0.1 * 100 * contracts, 0),
-                                "max_risk": round(lc_price * 100 * contracts, 0),
-                                "breakeven": round(lc_strike + lc_price, 2),
-                                "pop": round(abs(greek(lc_row, "delta")) * max(0.4, 1 - lc_price / price) * 100, 1),
-                                "rr_ratio": round(price * 0.1 / lc_price, 2) if lc_price > 0 else 0,
-                                "greeks": {
-                                    "delta": round(greek(lc_row, "delta") * contracts * 100, 1),
-                                    "theta": round(greek(lc_row, "theta") * contracts * 100, 2),
-                                    "gamma": round(greek(lc_row, "gamma") * contracts * 100, 3),
-                                    "vega": round(greek(lc_row, "vega") * contracts * 100, 2),
-                                },
-                                "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
-                                "contracts": contracts,
-                            }
-            elif is_bear:
-                if sell_premium:
-                    sr = find_otm(best_calls, "call", alt_delta)
-                    if sr:
-                        lr_c = best_calls[best_calls["strike_price"] >= float(sr["strike_price"]) + alt_width - 1]
-                        if not lr_c.empty:
-                            lr = lr_c.iloc[(lr_c["strike_price"] - (float(sr["strike_price"]) + alt_width)).abs().argmin()]
-                            combo_trade = build_spread(sr, lr, "Wide Bear Call Spread", "call", "call")
-                            if combo_trade: combo_trade["type"] = "combination"
-                else:
-                    lp_row = find_otm(best_puts, "put", 0.40)
-                    if lp_row:
-                        lp_price = mid(lp_row)
-                        lp_strike = float(lp_row["strike_price"])
-                        if lp_price > 0:
-                            contracts = max(1, min(int(max_risk_dollars / (lp_price * 100)), 5))
-                            combo_trade = {
-                                "type": "combination", "label": f"Long ${lp_strike:g} Put",
-                                "legs": [{"action": "buy", "instrument": "put", "ticker": primary, "strike": lp_strike,
-                                          "exp": best_exp, "qty": contracts, "price": lp_price}],
-                                "entry": lp_price, "stop": None, "target": None,
-                                "max_profit": round(lp_strike * 0.1 * 100 * contracts, 0),
-                                "max_risk": round(lp_price * 100 * contracts, 0),
-                                "breakeven": round(lp_strike - lp_price, 2),
-                                "pop": round(abs(greek(lp_row, "delta")) * max(0.4, 1 - lp_price / price) * 100, 1),
-                                "rr_ratio": round(lp_strike * 0.1 / lp_price, 2) if lp_price > 0 else 0,
-                                "greeks": {
-                                    "delta": round(greek(lp_row, "delta") * contracts * 100, 1),
-                                    "theta": round(greek(lp_row, "theta") * contracts * 100, 2),
-                                    "gamma": round(greek(lp_row, "gamma") * contracts * 100, 3),
-                                    "vega": round(greek(lp_row, "vega") * contracts * 100, 2),
-                                },
-                                "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
-                                "contracts": contracts,
-                            }
-        # Fallback combo: if the wide spread didn't work, try a long option (always defined risk)
-        if not combo_trade and not is_neutral:
-            if is_bull:
-                lc_row = find_otm(best_calls, "call", 0.40)
-                if lc_row:
-                    lc_price = mid(lc_row)
-                    lc_strike = float(lc_row["strike_price"])
-                    if lc_price > 0:
-                        contracts = max(1, min(int(max_risk_dollars / (lc_price * 100)), 5))
-                        combo_trade = {
-                            "type": "combination", "label": f"Long ${lc_strike:g} Call",
-                            "legs": [{"action": "buy", "instrument": "call", "ticker": primary, "strike": lc_strike,
-                                      "exp": best_exp, "qty": contracts, "price": lc_price}],
-                            "entry": lc_price, "stop": None, "target": None,
-                            "max_profit": round(price * 0.1 * 100 * contracts, 0),
-                            "max_risk": round(lc_price * 100 * contracts, 0),
-                            "breakeven": round(lc_strike + lc_price, 2),
-                            "pop": round(abs(greek(lc_row, "delta")) * max(0.4, 1 - lc_price / price) * 100, 1),
-                            "rr_ratio": round(price * 0.1 / lc_price, 2) if lc_price > 0 else 0,
-                            "greeks": {
-                                "delta": round(greek(lc_row, "delta") * contracts * 100, 1),
-                                "theta": round(greek(lc_row, "theta") * contracts * 100, 2),
-                                "gamma": round(greek(lc_row, "gamma") * contracts * 100, 3),
-                                "vega": round(greek(lc_row, "vega") * contracts * 100, 2),
-                            },
-                            "timeframe": f"{best_dte}d (exp {best_exp})",
-                            "contracts": contracts,
-                        }
-            else:
-                lp_row = find_otm(best_puts, "put", 0.40)
-                if lp_row:
-                    lp_price = mid(lp_row)
-                    lp_strike = float(lp_row["strike_price"])
-                    if lp_price > 0:
-                        contracts = max(1, min(int(max_risk_dollars / (lp_price * 100)), 5))
-                        combo_trade = {
-                            "type": "combination", "label": f"Long ${lp_strike:g} Put",
-                            "legs": [{"action": "buy", "instrument": "put", "ticker": primary, "strike": lp_strike,
-                                      "exp": best_exp, "qty": contracts, "price": lp_price}],
-                            "entry": lp_price, "stop": None, "target": None,
-                            "max_profit": round(lp_strike * 0.1 * 100 * contracts, 0),
-                            "max_risk": round(lp_price * 100 * contracts, 0),
-                            "breakeven": round(lp_strike - lp_price, 2),
-                            "pop": round(abs(greek(lp_row, "delta")) * max(0.4, 1 - lp_price / price) * 100, 1),
-                            "rr_ratio": round(lp_strike * 0.1 / lp_price, 2) if lp_price > 0 else 0,
-                            "greeks": {
-                                "delta": round(greek(lp_row, "delta") * contracts * 100, 1),
-                                "theta": round(greek(lp_row, "theta") * contracts * 100, 2),
-                                "gamma": round(greek(lp_row, "gamma") * contracts * 100, 3),
-                                "vega": round(greek(lp_row, "vega") * contracts * 100, 2),
-                            },
-                            "timeframe": f"{best_dte}d (exp {best_exp})",
-                            "contracts": contracts,
-                        }
+          # Bearish: wider bear call spread or long put + call hedge
+          # Neutral: wider iron condor (different deltas than trade 2)
+          combo_trade = None
+          if opt_trade:
+              # Build an alternative spread at a different delta/width than the optimizer picked
+              alt_delta = 0.35 if sell_premium else 0.30  # further OTM or closer to ATM
+              alt_width = round(target_width * 1.5)
+              if is_bull:
+                  if sell_premium:
+                      sr = find_otm(best_puts, "put", alt_delta)
+                      if sr:
+                          lr_c = best_puts[best_puts["strike_price"] <= float(sr["strike_price"]) - alt_width + 1]
+                          if not lr_c.empty:
+                              lr = lr_c.iloc[(lr_c["strike_price"] - (float(sr["strike_price"]) - alt_width)).abs().argmin()]
+                              combo_trade = build_spread(sr, lr, "Wide Bull Put Spread", "put", "put")
+                              if combo_trade: combo_trade["type"] = "combination"
+                  else:
+                      # Long call (defined risk, leveraged upside)
+                      lc_row = find_otm(best_calls, "call", 0.40)
+                      if lc_row:
+                          lc_price = mid(lc_row)
+                          lc_strike = float(lc_row["strike_price"])
+                          if lc_price > 0:
+                              contracts = max(1, min(int(max_risk_dollars / (lc_price * 100)), 5))
+                              combo_trade = {
+                                  "type": "combination", "label": f"Long ${lc_strike:g} Call",
+                                  "legs": [{"action": "buy", "instrument": "call", "ticker": primary, "strike": lc_strike,
+                                            "exp": best_exp, "qty": contracts, "price": lc_price}],
+                                  "entry": lc_price, "stop": None, "target": None,
+                                  "max_profit": round(price * 0.1 * 100 * contracts, 0),
+                                  "max_risk": round(lc_price * 100 * contracts, 0),
+                                  "breakeven": round(lc_strike + lc_price, 2),
+                                  "pop": round(abs(greek(lc_row, "delta")) * max(0.4, 1 - lc_price / price) * 100, 1),
+                                  "rr_ratio": round(price * 0.1 / lc_price, 2) if lc_price > 0 else 0,
+                                  "greeks": {
+                                      "delta": round(greek(lc_row, "delta") * contracts * 100, 1),
+                                      "theta": round(greek(lc_row, "theta") * contracts * 100, 2),
+                                      "gamma": round(greek(lc_row, "gamma") * contracts * 100, 3),
+                                      "vega": round(greek(lc_row, "vega") * contracts * 100, 2),
+                                  },
+                                  "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
+                                  "contracts": contracts,
+                              }
+              elif is_bear:
+                  if sell_premium:
+                      sr = find_otm(best_calls, "call", alt_delta)
+                      if sr:
+                          lr_c = best_calls[best_calls["strike_price"] >= float(sr["strike_price"]) + alt_width - 1]
+                          if not lr_c.empty:
+                              lr = lr_c.iloc[(lr_c["strike_price"] - (float(sr["strike_price"]) + alt_width)).abs().argmin()]
+                              combo_trade = build_spread(sr, lr, "Wide Bear Call Spread", "call", "call")
+                              if combo_trade: combo_trade["type"] = "combination"
+                  else:
+                      lp_row = find_otm(best_puts, "put", 0.40)
+                      if lp_row:
+                          lp_price = mid(lp_row)
+                          lp_strike = float(lp_row["strike_price"])
+                          if lp_price > 0:
+                              contracts = max(1, min(int(max_risk_dollars / (lp_price * 100)), 5))
+                              combo_trade = {
+                                  "type": "combination", "label": f"Long ${lp_strike:g} Put",
+                                  "legs": [{"action": "buy", "instrument": "put", "ticker": primary, "strike": lp_strike,
+                                            "exp": best_exp, "qty": contracts, "price": lp_price}],
+                                  "entry": lp_price, "stop": None, "target": None,
+                                  "max_profit": round(lp_strike * 0.1 * 100 * contracts, 0),
+                                  "max_risk": round(lp_price * 100 * contracts, 0),
+                                  "breakeven": round(lp_strike - lp_price, 2),
+                                  "pop": round(abs(greek(lp_row, "delta")) * max(0.4, 1 - lp_price / price) * 100, 1),
+                                  "rr_ratio": round(lp_strike * 0.1 / lp_price, 2) if lp_price > 0 else 0,
+                                  "greeks": {
+                                      "delta": round(greek(lp_row, "delta") * contracts * 100, 1),
+                                      "theta": round(greek(lp_row, "theta") * contracts * 100, 2),
+                                      "gamma": round(greek(lp_row, "gamma") * contracts * 100, 3),
+                                      "vega": round(greek(lp_row, "vega") * contracts * 100, 2),
+                                  },
+                                  "timeframe": f"{best_dte}d (exp {best_exp})" + (" ⚠ EARNINGS" if earnings_in_window else ""),
+                                  "contracts": contracts,
+                              }
+          # Fallback combo: if the wide spread didn't work, try a long option (always defined risk)
+          if not combo_trade and not is_neutral:
+              if is_bull:
+                  lc_row = find_otm(best_calls, "call", 0.40)
+                  if lc_row:
+                      lc_price = mid(lc_row)
+                      lc_strike = float(lc_row["strike_price"])
+                      if lc_price > 0:
+                          contracts = max(1, min(int(max_risk_dollars / (lc_price * 100)), 5))
+                          combo_trade = {
+                              "type": "combination", "label": f"Long ${lc_strike:g} Call",
+                              "legs": [{"action": "buy", "instrument": "call", "ticker": primary, "strike": lc_strike,
+                                        "exp": best_exp, "qty": contracts, "price": lc_price}],
+                              "entry": lc_price, "stop": None, "target": None,
+                              "max_profit": round(price * 0.1 * 100 * contracts, 0),
+                              "max_risk": round(lc_price * 100 * contracts, 0),
+                              "breakeven": round(lc_strike + lc_price, 2),
+                              "pop": round(abs(greek(lc_row, "delta")) * max(0.4, 1 - lc_price / price) * 100, 1),
+                              "rr_ratio": round(price * 0.1 / lc_price, 2) if lc_price > 0 else 0,
+                              "greeks": {
+                                  "delta": round(greek(lc_row, "delta") * contracts * 100, 1),
+                                  "theta": round(greek(lc_row, "theta") * contracts * 100, 2),
+                                  "gamma": round(greek(lc_row, "gamma") * contracts * 100, 3),
+                                  "vega": round(greek(lc_row, "vega") * contracts * 100, 2),
+                              },
+                              "timeframe": f"{best_dte}d (exp {best_exp})",
+                              "contracts": contracts,
+                          }
+              else:
+                  lp_row = find_otm(best_puts, "put", 0.40)
+                  if lp_row:
+                      lp_price = mid(lp_row)
+                      lp_strike = float(lp_row["strike_price"])
+                      if lp_price > 0:
+                          contracts = max(1, min(int(max_risk_dollars / (lp_price * 100)), 5))
+                          combo_trade = {
+                              "type": "combination", "label": f"Long ${lp_strike:g} Put",
+                              "legs": [{"action": "buy", "instrument": "put", "ticker": primary, "strike": lp_strike,
+                                        "exp": best_exp, "qty": contracts, "price": lp_price}],
+                              "entry": lp_price, "stop": None, "target": None,
+                              "max_profit": round(lp_strike * 0.1 * 100 * contracts, 0),
+                              "max_risk": round(lp_price * 100 * contracts, 0),
+                              "breakeven": round(lp_strike - lp_price, 2),
+                              "pop": round(abs(greek(lp_row, "delta")) * max(0.4, 1 - lp_price / price) * 100, 1),
+                              "rr_ratio": round(lp_strike * 0.1 / lp_price, 2) if lp_price > 0 else 0,
+                              "greeks": {
+                                  "delta": round(greek(lp_row, "delta") * contracts * 100, 1),
+                                  "theta": round(greek(lp_row, "theta") * contracts * 100, 2),
+                                  "gamma": round(greek(lp_row, "gamma") * contracts * 100, 3),
+                                  "vega": round(greek(lp_row, "vega") * contracts * 100, 2),
+                              },
+                              "timeframe": f"{best_dte}d (exp {best_exp})",
+                              "contracts": contracts,
+                          }
         except Exception:
             pass  # combo builder failed — stock + options trades still valid
         if combo_trade:

@@ -30,6 +30,7 @@ export const NAV_GROUPS: NavGroup[] = [
     pages: [
       { label: "Scenario Analysis", href: "/scenario-analysis", description: "6-tab macro engine with Grok AI regime analysis", status: "live" },
       { label: "Stock Analysis", href: "/stock-analysis", description: "3-model AI consensus scorecard + SEC EDGAR", status: "live" },
+      { label: "Trump Decoder", href: "/trump-decoder", description: "Psychological profiling + behavioral analysis — decode statements, predict responses", status: "live" },
     ],
   },
   {

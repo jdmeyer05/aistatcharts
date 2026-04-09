@@ -5,7 +5,6 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { fetchDailyBriefing, fetchMorningNote, fetchNewsSearch, fetchNewsVerify, fetchNewsAnalysis, fetchTradeArchitect, fetchPolymarket, fetchPolymarketHistory, fetchRobinhoodPositions, fetchStrategyScan, fetchVolAnalysis, addPosition, type DailyBriefingResult, type NewsItem, type PolymarketEvent, type PolymarketHistoryPoint, type RHSpread, type RHStock, type StrategyScanResult, type VolAnalysis } from "@/lib/api";
 import { TradingViewChart } from "@/components/tradingview-chart";
 import { LightweightChart } from "@/components/lightweight-chart";
-import { MatrixLoader } from "@/components/matrix-loader";
 
 const DEFAULT_WATCHLIST = ["SPY","QQQ","AAPL","MSFT","NVDA","TSLA","AMD","AMZN","META","GOOGL","NFLX","GLD","SMH","XLF","TLT","JPM","BA"];
 
@@ -869,13 +868,6 @@ export default function DailyBriefing() {
 
   return (
     <div className="space-y-3 relative">
-      <MatrixLoader loading={isLoading || archLoading}
-        status={archLoading ? "GATHERING 14 DATA SOURCES... STRUCTURING WITH CLAUDE..."
-          : scan.isPending ? "SCANNING MARKET... RUNNING 22 STRATEGIES..."
-          : newsPhase === "searching" ? "SEARCHING WEB + X FOR NEWS..."
-          : newsPhase === "verifying" ? "CROSS-VERIFYING SOURCES..."
-          : aiMutation.isPending ? "AI SYNTHESIZING MARKET NOTE..."
-          : "INITIALIZING SYSTEM..."} />
       {/* ═══ 1. Controls ═══ */}
       <div className="card card-compact">
         <div className="flex flex-wrap items-end gap-3">
@@ -981,13 +973,6 @@ export default function DailyBriefing() {
             ))}
           </div>
         </div>
-        {archLoading && (
-          <div className="relative mt-3" style={{ minHeight: 320 }}>
-            <MatrixLoader loading={true}
-              status={archLoading ? "GATHERING 14 DATA SOURCES... STRUCTURING TRADES..."
-                : "INITIALIZING..."} />
-          </div>
-        )}
         {archError && <div className="text-xs text-loss mt-2">{archError}</div>}
         {/* Structured trade cards */}
         {archTrades.length > 0 && (

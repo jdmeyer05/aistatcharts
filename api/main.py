@@ -78,7 +78,7 @@ app.add_middleware(
 )
 
 # Register route modules
-from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking
+from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -88,6 +88,7 @@ app.include_router(scanner.router, prefix="/api/scan", tags=["Scanners"])
 app.include_router(energy.router, prefix="/api/energy", tags=["Energy"])
 app.include_router(edgar.router, prefix="/api/edgar", tags=["EDGAR"])
 app.include_router(tracking.router, prefix="/api/tracking", tags=["Tracking"])
+app.include_router(trump.router, prefix="/api/trump", tags=["Trump Decoder"])
 
 
 @app.get("/api/health")

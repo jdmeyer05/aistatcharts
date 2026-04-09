@@ -1195,3 +1195,158 @@ export async function scanVerticalSpreads(
     timeoutMs: 5 * 60 * 1000,
   });
 }
+
+// ─── Trump Decoder ──────────────────────────────────────────
+
+export interface TrumpPsychProfile {
+  mbti?: string;
+  big_five?: Record<string, number>;
+  dark_triad?: Record<string, number>;
+  negotiation_style?: Record<string, unknown>;
+  bluff_patterns?: { pattern: string; frequency: string; example: string }[];
+  escalation_tells?: { tell: string; indicates: string; example: string }[];
+  deescalation_tells?: { tell: string; indicates: string; example: string }[];
+  known_triggers?: { trigger: string; typical_response: string; market_impact: string }[];
+  communication_patterns?: Record<string, unknown>;
+  bluff_detection_rubric?: { factor: string; bluff_indicator: string; weight: number }[];
+  full_profile?: string;
+  current_behavioral_snapshot?: string;
+}
+
+export interface TrumpPsychResponse {
+  success: boolean; error?: string;
+  cached: boolean; profile: TrumpPsychProfile;
+  version?: number; created_at?: string;
+}
+
+export interface TrumpHistoricalAnalog {
+  date: string; statement_summary?: string; similarity?: string;
+  outcome: string; days_to_resolution?: number; was_bluff?: boolean;
+  market_reaction?: string; sector_impact?: string;
+}
+
+export interface TrumpPositionRisk {
+  ticker: string; position_type: string; risk_level: string; recommendation: string;
+}
+
+export interface TrumpAffectedSector {
+  sector: string; direction: string; magnitude: number; reason: string;
+}
+
+export interface TrumpAffectedTicker {
+  ticker: string; direction: string; magnitude: number; reason: string;
+}
+
+export interface TrumpMoodIndex {
+  posting_frequency?: string; sentiment?: string; escalation_level?: number;
+  notable_recent_posts?: string[]; tone_shift?: string;
+}
+
+export interface TrumpDecodeResponse {
+  success: boolean; error?: string;
+  statement: string; context: string;
+  decoded_meaning: string;
+  bluff_score: number; bluff_label: string; bluff_reasoning: string;
+  market_impact: number; market_impact_label: string;
+  probability_distribution: Record<string, number>;
+  historical_analogs: TrumpHistoricalAnalog[];
+  position_risks: TrumpPositionRisk[];
+  affected_sectors: TrumpAffectedSector[];
+  affected_tickers: TrumpAffectedTicker[];
+  mood_index: TrumpMoodIndex;
+  pattern_match?: Record<string, unknown>;
+  spy_range_pct?: number[];
+  vol_impact?: string;
+  historical_avg_reaction?: string;
+  key_signals_to_watch?: string[];
+  timeline?: string;
+  narrative: string;
+  model_sources: Record<string, string>;
+}
+
+export interface TrumpPredictResponse {
+  success: boolean; error?: string;
+  scenario: string; timeframe: string;
+  predicted_actions: {
+    action: string; probability: number; timeline: string;
+    historical_precedent: string; market_impact: number; signals_to_watch: string[];
+  }[];
+  psychological_reasoning: string;
+  wild_card_risk: string;
+  recommended_positioning: string;
+  narrative: string;
+  historical_analogs: { date: string; situation: string; trump_response: string; timeline: string; market_reaction: string }[];
+  base_rate: string;
+}
+
+export interface TrumpPost {
+  timestamp: string; text: string; platform: string;
+  interpretation: string; market_relevance: number;
+  category: string; sentiment: string;
+}
+
+export interface TrumpMonitorResponse {
+  success: boolean; error?: string;
+  posts: TrumpPost[];
+  mood_summary: string; posting_frequency: string;
+  escalation_trend: string; key_themes: string[];
+  market_alert: string | null;
+}
+
+export interface TrumpPattern {
+  id?: number; category: string; date_range: string;
+  trigger_statement: string; escalation_path: { date: string; event: string; market_reaction: string }[];
+  resolution: string; resolution_type: string; days_to_resolution: number;
+  market_impact_summary: string; spy_move_pct: number; vix_peak: number;
+  most_affected_sectors: string[]; pattern_type: string; bluff_score: number;
+  key_lesson?: string;
+}
+
+export interface TrumpPatternResponse {
+  success: boolean; error?: string;
+  patterns: TrumpPattern[]; source: string; count: number;
+}
+
+export interface TrumpDecodedStatement {
+  id: number; statement: string; user_context: string;
+  decoded_meaning: string; bluff_score: number; bluff_label: string;
+  market_impact: number; market_impact_label: string;
+  probability_distribution: Record<string, number>;
+  actual_outcome?: string; outcome_market_move?: number; was_accurate?: boolean;
+  created_at: string;
+}
+
+export async function fetchTrumpPsychProfile(): Promise<TrumpPsychResponse> {
+  return apiFetch("/api/trump/psych-profile", { timeoutMs: 3 * 60_000 });
+}
+
+export async function decodeTrumpStatement(statement: string, context: string = "", positions_summary: string = "", image_base64: string = ""): Promise<TrumpDecodeResponse> {
+  return apiFetch("/api/trump/decode-statement", {
+    method: "POST",
+    body: JSON.stringify({ statement, context, positions_summary, ...(image_base64 ? { image_base64 } : {}) }),
+    timeoutMs: 3 * 60_000,
+  });
+}
+
+export async function predictTrumpResponse(scenario: string, timeframe: string = "48h"): Promise<TrumpPredictResponse> {
+  return apiFetch("/api/trump/predict-response", {
+    method: "POST",
+    body: JSON.stringify({ scenario, timeframe }),
+    timeoutMs: 3 * 60_000,
+  });
+}
+
+export async function fetchTrumpMonitor(): Promise<TrumpMonitorResponse> {
+  return apiFetch("/api/trump/monitor", { timeoutMs: 2 * 60_000 });
+}
+
+export async function fetchTrumpPatterns(query: string = "", category: string = ""): Promise<TrumpPatternResponse> {
+  const params = new URLSearchParams();
+  if (query) params.set("query", query);
+  if (category) params.set("category", category);
+  return apiFetch(`/api/trump/pattern-database?${params}`, { timeoutMs: 2 * 60_000 });
+}
+
+export async function fetchTrumpHistory(limit: number = 20): Promise<{ success: boolean; statements: TrumpDecodedStatement[] }> {
+  return apiFetch(`/api/trump/history?limit=${limit}`, { timeoutMs: 30_000 });
+}
