@@ -173,12 +173,14 @@ function PolyPill({ ev }: { ev: PolymarketEvent }) {
 
 // ── P/L diagram for spreads ──
 interface OppData {
-  type: string; label: string; premium: number; max_risk: number; max_profit: number;
+  type: string; label: string; ticker: string; sector: string;
+  score: number; premium: number; max_risk: number; max_profit: number;
   long_strike?: number; short_strike?: number; stock_price?: number;
   short_put?: number; long_put?: number; short_call?: number; long_call?: number;
   pop: number; rr_ratio: number; managed_wr: number; kelly_adj: number;
-  dte: number; ivr?: number; ivr_band: string; liq_grade: string;
-  [key: string]: unknown;
+  contracts: number; strikes: string; expiration: string; dte: number;
+  ivr: number | null; ivr_band: string; liq_grade: string;
+  earnings_before: boolean; inside_exp_move: boolean;
 }
 
 function computePL(opp: OppData): { prices: number[]; pls: number[]; breakevens: number[] } {
@@ -1256,7 +1258,7 @@ export default function DailyBriefing() {
                     <span className="text-text-muted">{s.label as string}</span>
                     <span className="font-data">R:R {s.rr_ratio as number}x</span>
                     {s.pop != null && <span className="text-text-muted">POP {s.pop as number}%</span>}
-                    {s.thesis && <span className="text-[0.5rem] text-text-muted italic truncate max-w-[200px]">&ldquo;{s.thesis as string}&rdquo;</span>}
+                    {Boolean(s.thesis) && <span className="text-[0.5rem] text-text-muted italic truncate max-w-[200px]">&ldquo;{s.thesis as string}&rdquo;</span>}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[0.5rem] text-text-muted">{new Date(s.timestamp as string).toLocaleDateString()}</span>

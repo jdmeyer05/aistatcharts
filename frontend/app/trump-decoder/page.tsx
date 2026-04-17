@@ -361,9 +361,9 @@ function DecodeTab({ positionsSummary }: { positionsSummary: string }) {
                   </div>
                 ))}
               </div>
-              {d.pattern_match?.bluff_rate_in_analogs && (
+              {Boolean(d.pattern_match?.bluff_rate_in_analogs) && (
                 <div className="mt-2 text-xs text-text-secondary border-t border-border pt-2">
-                  <strong>Pattern:</strong> {d.pattern_match.bluff_rate_in_analogs} — Most likely: {d.pattern_match.most_likely_outcome || "unknown"}
+                  <strong>Pattern:</strong> {String(d.pattern_match?.bluff_rate_in_analogs ?? "")} — Most likely: {String(d.pattern_match?.most_likely_outcome ?? "unknown")}
                 </div>
               )}
             </div>
@@ -427,7 +427,7 @@ function DecodeTab({ positionsSummary }: { positionsSummary: string }) {
           )}
 
           {/* ── Key Signals to Watch ── */}
-          {d.key_signals_to_watch?.length > 0 && (
+          {d.key_signals_to_watch && d.key_signals_to_watch.length > 0 && (
             <div className="border border-accent/30 rounded-md p-3 bg-accent/5">
               <div className="text-[10px] font-bold text-accent tracking-wider mb-1">SIGNALS TO WATCH</div>
               <ul className="text-xs text-text-secondary space-y-0.5">
@@ -673,10 +673,10 @@ function MonitorTab() {
           )}
 
           {/* Breaking Developments */}
-          {(d as Record<string, unknown>).breaking_developments && (
+          {d.breaking_developments && (
             <div className="border border-accent/50 rounded-md p-3 bg-accent/10">
               <div className="text-[10px] font-bold text-accent tracking-wider mb-1">BREAKING DEVELOPMENTS</div>
-              <p className="text-xs text-text">{String((d as Record<string, unknown>).breaking_developments)}</p>
+              <p className="text-xs text-text">{d.breaking_developments}</p>
             </div>
           )}
 
@@ -893,8 +893,8 @@ function PsychTab() {
               <div className="text-[10px] font-bold text-text-muted tracking-wider mb-1">NEGOTIATION</div>
               {p.negotiation_style && (
                 <div className="text-xs space-y-0.5">
-                  <div className="text-text-secondary">Bluff rate: <span className="text-text font-semibold">{(p.negotiation_style as Record<string, unknown>).bluff_rate_pct ?? "?"}%</span></div>
-                  <div className="text-text-secondary">Follow-through: <span className="text-text font-semibold">{(p.negotiation_style as Record<string, unknown>).follow_through_rate_pct ?? "?"}%</span></div>
+                  <div className="text-text-secondary">Bluff rate: <span className="text-text font-semibold">{String((p.negotiation_style as Record<string, unknown>).bluff_rate_pct ?? "?")}%</span></div>
+                  <div className="text-text-secondary">Follow-through: <span className="text-text font-semibold">{String((p.negotiation_style as Record<string, unknown>).follow_through_rate_pct ?? "?")}%</span></div>
                   <div className="text-text-secondary">Deadline: <span className="text-text">{String((p.negotiation_style as Record<string, unknown>).deadline_behavior || "?").slice(0, 60)}</span></div>
                 </div>
               )}
@@ -902,7 +902,7 @@ function PsychTab() {
           </div>
 
           {/* Bluff Patterns */}
-          {p.bluff_patterns?.length > 0 && (
+          {p.bluff_patterns && p.bluff_patterns.length > 0 && (
             <div className="border border-border rounded-md p-3 bg-surface">
               <div className="text-[10px] font-bold text-text-muted tracking-wider mb-2">DOCUMENTED BLUFF PATTERNS</div>
               <div className="space-y-1.5">
@@ -919,7 +919,7 @@ function PsychTab() {
 
           {/* Escalation / De-escalation Tells */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {p.escalation_tells?.length > 0 && (
+            {p.escalation_tells && p.escalation_tells.length > 0 && (
               <div className="border border-loss/30 rounded-md p-3 bg-loss/5">
                 <div className="text-[10px] font-bold text-loss tracking-wider mb-2">ESCALATION TELLS</div>
                 {p.escalation_tells.map((t, i) => (
@@ -930,7 +930,7 @@ function PsychTab() {
                 ))}
               </div>
             )}
-            {p.deescalation_tells?.length > 0 && (
+            {p.deescalation_tells && p.deescalation_tells.length > 0 && (
               <div className="border border-gain/30 rounded-md p-3 bg-gain/5">
                 <div className="text-[10px] font-bold text-gain tracking-wider mb-2">DE-ESCALATION TELLS</div>
                 {p.deescalation_tells.map((t, i) => (
@@ -944,7 +944,7 @@ function PsychTab() {
           </div>
 
           {/* Known Triggers */}
-          {p.known_triggers?.length > 0 && (
+          {p.known_triggers && p.known_triggers.length > 0 && (
             <div className="border border-border rounded-md p-3 bg-surface">
               <div className="text-[10px] font-bold text-text-muted tracking-wider mb-2">KNOWN TRIGGERS</div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
@@ -960,7 +960,7 @@ function PsychTab() {
           )}
 
           {/* Bluff Detection Rubric */}
-          {p.bluff_detection_rubric?.length > 0 && (
+          {p.bluff_detection_rubric && p.bluff_detection_rubric.length > 0 && (
             <div className="border border-accent/30 rounded-md p-3 bg-accent/5">
               <div className="text-[10px] font-bold text-accent tracking-wider mb-2">BLUFF DETECTION RUBRIC</div>
               <div className="space-y-1">

@@ -235,11 +235,28 @@ export interface DailyBriefingResult {
     ivr: number | null; ivr_band: string; liq_grade: string;
     earnings_before: boolean; inside_exp_move: boolean;
     managed_wr: number; kelly_adj: number;
+    // Vertical spreads only
+    long_strike?: number; short_strike?: number;
+    // Iron condors only
+    short_put?: number; long_put?: number; short_call?: number; long_call?: number;
+    // Underlying reference (both types)
+    stock_price?: number;
   }[];
   risk_budget: { account_size: number; top5_risk: number; pct_of_account: number; remaining: number; verdict: string };
   warnings: string[];
   sector_exposure: Record<string, number>;
   scan_stats: { spreads_found: number; condors_found: number; top_shown: number };
+  outlook: {
+    spy_price: number;
+    vix: number;
+    implied_move_pct: number;
+    implied_move_dollar: number;
+    implied_low: number;
+    implied_high: number;
+    earnings: { ticker: string; date: string; days: number }[];
+    fomc_events: { date: string; days_away: number; type: string }[];
+    exposure_notes: { type: string; note: string }[];
+  };
 }
 
 export async function fetchDailyBriefing(watchlist: string[], accountSize = 25000): Promise<DailyBriefingResult> {
@@ -1291,6 +1308,7 @@ export interface TrumpMonitorResponse {
   mood_summary: string; posting_frequency: string;
   escalation_trend: string; key_themes: string[];
   market_alert: string | null;
+  breaking_developments?: string | null;
 }
 
 export interface TrumpPattern {
