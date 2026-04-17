@@ -1,60 +1,44 @@
 "use client";
 
-import { useState, useEffect } from "react";
+/**
+ * Phase 2 auth gate. Middleware (`frontend/middleware.ts`) handles the actual
+ * route protection — unauthenticated users are redirected to /login before
+ * the app ever renders. This component is kept as a thin session-context
+ * provider so pages can read the signed-in user without refetching.
+ */
+import { createContext, useContext, useEffect, useState } from "react";
+import { supabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 
-const SITE_KEY = "aistatcharts_auth";
-const VALID_PASSWORD = process.env.NEXT_PUBLIC_SITE_PASSWORD || "letmein";
+interface SessionUser {
+  email: string | null;
+  id: string | null;
+}
+
+const SessionContext = createContext<SessionUser>({ email: null, id: null });
+
+export function useSessionUser(): SessionUser {
+  return useContext(SessionContext);
+}
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
-  const [authed, setAuthed] = useState(false);
-  const [checking, setChecking] = useState(true);
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState(false);
+  const [user, setUser] = useState<SessionUser>({ email: null, id: null });
 
   useEffect(() => {
-    const stored = localStorage.getItem(SITE_KEY);
-    if (stored === VALID_PASSWORD) {
-      setAuthed(true);
-    }
-    setChecking(false);
+    if (!hasSupabaseConfig()) return;
+    const supabase = supabaseBrowser();
+
+    supabase.auth.getUser().then(({ data }) => {
+      setUser({ email: data.user?.email ?? null, id: data.user?.id ?? null });
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser({ email: session?.user?.email ?? null, id: session?.user?.id ?? null });
+    });
+
+    return () => {
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (password === VALID_PASSWORD) {
-      localStorage.setItem(SITE_KEY, password);
-      setAuthed(true);
-      setError(false);
-    } else {
-      setError(true);
-    }
-  }
-
-  if (checking) return null;
-
-  if (!authed) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-bg">
-        <form onSubmit={handleSubmit} className="card w-80 space-y-4 text-center">
-          <h1 className="text-xl font-bold">AI Statcharts</h1>
-          <p className="text-sm text-text-muted">Private access only.</p>
-          <input
-            type="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            placeholder="Access code"
-            autoFocus
-            className="w-full px-4 py-2 border border-border rounded-lg text-sm bg-surface text-center"
-          />
-          {error && <p className="text-xs text-loss">Incorrect code.</p>}
-          <button type="submit"
-            className="w-full py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover text-sm">
-            Enter
-          </button>
-        </form>
-      </div>
-    );
-  }
-
-  return <>{children}</>;
+  return <SessionContext.Provider value={user}>{children}</SessionContext.Provider>;
 }

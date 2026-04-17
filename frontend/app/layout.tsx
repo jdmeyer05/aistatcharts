@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { Header } from "@/components/layout/header";
 import { Providers } from "@/components/providers";
 import { AuthGate } from "@/components/auth-gate";
+import { AppChrome } from "@/components/layout/app-chrome";
 // import { MatrixBackground } from "@/components/matrix-background";
 
 const geistSans = Geist({
@@ -38,10 +38,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col bg-bg text-text">
         <Providers>
           <AuthGate>
-            <Header />
-            <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-              {children}
-            </main>
+            <AppChrome>{children}</AppChrome>
           </AuthGate>
         </Providers>
       </body>

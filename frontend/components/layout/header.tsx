@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState, useRef } from "react";
 import { NAV_GROUPS, findGroup, type NavGroup } from "@/lib/nav";
+import { useSessionUser } from "@/components/auth-gate";
+import { supabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 
 /* ─── Theme Toggle ────────────────────────────────────────── */
 
@@ -131,6 +133,68 @@ function NavDropdown({ group, isActive }: { group: NavGroup; isActive: boolean }
   );
 }
 
+/* ─── User menu ──────────────────────────────────────────── */
+
+function UserMenu() {
+  const { email } = useSessionUser();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  async function signOut() {
+    if (!hasSupabaseConfig()) return;
+    setBusy(true);
+    try {
+      await supabaseBrowser().auth.signOut();
+      router.replace("/login");
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!email) return null;
+
+  // Compact: just initials button; dropdown reveals email + sign out.
+  const initial = email.charAt(0).toUpperCase();
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title={email}
+        className="w-7 h-7 flex items-center justify-center rounded-full bg-white/15 text-white text-[0.7rem] font-bold hover:bg-white/25 transition-colors"
+      >
+        {initial}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-9 min-w-[200px] rounded-md border border-border bg-surface shadow-lg text-sm z-50">
+          <div className="px-3 py-2 border-b border-border text-xs text-text-muted font-data truncate">
+            {email}
+          </div>
+          <button
+            onClick={signOut}
+            disabled={busy}
+            className="w-full text-left px-3 py-2 text-xs font-semibold hover:bg-surface-alt disabled:opacity-50"
+          >
+            {busy ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Header ──────────────────────────────────────────────── */
 
 export function Header() {
@@ -164,9 +228,10 @@ export function Header() {
             )}
           </nav>
 
-          {/* Theme toggle */}
-          <div className="flex items-center shrink-0">
+          {/* Theme toggle + user menu */}
+          <div className="flex items-center gap-2 shrink-0">
             <ThemeToggle />
+            <UserMenu />
           </div>
         </div>
       </div>

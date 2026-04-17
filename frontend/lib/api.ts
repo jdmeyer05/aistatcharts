@@ -2,8 +2,25 @@
  * Typed FastAPI client for AI Statcharts backend.
  * All data flows through these functions — no direct fetch calls in components.
  */
+import { hasSupabaseConfig, supabaseBrowser } from "@/lib/supabase";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+/** Pull the current Supabase access token (if any) to attach as Bearer. */
+async function getAuthHeader(): Promise<Record<string, string>> {
+  // Server-side callers (RSC/route handlers) can't use the browser client.
+  // apiFetch is used exclusively from "use client" components, so this path
+  // only runs in the browser. Bail out on SSR to avoid hydration mismatches.
+  if (typeof window === "undefined" || !hasSupabaseConfig()) return {};
+  try {
+    const supabase = supabaseBrowser();
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 async function apiFetch<T>(
   path: string,
@@ -16,11 +33,13 @@ async function apiFetch<T>(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const authHeader = await getAuthHeader();
     const res = await fetch(url, {
       ...fetchOptions,
       signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
+        ...authHeader,
         ...fetchOptions.headers,
       },
     });
