@@ -14,8 +14,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # curl (healthcheck) + build tools for scipy/sklearn/shap C extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    wget \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# TA-Lib C library — required by the Python `TA-Lib` wheel. Strategy scanner
+# (api/routes/market.py) uses 50+ talib functions; rewriting to pandas would
+# be a bigger surgery than vendoring the lib.
+RUN cd /tmp \
+    && wget -q https://github.com/TA-Lib/ta-lib/releases/download/v0.6.4/ta-lib-0.6.4-src.tar.gz \
+    && tar -xzf ta-lib-0.6.4-src.tar.gz \
+    && cd ta-lib-0.6.4 \
+    && ./configure --prefix=/usr \
+    && make -j"$(nproc)" \
+    && make install \
+    && cd /tmp && rm -rf ta-lib-0.6.4 ta-lib-0.6.4-src.tar.gz \
+    && ldconfig
 
 WORKDIR /app
 

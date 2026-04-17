@@ -12,6 +12,13 @@ const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Unusual Activity", "Put/Call Analysis", "Gamma Exposure (GEX)", "Block Trade Detection"];
 
+const INDEX_TICKERS = new Set([
+  "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "SPX", "NDX", "RUT", "VIX",
+  "XLE", "XLF", "XLK", "XLI", "XLU", "XLP", "XLY", "XLV", "XLB", "XLC", "XLRE",
+  "TLT", "IEF", "HYG", "LQD", "GLD", "SLV", "USO", "UNG", "EEM", "EFA",
+]);
+const SENTIMENT_DTE_MAX = 45;
+
 interface ChainRow {
   strike_price: number; contract_type: string; expiration_date: string;
   implied_volatility: number; delta: number; gamma: number;
@@ -24,6 +31,7 @@ export default function OptionsFlow() {
   const t = getChartTheme(resolvedTheme === "dark");
   const L = getBaseLayout(t);
   const [ticker, setTicker] = useState("SPY");
+  const [loadedTicker, setLoadedTicker] = useState("");
   const [activeTab, setActiveTab] = useState(0);
   const [chain, setChain] = useState<ChainRow[]>([]);
   const [spot, setSpot] = useState(0);
@@ -35,9 +43,9 @@ export default function OptionsFlow() {
   const load = useMutation({
     mutationFn: async (tk: string) => {
       const [ch, snap] = await Promise.all([fetchOptionsChain(tk), fetchSnapshot([tk])]);
-      return { chain: ch.data as unknown as ChainRow[], spot: snap[tk]?.price ?? 0 };
+      return { chain: ch.data as unknown as ChainRow[], spot: snap[tk]?.price ?? 0, tk };
     },
-    onSuccess: (d) => { setChain(d.chain); setSpot(d.spot); },
+    onSuccess: (d) => { setChain(d.chain); setSpot(d.spot); setLoadedTicker(d.tk); },
   });
 
   const calls = useMemo(() => chain.filter(c => c.contract_type === "call"), [chain]);
@@ -51,17 +59,31 @@ export default function OptionsFlow() {
   }, [chain, minVol, minRatio]);
 
   const pcStats = useMemo(() => {
-    const cv = calls.reduce((s, c) => s + c.volume, 0);
-    const pv = puts.reduce((s, c) => s + c.volume, 0);
-    const co = calls.reduce((s, c) => s + c.open_interest, 0);
-    const po = puts.reduce((s, c) => s + c.open_interest, 0);
+    // Restrict to 0–45 DTE so institutional LEAPS hedges don't dominate the ratio
+    // (SPY carries huge long-dated put OI regardless of spot — irrelevant to near-term sentiment).
+    const now = Date.now();
+    const inWindow = (exp: string) => {
+      const d = Date.parse(exp);
+      if (Number.isNaN(d)) return true;
+      const days = (d - now) / 86400000;
+      return days >= 0 && days <= SENTIMENT_DTE_MAX;
+    };
+    const callsW = calls.filter(c => inWindow(c.expiration_date));
+    const putsW = puts.filter(c => inWindow(c.expiration_date));
+    const cv = callsW.reduce((s, c) => s + c.volume, 0);
+    const pv = putsW.reduce((s, c) => s + c.volume, 0);
+    const co = callsW.reduce((s, c) => s + c.open_interest, 0);
+    const po = putsW.reduce((s, c) => s + c.open_interest, 0);
     const pcVol = cv > 0 ? pv / cv : 0;
     const pcOI = co > 0 ? po / co : 0;
-    const histMean = 0.70, histStd = 0.15;
+    // Index/ETF tickers have structurally higher P/C — they're the market's default hedging vehicles.
+    const isIndex = INDEX_TICKERS.has(loadedTicker);
+    const histMean = isIndex ? 1.10 : 0.70;
+    const histStd = isIndex ? 0.22 : 0.15;
     const z = histStd > 0 ? (pcVol - histMean) / histStd : 0;
     const regime = z > 1.5 ? "Extreme Fear" : z > 0.5 ? "Elevated Hedging" : z < -1.5 ? "Extreme Complacency" : z < -0.5 ? "Low Hedging" : "Neutral";
-    return { cv, pv, co, po, pcVol, pcOI, z, histMean, histStd, regime };
-  }, [calls, puts]);
+    return { cv, pv, co, po, pcVol, pcOI, z, histMean, histStd, regime, isIndex };
+  }, [calls, puts, loadedTicker]);
 
   const gex = useMemo(() => {
     if (!spot) return null;
@@ -185,21 +207,25 @@ export default function OptionsFlow() {
                 <Metric label="Call Volume" value={pcStats.cv.toLocaleString()} />
                 <Metric label="Put Volume" value={pcStats.pv.toLocaleString()} />
               </div>
-              <p className="text-xs text-text-muted">&gt;1.0 = Bearish | &lt;1.0 = Bullish</p>
+              <p className="text-xs text-text-muted">
+                Baseline for {loadedTicker || "this ticker"}: {pcStats.histMean.toFixed(2)} ({pcStats.isIndex ? "index/ETF" : "single-name"}). Near-dated (≤{SENTIMENT_DTE_MAX} DTE) only — LEAPS hedges excluded.
+              </p>
               <div className="flex flex-wrap gap-6 pt-2 border-t border-border">
                 <Metric label="Z-Score" value={`${pcStats.z > 0 ? "+" : ""}${pcStats.z.toFixed(1)}σ`} />
                 <Metric label="Sentiment" value={pcStats.regime} />
               </div>
               {/* Gauge */}
               {(() => {
-                const gx = Array.from({ length: 200 }, (_, i) => 0.2 + i * (1.3 / 199));
+                const gLo = Math.max(0, pcStats.histMean - 3 * pcStats.histStd);
+                const gHi = pcStats.histMean + 3 * pcStats.histStd;
+                const gx = Array.from({ length: 200 }, (_, i) => gLo + i * ((gHi - gLo) / 199));
                 const gy = gx.map(x => Math.exp(-0.5 * ((x - pcStats.histMean) / pcStats.histStd) ** 2));
                 return <Plot data={[{ x: gx, y: gy, type: "scatter" as const, mode: "lines" as const, fill: "tozeroy" as const, fillcolor: t.accent + "25", line: { color: t.accent, width: 1 }, showlegend: false, hoverinfo: "skip" as const }]}
                   layout={{ height: 180, ...L, margin: { l: 30, r: 20, t: 10, b: 30 }, xaxis: { title: "P/C Ratio", gridcolor: t.grid }, yaxis: { visible: false },
                     shapes: [
                       { type: "line", x0: pcStats.pcVol, x1: pcStats.pcVol, y0: 0, y1: 1, yref: "paper", line: { color: t.spot, width: 3 } },
-                      { type: "line", x0: 0.5, x1: 0.5, y0: 0, y1: 1, yref: "paper", line: { color: t.gain, width: 1, dash: "dot" } },
-                      { type: "line", x0: 1.0, x1: 1.0, y0: 0, y1: 1, yref: "paper", line: { color: t.loss, width: 1, dash: "dot" } },
+                      { type: "line", x0: pcStats.histMean - pcStats.histStd, x1: pcStats.histMean - pcStats.histStd, y0: 0, y1: 1, yref: "paper", line: { color: t.gain, width: 1, dash: "dot" } },
+                      { type: "line", x0: pcStats.histMean + pcStats.histStd, x1: pcStats.histMean + pcStats.histStd, y0: 0, y1: 1, yref: "paper", line: { color: t.loss, width: 1, dash: "dot" } },
                     ], annotations: [{ x: pcStats.pcVol, y: 1, yref: "paper", text: `${pcStats.pcVol.toFixed(2)}`, showarrow: false, font: { size: 9, color: t.spot } }] }}
                   config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />;
               })()}
