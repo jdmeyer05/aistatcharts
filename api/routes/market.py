@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from api.deps import get_current_user, require_admin
+from api.deps import get_current_user, require_admin, require_admin_or_scheduler
 
 router = APIRouter()
 
@@ -207,6 +207,187 @@ async def options_chain(
     if df is None or df.empty:
         return {"ticker": ticker, "data": []}
     return {"ticker": ticker, "count": len(df), "data": df.to_dict(orient="records")}
+
+
+# ─────────────────── Open Interest history ───────────────────
+# Background worker hits the admin endpoint daily via Cloud Scheduler; the
+# query endpoint reads back whatever history has accumulated in Supabase.
+
+class OISnapshotRequest(BaseModel):
+    tickers: list[str] | None = None  # None = use SEED_UNIVERSE
+    top_n: int = 200
+    min_oi: int = 10
+
+
+@router.post("/admin/oi-snapshot")
+async def oi_snapshot_capture(
+    request_body: OISnapshotRequest = None,
+    user: str = Depends(require_admin_or_scheduler),
+):
+    """Capture today's OI for the universe, rank top N, upsert to Supabase.
+
+    Triggered by Cloud Scheduler daily at ~4:30 PM ET. Also callable manually
+    by admins for backfill/debug.
+    """
+    import os
+    from datetime import date as _date
+    from fastapi import HTTPException
+    from src.api_keys import get_secret
+    from src.db import get_client
+    from src.options_oi_ingest import SEED_UNIVERSE, capture_universe
+
+    body = request_body or OISnapshotRequest()
+    key = get_secret("MASSIVE_API_KEY")
+    if not key:
+        raise HTTPException(500, "Polygon API key not configured")
+    db = get_client()
+    if db is None:
+        raise HTTPException(500, "Supabase client not available")
+
+    tickers = body.tickers or SEED_UNIVERSE
+    snapshots, ranking = capture_universe(tickers, key, top_n=body.top_n)
+    today = _date.today().isoformat()
+
+    # Write ranking
+    ranking_rows = [{**r, "capture_date": today} for r in ranking]
+    if ranking_rows:
+        db.table("options_oi_universe").upsert(ranking_rows, on_conflict="capture_date,ticker").execute()
+
+    # Write OI rows, per-ticker batches to keep request sizes reasonable
+    total_rows = 0
+    for snap in snapshots:
+        rows = [{
+            "ticker": snap.ticker,
+            "capture_date": today,
+            "strike": r["strike"],
+            "expiration": r["expiration"],
+            "contract_type": r["contract_type"],
+            "open_interest": r["open_interest"],
+            "volume": r["volume"],
+            "implied_vol": r["implied_vol"],
+        } for r in snap.rows if r["open_interest"] >= body.min_oi]
+        if not rows:
+            continue
+        # Insert in chunks of 500 to avoid hitting request size limits
+        for i in range(0, len(rows), 500):
+            batch = rows[i:i + 500]
+            db.table("options_oi_history").upsert(
+                batch, on_conflict="ticker,capture_date,expiration,strike,contract_type",
+            ).execute()
+            total_rows += len(batch)
+
+    return {
+        "capture_date": today,
+        "candidates_probed": len(tickers),
+        "tickers_captured": len(snapshots),
+        "rows_written": total_rows,
+        "top_5": ranking[:5],
+    }
+
+
+@router.get("/oi-history/{ticker}")
+async def oi_history_query(
+    ticker: str,
+    days: int = Query(10, ge=2, le=90),
+    user: str = Depends(get_current_user),
+):
+    """Read accumulated OI history for a ticker.
+
+    Returns per-contract OI series plus summary stats (biggest builds/unwinds,
+    daily net call/put OI). The capture worker must have been running for at
+    least ``days`` trading days for this to have full data.
+    """
+    from fastapi import HTTPException
+    from src.db import get_client
+
+    db = get_client()
+    if db is None:
+        raise HTTPException(500, "Supabase client not available")
+
+    tk = ticker.upper()
+    result = db.table("options_oi_history").select(
+        "capture_date,strike,expiration,contract_type,open_interest,volume"
+    ).eq("ticker", tk).order("capture_date", desc=False).execute()
+    raw_rows = result.data or []
+    if not raw_rows:
+        return {"ticker": tk, "n_days_captured": 0, "dates": [], "series": [], "summary": None}
+
+    # Build date list and per-contract series
+    all_dates = sorted({r["capture_date"] for r in raw_rows})
+    recent_dates = all_dates[-days:]
+
+    by_contract: dict[tuple, dict[str, int]] = {}
+    for r in raw_rows:
+        if r["capture_date"] not in recent_dates:
+            continue
+        ck = (float(r["strike"]), r["expiration"], r["contract_type"])
+        by_contract.setdefault(ck, {})[r["capture_date"]] = int(r["open_interest"])
+
+    series = []
+    for (strike, exp, ct), by_date in by_contract.items():
+        oi_vec = [by_date.get(d) for d in recent_dates]
+        non_null = [v for v in oi_vec if v is not None]
+        if len(non_null) < 2:
+            continue
+        delta_abs = non_null[-1] - non_null[0]
+        delta_pct = (delta_abs / non_null[0] * 100.0) if non_null[0] else None
+        series.append({
+            "strike": strike, "exp": exp, "type": ct,
+            "oi": oi_vec,
+            "first": non_null[0], "last": non_null[-1],
+            "delta_abs": delta_abs, "delta_pct": delta_pct,
+        })
+
+    # Summary — biggest builds / unwinds over the window
+    sorted_abs = sorted(series, key=lambda s: s["delta_abs"], reverse=True)
+    biggest_builds = [s for s in sorted_abs if s["delta_abs"] > 0][:15]
+    biggest_unwinds = list(reversed([s for s in sorted_abs if s["delta_abs"] < 0][-15:]))
+
+    daily_net = []
+    for i, d in enumerate(recent_dates):
+        call_total = sum(s["oi"][i] for s in series if s["type"] == "call" and s["oi"][i] is not None)
+        put_total = sum(s["oi"][i] for s in series if s["type"] == "put" and s["oi"][i] is not None)
+        daily_net.append({"date": d, "call_oi": call_total, "put_oi": put_total})
+
+    return {
+        "ticker": tk,
+        "n_days_captured": len(recent_dates),
+        "total_days_available": len(all_dates),
+        "dates": recent_dates,
+        "series": series,
+        "summary": {
+            "biggest_builds": biggest_builds,
+            "biggest_unwinds": biggest_unwinds,
+            "daily_net": daily_net,
+        },
+    }
+
+
+@router.get("/oi-universe")
+async def oi_universe_recent(
+    limit: int = Query(200, ge=1, le=500),
+    user: str = Depends(get_current_user),
+):
+    """List tickers ranked by total OI on the most recent capture day."""
+    from fastapi import HTTPException
+    from src.db import get_client
+
+    db = get_client()
+    if db is None:
+        raise HTTPException(500, "Supabase client not available")
+
+    latest = db.table("options_oi_universe").select("capture_date").order(
+        "capture_date", desc=True,
+    ).limit(1).execute()
+    if not latest.data:
+        return {"capture_date": None, "tickers": []}
+    d = latest.data[0]["capture_date"]
+    rows = db.table("options_oi_universe").select(
+        "ticker,rank,total_oi,total_volume"
+    ).eq("capture_date", d).order("rank", desc=False).limit(limit).execute()
+    return {"capture_date": d, "tickers": rows.data or []}
+
+
 
 
 @router.get("/news")

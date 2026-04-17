@@ -79,3 +79,23 @@ async def require_admin(user: str = Depends(get_current_user)) -> str:
         raise HTTPException(status_code=403, detail="Admin access required")
 
     return user
+
+
+async def require_admin_or_scheduler(
+    authorization: str = Header(None),
+    x_capture_key: str = Header(None),
+) -> str:
+    """Allow either an admin JWT OR a matching Cloud Scheduler capture key.
+
+    Used for background-job endpoints invoked by Cloud Scheduler. The key
+    lives in the ``OI_CAPTURE_KEY`` secret and must be sent as the
+    ``X-Capture-Key`` request header.
+    """
+    # Path 1: capture-key header (scheduler)
+    expected = get_secret("OI_CAPTURE_KEY")
+    if expected and x_capture_key and x_capture_key == expected:
+        return "scheduler"
+
+    # Path 2: admin JWT (manual invocation)
+    user = await get_current_user(authorization=authorization)
+    return await require_admin(user=user)

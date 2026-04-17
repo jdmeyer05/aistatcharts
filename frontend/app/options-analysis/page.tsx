@@ -1,16 +1,16 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useState, useMemo, useEffect } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import { fetchOptionsChain, fetchSnapshot } from "@/lib/api";
+import { fetchOptionsChain, fetchSnapshot, fetchOIHistory } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import dynamic from "next/dynamic";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
-const TABS = ["Volatility", "Positioning", "Flow", "Greeks", "Chain"];
+const TABS = ["IV & Skew", "Positioning & Max Pain", "Order Flow", "Dealer Greeks", "OI Changes", "Chain"];
 
 const INDEX_TICKERS = new Set([
   "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "SPX", "NDX", "RUT", "VIX",
@@ -563,8 +563,11 @@ export default function OptionsIntelligence() {
             </div>
           )}
 
-          {/* ═══ Tab 4: Chain ═══ */}
-          {activeTab === 4 && (
+          {/* ═══ Tab 4: OI Changes (historical) ═══ */}
+          {activeTab === 4 && <OIChangesPanel ticker={loadedTicker} themeKeys={t} baseLayout={L} />}
+
+          {/* ═══ Tab 5: Chain ═══ */}
+          {activeTab === 5 && (
             <div className="card">
               <p className="text-xs text-text-muted mb-3">Full chain for {selectedExp}. ATM row highlighted. Strikes filtered to ±15% of spot.</p>
               <div className="overflow-x-auto">
@@ -604,6 +607,126 @@ export default function OptionsIntelligence() {
       )}
       {chain.length === 0 && !load.isPending && load.isSuccess && <div className="card text-center py-8 text-text-muted">No chain data returned for {loadedTicker}.</div>}
       {load.isError && <div className="card border-loss/30 bg-loss-bg text-loss text-sm">Failed: {(load.error as Error).message}</div>}
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────
+// OI Changes panel — reads from the accumulated OI history table
+// populated by the daily Cloud Scheduler job.
+// ─────────────────────────────────────────────────────────────
+
+type ChartTheme = ReturnType<typeof getChartTheme>;
+type BaseLayout = ReturnType<typeof getBaseLayout>;
+
+function OIChangesPanel({ ticker, themeKeys: t, baseLayout: L }: { ticker: string; themeKeys: ChartTheme; baseLayout: BaseLayout }) {
+  const [lookback, setLookback] = useState(10);
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ["oi-history", ticker, lookback],
+    queryFn: () => fetchOIHistory(ticker, lookback),
+    enabled: !!ticker,
+    staleTime: 60_000 * 15,
+  });
+
+  if (!ticker) {
+    return <div className="card text-center py-8 text-sm text-text-muted">Load a chain first — OI history is keyed off the loaded ticker.</div>;
+  }
+  if (isLoading) {
+    return <div className="card text-center py-8"><div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" /><p className="text-xs text-text-muted mt-3">Loading OI history...</p></div>;
+  }
+  if (isError) {
+    return <div className="card border-loss/30 bg-loss-bg text-loss text-sm p-4">Failed to load OI history: {(error as Error)?.message}</div>;
+  }
+  if (!data || data.n_days_captured < 2) {
+    return (
+      <div className="card space-y-3 py-6 text-center">
+        <div className="text-sm font-semibold">Accumulating data</div>
+        <p className="text-xs text-text-muted max-w-md mx-auto">
+          {data?.n_days_captured === 0
+            ? `No history captured yet for ${ticker}. The daily worker writes a snapshot each trading day at 4:30 PM ET — check back after 2+ weekdays of captures.`
+            : `Only ${data.n_days_captured} day of history so far. Need at least 2 to compute change. The worker captures daily post-close.`}
+        </p>
+      </div>
+    );
+  }
+
+  const summary = data.summary!;
+  return (
+    <div className="card space-y-6">
+      <div className="flex items-center gap-3 flex-wrap">
+        <label className="metric-label">Lookback (days)</label>
+        <select value={lookback} onChange={e => setLookback(Number(e.target.value))}
+          className="px-2 py-1 border border-border rounded text-xs font-data bg-surface">
+          {[5, 10, 20, 30, 60].map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <span className="text-xs text-text-muted">
+          {data.n_days_captured} days shown · {data.total_days_available} total captured · first: {data.dates[0]} · last: {data.dates[data.dates.length - 1]}
+        </span>
+      </div>
+
+      {/* Daily net OI */}
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-wide">Aggregate OI over time</h3>
+        <p className="text-xs text-text-muted mt-0.5">Total call vs put OI across all tracked strikes, day by day.</p>
+      </div>
+      <Plot data={[
+        { x: summary.daily_net.map(d => d.date), y: summary.daily_net.map(d => d.call_oi), type: "scatter" as const, mode: "lines+markers" as const, name: "Call OI", line: { color: t.gain, width: 2 }, marker: { size: 6 } },
+        { x: summary.daily_net.map(d => d.date), y: summary.daily_net.map(d => d.put_oi), type: "scatter" as const, mode: "lines+markers" as const, name: "Put OI", line: { color: t.loss, width: 2 }, marker: { size: 6 } },
+      ]} layout={{ height: 300, ...L, xaxis: { title: "Date", gridcolor: t.grid }, yaxis: { title: "Open Interest", gridcolor: t.grid } }}
+        config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+
+      {/* Biggest builds */}
+      <div className="pt-3 border-t border-border">
+        <h3 className="text-xs font-semibold uppercase tracking-wide">Biggest OI builds (net gain over window)</h3>
+        <p className="text-xs text-text-muted mt-0.5">New positioning — accumulation since {data.dates[0]}.</p>
+      </div>
+      {summary.biggest_builds.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="data-table text-xs">
+            <thead><tr><th>Strike</th><th>Type</th><th>Exp</th><th>OI {data.dates[0]}</th><th>OI {data.dates[data.dates.length - 1]}</th><th>Δ OI</th><th>% Change</th></tr></thead>
+            <tbody>
+              {summary.biggest_builds.map((s, i) => (
+                <tr key={i}>
+                  <td className="font-data">${s.strike.toFixed(0)}</td>
+                  <td><span className={`badge ${s.type === "call" ? "badge-gain" : "badge-loss"}`}>{s.type}</span></td>
+                  <td>{s.exp}</td>
+                  <td className="font-data">{s.first.toLocaleString()}</td>
+                  <td className="font-data">{s.last.toLocaleString()}</td>
+                  <td className="font-data font-semibold text-gain">+{s.delta_abs.toLocaleString()}</td>
+                  <td className="font-data">{s.delta_pct !== null ? `+${s.delta_pct.toFixed(0)}%` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="text-xs text-text-muted">No meaningful OI growth over this window.</p>}
+
+      {/* Biggest unwinds */}
+      <div className="pt-3 border-t border-border">
+        <h3 className="text-xs font-semibold uppercase tracking-wide">Biggest OI unwinds (net loss over window)</h3>
+        <p className="text-xs text-text-muted mt-0.5">Positioning being closed out — distribution of old paper.</p>
+      </div>
+      {summary.biggest_unwinds.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="data-table text-xs">
+            <thead><tr><th>Strike</th><th>Type</th><th>Exp</th><th>OI {data.dates[0]}</th><th>OI {data.dates[data.dates.length - 1]}</th><th>Δ OI</th><th>% Change</th></tr></thead>
+            <tbody>
+              {summary.biggest_unwinds.map((s, i) => (
+                <tr key={i}>
+                  <td className="font-data">${s.strike.toFixed(0)}</td>
+                  <td><span className={`badge ${s.type === "call" ? "badge-gain" : "badge-loss"}`}>{s.type}</span></td>
+                  <td>{s.exp}</td>
+                  <td className="font-data">{s.first.toLocaleString()}</td>
+                  <td className="font-data">{s.last.toLocaleString()}</td>
+                  <td className="font-data font-semibold text-loss">{s.delta_abs.toLocaleString()}</td>
+                  <td className="font-data">{s.delta_pct !== null ? `${s.delta_pct.toFixed(0)}%` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="text-xs text-text-muted">No notable unwinds over this window.</p>}
     </div>
   );
 }

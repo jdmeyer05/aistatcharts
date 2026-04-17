@@ -1119,6 +1119,44 @@ export async function fetchEdgarEarningsCalendar(days = 7): Promise<{ days: numb
   return apiFetch(`/api/edgar/earnings-calendar?days=${days}`, { timeoutMs: 60_000 });
 }
 
+// ─── Options OI history ──────────────────────────────────────
+
+export interface OIHistorySeries {
+  strike: number;
+  exp: string;
+  type: "call" | "put";
+  oi: (number | null)[];
+  first: number;
+  last: number;
+  delta_abs: number;
+  delta_pct: number | null;
+}
+export interface OIHistoryResponse {
+  ticker: string;
+  n_days_captured: number;
+  total_days_available?: number;
+  dates: string[];
+  series: OIHistorySeries[];
+  summary: {
+    biggest_builds: OIHistorySeries[];
+    biggest_unwinds: OIHistorySeries[];
+    daily_net: { date: string; call_oi: number; put_oi: number }[];
+  } | null;
+}
+export async function fetchOIHistory(ticker: string, days = 10): Promise<OIHistoryResponse> {
+  return apiFetch(`/api/market/oi-history/${ticker}?days=${days}`, { timeoutMs: 30_000 });
+}
+
+export interface OIUniverseEntry {
+  ticker: string;
+  rank: number;
+  total_oi: number;
+  total_volume: number | null;
+}
+export async function fetchOIUniverse(limit = 200): Promise<{ capture_date: string | null; tickers: OIUniverseEntry[] }> {
+  return apiFetch(`/api/market/oi-universe?limit=${limit}`, { timeoutMs: 15_000 });
+}
+
 // ─── Macro / Analyst / Earnings History ──────────────────────
 
 export interface MacroDashboardResponse {
