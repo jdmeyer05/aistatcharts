@@ -52,7 +52,6 @@ export const NAV_GROUPS: NavGroup[] = [
     pages: [
       { label: "Algo Backtester", href: "/algo-backtester", description: "13 strategies, de Prado methods (DSR, PBO, triple barrier)", status: "live" },
       { label: "Strategy Scanner", href: "/strategy-scanner", description: "Multi-ticker × multi-strategy scan ranked by Deflated Sharpe", status: "live" },
-      { label: "Live Scan", href: "/live-scan", description: "Real-time 3D visualization of strategy scanning", status: "live" },
       { label: "Signal Scanner", href: "/signal-scanner", description: "8-tab institutional scanner: momentum, mean reversion, value", status: "live" },
       { label: "Correlation", href: "/correlation", description: "Cross-asset matrix, regime analysis, PCA, clustering", status: "live" },
       { label: "Quant Lab", href: "/quant-lab", description: "AFML: frac diff, CUSUM, SADF, meta-labeling, VPIN, entropy", status: "live" },
