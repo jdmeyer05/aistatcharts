@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-04-16 — Next.js Migration Phase 1: ERCOT / Econ Calendar / Signal Scanner + Auth Kill-Switch
+
+### Streamlit → Next.js Migration (3 of 8 thin pages completed)
+
+Audit found 8 Next.js pages with thin coverage relative to their Streamlit counterparts. First 3 completed to full parity:
+
+- **ERCOT Capacity** (`/ercot-capacity`) — was 11% covered (installed capacity only). Now full 6-tab port of the planned-pipeline dataset:
+  By Fuel Type, Timeline/COD, Project Details (fuel/year/FS filters), By County, Financial Security, Month-over-Month tracking with project-level diff (added/removed/COD/capacity changes).
+  - New `src/ercot_capacity.py` module discovers + parses ERCOT's monthly Excel reports
+  - New `GET /api/energy/ercot-capacity/months` and `GET /api/energy/ercot-capacity` endpoints
+  - Fixed bug inherited from Streamlit discovery: the `30 * months_ago` arithmetic drifted across year boundaries and produced duplicate December entries. Replaced with proper calendar-month decrement + dedupe.
+
+- **Economic Calendar** (`/economic-calendar`) — was 15% covered (2 tabs). Now full 9-tab port:
+  Week at a Glance, Economic Releases (impact/category filters + 7-day timeline), Yield Curve (11 tenors + historical overlay + 2s10s spread + Fed Funds path), Inflation Dashboard (CPI/Core/PCE/PPI YoY + MoM + breakdown), Labor Market (NFP/UNRATE/ICSA/AHE + 4 panels), Macro Dashboard (8 indicators + extras expander), Earnings Calendar (big-cap filter + beat/miss), Treasury Auctions (table + timeline), Surprise Tracker (7 indicators + z-score index + heatmap + streak detection).
+  - New endpoints: `GET /api/market/econ-calendar-releases`, `GET /api/market/earnings-calendar`, `GET /api/market/treasury-auctions`
+
+- **Signal Scanner** (`/signal-scanner`) — was 20% covered (3 tabs + broken composite). Now full 8-tab port:
+  Dashboard (regime detector + factor spreads + heatmap), Momentum (5 periods + L/S spread + quality table), Mean Reversion (RSI/BB/Z confluence + oversold/overbought picks), Value & Quality (fundamentals ranks), Earnings & Sentiment (EPS revisions + insider activity), Regime & Microstructure (VPIN + entropy + vol regime classification), Factor Correlation (redundancy + conflict detection + Jacobi eigenvalue decomposition), Composite Ranking (full heatmap + factor profile).
+  - New `POST /api/scan/signal-bundle` — parallel fetch of prices + fundamentals + EPS revisions + insider activity
+  - Ported VPIN-like metric, Shannon entropy, Jacobi eigenvalue solver to pure TypeScript
+  - Composite math bug fix (inverted mean-reversion score) already shipped previously as `9e57a4d`
+
+### Auth Kill-Switch (Phase 1 of user-login story)
+
+FastAPI's `get_current_user` silently returned "anonymous" for unauthenticated callers, and JWT signature verification was disabled — meaning any visitor could hit `/api/positions/robinhood` and read live portfolio positions. Though the endpoint was never publicly deployed (Vercel frontend had no `NEXT_PUBLIC_API_URL` set), a future FastAPI deploy would have been vulnerable by default.
+
+- `api/deps.py`: proper Supabase HS256 JWT verification via PyJWT using `SUPABASE_JWT_SECRET`; new `require_admin` dependency gated by `ADMIN_EMAILS` env/secret. Fails closed (503) when no admins configured. `LOCAL_DEV=true` bypass is **env-only** — never falls back to `secrets.toml`, so it can't accidentally leak into a deployed image.
+- Applied `require_admin` to: `GET /api/positions/robinhood`, `POST /api/market/holding-deep-dive`, `POST /api/market/trade-architect`.
+
+Required in `.streamlit/secrets.toml` before the gated endpoints will work for admins:
+```toml
+SUPABASE_JWT_SECRET = "<from Supabase dashboard → Settings → API>"
+ADMIN_EMAILS = "jdmeyer05@gmail.com"
+```
+
+### Ranking Math Fixes
+
+- **Signal Scanner composite**: mean-reversion component was `(50 − |rsi − 50|) + (50 − |bbPct − 50|)` — this rewards *neutral* tickers instead of extremes, silently mis-ranking the composite. Inverted.
+- **Meta Analysis annualized return**: `Math.pow(ratio, 252/eq.length)` used total equity-path length as the denominator; correct is `eq.length − 1` (number of return periods). 0.4% understatement on a 252-day sample, larger on shorter samples.
+
+### Deferred (next session)
+
+Remaining 5 thin-page migrations tracked in `MIGRATION_STATUS.md`:
+Scenario Analysis, Fed Macro Drivers, Meta Analysis, Quant Lab, Calendar Spread polish.
+
+---
+
 ## 2026-04-08 — Trump Decoder (New Page), Market Scan Cleanup, Indentation Fix
 
 ### New Page: Trump Decoder (`/trump-decoder`)
