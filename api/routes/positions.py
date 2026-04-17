@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from api.deps import get_current_user
+from api.deps import get_current_user, require_admin
 
 router = APIRouter()
 
@@ -70,8 +70,8 @@ async def remove_position(pos_id: str, user: str = Depends(get_current_user)):
 
 
 @router.get("/robinhood")
-async def robinhood_positions(user: str = Depends(get_current_user)):
-    """Pull live positions from Robinhood."""
+async def robinhood_positions(user: str = Depends(require_admin)):
+    """Pull live positions from Robinhood. Admin-only — exposes personal financial data."""
     import logging
     _log = logging.getLogger(__name__)
 

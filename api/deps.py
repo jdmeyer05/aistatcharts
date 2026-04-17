@@ -1,6 +1,8 @@
 """FastAPI dependency injection — auth, database, user context."""
 
+import os
 from fastapi import Depends, HTTPException, Header
+from src.api_keys import get_secret
 from src.db import get_client, set_user_id
 
 
@@ -12,33 +14,68 @@ def get_db():
     return db
 
 
-async def get_current_user(authorization: str = Header(None)) -> str:
-    """Dependency: extract user_id from Supabase JWT.
+def _is_local_dev() -> bool:
+    # Env-only on purpose — don't fall back to secrets.toml, which can leak into
+    # deployed images and silently disable auth in production.
+    return os.environ.get("LOCAL_DEV", "").lower() == "true"
 
-    For now, accepts a simple bearer token that is the user's email.
-    In production, verify the JWT signature against Supabase's JWKS.
+
+def _admin_emails() -> set[str]:
+    raw = get_secret("ADMIN_EMAILS") or ""
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
+def _decode_jwt(token: str) -> dict | None:
+    """Verify a Supabase HS256 JWT and return its claims, or None on failure."""
+    secret = get_secret("SUPABASE_JWT_SECRET")
+    if not secret:
+        return None
+    try:
+        import jwt
+        return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
+    except Exception:
+        return None
+
+
+async def get_current_user(authorization: str = Header(None)) -> str:
+    """Extract the caller's email from a verified Supabase JWT.
+
+    Returns "anonymous" when no valid token is provided. Endpoints that expose
+    personal data must NOT treat "anonymous" as authorized — use require_admin.
     """
     if not authorization:
         return "anonymous"
 
-    try:
-        # Strip "Bearer " prefix
-        token = authorization.replace("Bearer ", "").strip()
-        if not token:
-            return "anonymous"
+    token = authorization.replace("Bearer ", "").strip()
+    if not token:
+        return "anonymous"
 
-        # TODO: In production, verify JWT signature against Supabase JWKS
-        # For now, decode the JWT payload without verification (dev only)
-        import json, base64
-        parts = token.split(".")
-        if len(parts) == 3:
-            # Decode JWT payload (part 2)
-            payload = parts[1] + "=" * (4 - len(parts[1]) % 4)  # pad base64
-            decoded = json.loads(base64.b64decode(payload))
-            user_id = decoded.get("sub") or decoded.get("email") or "anonymous"
-            set_user_id(user_id)
-            return user_id
-    except Exception:
-        pass
+    claims = _decode_jwt(token)
+    if not claims:
+        return "anonymous"
 
-    return "anonymous"
+    user_id = claims.get("email") or claims.get("sub") or "anonymous"
+    if user_id != "anonymous":
+        set_user_id(user_id)
+    return user_id
+
+
+async def require_admin(user: str = Depends(get_current_user)) -> str:
+    """Only allow admin users. Raises 403 for everyone else.
+
+    Admins are defined by the ADMIN_EMAILS secret (comma-separated emails).
+    Local-dev bypass: LOCAL_DEV=true in the process env treats every caller as
+    admin — intended for running against localhost only.
+    """
+    if _is_local_dev():
+        return user
+
+    admins = _admin_emails()
+    if not admins:
+        # Fail closed when no admins are configured.
+        raise HTTPException(status_code=503, detail="Admin access not configured")
+
+    if user.lower() not in admins:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    return user

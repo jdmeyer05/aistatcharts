@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from api.deps import get_current_user
+from api.deps import get_current_user, require_admin
 
 router = APIRouter()
 
@@ -4750,8 +4750,8 @@ class HoldingDiveRequest(BaseModel):
     entry_date: str = ""
 
 @router.post("/holding-deep-dive")
-async def holding_deep_dive(req: HoldingDiveRequest, user: str = Depends(get_current_user)):
-    """Focused analysis of a single held position. Fast (5 parallel fetches + Sonnet)."""
+async def holding_deep_dive(req: HoldingDiveRequest, user: str = Depends(require_admin)):
+    """Focused analysis of a single held position. Admin-only — reads Robinhood positions."""
     import concurrent.futures
     from src.api_keys import get_secret
 
@@ -6152,8 +6152,8 @@ def _gather_architect_context(primary: str, tickers: list[str], account_size: fl
     return context, sources
 
 @router.post("/trade-architect")
-async def trade_architect(req: TradeArchitectRequest, user: str = Depends(get_current_user)):
-    """Conversational AI Trade Architect. First call gathers context; follow-ups reuse it."""
+async def trade_architect(req: TradeArchitectRequest, user: str = Depends(require_admin)):
+    """Conversational AI Trade Architect. Admin-only — reads Robinhood positions for context."""
     from src.api_keys import get_secret
 
     # Determine the user message
