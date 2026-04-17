@@ -1,9 +1,13 @@
 # Streamlit → Next.js Migration — Status & Handoff
 
-**Last updated:** 2026-04-16
-**Session that left this note:** Completed 3 of 8 thin-page migrations plus an
-auth kill-switch. See `CHANGELOG.md` entry dated 2026-04-16 for the full
-shipped-work summary.
+**Last updated:** 2026-04-16 (session 2)
+**Session that left this note:** All 8 migration tasks now complete.
+Completed Meta Analysis (#4), Scenario Analysis (#5 — flagship), Quant Lab
+(#6), Fed Macro Drivers (#7), AND Calendar Spread polish (#8) in this
+session. New backends landed under `api/routes/meta_analysis.py`,
+`api/routes/scenario.py`, `api/routes/quant_lab.py`, and
+`api/routes/fed_macro.py`. Previous session completed the first 3
+thin-page migrations plus the auth kill-switch.
 
 This document is the entry point for the next session. Read it first.
 
@@ -21,25 +25,126 @@ the corresponding Streamlit page was substantial. The user wants "as close to
 | 1 | ERCOT Capacity | 653 | 6 tabs, full port | see history |
 | 2 | Economic Calendar | 1,412 | 9 tabs, full port | see history |
 | 3 | Signal Scanner | 1,577 | 8 tabs, full port | see history |
+| 4 | Meta Analysis | 3,327 | 9 tabs, full port (~1,450 LOC) | uncommitted |
+| 5 | Scenario Analysis | 2,331 | 8 tabs, full port (~1,200 LOC) | uncommitted |
+| 6 | Quant Lab | 1,869 | 8 tabs, full port (~1,050 LOC) | uncommitted |
+| 7 | Fed Macro Drivers | 1,513 | 8 tabs, full port (~1,250 LOC) | uncommitted |
+| 8 | Calendar Spread polish | 2,585 | 525 → 926 LOC, gaps closed | uncommitted |
 
-All three pass `npx tsc --noEmit` and `npx next build` cleanly. Each backend
+All four pass `npx tsc --noEmit` and `npx next build` cleanly. Each backend
 endpoint was tested live with curl before shipping.
 
 ## Not yet done — priority order
 
 Go in this order unless the user overrides. Sized by remaining gap:
 
-| # | Page | Streamlit LOC | Current NJS | Coverage | Status |
-|---|---|---|---|---|---|
-| 4 | **Meta Analysis** (`pages/41_Meta_Analysis.py`) | 3,327 | 131 LOC (3 tabs) | **~33%** | Pending |
-| 5 | **Scenario Analysis** (`pages/02_Scenario_Analysis.py`) — flagship | 2,331 | 176 LOC (4 tabs) | ~25% | Pending |
-| 6 | **Quant Lab** (`pages/36_Quant_Lab.py`) | 1,869 | 120 LOC (4 tabs) | ~50% | Pending |
-| 7 | **Fed Macro Drivers** (`pages/21_Fed_Macro_Drivers.py`) | 1,513 | 239 LOC (5 tabs) | ~30% | Pending |
-| 8 | **Calendar Spread polish** (`pages/42_Calendar_Spreads.py`) | 2,585 | 525 LOC (8 tabs) | 85% | Small cleanup |
+No pending migration tasks — all 8 pages shipped. Residual gaps are documented
+in the Notes section below.
 
-Note: the user said "biggest gaps first." Under that rule, Meta Analysis is
-next (33% coverage, biggest LOC gap). If you want the flagship polished
-first, Scenario Analysis has the highest user-visibility.
+Note on Meta Analysis (now shipped): the Forecasts tab (tab 3) currently shows
+an informational placeholder — the forward-estimates workflow (analyst targets
++ EPS revisions + valuation + macro overlay) is still Streamlit-only. If you
+want it in the Next.js build, add a `/api/meta/forecasts` POST that wraps
+`_fetch_forecasts`, `_fetch_macro_context`, and `_build_forecast_returns` from
+`pages/41_Meta_Analysis.py:489-635`, then feed the components into the tab.
+
+Tab 9 also omits two Streamlit-only extras that require long-running grid
+work: (a) cross-group correlation heatmap of best-method OOS returns, and
+(b) the two-layer hierarchical allocation flow with Fama-French factor
+attribution. The universe grid itself, top-15 combos, best-method-per-universe,
+and consistency bar are all ported.
+
+Notes on Scenario Analysis (now shipped):
+
+- **Scaling bug fixed**. `src/portfolio_models.py::estimate_regime_returns` has
+  a legacy double-scaling bug: it multiplies by `horizon_days` on top of the
+  already horizon-scaled input, producing per-regime returns ~252× too large.
+  The new `/api/scenario/portfolio-impact` endpoint sidesteps that by computing
+  the point estimate inline (`sum(beta × scaled_move) × 100`). If the
+  Streamlit page gets revisited, fix the helper by either passing
+  `horizon_days=1` or removing the internal `* horizon_days` multiplication.
+- **Grok AI regime analysis is read-only**. `/api/scenario/grok-latest` surfaces
+  the most recent cached result from `src/grok_regime_history.json`. A fresh
+  Grok call is still Streamlit-only (runs hourly inside `pages/02_*.py`). To
+  port, add a `POST /api/scenario/grok-refresh` that wraps `_call_grok_api`
+  from the Streamlit page — gate with `require_admin` (cost: ~$0.03/call).
+- **StockTwits + Polymarket**: only feed into the Grok prompt, not the UI.
+  Nothing to port unless Grok refresh is added.
+- **Fed & Macro Drivers tab** shows only the dual-mandate scorecard (5 metrics)
+  plus a link to the dedicated `/fed-macro` page, mirroring the Streamlit flow.
+- **Live API restart needed**: the user's uvicorn on `:8000` was started before
+  `api/routes/scenario.py` was added, so the scenario routes won't resolve
+  until they restart the server. The new routes were smoke-tested on `:8001`.
+
+Notes on Quant Lab (now shipped):
+
+- **Server endpoints** (`api/routes/quant_lab.py`): `POST /api/quant-lab/analyze`
+  runs the heavy Python lifting (ADF scan for fractional differencing, SADF
+  bubble detection, Chow breakpoint F-stats, Random-Forest MDI+MDA feature
+  importance). `POST /api/quant-lab/hrp` runs static + walk-forward
+  hierarchical risk parity with weight evolution.
+- **SHAP skipped**. The Streamlit tab 5 computes SHAP dependency plots; not
+  worth the extra backend complexity and SHAP Python dependency. Users still
+  see normalized MDI + MDA + OOS accuracy, which is the core signal.
+- **Transfer entropy skipped**. Streamlit tab 8 includes cross-asset transfer
+  entropy (requires fetching a second ticker). Ported inline entropy
+  (Shannon, plug-in, Lempel-Ziv, conditional + transition matrix + timeframe
+  comparison) — the bits that only need the primary ticker.
+- **Client-side math**: CUSUM filter, triple-barrier labeling + meta-label
+  sizing + equity curve, ATR, sample-uniqueness bootstrap (standard +
+  sequential), Amihud / VPIN / Kyle's Lambda / Corwin-Schultz, and all
+  entropy computations run purely in the browser. The Streamlit backend
+  handles ADF/SADF/Chow/feature importance/HRP only.
+- **Fractional diff ADF scan can be sparse**. At high d, the truncated
+  weights series is short enough that `_frac_diff` drops below 30 usable
+  obs; those rows are filtered. Not a bug — consistent with AFML recipe.
+
+Notes on Fed Macro Drivers (now shipped):
+
+- **Server endpoints** (`api/routes/fed_macro.py`): `/sentiment` (StockTwits
+  + Polymarket), `/balance-sheet` (Fed balance sheet + liquidity snapshot),
+  `/cot` (CFTC managed money positioning), `/oecd-cli` (leading indicators),
+  `/next-fomc` (ISO date of next meeting). FRED driver data reuses the
+  existing `/api/market/fred-batch` endpoint — no new route needed.
+- **Static data in the frontend**: 8 FOMC statements, March 2026 + December
+  2025 dot plots with medians, SEP projections, reaction function table, and
+  hawkish/dovish word lists are all hardcoded in
+  `frontend/app/fed-macro/page.tsx`. These are snapshot data that don't
+  change between Fed meetings; update them when the next SEP drops.
+- **Word diff done client-side**. Implemented a small Myers-style LCS diff
+  in TypeScript — no external diff library needed.
+- **Gemini FOMC AI analysis skipped**. The Streamlit page offers a Gemini
+  call that interprets FOMC language changes. To port: add
+  `POST /api/fed-macro/fomc-diff-ai` wrapping `genai.Client` with
+  `ACCURACY_CHECK` prompt + `ai_cache` key; gate with admin auth (cost:
+  ~$0.03/call).
+- **Balance sheet NaN/numpy sanitizer**. `src/macro_data.py::get_fed_liquidity_snapshot`
+  can return numpy scalars and NaN values; `/balance-sheet` coerces these
+  via an inline `_coerce` helper before JSON serialization. If new fields
+  are added to the snapshot dict, make sure they still flow through.
+
+Notes on Calendar Spread polish (now shipped):
+
+- **Client-side additions** (no new backend needed): added missing
+  Streamlit features to `frontend/app/calendar-spread/page.tsx` using
+  client-side math — `bsGreeks` and `spreadGreeks` helpers compute
+  delta/gamma/vega/theta directly.
+- **Term Structure tab**: added Calendar IV Differential bar chart for
+  adjacent expiration pairs and an `IvVsRvSection` component that fetches
+  1-year price history on demand and ranks each expiration&apos;s ATM IV
+  against the 20D realized-vol distribution.
+- **P&amp;L Simulator tab**: added Daily Theta P&amp;L curve, Greeks
+  Evolution (2×2 grid of delta/gamma/vega/theta over time), IV Scenario
+  table, and Term Structure Tilt table.
+- **Risk Analysis tab**: added Gamma Risk Near Front Expiry (delta/gamma
+  over DTE), Pin Risk zone computation (extrinsic-value based), Tail Risk
+  Scenarios table (−3σ to +3σ with leverage-effect β=−0.4 IV adjustment),
+  and Reg-T margin requirement note.
+- **Skipped from Streamlit** (low priority for the polish scope): earnings
+  date overlay, diagonal roll analysis, early assignment checks (needs
+  `yfinance.dividends`), watchlist alerts section, and the scanner
+  score-validation panel. Port these if needed later — all require
+  per-ticker yfinance calls that would add latency.
 
 ## Pattern That Works (use this)
 
@@ -165,10 +270,40 @@ non-admin callers:
 Requires `SUPABASE_JWT_SECRET` + `ADMIN_EMAILS` in `.streamlit/secrets.toml`
 or env. If neither is set, endpoints return **503** to everyone (fail closed).
 
-**Phase 2 pending:** frontend login UI + wire JWT into `apiFetch` + replace
-the fake `auth-gate.tsx` (client-side password in a public `NEXT_PUBLIC_`
-var — not real security). This is a separate project from the migration but
-needed before the site can be made public.
+**Phase 2 shipped (2026-04-17).** Full Supabase auth wired up end-to-end:
+
+- `frontend/lib/supabase.ts` — `supabaseBrowser()` factory using `@supabase/ssr`.
+- `frontend/proxy.ts` — Next 16 proxy (née middleware) that refreshes the
+  session cookie, redirects unauthenticated traffic to `/login?next=…`, and
+  bounces authenticated users away from `/login`.
+- `frontend/app/login/page.tsx` — email+password sign in, with a magic-link
+  fallback button. Wrapped in `<Suspense>` because `useSearchParams()` needs
+  it in Next 16.
+- `frontend/components/auth-gate.tsx` — rewritten as a thin session-context
+  provider (`useSessionUser()`) instead of the old fake password gate. Routes
+  are protected by the proxy now, not this component.
+- `frontend/components/layout/app-chrome.tsx` — hides the Header+main
+  wrapper on `/login` without restructuring 35 page directories into a
+  route group.
+- `frontend/components/layout/header.tsx` — added `UserMenu` dropdown (email
+  + sign-out button) next to the theme toggle.
+- `frontend/lib/api.ts::apiFetch` — now pulls the current Supabase access
+  token from the browser client and attaches it as `Authorization: Bearer`
+  on every backend call. Works with `api/deps.py::get_current_user` which
+  already decodes the HS256 JWT.
+- `.env.local` / `.env.production` — `NEXT_PUBLIC_SUPABASE_URL` +
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` added. The `NEXT_PUBLIC_SITE_PASSWORD`
+  legacy env is still present but unused; safe to delete after verification.
+
+**Required on the Supabase side**: user account for `jdmeyer05@gmail.com` must
+exist in the Supabase Auth dashboard (create via Supabase UI or CLI), and the
+backend still needs `SUPABASE_JWT_SECRET` + `ADMIN_EMAILS=jdmeyer05@gmail.com`
+set in `.streamlit/secrets.toml` (or env) for admin-gated endpoints
+(Robinhood, holding-deep-dive, trade-architect) to work.
+
+**Deprecation note**: Next.js 16 renamed `middleware.ts` → `proxy.ts` and the
+exported function from `middleware` → `proxy`. The old name still works in
+16.x but emits a warning and is scheduled for removal. Using the new name.
 
 ## How to Resume
 

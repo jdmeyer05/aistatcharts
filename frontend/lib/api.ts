@@ -1484,3 +1484,523 @@ export async function fetchTrumpPatterns(query: string = "", category: string = 
 export async function fetchTrumpHistory(limit: number = 20): Promise<{ success: boolean; statements: TrumpDecodedStatement[] }> {
   return apiFetch(`/api/trump/history?limit=${limit}`, { timeoutMs: 30_000 });
 }
+
+// ── Meta Analysis ─────────────────────────────────────────────────────
+
+export interface MetaMetric {
+  method: string;
+  ann_return: number;
+  ann_vol: number;
+  sharpe: number;
+  sortino: number;
+  max_dd: number;
+  calmar: number;
+  win_rate: number;
+  info_ratio?: number;
+  tracking_error?: number;
+  up_capture?: number;
+  down_capture?: number;
+}
+
+export interface MetaWeightHistoryEntry {
+  date: string;
+  weights: Record<string, number>;
+}
+
+export interface MetaTurnoverEntry {
+  date: string;
+  turnover: number;
+}
+
+export interface MetaRegimeRow {
+  method: string;
+  regime: "Bull" | "Recovery" | "Bear" | "Crisis";
+  ann_return: number;
+  ann_vol: number;
+  sharpe: number;
+  days: number;
+}
+
+export interface MetaStressRow {
+  method: string;
+  beta: number;
+  scenarios: Record<string, number>;
+}
+
+export interface MetaDsrRow {
+  method: string;
+  sharpe: number;
+  dsr: number;
+  skew: number;
+  kurtosis: number;
+  min_track_record: number;
+  min_years: number;
+  actual_days: number;
+  sufficient_data: boolean;
+  significant: boolean;
+}
+
+export interface MetaBootstrapRow {
+  method: string;
+  sharpe: number;
+  ci_low: number;
+  ci_high: number;
+  p_positive: number;
+  significant: boolean;
+}
+
+export interface MetaScoreRow {
+  method: string;
+  sharpe: number;
+  dsr_pass: boolean;
+  pbo_pass: boolean;
+  boot_pass: boolean;
+  trl_pass: boolean;
+  score: number;
+  verdict: "Robust" | "Credible" | "Suspect" | "Unreliable";
+}
+
+export interface MetaDrawdownDuration {
+  longest_days: number;
+  avg_days: number;
+  episodes: number;
+}
+
+export interface MetaBacktestResponse {
+  tickers: string[];
+  n_assets: number;
+  dates: string[];
+  n_days: number;
+  data_start: string | null;
+  data_end: string | null;
+  ranked_methods: string[];
+  ranked_by: string;
+  rebalance: string;
+  est_days: number;
+  equity_curves: Record<string, number[]>;
+  net_curves: Record<string, number[]>;
+  drawdown_curves: Record<string, number[]>;
+  drawdown_duration: Record<string, MetaDrawdownDuration>;
+  metrics: MetaMetric[];
+  net_metrics: MetaMetric[];
+  current_weights: Record<string, Record<string, number>>;
+  weight_history: Record<string, MetaWeightHistoryEntry[]>;
+  turnover: Record<string, MetaTurnoverEntry[]>;
+  cost_bps: number;
+  regime_analysis: MetaRegimeRow[];
+  stress_scenarios: MetaStressRow[];
+  stress_scenario_names: string[];
+  dsr_results: MetaDsrRow[];
+  pbo: { value: number | null; logits: number[] };
+  bootstrap_ci: MetaBootstrapRow[];
+  scorecard: MetaScoreRow[];
+  rolling_sharpe: Record<string, { dates: string[]; values: number[] }>;
+  method_corr_methods: string[];
+  method_corr: number[][];
+  excess_vs_ew: Record<string, { dates: string[]; values: number[] }>;
+  n_methods_tested: number;
+  error?: string;
+}
+
+export interface MetaBacktestRequest {
+  tickers: string[];
+  lookback?: "1Y" | "2Y" | "3Y" | "5Y";
+  rebalance?: "Monthly" | "Quarterly";
+  est_days?: 126 | 189 | 252 | 504;
+  denoise?: boolean;
+  blends?: Record<string, Record<string, number>>;
+  rank_by?: "Sharpe" | "Ann. Return" | "Sortino" | "Calmar" | "Max DD";
+}
+
+export async function runMetaBacktest(req: MetaBacktestRequest): Promise<MetaBacktestResponse> {
+  return apiFetch("/api/meta/backtest", {
+    method: "POST",
+    body: JSON.stringify(req),
+    timeoutMs: 5 * 60_000,
+  });
+}
+
+export interface MetaGridRow {
+  universe: string;
+  method: string;
+  sharpe: number;
+  ann_return: number;
+  max_dd: number;
+  sortino: number;
+}
+
+export interface MetaGridResponse {
+  universes: string[];
+  methods: string[];
+  grid: MetaGridRow[];
+  lookback: string;
+  rebalance: string;
+  est_days: number;
+  error?: string;
+}
+
+export async function runMetaGrid(req: {
+  lookback?: string;
+  rebalance?: string;
+  est_days?: number;
+  denoise?: boolean;
+}): Promise<MetaGridResponse> {
+  return apiFetch("/api/meta/grid", {
+    method: "POST",
+    body: JSON.stringify(req),
+    timeoutMs: 10 * 60_000,
+  });
+}
+
+export async function fetchMetaPresets(): Promise<{ presets: Record<string, string[]> }> {
+  return apiFetch("/api/meta/presets");
+}
+
+// ── Scenario Analysis ─────────────────────────────────────────────────
+
+export interface ScenarioRegime {
+  name: string;
+  description: string;
+  rationale: string;
+  base_probability: number;
+  driver_moves: Record<string, number>;
+}
+
+export interface ScenarioTickerEstimate {
+  point: number;
+  lo: number;
+  hi: number;
+  r2: number;
+  beta_stability: number;
+  source: string;
+}
+
+export interface ScenarioRegimeResult {
+  regime: string;
+  pnl: number;
+  pnl_lo: number;
+  pnl_hi: number;
+  pnl_pct: number;
+  prob: number;
+  ticker_moves: Record<string, ScenarioTickerEstimate>;
+}
+
+export interface ScenarioMonteCarlo {
+  mean: number;
+  median: number;
+  var_95: number;
+  cvar_95: number;
+  p10: number;
+  p90: number;
+  prob_loss: number;
+  prob_gain: number;
+  percentiles: Record<string, number>;
+  histogram: { counts: number[]; edges: number[] };
+  regime_draw_counts: Record<string, number>;
+}
+
+export interface ScenarioFactorDiag {
+  ticker: string;
+  r2: number;
+  beta_stability: number;
+  n_obs: number;
+  residual_std: number;
+  stressed_residual_std: number;
+  sector: string;
+  betas: Record<string, number>;
+  alpha: number;
+}
+
+export interface ScenarioCorrelation {
+  normal_methods?: string[];
+  normal?: number[][];
+  stressed_methods?: string[];
+  stressed?: number[][];
+}
+
+export interface FedDriverInfo {
+  name: string;
+  unit: string;
+  yoy: boolean;
+  category: string;
+}
+
+export interface PortfolioImpactResponse {
+  tickers: string[];
+  failed: string[];
+  n_assets: number;
+  portfolio_value: number;
+  horizon_days: number;
+  alloc_per_ticker: number;
+  regimes: ScenarioRegime[];
+  driver_keys: string[];
+  fed_drivers: Record<string, FedDriverInfo>;
+  factor_series: string[];
+  regime_results: ScenarioRegimeResult[];
+  ev_pnl: number;
+  ev_lo: number;
+  ev_hi: number;
+  monte_carlo: ScenarioMonteCarlo;
+  concentration: { sectors: Record<string, string[]>; warnings: string[] };
+  correlation: ScenarioCorrelation;
+  factor_diagnostics: ScenarioFactorDiag[];
+  avg_r2: number;
+  avg_stability: number;
+  error?: string;
+}
+
+export interface PortfolioImpactRequest {
+  tickers: string[];
+  portfolio_value?: number;
+  lookback?: number;
+  horizon_days?: number;
+  user_probs?: Record<string, number>;
+  n_sims?: number;
+}
+
+export async function fetchPortfolioImpact(req: PortfolioImpactRequest): Promise<PortfolioImpactResponse> {
+  return apiFetch("/api/scenario/portfolio-impact", {
+    method: "POST",
+    body: JSON.stringify(req),
+    timeoutMs: 4 * 60_000,
+  });
+}
+
+export interface GbmScenarioResult {
+  mean_path: number[];
+  p10_path: number[];
+  p90_path: number[];
+  median_terminal: number;
+  mean_terminal: number;
+  p10_terminal: number;
+  p90_terminal: number;
+  prob_profit: number;
+  annual_ret: number;
+}
+
+export interface GbmResponse {
+  ticker: string;
+  spot: number;
+  hist_vol: number;
+  history: { dates: string[]; closes: number[] };
+  scenarios: Record<string, GbmScenarioResult>;
+  error?: string;
+}
+
+export async function fetchGbmProjection(req: {
+  ticker: string;
+  lookback?: number;
+  proj_days?: number;
+  num_paths?: number;
+  bull_ret?: number;
+  base_ret?: number;
+  bear_ret?: number;
+}): Promise<GbmResponse> {
+  return apiFetch("/api/scenario/gbm-projection", {
+    method: "POST",
+    body: JSON.stringify(req),
+    timeoutMs: 60_000,
+  });
+}
+
+export interface RegimeTrackEvaluation {
+  date: string;
+  top_regime: string;
+  probability: number;
+  expected: "Bullish" | "Bearish" | "Neutral";
+  spy_30d: number;
+  actual: "Bullish" | "Bearish";
+  correct: boolean | null;
+}
+
+export interface RegimeTrackResponse {
+  history_count: number;
+  evaluations_count: number;
+  directional_count: number;
+  correct_count: number;
+  accuracy: number | null;
+  evaluations: RegimeTrackEvaluation[];
+  error?: string;
+}
+
+export async function fetchRegimeTrackRecord(): Promise<RegimeTrackResponse> {
+  return apiFetch("/api/scenario/regime-track-record", { timeoutMs: 60_000 });
+}
+
+export interface GrokLatestResponse {
+  available: boolean;
+  timestamp?: string;
+  regimes?: Array<{ name: string; probability: number; rationale?: string }>;
+  sentiment_summary?: string;
+  change_summary?: string;
+  asset_estimates?: Record<string, Record<string, number>>;
+}
+
+export async function fetchGrokLatest(): Promise<GrokLatestResponse> {
+  return apiFetch("/api/scenario/grok-latest");
+}
+
+// ── Quant Lab ─────────────────────────────────────────────────────────
+
+export interface QuantLabAdfRow {
+  d: number;
+  adf_stat: number | null;
+  pvalue: number;
+  corr: number;
+}
+
+export interface QuantLabOHLCV {
+  dates: string[];
+  close: number[];
+  log_prices: number[];
+  log_returns: number[];
+  volume: number[];
+  high: number[];
+  low: number[];
+}
+
+export interface QuantLabFeatureImportance {
+  features: string[];
+  mdi: Record<string, number>;
+  mda: Record<string, number>;
+  oos_accuracy: number;
+}
+
+export interface QuantLabAnalyzeResponse {
+  ticker: string;
+  lookback: number;
+  n_obs: number;
+  date_start: string;
+  date_end: string;
+  ann_return: number;
+  ann_vol: number;
+  ohlcv: QuantLabOHLCV;
+  adf_scan: QuantLabAdfRow[];
+  min_d: number;
+  fd_optimal: { d: number; dates: string[]; values: number[] };
+  sadf: { dates: string[]; values: number[]; cv_95: number; max: number; n_periods: number };
+  chow: { dates: string[]; f_stats: number[]; cv_99: number };
+  feature_importance: QuantLabFeatureImportance | null;
+  error?: string;
+}
+
+export async function fetchQuantLabAnalyze(ticker: string, lookback: number = 756): Promise<QuantLabAnalyzeResponse> {
+  return apiFetch("/api/quant-lab/analyze", {
+    method: "POST",
+    body: JSON.stringify({ ticker, lookback }),
+    timeoutMs: 4 * 60_000,
+  });
+}
+
+export interface QuantLabHrpMetrics {
+  ann_return: number;
+  ann_vol: number;
+  sharpe: number;
+  max_dd: number;
+}
+
+export interface QuantLabHrpWeightHistoryEntry {
+  date: string;
+  weights: Record<string, number>;
+}
+
+export interface QuantLabHrpResponse {
+  tickers: string[];
+  failed: string[];
+  weights: {
+    hrp: Record<string, number>;
+    equal: Record<string, number>;
+    inverse_vol: Record<string, number>;
+  };
+  dates: string[];
+  cum_hrp: number[];
+  cum_eq: number[];
+  cum_iv: number[];
+  static_metrics: {
+    hrp: QuantLabHrpMetrics;
+    equal: QuantLabHrpMetrics;
+    inverse_vol: QuantLabHrpMetrics;
+  };
+  walk_forward: {
+    dates: string[];
+    cum: number[];
+    metrics: QuantLabHrpMetrics;
+    weight_history: QuantLabHrpWeightHistoryEntry[];
+    rebalance: string;
+  };
+  error?: string;
+}
+
+export async function fetchQuantLabHrp(req: {
+  tickers: string[];
+  lookback?: number;
+  rebalance?: "Monthly" | "Quarterly";
+  estimation_window?: number;
+}): Promise<QuantLabHrpResponse> {
+  return apiFetch("/api/quant-lab/hrp", {
+    method: "POST",
+    body: JSON.stringify(req),
+    timeoutMs: 4 * 60_000,
+  });
+}
+
+// ── Fed Macro Drivers ─────────────────────────────────────────────────
+
+export interface StockTwitsItem {
+  symbol: string;
+  bullish: number;
+  bearish: number;
+  messages: number;
+  bull_ratio: number;
+  signal: string;
+}
+
+export interface PolymarketItem {
+  category: string;
+  question: string;
+  yes_prob: number;
+  no_prob: number;
+}
+
+export async function fetchFedMacroSentiment(): Promise<{
+  stocktwits: StockTwitsItem[];
+  polymarket: PolymarketItem[];
+}> {
+  return apiFetch("/api/fed-macro/sentiment", { timeoutMs: 90_000 });
+}
+
+export interface FedBalanceSheetResponse {
+  series: Record<string, (number | null)[]>;
+  dates: string[];
+  snapshot: {
+    total_assets?: number | null;
+    tga?: number | null;
+    rrp?: number | null;
+    net_liquidity?: number | null;
+    net_liq_change?: number | null;
+    draining?: boolean | null;
+  };
+  error?: string;
+}
+export async function fetchFedBalanceSheet(): Promise<FedBalanceSheetResponse> {
+  return apiFetch("/api/fed-macro/balance-sheet", { timeoutMs: 60_000 });
+}
+
+export interface CotPositioningResponse {
+  positioning: Record<string, { direction: string; net_pct_oi: number; change: number }>;
+}
+export async function fetchCotPositioning(): Promise<CotPositioningResponse> {
+  return apiFetch("/api/fed-macro/cot", { timeoutMs: 60_000 });
+}
+
+export interface OecdCliResponse {
+  dates: string[];
+  series: Record<string, (number | null)[]>;
+}
+export async function fetchOecdCli(): Promise<OecdCliResponse> {
+  return apiFetch("/api/fed-macro/oecd-cli", { timeoutMs: 60_000 });
+}
+
+export async function fetchNextFomc(): Promise<{ date: string | null }> {
+  return apiFetch("/api/fed-macro/next-fomc", { timeoutMs: 30_000 });
+}

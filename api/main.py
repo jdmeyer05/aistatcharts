@@ -78,7 +78,7 @@ app.add_middleware(
 )
 
 # Register route modules
-from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump
+from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -89,6 +89,10 @@ app.include_router(energy.router, prefix="/api/energy", tags=["Energy"])
 app.include_router(edgar.router, prefix="/api/edgar", tags=["EDGAR"])
 app.include_router(tracking.router, prefix="/api/tracking", tags=["Tracking"])
 app.include_router(trump.router, prefix="/api/trump", tags=["Trump Decoder"])
+app.include_router(meta_analysis.router, prefix="/api/meta", tags=["Meta Analysis"])
+app.include_router(scenario.router, prefix="/api/scenario", tags=["Scenario Analysis"])
+app.include_router(quant_lab.router, prefix="/api/quant-lab", tags=["Quant Lab"])
+app.include_router(fed_macro.router, prefix="/api/fed-macro", tags=["Fed Macro"])
 
 
 @app.get("/api/health")
