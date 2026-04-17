@@ -226,6 +226,40 @@ async def ercot_bundle(user: str = Depends(get_current_user)):
     return bundle
 
 
+@router.get("/ercot-capacity/months")
+async def ercot_capacity_months(user: str = Depends(get_current_user)):
+    """Discover the ERCOT monthly capacity reports currently available online.
+
+    Returns a list of {date_path, month_label} ordered newest first. Cached 24h
+    server-side.
+    """
+    from src.ercot_capacity import discover_months
+    return {"months": discover_months(lookback=12)}
+
+
+@router.get("/ercot-capacity")
+async def ercot_capacity(
+    month_label: str = Query(..., description="e.g. March_2026 — from /ercot-capacity/months"),
+    date_path: str = Query(..., description="e.g. 2026/04/05 — from /ercot-capacity/months"),
+    planned_only: bool = Query(False),
+    user: str = Depends(get_current_user),
+):
+    """Download and parse one month of ERCOT capacity data.
+
+    Returns all project rows with normalized fields. Cached 1h server-side per
+    (date_path, month_label, planned_only) combo. An empty ``projects`` list
+    indicates the report wasn't available or had no usable rows.
+    """
+    from src.ercot_capacity import fetch_capacity_file
+    projects = fetch_capacity_file(date_path, month_label, planned_only=planned_only)
+    return {
+        "month_label": month_label,
+        "date_path": date_path,
+        "planned_only": planned_only,
+        "projects": projects,
+    }
+
+
 @router.get("/futures-snapshot")
 async def futures_snapshot(user: str = Depends(get_current_user)):
     """Fetch snapshot for all futures tickers across 6 asset classes."""

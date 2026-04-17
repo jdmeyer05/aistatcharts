@@ -4604,6 +4604,115 @@ async def polymarket_history(token_id: str = Query(...), interval: str = Query("
         return {"success": False, "points": [], "error": str(e)}
 
 
+@router.get("/econ-calendar-releases")
+async def econ_calendar_releases(user: str = Depends(get_current_user)):
+    """FRED release dates for major macro indicators + upcoming FOMC decisions.
+
+    Returns a merged list of events across the next ~3 months, each with
+    name, date, impact (High/Medium), category, and source series_id.
+    """
+    import requests
+    from datetime import date
+    from src.api_keys import get_secret
+    from src.economic_calendar import FOMC_DATES
+
+    key = get_secret("FRED_API_KEY")
+    if not key:
+        return {"events": []}
+
+    FRED_RELEASES = {
+        10: ("CPI", "CPIAUCSL", "High", "Inflation"),
+        50: ("Nonfarm Payrolls (NFP)", "PAYEMS", "High", "Employment"),
+        53: ("GDP", "GDP", "High", "Growth"),
+        21: ("FOMC Minutes/Data Release", "FEDFUNDS", "High", "Fed"),
+        9:  ("Retail Sales", "RSAFS", "High", "Consumer"),
+        46: ("PPI", "PPIFIS", "High", "Inflation"),
+        29: ("PCE Price Index", "PCEPI", "High", "Inflation"),
+        61: ("ISM Manufacturing", "MANEMP", "High", "Production"),
+        13: ("Industrial Production", "INDPRO", "Medium", "Production"),
+        18: ("Housing Starts", "HOUST", "Medium", "Housing"),
+        11: ("Employment Cost Index", "ECI", "Medium", "Employment"),
+        327: ("Consumer Sentiment (UMich)", "UMCSENT", "Medium", "Consumer"),
+        22: ("Existing Home Sales", "EXHOSLUSM495S", "Medium", "Housing"),
+        86: ("New Home Sales", "HSN1F", "Medium", "Housing"),
+        15: ("Durable Goods Orders", "DGORDER", "Medium", "Production"),
+        65: ("Initial Jobless Claims", "ICSA", "Medium", "Employment"),
+        20: ("Trade Balance", "BOPGSTB", "Medium", "Trade"),
+        31: ("Personal Income", "PI", "Medium", "Consumer"),
+        14: ("Capacity Utilization", "TCU", "Medium", "Production"),
+        17: ("Building Permits", "PERMIT", "Medium", "Housing"),
+        83: ("Consumer Confidence (CB)", "CSCICP03USM665S", "Medium", "Consumer"),
+    }
+    today_str = date.today().strftime("%Y-%m-%d")
+    out: list[dict] = []
+    for rid, (name, series, impact, category) in FRED_RELEASES.items():
+        try:
+            r = requests.get(
+                "https://api.stlouisfed.org/fred/release/dates",
+                params={
+                    "release_id": rid, "api_key": key, "file_type": "json",
+                    "sort_order": "asc", "include_release_dates_with_no_data": "true",
+                    "realtime_start": today_str, "limit": 3,
+                },
+                timeout=10,
+            )
+            for d in r.json().get("release_dates", []):
+                out.append({"date": d["date"], "event": name, "impact": impact,
+                            "category": category, "series": series})
+        except Exception as e:
+            logger.warning("FRED release fetch failed for %s: %s", name, e)
+
+    # Inject FOMC decision dates
+    for fomc_date in FOMC_DATES:
+        if fomc_date >= today_str:
+            out.append({"date": fomc_date, "event": "FOMC Rate Decision",
+                        "impact": "High", "category": "Fed", "series": "FEDFUNDS"})
+
+    return {"events": sorted(out, key=lambda e: e["date"])}
+
+
+@router.get("/earnings-calendar")
+async def earnings_calendar(
+    from_date: str = Query(..., alias="from", description="YYYY-MM-DD"),
+    to_date: str = Query(..., alias="to", description="YYYY-MM-DD"),
+    user: str = Depends(get_current_user),
+):
+    """Upcoming earnings reports via Finnhub. Pass-through with light normalization."""
+    import requests
+    from src.api_keys import get_secret
+
+    key = get_secret("FINNHUB_API_KEY")
+    if not key:
+        return {"earnings": []}
+    try:
+        r = requests.get(
+            "https://finnhub.io/api/v1/calendar/earnings",
+            params={"from": from_date, "to": to_date, "token": key},
+            timeout=15,
+        )
+        data = r.json().get("earningsCalendar", [])
+        return {"earnings": data}
+    except Exception as e:
+        logger.error("Finnhub earnings fetch failed: %s", e)
+        return {"earnings": []}
+
+
+@router.get("/treasury-auctions")
+async def treasury_auctions(user: str = Depends(get_current_user)):
+    """Upcoming Treasury auctions via Treasury's fiscal data API."""
+    import requests
+    try:
+        r = requests.get(
+            "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/upcoming_auctions",
+            params={"sort": "auction_date", "page[size]": 50},
+            timeout=15,
+        )
+        return {"auctions": r.json().get("data", [])}
+    except Exception as e:
+        logger.error("Treasury auction fetch failed: %s", e)
+        return {"auctions": []}
+
+
 @router.get("/risk")
 async def risk_snapshot(user: str = Depends(get_current_user)):
     """Get risk dashboard data — conflict, macro regime, vol, strategy."""

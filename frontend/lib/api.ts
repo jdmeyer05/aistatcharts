@@ -687,6 +687,94 @@ export async function fetchEvents(): Promise<{ events: CalendarEvent[] }> {
   return apiFetch("/api/market/events");
 }
 
+// ── Economic Calendar ────────────────────────────────────────────────
+export interface EconEvent {
+  date: string;          // YYYY-MM-DD
+  event: string;
+  impact: "High" | "Medium" | "Low" | string;
+  category: string;
+  series: string;
+}
+export async function fetchEconCalendarReleases(): Promise<{ events: EconEvent[] }> {
+  return apiFetch("/api/market/econ-calendar-releases", { timeoutMs: 30_000 });
+}
+
+export interface EarningsEntry {
+  date: string;         // YYYY-MM-DD
+  symbol: string;
+  epsEstimate: number | null;
+  epsActual: number | null;
+  revenueEstimate: number | null;
+  revenueActual: number | null;
+  hour: string;         // bmo | amc | dmh | ""
+  quarter?: number;
+  year?: number;
+}
+export async function fetchEarningsCalendar(from: string, to: string): Promise<{ earnings: EarningsEntry[] }> {
+  return apiFetch(`/api/market/earnings-calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { timeoutMs: 30_000 });
+}
+
+export interface TreasuryAuction {
+  record_date: string;
+  security_type: string;  // Bill | Note | Bond | TIPS | FRN | CMB
+  security_term: string;
+  reopening?: string;
+  cusip?: string;
+  offering_amt?: string;   // millions $ as string from Treasury
+  announcemt_date?: string;
+  auction_date: string;
+  issue_date?: string;
+}
+export async function fetchTreasuryAuctions(): Promise<{ auctions: TreasuryAuction[] }> {
+  return apiFetch("/api/market/treasury-auctions", { timeoutMs: 30_000 });
+}
+
+// ── Signal Scanner bundle ────────────────────────────────────────────
+export interface SignalFundamentals {
+  ticker: string;
+  forward_pe: number | null;
+  trailing_pe: number | null;
+  price_to_book: number | null;
+  ev_ebitda: number | null;
+  dividend_yield: number | null;
+  fcf_yield: number | null;
+  roe: number | null;
+  profit_margin: number | null;
+  operating_margin: number | null;
+  gross_margin: number | null;
+  revenue_growth: number | null;
+  earnings_growth: number | null;
+  beta: number | null;
+  net_debt_ebitda: number | null;
+  current_ratio: number | null;
+  market_cap: number | null;
+}
+export interface SignalEpsRow {
+  ticker: string;
+  up_7d: number; up_30d: number;
+  down_7d: number; down_30d: number;
+  net_30d: number;
+}
+export interface SignalInsiderRow {
+  ticker: string;
+  buy_count: number; sell_count: number;
+  buy_value: number; sell_value: number;
+  net_value: number;
+}
+export interface SignalScanBundle {
+  prices: Record<string, { Date: string; Close: number; Volume: number }[]>;
+  fundamentals: SignalFundamentals[];
+  eps_revisions: SignalEpsRow[];
+  insider: SignalInsiderRow[];
+}
+export async function fetchSignalBundle(tickers: string[], lookback: "6mo" | "1y" | "2y" = "1y"): Promise<SignalScanBundle> {
+  return apiFetch("/api/scan/signal-bundle", {
+    method: "POST",
+    body: JSON.stringify({ tickers, lookback }),
+    timeoutMs: 3 * 60 * 1000,
+  });
+}
+
 export interface RiskSnapshot {
   iran: { score: number; level: string; oil_range: string | null } | null;
   macro: {
@@ -865,6 +953,34 @@ export async function fetchFuturesSnapshot(): Promise<Record<string, FuturesItem
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function fetchErcotBundle(): Promise<Record<string, any>> {
   return apiFetch("/api/energy/ercot-bundle", { timeoutMs: 30_000 });
+}
+
+export interface ErcotCapacityMonth { date_path: string; month_label: string; }
+export interface ErcotCapacityProject {
+  inr: string;
+  project_name: string;
+  county: string;
+  projected_cod: string | null;  // ISO date
+  ia_signed: string | null;       // ISO date
+  fuel_type: string;              // Wind | Solar | Battery | Gas
+  fuel_detail: string;            // e.g. Gas-CC / Gas-CT/Other
+  technology: string;
+  capacity_mw: number;
+  year: number | null;
+  financial_security: string;     // Yes | No | ""
+}
+export interface ErcotCapacityResponse {
+  month_label: string;
+  date_path: string;
+  planned_only: boolean;
+  projects: ErcotCapacityProject[];
+}
+export async function fetchErcotCapacityMonths(): Promise<{ months: ErcotCapacityMonth[] }> {
+  return apiFetch("/api/energy/ercot-capacity/months", { timeoutMs: 60_000 });
+}
+export async function fetchErcotCapacity(monthLabel: string, datePath: string, plannedOnly = false): Promise<ErcotCapacityResponse> {
+  const q = new URLSearchParams({ month_label: monthLabel, date_path: datePath, planned_only: String(plannedOnly) });
+  return apiFetch(`/api/energy/ercot-capacity?${q.toString()}`, { timeoutMs: 60_000 });
 }
 
 export async function fetchEIASeries(

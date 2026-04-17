@@ -1314,3 +1314,124 @@ def scan_vertical_spreads(req: VSScanRequest, user: str = Depends(get_current_us
 
     clean = [{k: _to_native(v) for k, v in r.items()} for r in results]
     return {"count": len(clean), "results": clean}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Signal Scanner bundle — prices + fundamentals + EPS + insider
+# ═══════════════════════════════════════════════════════════════════
+
+class SignalScanRequest(BaseModel):
+    tickers: list[str]
+    lookback: str = "1y"  # 6mo | 1y | 2y
+
+
+@router.post("/signal-bundle")
+def signal_bundle(req: SignalScanRequest, user: str = Depends(get_current_user)):
+    """One-shot fetch for the Signal Scanner page — prices/volume for all
+    tickers plus fundamentals, EPS revisions, and insider activity.
+    """
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+    from src.market_data import fetch_eps_revisions, fetch_insider_summary
+
+    tickers = [t.strip().upper() for t in req.tickers if t.strip()]
+    if len(tickers) < 2:
+        return {"error": "Need at least 2 tickers"}
+
+    def _load_prices():
+        try:
+            data = yf.download(tickers, period=req.lookback, progress=False, threads=True, auto_adjust=False)
+            out_prices: dict[str, list[dict]] = {}
+            if hasattr(data.columns, "levels"):  # MultiIndex
+                close_df = data["Close"]
+                vol_df = data["Volume"]
+                for tk in close_df.columns:
+                    rows = []
+                    for ts, val in close_df[tk].items():
+                        if val == val:  # not NaN
+                            vol = vol_df[tk].get(ts, None)
+                            rows.append({
+                                "Date": str(ts.date()),
+                                "Close": float(val),
+                                "Volume": float(vol) if vol == vol else 0,
+                            })
+                    out_prices[tk] = rows
+            else:
+                tk = tickers[0]
+                rows = []
+                for ts, val in data["Close"].items():
+                    if val == val:
+                        vol = data["Volume"].get(ts, 0)
+                        rows.append({
+                            "Date": str(ts.date()),
+                            "Close": float(val),
+                            "Volume": float(vol) if vol == vol else 0,
+                        })
+                out_prices[tk] = rows
+            return out_prices
+        except Exception:
+            return {}
+
+    def _load_fundamentals():
+        def _one(tk: str) -> dict | None:
+            try:
+                info = yf.Ticker(tk).info or {}
+                mktcap = info.get("marketCap")
+                fcf = info.get("freeCashflow")
+                debt = info.get("totalDebt")
+                cash = info.get("totalCash")
+                ebitda = info.get("ebitda")
+                def _pct(k):
+                    v = info.get(k)
+                    return v * 100 if isinstance(v, (int, float)) else None
+                return {
+                    "ticker": tk,
+                    "forward_pe": info.get("forwardPE"),
+                    "trailing_pe": info.get("trailingPE"),
+                    "price_to_book": info.get("priceToBook"),
+                    "ev_ebitda": info.get("enterpriseToEbitda"),
+                    "dividend_yield": _pct("dividendYield"),
+                    "fcf_yield": (fcf / mktcap * 100) if fcf and mktcap and mktcap > 0 else None,
+                    "roe": _pct("returnOnEquity"),
+                    "profit_margin": _pct("profitMargins"),
+                    "operating_margin": _pct("operatingMargins"),
+                    "gross_margin": _pct("grossMargins"),
+                    "revenue_growth": _pct("revenueGrowth"),
+                    "earnings_growth": _pct("earningsGrowth"),
+                    "beta": info.get("beta"),
+                    "net_debt_ebitda": ((debt or 0) - (cash or 0)) / ebitda if debt and ebitda and ebitda > 0 else None,
+                    "current_ratio": info.get("currentRatio"),
+                    "market_cap": mktcap,
+                }
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            return [r for r in ex.map(_one, tickers) if r]
+
+    def _load_eps():
+        try:
+            df = fetch_eps_revisions(tickers)
+            return df.to_dict(orient="records") if not df.empty else []
+        except Exception:
+            return []
+
+    def _load_insider():
+        try:
+            df = fetch_insider_summary(tickers)
+            return df.to_dict(orient="records") if not df.empty else []
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_prices = pool.submit(_load_prices)
+        f_funds = pool.submit(_load_fundamentals)
+        f_eps = pool.submit(_load_eps)
+        f_ins = pool.submit(_load_insider)
+
+    return {
+        "prices": f_prices.result(),
+        "fundamentals": f_funds.result(),
+        "eps_revisions": f_eps.result(),
+        "insider": f_ins.result(),
+    }
