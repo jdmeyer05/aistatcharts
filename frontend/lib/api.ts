@@ -2023,3 +2023,49 @@ export async function fetchOecdCli(): Promise<OecdCliResponse> {
 export async function fetchNextFomc(): Promise<{ date: string | null }> {
   return apiFetch("/api/fed-macro/next-fomc", { timeoutMs: 30_000 });
 }
+
+// ── Meta Analysis forecasts ─────────────────────────────────────────────
+
+export interface MetaForecastComponent {
+  ticker: string;
+  analyst_implied: number;
+  eps_momentum: number;
+  valuation: number;
+  macro: number;
+  blended_forecast: number;
+  historical_annual: number;
+}
+
+export interface MetaForecastCoverage {
+  ticker?: string;
+  current_price: number | null;
+  target_price: number | null;
+  target_low: number | null;
+  target_high: number | null;
+  implied_return: number | null;
+  n_analysts: number | null;
+  rec_mean: number | null;
+  forward_pe: number | null;
+  trailing_pe: number | null;
+  earnings_growth: number | null;
+  revenue_growth: number | null;
+  sector: string | null;
+}
+
+export interface MetaForecastResponse {
+  tickers: string[];
+  failed: string[];
+  macro: { yield_curve?: number; vix?: number; fed_funds?: number; ten_year?: number };
+  macro_adj_pct: number;
+  components: MetaForecastComponent[];
+  coverage: MetaForecastCoverage[];
+  error?: string;
+}
+
+export async function fetchMetaForecasts(tickers: string[]): Promise<MetaForecastResponse> {
+  return apiFetch("/api/meta/forecasts", {
+    method: "POST",
+    body: JSON.stringify({ tickers }),
+    timeoutMs: 3 * 60_000,
+  });
+}

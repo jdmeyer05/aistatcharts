@@ -468,6 +468,150 @@ class GridRequest(BaseModel):
     denoise: bool = True
 
 
+class ForecastRequest(BaseModel):
+    tickers: List[str]
+
+
+# ═══════════════════════════════════════════════
+# FORECAST HELPERS (ported from Streamlit page)
+# ═══════════════════════════════════════════════
+
+def _fetch_analyst_targets(tickers: List[str]) -> pd.DataFrame:
+    """Per-ticker analyst targets, valuation, growth. yfinance Ticker is
+    thread-safe; yf.download with threads=True is not (see CLAUDE guidance)."""
+    import yfinance as yf
+
+    def _one(tk: str):
+        try:
+            info = yf.Ticker(tk).info or {}
+            current = info.get("currentPrice") or info.get("regularMarketPrice")
+            target = info.get("targetMeanPrice")
+            implied = (target / current - 1) if target and current and current > 0 else None
+            eg = info.get("earningsGrowth")
+            rg = info.get("revenueGrowth")
+            return {
+                "ticker": tk,
+                "current_price": current,
+                "target_price": target,
+                "target_low": info.get("targetLowPrice"),
+                "target_high": info.get("targetHighPrice"),
+                "implied_return": implied,
+                "n_analysts": info.get("numberOfAnalystOpinions"),
+                "rec_mean": info.get("recommendationMean"),
+                "forward_pe": info.get("forwardPE"),
+                "trailing_pe": info.get("trailingPE"),
+                "earnings_growth": (eg * 100) if eg is not None else None,
+                "revenue_growth": (rg * 100) if rg is not None else None,
+                "sector": info.get("sector"),
+            }
+        except Exception as e:
+            logger.warning(f"forecast fetch failed for {tk}: {e}")
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        rows = [r for r in ex.map(_one, tickers) if r is not None]
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def _fetch_macro_context() -> Dict[str, float]:
+    """Yield curve, VIX, Fed Funds, 10Y Treasury — latest print each."""
+    from src.market_data import fetch_fred_series
+    out: Dict[str, float] = {}
+    for sid, label in [("T10Y2Y", "yield_curve"), ("VIXCLS", "vix"),
+                       ("DFF", "fed_funds"), ("DGS10", "ten_year")]:
+        try:
+            s = fetch_fred_series(sid, periods=60)
+            if s is not None and not s.empty and "value" in s.columns:
+                vals = s["value"].dropna()
+                if not vals.empty:
+                    out[label] = float(vals.iloc[-1])
+        except Exception as e:
+            logger.warning(f"macro fetch failed for {sid}: {e}")
+    return out
+
+
+def _build_forecast_components(
+    forecast_df: pd.DataFrame,
+    tickers: List[str],
+    hist_mu: np.ndarray,
+    macro: Dict[str, float],
+) -> Dict:
+    """Blend analyst / EPS / valuation / macro into per-ticker forecasts.
+
+    EPS momentum is omitted here because fetch_eps_revisions sits behind a
+    separate API and Streamlit only uses it if an EPS DataFrame is passed.
+    The 30% weight falls back to zero if EPS data isn't provided.
+    """
+    n = len(tickers)
+    analyst_ret = np.full(n, np.nan)
+    eps_signal = np.zeros(n)
+    val_signal = np.zeros(n)
+
+    if not forecast_df.empty:
+        fc = forecast_df.set_index("ticker") if "ticker" in forecast_df.columns else forecast_df
+        for i, t in enumerate(tickers):
+            if t in fc.index:
+                row = fc.loc[t]
+                ir = row.get("implied_return") if not isinstance(row, pd.DataFrame) else None
+                if ir is not None and pd.notna(ir):
+                    analyst_ret[i] = ir
+
+        if "forward_pe" in forecast_df.columns:
+            fwd_pes = forecast_df.set_index("ticker")["forward_pe"].reindex(tickers)
+            median_pe = fwd_pes.median()
+            if pd.notna(median_pe) and median_pe > 0:
+                for i, t in enumerate(tickers):
+                    pe = fwd_pes.get(t)
+                    if pd.notna(pe) and pe > 0:
+                        ratio = pe / median_pe
+                        if ratio < 0.5:
+                            val_signal[i] = 0.06
+                        elif ratio < 0.8:
+                            val_signal[i] = 0.03
+                        elif ratio > 2.0:
+                            val_signal[i] = -0.06
+                        elif ratio > 1.5:
+                            val_signal[i] = -0.03
+
+    try:
+        yc = float(macro.get("yield_curve", 0))
+    except (TypeError, ValueError):
+        yc = 0.0
+    try:
+        vix = float(macro.get("vix", 20))
+    except (TypeError, ValueError):
+        vix = 20.0
+    if yc > 0.5 and vix < 20:
+        macro_adj = 0.03
+    elif yc > 0 and vix < 25:
+        macro_adj = 0.01
+    elif yc < 0 or vix > 30:
+        macro_adj = -0.03
+    else:
+        macro_adj = 0.0
+
+    hist_annual = hist_mu * 252
+    analyst_annual = np.where(np.isnan(analyst_ret), hist_annual, analyst_ret)
+
+    blended = (0.40 * analyst_annual + 0.30 * eps_signal +
+               0.20 * val_signal + 0.10 * macro_adj)
+    blended = np.clip(blended, -0.50, 0.50)
+
+    components = []
+    for i, t in enumerate(tickers):
+        components.append({
+            "ticker": t,
+            "analyst_implied": float(analyst_annual[i] * 100),
+            "eps_momentum": float(eps_signal[i] * 100),
+            "valuation": float(val_signal[i] * 100),
+            "macro": float(macro_adj * 100),
+            "blended_forecast": float(blended[i] * 100),
+            "historical_annual": float(hist_mu[i] * 252 * 100),
+        })
+
+    return {"components": components, "macro_adj": float(macro_adj * 100)}
+
+
 # ═══════════════════════════════════════════════
 # ENDPOINT: /api/meta/backtest
 # ═══════════════════════════════════════════════
@@ -865,4 +1009,63 @@ async def meta_grid(req: GridRequest, user: str = Depends(get_current_user)):
         "lookback": req.lookback,
         "rebalance": req.rebalance,
         "est_days": req.est_days,
+    }
+
+
+# ═══════════════════════════════════════════════
+# ENDPOINT: /api/meta/forecasts
+# ═══════════════════════════════════════════════
+
+@router.post("/forecasts")
+async def meta_forecasts(req: ForecastRequest, user: str = Depends(get_current_user)):
+    """Blend analyst/valuation/macro into per-ticker annual return forecasts."""
+    tickers = sorted({t.strip().upper() for t in req.tickers if t.strip()})[:60]
+    if len(tickers) < 1:
+        return {"error": "At least 1 ticker required."}
+
+    # Historical mean from ~1y of closes via Polygon
+    prices = _fetch_prices(tickers, 365)
+    usable = [t for t in tickers if t in prices.columns]
+    if not usable:
+        return {"error": "No price data available for the requested tickers."}
+
+    returns = prices[usable].pct_change().dropna()
+    hist_mu = returns.mean().reindex(usable).fillna(0).values
+
+    # Analyst targets + macro, in parallel
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fc_future = ex.submit(_fetch_analyst_targets, usable)
+        macro_future = ex.submit(_fetch_macro_context)
+        forecast_df = fc_future.result()
+        macro = macro_future.result()
+
+    blend = _build_forecast_components(forecast_df, usable, hist_mu, macro)
+
+    # Analyst coverage rows for the table
+    coverage: List[Dict] = []
+    if not forecast_df.empty:
+        for _, row in forecast_df.iterrows():
+            coverage.append({
+                "ticker": row.get("ticker"),
+                "current_price": (float(row["current_price"]) if pd.notna(row.get("current_price")) else None),
+                "target_price": (float(row["target_price"]) if pd.notna(row.get("target_price")) else None),
+                "target_low": (float(row["target_low"]) if pd.notna(row.get("target_low")) else None),
+                "target_high": (float(row["target_high"]) if pd.notna(row.get("target_high")) else None),
+                "implied_return": (float(row["implied_return"]) * 100 if pd.notna(row.get("implied_return")) else None),
+                "n_analysts": (int(row["n_analysts"]) if pd.notna(row.get("n_analysts")) else None),
+                "rec_mean": (float(row["rec_mean"]) if pd.notna(row.get("rec_mean")) else None),
+                "forward_pe": (float(row["forward_pe"]) if pd.notna(row.get("forward_pe")) else None),
+                "trailing_pe": (float(row["trailing_pe"]) if pd.notna(row.get("trailing_pe")) else None),
+                "earnings_growth": (float(row["earnings_growth"]) if pd.notna(row.get("earnings_growth")) else None),
+                "revenue_growth": (float(row["revenue_growth"]) if pd.notna(row.get("revenue_growth")) else None),
+                "sector": row.get("sector"),
+            })
+
+    return {
+        "tickers": usable,
+        "failed": [t for t in tickers if t not in usable],
+        "macro": macro,
+        "macro_adj_pct": blend["macro_adj"],
+        "components": blend["components"],
+        "coverage": coverage,
     }

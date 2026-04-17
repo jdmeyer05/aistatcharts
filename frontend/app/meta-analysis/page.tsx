@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import {
   fetchMetaPresets,
+  fetchMetaForecasts,
   runMetaBacktest,
   runMetaGrid,
   type MetaBacktestResponse,
@@ -339,7 +340,7 @@ export default function MetaAnalysisPage() {
 
           {activeTab === 0 && <EquityCurvesTab data={result} t={t} L={L} topN={topN} setTopN={setTopN} />}
           {activeTab === 1 && <AllocationsTab data={result} t={t} L={L} allocMethod={allocMethod} setAllocMethod={setAllocMethod} />}
-          {activeTab === 2 && <ForecastsTab />}
+          {activeTab === 2 && <ForecastsTab tickers={result.tickers} t={t} L={L} />}
           {activeTab === 3 && <PerformanceTab data={result} t={t} L={L} />}
           {activeTab === 4 && <InstitutionalTab data={result} t={t} L={L} />}
           {activeTab === 5 && <StatisticalTestsTab data={result} t={t} L={L} />}
@@ -684,27 +685,150 @@ function AllocationsTab({
 // TAB 3: FORECASTS (placeholder — forward estimates are a separate workflow)
 // ═══════════════════════════════════════════════════════════════
 
-function ForecastsTab() {
+function ForecastsTab({
+  tickers, t, L,
+}: {
+  tickers: string[];
+  t: ReturnType<typeof getChartTheme>;
+  L: ReturnType<typeof getBaseLayout>;
+}) {
+  const run = useMutation({ mutationFn: () => fetchMetaForecasts(tickers) });
+  const data = run.data && !run.data.error ? run.data : null;
+
   return (
-    <div className="card text-sm space-y-3">
-      <div className="text-base font-semibold">Forward Return Estimates</div>
-      <div className="text-text-muted text-xs">
-        The forecast model blends four components into a single annualized return estimate per ticker. When enabled, Tangency and Robust Sharpe use these forecasts for <em>current weights only</em>; the walk-forward backtest remains purely historical (no look-ahead).
+    <div className="space-y-4">
+      <div className="card card-compact">
+        <div className="text-sm font-semibold mb-1">Forward return estimates</div>
+        <div className="text-text-muted text-xs mb-3">
+          Blends four components into an annualized return estimate per ticker: analyst target (40%), EPS momentum (30%, currently 0 until EPS endpoint is wired), valuation vs peer-median forward P/E (20%), and macro yield-curve/VIX overlay (10%). Clipped to ±50%.
+        </div>
+        <button
+          onClick={() => run.mutate()}
+          disabled={run.isPending || tickers.length === 0}
+          className="px-5 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm"
+        >
+          {run.isPending ? "Fetching analyst + macro…" : `Compute forecasts (${tickers.length} tickers)`}
+        </button>
       </div>
-      <table className="data-table text-xs">
-        <thead>
-          <tr><th>Component</th><th>Weight</th><th>Source</th><th>Logic</th></tr>
-        </thead>
-        <tbody>
-          <tr><td className="font-semibold">Analyst Implied</td><td className="font-data">40%</td><td>yfinance consensus target</td><td>(target / price) − 1</td></tr>
-          <tr><td className="font-semibold">EPS Momentum</td><td className="font-data">30%</td><td>EPS revision counts</td><td>Net positive → outperformance</td></tr>
-          <tr><td className="font-semibold">Valuation</td><td className="font-data">20%</td><td>Forward P/E vs median</td><td>Cheap → positive, expensive → negative</td></tr>
-          <tr><td className="font-semibold">Macro</td><td className="font-data">10%</td><td>FRED yield curve + VIX</td><td>Risk-on / risk-off regime</td></tr>
-        </tbody>
-      </table>
-      <div className="text-xs text-text-muted">
-        Forward estimates workflow is still powered by the Streamlit app while the Next.js forecast endpoint is being ported. Run the backtest with current controls for historical-mean optimization.
-      </div>
+
+      {run.isPending && (
+        <div className="card text-center py-8"><div className="inline-block w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div>
+      )}
+
+      {run.data?.error && <div className="card border-loss text-loss text-sm">{run.data.error}</div>}
+
+      {data && (
+        <>
+          <div className="card card-compact">
+            <div className="text-sm font-semibold mb-2">Macro context</div>
+            <div className="flex flex-wrap gap-6">
+              <Metric label="Yield curve (10Y−2Y)" value={data.macro.yield_curve !== undefined ? `${data.macro.yield_curve.toFixed(2)}%` : "—"} delta={data.macro.yield_curve !== undefined ? (data.macro.yield_curve > 0 ? "Positive" : "Inverted") : undefined} deltaType={data.macro.yield_curve !== undefined && data.macro.yield_curve > 0 ? "gain" : "loss"} />
+              <Metric label="VIX" value={data.macro.vix !== undefined ? data.macro.vix.toFixed(1) : "—"} />
+              <Metric label="Fed Funds" value={data.macro.fed_funds !== undefined ? `${data.macro.fed_funds.toFixed(2)}%` : "—"} />
+              <Metric label="10Y Treasury" value={data.macro.ten_year !== undefined ? `${data.macro.ten_year.toFixed(2)}%` : "—"} />
+            </div>
+            <div className="text-xs text-text-muted mt-2">
+              Macro overlay: <span className={data.macro_adj_pct > 0 ? "text-gain" : data.macro_adj_pct < 0 ? "text-loss" : "text-text-muted"}>
+                {data.macro_adj_pct >= 0 ? "+" : ""}{data.macro_adj_pct.toFixed(0)}%
+              </span>
+              {" "}
+              ({data.macro_adj_pct > 0 ? "favorable — positive yield curve, low VIX" : data.macro_adj_pct < 0 ? "unfavorable — inverted curve or elevated VIX" : "neutral conditions"})
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="text-sm font-semibold mb-1">Blended forecast returns (annualized)</div>
+            <Plot
+              data={[{
+                type: "bar" as const,
+                orientation: "h" as const,
+                y: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) => c.ticker),
+                x: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) => c.blended_forecast),
+                marker: {
+                  color: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) =>
+                    c.blended_forecast > 5 ? t.gain : c.blended_forecast > 0 ? t.accent : t.loss
+                  ),
+                },
+                text: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) => `${c.blended_forecast >= 0 ? "+" : ""}${c.blended_forecast.toFixed(1)}%`),
+                textposition: "outside" as const,
+              }]}
+              layout={{
+                height: Math.max(320, data.components.length * 26),
+                ...L,
+                xaxis: { title: "Forecast return (%)", gridcolor: t.grid },
+                yaxis: { gridcolor: t.grid },
+                shapes: [{ type: "line", xref: "x" as const, yref: "paper" as const, x0: 0, x1: 0, y0: 0, y1: 1, line: { color: t.muted, dash: "dash", width: 1 } }],
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: "100%" }}
+            />
+          </div>
+
+          <div className="card">
+            <div className="text-sm font-semibold mb-2">Component breakdown (contribution, %)</div>
+            <Plot
+              data={[
+                { type: "bar" as const, orientation: "h" as const, y: data.components.map((c) => c.ticker), x: data.components.map((c) => c.analyst_implied * 0.4), name: "Analyst × 40%", marker: { color: t.accent } },
+                { type: "bar" as const, orientation: "h" as const, y: data.components.map((c) => c.ticker), x: data.components.map((c) => c.eps_momentum * 0.3), name: "EPS × 30%", marker: { color: t.gain } },
+                { type: "bar" as const, orientation: "h" as const, y: data.components.map((c) => c.ticker), x: data.components.map((c) => c.valuation * 0.2), name: "Valuation × 20%", marker: { color: t.spot } },
+                { type: "bar" as const, orientation: "h" as const, y: data.components.map((c) => c.ticker), x: data.components.map((c) => c.macro * 0.1), name: "Macro × 10%", marker: { color: t.loss } },
+              ]}
+              layout={{
+                height: Math.max(320, data.components.length * 26),
+                ...L,
+                barmode: "relative" as const,
+                xaxis: { title: "Contribution (%)", gridcolor: t.grid },
+                yaxis: { gridcolor: t.grid },
+                legend: { orientation: "h", y: -0.18 },
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: "100%" }}
+            />
+          </div>
+
+          <div className="card">
+            <div className="text-sm font-semibold mb-2">Historical vs forecast (annualized %)</div>
+            <Plot
+              data={[
+                { type: "bar" as const, x: data.components.map((c) => c.ticker), y: data.components.map((c) => c.historical_annual), name: "Historical", marker: { color: t.muted } },
+                { type: "bar" as const, x: data.components.map((c) => c.ticker), y: data.components.map((c) => c.blended_forecast), name: "Forecast", marker: { color: t.accent } },
+              ]}
+              layout={{ height: 360, ...L, barmode: "group" as const, yaxis: { title: "Return (%)", gridcolor: t.grid }, xaxis: { gridcolor: t.grid }, legend: { orientation: "h", y: -0.18 } }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: "100%" }}
+            />
+          </div>
+
+          {data.coverage.length > 0 && (
+            <div className="card">
+              <div className="text-sm font-semibold mb-2">Analyst coverage &amp; valuation</div>
+              <div className="overflow-x-auto">
+                <table className="data-table text-xs">
+                  <thead>
+                    <tr><th>Ticker</th><th>Price</th><th>Target</th><th>Implied</th><th>Analysts</th><th>Rec</th><th>Fwd P/E</th><th>Earn Growth</th><th>Rev Growth</th><th>Sector</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.coverage.map((c) => (
+                      <tr key={c.ticker}>
+                        <td className="font-semibold">{c.ticker}</td>
+                        <td className="font-data">{c.current_price !== null ? `$${c.current_price.toFixed(2)}` : "—"}</td>
+                        <td className="font-data">{c.target_price !== null ? `$${c.target_price.toFixed(2)}` : "—"}</td>
+                        <td className={`font-data ${(c.implied_return ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>{c.implied_return !== null ? `${c.implied_return >= 0 ? "+" : ""}${c.implied_return.toFixed(1)}%` : "—"}</td>
+                        <td className="font-data">{c.n_analysts ?? "—"}</td>
+                        <td className="font-data">{c.rec_mean !== null ? c.rec_mean.toFixed(1) : "—"}</td>
+                        <td className="font-data">{c.forward_pe !== null ? c.forward_pe.toFixed(1) : "—"}</td>
+                        <td className={`font-data ${(c.earnings_growth ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>{c.earnings_growth !== null ? `${c.earnings_growth >= 0 ? "+" : ""}${c.earnings_growth.toFixed(1)}%` : "—"}</td>
+                        <td className={`font-data ${(c.revenue_growth ?? 0) >= 0 ? "text-gain" : "text-loss"}`}>{c.revenue_growth !== null ? `${c.revenue_growth >= 0 ? "+" : ""}${c.revenue_growth.toFixed(1)}%` : "—"}</td>
+                        <td className="text-text-muted">{c.sector ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
