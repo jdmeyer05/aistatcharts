@@ -10,7 +10,7 @@ import {
   type QuantLabAnalyzeResponse,
   type QuantLabHrpResponse,
 } from "@/lib/api";
-import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
+import { getChartTheme, getBaseLayout, heatmapTrace, heatmapHeight } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -878,18 +878,14 @@ function FeatureImportanceTab({ data, t, L }: { data: QuantLabAnalyzeResponse; t
         <div className="text-xs text-text-muted mb-2">MDI: in-sample impurity reduction. MDA: out-of-sample permutation importance (more honest).</div>
         <Plot
           data={[{
-            type: "heatmap" as const,
+            ...heatmapTrace(t, "sequential", { colorbarTitle: "Normalized" }),
             z,
             x: ["MDI (Impurity)", "MDA (Accuracy)"],
             y: sortedFeat,
-            colorscale: [[0, t.plot], [0.5, t.spot], [1, t.gain]],
             zmin: 0, zmax: 1,
             text: z.map((row) => row.map((v) => v.toFixed(2))),
-            texttemplate: "%{text}",
-            textfont: { size: 11 },
-            colorbar: { title: { text: "Normalized" } },
           }]}
-          layout={{ height: Math.max(260, features.length * 30), ...L }}
+          layout={{ height: heatmapHeight(features.length), ...L }}
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />
@@ -1375,15 +1371,11 @@ function EntropyTab({ data, t, L }: { data: QuantLabAnalyzeResponse; t: ReturnTy
         </div>
         <Plot
           data={[{
-            type: "heatmap" as const,
+            ...heatmapTrace(t, "intensity", { colorbarTitle: "P(X|Y)" }),
             z: transMat,
             x: Array.from({ length: nStates }, (_, i) => `Bin ${i}`),
             y: Array.from({ length: nStates }, (_, i) => `Lag ${i}`),
-            colorscale: [[0, t.plot], [1, t.accent]],
             text: transMat.map((row) => row.map((v) => v.toFixed(2))),
-            texttemplate: "%{text}",
-            textfont: { size: 11 },
-            colorbar: { title: { text: "P(X|Y)" } },
           }]}
           layout={{ height: 340, ...L }}
           config={{ displayModeBar: false, responsive: true }}

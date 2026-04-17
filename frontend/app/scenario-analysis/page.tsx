@@ -15,7 +15,7 @@ import {
   type RegimeTrackResponse,
   type GrokLatestResponse,
 } from "@/lib/api";
-import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
+import { getChartTheme, getBaseLayout, heatmapTrace, heatmapHeight } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -721,18 +721,14 @@ function HistoricalStressTab({ data, t, L }: {
             <div className="text-sm font-semibold mb-2">Per-asset stress impact (%)</div>
             <Plot
               data={[{
-                type: "heatmap" as const,
+                ...heatmapTrace(t, "divergent", { colorbarTitle: "Shock %" }),
                 z: results.map((r) => data.tickers.map((tk) => r.ticker_impacts[tk] ?? 0)),
                 x: data.tickers,
                 y: results.map((r) => r.scenario),
-                colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
                 zmid: 0,
                 text: results.map((r) => data.tickers.map((tk) => `${(r.ticker_impacts[tk] ?? 0).toFixed(1)}%`)),
-                texttemplate: "%{text}",
-                textfont: { size: 10 },
-                colorbar: { title: { text: "Shock %" } },
               }]}
-              layout={{ height: Math.max(240, results.length * 38), ...L }}
+              layout={{ height: heatmapHeight(results.length), ...L }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: "100%" }}
             />
@@ -1263,18 +1259,14 @@ function DiagnosticsTab({ data, t, L }: {
         <div className="text-sm font-semibold mb-2">Factor beta profiles (bps per unit change)</div>
         <Plot
           data={[{
-            type: "heatmap" as const,
+            ...heatmapTrace(t, "correlation", { colorbarTitle: "Sensitivity (bps)" }),
             z: betaHeatZ,
             x: friendlyFactorNames,
             y: diags.map((d) => d.ticker),
-            colorscale: [[0, t.loss], [0.5, t.plot], [1, t.accent]],
             zmid: 0,
             text: betaHeatZ.map((row) => row.map((v) => v === 0 ? "" : v.toFixed(1))),
-            texttemplate: "%{text}",
-            textfont: { size: 10 },
-            colorbar: { title: { text: "Sensitivity (bps)" } },
           }]}
-          layout={{ height: Math.max(200, diags.length * 38), ...L }}
+          layout={{ height: heatmapHeight(diags.length), ...L }}
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />
@@ -1320,15 +1312,12 @@ function DiagnosticsTab({ data, t, L }: {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <Plot
               data={[{
-                type: "heatmap" as const,
+                ...heatmapTrace(t, "divergent"),
                 z: data.correlation.normal,
                 x: data.correlation.normal_methods,
                 y: data.correlation.normal_methods,
-                colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
                 zmid: 0, zmin: -1, zmax: 1,
                 text: data.correlation.normal.map((row) => row.map((v) => v.toFixed(2))),
-                texttemplate: "%{text}",
-                textfont: { size: 10 },
               }]}
               layout={{ height: 320, ...L, title: { text: "Normal periods", font: { size: 12 } } }}
               config={{ displayModeBar: false, responsive: true }}
@@ -1336,15 +1325,12 @@ function DiagnosticsTab({ data, t, L }: {
             />
             <Plot
               data={[{
-                type: "heatmap" as const,
+                ...heatmapTrace(t, "divergent"),
                 z: data.correlation.stressed,
                 x: data.correlation.stressed_methods,
                 y: data.correlation.stressed_methods,
-                colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
                 zmid: 0, zmin: -1, zmax: 1,
                 text: data.correlation.stressed.map((row) => row.map((v) => v.toFixed(2))),
-                texttemplate: "%{text}",
-                textfont: { size: 10 },
               }]}
               layout={{ height: 320, ...L, title: { text: "Stressed periods (high VIX)", font: { size: 12 } } }}
               config={{ displayModeBar: false, responsive: true }}

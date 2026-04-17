@@ -12,7 +12,7 @@ import {
   type MetaBacktestResponse,
   type MetaGridResponse,
 } from "@/lib/api";
-import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
+import { getChartTheme, getBaseLayout, heatmapTrace, heatmapHeight } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -626,19 +626,15 @@ function AllocationsTab({
           <div className="text-sm font-semibold mb-2">Rebalance history — {active}</div>
           <Plot
             data={[{
-              type: "heatmap" as const,
+              ...heatmapTrace(t, "sequential", { colorbarTitle: "Weight %" }),
               z: histZ,
               x: histDates,
               y: histTickers,
-              colorscale: [[0, t.plot], [0.5, t.accent], [1, t.gain]],
               zmin: 0,
               text: histText,
-              texttemplate: "%{text}",
-              textfont: { size: 9 },
-              colorbar: { title: { text: "Weight %" } },
             }]}
             layout={{
-              height: Math.max(320, histTickers.length * 22),
+              height: heatmapHeight(histTickers.length, { compact: true }),
               ...L,
               title: { text: `${active} — weight evolution across rebalances`, font: { size: 12 } },
               xaxis: { title: "Rebalance date", gridcolor: t.grid },
@@ -1000,21 +996,14 @@ function InstitutionalTab({ data, t, L }: {
           <div className="text-xs text-text-muted mb-2">Sharpe ratio by market regime (Equal Weight as market proxy).</div>
           <Plot
             data={[{
-              type: "heatmap" as const,
+              ...heatmapTrace(t, "divergent", { colorbarTitle: "Sharpe" }),
               z: regimeZ,
               x: regimeOrder,
               y: regimeMethods,
-              colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
               zmid: 0,
               text: regimeText,
-              texttemplate: "%{text}",
-              textfont: { size: 11 },
-              colorbar: { title: { text: "Sharpe" } },
             }]}
-            layout={{
-              height: Math.max(260, regimeMethods.length * 36),
-              ...L,
-            }}
+            layout={{ height: heatmapHeight(regimeMethods.length), ...L }}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%" }}
           />
@@ -1131,21 +1120,14 @@ function InstitutionalTab({ data, t, L }: {
           <div className="text-xs text-text-muted mb-2">Estimated portfolio loss (= beta × historical market drawdown).</div>
           <Plot
             data={[{
-              type: "heatmap" as const,
+              ...heatmapTrace(t, "divergent", { colorbarTitle: "Est. loss %" }),
               z: data.stress_scenarios.map((s) => data.stress_scenario_names.map((sc) => s.scenarios[sc] ?? 0)),
               x: data.stress_scenario_names,
               y: data.stress_scenarios.map((s) => s.method),
-              colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
               zmid: -15,
               text: data.stress_scenarios.map((s) => data.stress_scenario_names.map((sc) => `${(s.scenarios[sc] ?? 0).toFixed(1)}%`)),
-              texttemplate: "%{text}",
-              textfont: { size: 10 },
-              colorbar: { title: { text: "Est. loss %" } },
             }]}
-            layout={{
-              height: Math.max(220, data.stress_scenarios.length * 32),
-              ...L,
-            }}
+            layout={{ height: heatmapHeight(data.stress_scenarios.length), ...L }}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%" }}
           />
@@ -1498,21 +1480,14 @@ function RollingTab({ data, t, L }: {
           <div className="text-xs text-text-muted mb-2">High correlation = methods are redundant. Low correlation = true diversification of approach.</div>
           <Plot
             data={[{
-              type: "heatmap" as const,
+              ...heatmapTrace(t, "correlation", { colorbarTitle: "Corr" }),
               z: data.method_corr,
               x: data.method_corr_methods,
               y: data.method_corr_methods,
-              colorscale: [[0, t.loss], [0.5, t.plot], [1, t.accent]],
               zmid: 0.5, zmin: 0, zmax: 1,
               text: data.method_corr.map((row) => row.map((v) => v.toFixed(2))),
-              texttemplate: "%{text}",
-              textfont: { size: 10 },
-              colorbar: { title: { text: "Corr" } },
             }]}
-            layout={{
-              height: Math.max(320, data.method_corr_methods.length * 32),
-              ...L,
-            }}
+            layout={{ height: heatmapHeight(data.method_corr_methods.length), ...L }}
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%" }}
           />
@@ -1655,18 +1630,14 @@ function UniverseGridTab({
             <div className="text-sm font-semibold mb-2">Sharpe ratio — universe × method</div>
             <Plot
               data={[{
-                type: "heatmap" as const,
+                ...heatmapTrace(t, "divergent", { colorbarTitle: "Sharpe" }),
                 z: sharpeGrid.z as number[][],
                 x: sharpeGrid.x,
                 y: sharpeGrid.y,
-                colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
                 zmid: 0,
                 text: (sharpeGrid.z as number[][]).map((row) => row.map((v) => v === null ? "" : v.toFixed(2))),
-                texttemplate: "%{text}",
-                textfont: { size: 9 },
-                colorbar: { title: { text: "Sharpe" } },
               }]}
-              layout={{ height: Math.max(380, sharpeGrid.y.length * 28), ...L }}
+              layout={{ height: heatmapHeight(sharpeGrid.y.length), ...L }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: "100%" }}
             />
@@ -1676,18 +1647,14 @@ function UniverseGridTab({
             <div className="text-sm font-semibold mb-2">Annualized return — universe × method</div>
             <Plot
               data={[{
-                type: "heatmap" as const,
+                ...heatmapTrace(t, "divergent", { colorbarTitle: "Return %" }),
                 z: (returnGrid.z as number[][]).map((row) => row.map((v) => v === null ? null : v * 100)),
                 x: returnGrid.x,
                 y: returnGrid.y,
-                colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
                 zmid: 0,
                 text: (returnGrid.z as number[][]).map((row) => row.map((v) => v === null ? "" : `${(v * 100).toFixed(1)}%`)),
-                texttemplate: "%{text}",
-                textfont: { size: 9 },
-                colorbar: { title: { text: "Return %" } },
               }]}
-              layout={{ height: Math.max(380, returnGrid.y.length * 28), ...L }}
+              layout={{ height: heatmapHeight(returnGrid.y.length), ...L }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: "100%" }}
             />
@@ -1697,18 +1664,14 @@ function UniverseGridTab({
             <div className="text-sm font-semibold mb-2">Max drawdown — universe × method</div>
             <Plot
               data={[{
-                type: "heatmap" as const,
+                ...heatmapTrace(t, "divergent", { colorbarTitle: "Max DD %" }),
                 z: (maxddGrid.z as number[][]).map((row) => row.map((v) => v === null ? null : v * 100)),
                 x: maxddGrid.x,
                 y: maxddGrid.y,
-                colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
                 zmid: -15,
                 text: (maxddGrid.z as number[][]).map((row) => row.map((v) => v === null ? "" : `${(v * 100).toFixed(1)}%`)),
-                texttemplate: "%{text}",
-                textfont: { size: 9 },
-                colorbar: { title: { text: "Max DD %" } },
               }]}
-              layout={{ height: Math.max(380, maxddGrid.y.length * 28), ...L }}
+              layout={{ height: heatmapHeight(maxddGrid.y.length), ...L }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: "100%" }}
             />
@@ -1718,18 +1681,14 @@ function UniverseGridTab({
             <div className="text-sm font-semibold mb-2">Sortino ratio — universe × method</div>
             <Plot
               data={[{
-                type: "heatmap" as const,
+                ...heatmapTrace(t, "divergent", { colorbarTitle: "Sortino" }),
                 z: sortinoGrid.z as number[][],
                 x: sortinoGrid.x,
                 y: sortinoGrid.y,
-                colorscale: [[0, t.loss], [0.5, t.plot], [1, t.gain]],
                 zmid: 0,
                 text: (sortinoGrid.z as number[][]).map((row) => row.map((v) => v === null ? "" : v.toFixed(2))),
-                texttemplate: "%{text}",
-                textfont: { size: 9 },
-                colorbar: { title: { text: "Sortino" } },
               }]}
-              layout={{ height: Math.max(380, sortinoGrid.y.length * 28), ...L }}
+              layout={{ height: heatmapHeight(sortinoGrid.y.length), ...L }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: "100%" }}
             />

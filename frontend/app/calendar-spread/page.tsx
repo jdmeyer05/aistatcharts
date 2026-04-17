@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { fetchOptionsChain, fetchSnapshot, fetchPriceHistory, fetchAITradeIdeas } from "@/lib/api";
-import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
+import { getChartTheme, getBaseLayout, heatmapTrace } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import dynamic from "next/dynamic";
 
@@ -288,9 +288,9 @@ export default function CalendarSpreads() {
                 });
                 return (
                   <Plot data={[{
-                    type: "heatmap" as const, x: prices, y: days, z,
-                    colorscale: [[0, t.loss], [0.5, t.grid], [1, t.gain]], zmid: 0,
-                    colorbar: { title: { text: "P&L ($)", font: { size: 9 } }, thickness: 12 },
+                    ...heatmapTrace(t, "divergent", { colorbarTitle: "P&L ($)" }),
+                    x: prices, y: days, z,
+                    zmid: 0,
                     hovertemplate: "Price: $%{x:.0f}<br>Day: %{y}<br>P&L: $%{z:.0f}<extra></extra>",
                   }]}
                     layout={{ height: 400, ...L, xaxis: { title: "Spot Price", gridcolor: t.grid }, yaxis: { title: "Days Elapsed", gridcolor: t.grid },
@@ -438,13 +438,12 @@ export default function CalendarSpreads() {
                 }));
                 return (
                   <Plot data={[{
-                    type: "heatmap" as const,
+                    ...heatmapTrace(t, "divergent", { colorbarTitle: "P&L ($)" }),
                     x: ivShifts.map(s => `${s > 0 ? "+" : ""}${s}%`),
                     y: tilts.map(tt => `${tt > 0 ? "+" : ""}${tt}% tilt`),
                     z,
-                    colorscale: [[0, t.loss], [0.5, t.grid], [1, t.gain]], zmid: 0,
-                    text: z.map(row => row.map(v => `$${v}`)), texttemplate: "%{text}", textfont: { size: 10 },
-                    colorbar: { title: { text: "P&L ($)", font: { size: 9 } }, thickness: 12 },
+                    zmid: 0,
+                    text: z.map(row => row.map(v => `$${v}`)),
                   }]}
                     layout={{ height: 350, ...L, margin: { l: 80, r: 20, t: 10, b: 50 }, xaxis: { title: "Parallel IV Shift", gridcolor: t.grid }, yaxis: { title: "Term Structure Tilt", gridcolor: t.grid } }}
                     config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
