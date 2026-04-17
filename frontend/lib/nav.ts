@@ -36,8 +36,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Options",
     pages: [
-      { label: "Options Analysis", href: "/options-analysis", description: "IV skew, open interest walls, Greek exposures", status: "live" },
-      { label: "Options Flow", href: "/options-flow", description: "Unusual activity, P/C analysis, GEX, block detection", status: "live" },
+      { label: "Options Intelligence", href: "/options-analysis", description: "Volatility, positioning, flow, Greeks, chain — unified", status: "live" },
       { label: "Options Lab", href: "/options-lab", description: "Strategy modeler, BS-MJD pricing, Greeks lab", status: "live" },
       { label: "Calendar Spreads", href: "/calendar-spread", description: "8-tab calendar spread suite with scanner and backtest", status: "live" },
       { label: "Vol Surface", href: "/vol-surface", description: "9-tab IV surface with AI trade ideas", status: "live" },
