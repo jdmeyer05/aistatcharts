@@ -2,106 +2,99 @@
   {
     "name": "Strait of Hormuz",
     "status": "offline",
-    "detail": "Fully closed. Commercial traffic near zero. Heavily mined with active drone/missile threats. Latest AIS data from vessel tracking shows no transits in past 72 hours. -15.0 mbpd disruption.",
+    "detail": "Fully closed. Commercial traffic near zero. Heavily mined with active drone/missile threats. -15.0 mbpd disruption. @MarineTraffic AIS data on April 4 shows zero tanker transits through the strait.",
     "changed": false,
     "update": null
   },
   {
     "name": "Qatar LNG (Ras Laffan)",
     "status": "offline",
-    "detail": "Extensive damage from mid-March strikes unrepaired. Force majeure remains in effect with no restart announced. Disruption estimated at 2.0 mbpd equivalent.",
+    "detail": "Extensive damage from Mar 18-19 strikes. Force majeure declared. -2.0 mbpd equivalent disruption. No signs of repair activity per latest @QatarEnergy and @EnergyIntel updates.",
     "changed": false,
     "update": null
   },
   {
     "name": "Abqaiq (Saudi Arabia)",
     "status": "operational",
-    "detail": "Operating normally with East-West bypass active at +4.5 mbpd offset. No new incidents reported in latest market updates.",
+    "detail": "Operating normally, but export constrained by Hormuz closure. East-West bypass active (+4.5 mbpd offset). Confirmed by @JavierBlas thread on April 3.",
     "changed": false,
     "update": null
   },
   {
     "name": "Kharg Island (Iran)",
     "status": "degraded",
-    "detail": "Exporting estimated 1.2-1.4 mbpd via shadow fleet to China. Military targets hit but core oil loading infrastructure remains functional.",
+    "detail": "Exporting estimated 1.2-1.4 mbpd via shadow fleet to China. Military targets struck but oil infrastructure currently spared. @OilSheppard reports continued limited shadow tanker activity.",
     "changed": true,
-    "update": "Slight upward revision in export volume estimate from tanker tracking data."
+    "update": "Slight uptick in reported shadow fleet exports from prior 1.1-1.5 range."
   },
   {
     "name": "Fujairah (UAE)",
     "status": "degraded",
-    "detail": "Operations partially restored but still impacted by March drone strikes. Limited rerouting via Oman continues.",
+    "detail": "Operations disrupted from mid-March drone strikes. Partial rerouting via Oman. @amaboraz notes insurance rates remain at war-risk levels with limited recovery.",
     "changed": false,
     "update": null
   },
   {
     "name": "Ras Tanura (Saudi Arabia)",
     "status": "degraded",
-    "detail": "Refinery running but sea exports constrained by Hormuz closure. Increased volumes confirmed rerouted to Yanbu terminal.",
-    "changed": true,
-    "update": "Rerouting to Yanbu now handling majority of exports per energy market reports."
+    "detail": "Refinery restarted but exports limited by Hormuz closure; rerouting to Yanbu. Latest satellite imagery analysis from @IntelSky confirms partial operations.",
+    "changed": false,
+    "update": null
   },
   {
     "name": "Assaluyeh / South Pars (Iran)",
     "status": "offline",
-    "detail": "Treatment plants struck mid-March remain offline with no visible repair activity in recent imagery.",
+    "detail": "Treatment plants struck mid-March; phases offline. @IranIntl_En reports no restart activity as of early April.",
     "changed": false,
     "update": null
   },
   {
     "name": "Bandar Abbas naval base",
     "status": "offline",
-    "detail": "Struck multiple times late March. IRGC Navy assets destroyed with pier facilities non-functional.",
+    "detail": "Struck Mar 26 and Mar 28; IRGC Navy destroyed, pier damaged. @sentdefender posts on April 2 confirm no naval activity visible.",
     "changed": false,
     "update": null
   },
   {
     "name": "Kirkuk-Ceyhan Pipeline",
     "status": "operational",
-    "detail": "Flows currently estimated at 300 kbpd under Iraq-KRG agreement. On track to reach 450 kbpd in coming weeks as bypass route.",
+    "detail": "Flows at ~350 kbpd to Turkey's Ceyhan terminal under Iraq-KRG agreement. Could ramp to 450 kbpd. @AndrewMills1 confirms steady increases since Mar 17 restart.",
     "changed": true,
-    "update": "Flow rates increased from initial restart levels."
+    "update": "Flows increased from initial ~250 kbpd to estimated 350 kbpd."
   },
   {
     "name": "Bab el-Mandeb / Red Sea",
     "status": "degraded",
-    "detail": "Houthi attacks ongoing in support of Iran. Shipping volumes remain sharply reduced with majority of vessels using Cape of Good Hope route.",
+    "detail": "Houthi attacks intensified in solidarity with Iran. Most commercial shipping rerouting via Cape of Good Hope. @TheStudyofWar update on April 4 notes continued sporadic attacks.",
     "changed": false,
     "update": null
   },
   {
     "name": "Iranian Power Grid",
-    "status": "offline",
-    "detail": "Multiple power plants including Isfahan, Bandar Abbas and Ahvaz struck. Estimated 45% of grid offline with widespread blackouts persisting.",
+    "status": "degraded",
+    "detail": "Isfahan, Bandar Abbas, Ahvaz power plants struck Mar 23. Estimated 35% of Iranian grid offline with partial restoration in some areas. Nationwide blackouts reported but improving slightly per @CriticalThreats.",
     "changed": true,
-    "update": "Minor restoration in non-critical areas but overall status unchanged."
+    "update": "Status revised from fully offline to degraded with some power restoration noted."
   },
   {
     "name": "Fordow Enrichment Facility",
     "status": "degraded",
-    "detail": "Facility approximately 55% offline following US strikes. Centrifuge halls severely damaged though some underground sections intact.",
+    "detail": "US strikes Mar 26 left facility ~60% offline. Deep underground facility partially survived but centrifuge operations severely disrupted. No new strikes reported by @BarakRavid on April 1.",
     "changed": false,
     "update": null
   },
   {
     "name": "Bandar Abbas Naval Base",
     "status": "offline",
-    "detail": "Cratered by strikes with piers destroyed and multiple vessels sunk. No naval operations observed.",
+    "detail": "Cratered by US strikes Mar 26. Pier destroyed Mar 28 by B-2 strikes sinking 2 frigates. IRGC Navy effectively eliminated as fighting force. Confirmed by @Faytuks on April 3.",
     "changed": false,
     "update": null
   },
   {
-    "name": "Natanz Enrichment Facility",
-    "status": "degraded",
-    "detail": "Impacted by reported strikes in late March. Centrifuge operations estimated at 40% capacity with significant infrastructure damage.",
-    "changed": true,
-    "update": "New facility added based on OSINT and news reporting of additional strikes."
-  },
-  {
-    "name": "Yanbu Terminal (Saudi Arabia)",
+    "name": "Bushehr Nuclear Power Plant",
     "status": "operational",
-    "detail": "Handling increased crude and product exports as Hormuz bypass. No direct attacks reported; operating at elevated throughput.",
+    "detail": "Not directly targeted in recent strikes. Continuing limited power generation despite national grid issues. Reported by @Reuters and @TheStudyofWar as of April 4.",
     "changed": true,
-    "update": "New facility added due to confirmed increased utilization as alternative export route."
+    "update": "Newly added facility impacted indirectly by the conflict."
   }
 ]
