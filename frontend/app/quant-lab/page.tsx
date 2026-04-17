@@ -309,6 +309,14 @@ export default function QuantLabPage() {
 
       {analyze.data?.error && <div className="card border-loss text-loss text-sm">{analyze.data.error}</div>}
 
+      {!data && !analyze.isPending && !analyze.data?.error && (
+        <div className="card text-center py-10 text-text-muted text-sm">
+          <div className="font-semibold text-text mb-1">Quant Lab is idle</div>
+          Enter a ticker and lookback, then click <span className="text-accent font-semibold">Run Analysis</span> to scan the ADF p-value
+          curve for fractional-differencing stationarity, detect structural breaks, run feature importance, and more.
+        </div>
+      )}
+
       {data && (
         <>
           <SummaryBar data={data} t={t} />

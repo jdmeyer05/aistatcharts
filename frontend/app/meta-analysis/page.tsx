@@ -320,6 +320,14 @@ export default function MetaAnalysisPage() {
         <div className="card border-loss text-loss text-sm">{backtest.data.error}</div>
       )}
 
+      {!result && !backtest.isPending && !backtest.data?.error && (
+        <div className="card text-center py-10 text-text-muted text-sm">
+          <div className="font-semibold text-text mb-1">Meta analysis is idle</div>
+          Pick a universe and click <span className="text-accent font-semibold">Run Meta Analysis</span> to compute walk-forward equity curves,
+          institutional metrics, regime analysis, and De Prado statistical tests across all 9 allocation methods.
+        </div>
+      )}
+
       {result && (
         <>
           <ExecutiveSummary data={result} t={t} />

@@ -150,6 +150,21 @@ export default function CalendarSpreads() {
 
       {load.isPending && <div className="card text-center py-12"><div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div>}
 
+      {chain.length === 0 && !load.isPending && !load.isError && (
+        <div className="card text-center py-10 text-text-muted text-sm">
+          <div className="font-semibold text-text mb-1">Calendar spread builder is idle</div>
+          Enter a ticker and click <span className="text-accent font-semibold">Load Chain</span> to build a calendar spread,
+          scan the term structure, simulate P&amp;L, and run tail-risk scenarios.
+        </div>
+      )}
+
+      {chain.length > 0 && expirations.length < 2 && !load.isPending && (
+        <div className="card border-spot text-spot text-sm">
+          Only {expirations.length} expiration{expirations.length === 1 ? "" : "s"} loaded for this ticker —
+          calendar spreads need at least two. Try another symbol.
+        </div>
+      )}
+
       {chain.length > 0 && expirations.length >= 2 && (<>
         <div className="flex gap-1 border-b border-border pb-1 overflow-x-auto">
           {TABS.map((tab, i) => (<button key={tab} onClick={() => setActiveTab(i)}

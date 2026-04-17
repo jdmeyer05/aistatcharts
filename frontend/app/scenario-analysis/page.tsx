@@ -210,6 +210,14 @@ export default function ScenarioAnalysisPage() {
 
       {impact.data?.error && <div className="card border-loss text-loss text-sm">{impact.data.error}</div>}
 
+      {!data && !impact.isPending && !impact.data?.error && (
+        <div className="card text-center py-10 text-text-muted text-sm">
+          <div className="font-semibold text-text mb-1">Scenario engine is idle</div>
+          Set your portfolio and horizon, then click <span className="text-accent font-semibold">Run Analysis</span> to fit factor betas,
+          score 6 macro regimes, and run a 10k-path Monte Carlo with VaR/CVaR.
+        </div>
+      )}
+
       {data && (
         <>
           <SummaryBar data={data} t={t} />
