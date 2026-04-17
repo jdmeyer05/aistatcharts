@@ -1,5 +1,169 @@
 # Changelog
 
+## 2026-04-17 — Next.js Migration Phase 2: 5 flagship pages + Supabase auth end-to-end
+
+Closed the migration backlog from 2026-04-16 and shipped real Supabase-based
+authentication. Thirteen commits landed this session.
+
+### Streamlit → Next.js Migration (5 of 5 remaining pages completed)
+
+- **Meta Analysis** (`/meta-analysis`) — 3,327 LOC Streamlit → ~1,450 LOC
+  Next.js, 9 tabs full port. New `api/routes/meta_analysis.py` with
+  `POST /backtest` (walk-forward on 9 allocation methods + custom blends
+  against SPY benchmark), `POST /grid` (universe grid across 15 presets),
+  `GET /presets`, and (added later in session) `POST /forecasts`.
+  Surfaces De Prado statistical tests (DSR, PBO via CPCV, bootstrap CI,
+  min-track-record), Monte Carlo regime simulation, regime/capture/stress
+  analytics, rolling Sharpe, method correlation, universe grid heatmaps.
+
+- **Scenario Analysis** (`/scenario-analysis`) — 2,331 LOC → ~1,200 LOC,
+  8 tabs full port. New `api/routes/scenario.py` with
+  `POST /portfolio-impact` (factor-beta regime estimates + 10k-path Monte
+  Carlo with VaR/CVaR), `POST /gbm-projection` (bull/base/bear GBM),
+  `GET /regime-track-record` (Grok history vs SPY 30d accuracy),
+  `GET /grok-latest` (read cached Grok analysis).
+  **Scaling-bug fix**: `src/portfolio_models.py::estimate_regime_returns`
+  double-scales by `horizon_days` on top of pre-scaled input (inherited
+  Streamlit bug — produced ~252× too-large regime returns). Sidestepped
+  by computing the point estimate inline in the new endpoint.
+
+- **Quant Lab** (`/quant-lab`) — 1,869 LOC → ~1,050 LOC, 8 tabs full port.
+  New `api/routes/quant_lab.py` with `POST /analyze` (ADF scan for
+  fractional-differencing stationarity, rolling SADF bubble detection,
+  Chow breakpoint F-stats, RF feature importance MDI+MDA) and
+  `POST /hrp` (static + walk-forward hierarchical risk parity with
+  weight evolution). Client-side: CUSUM, triple-barrier labeling,
+  uniqueness bootstrap, Amihud/VPIN/Kyle/Corwin-Schultz microstructure,
+  Shannon/plug-in/Lempel-Ziv entropy, transition matrix.
+
+- **Fed Macro Drivers** (`/fed-macro`) — 1,513 LOC → ~1,250 LOC, 8 tabs
+  full port. New `api/routes/fed_macro.py` with `/sentiment` (StockTwits
+  + Polymarket), `/balance-sheet`, `/cot`, `/oecd-cli`, `/next-fomc`.
+  Static FOMC data (dot plots, SEP, 8 statements, reaction function)
+  embedded in the frontend. Inline Myers-style word-diff for FOMC
+  statement comparison. NaN/numpy sanitizer on `/balance-sheet`.
+
+- **Calendar Spread polish** (`/calendar-spread`) — 525 → 926 LOC, closed
+  the remaining ~15% gap. Added `bsGreeks`/`spreadGreeks` helpers,
+  IV-differential bar chart + IV-vs-RV rank table (Term Structure tab),
+  daily theta curve + Greeks evolution 2×2 grid + IV-scenario table +
+  TS-tilt table (P&L Simulator), gamma-near-expiry curves + pin-risk
+  zone + tail-risk scenarios + margin note (Risk Analysis).
+
+### Phase 2 Auth — Real Supabase sign-in end-to-end
+
+Replaced the fake client-side-password `AuthGate` with full Supabase auth.
+Backend JWT decoder in `api/deps.py` is unchanged — this wires the browser
+side up to produce the tokens it already verifies.
+
+- `frontend/lib/supabase.ts` — `supabaseBrowser()` factory, `hasSupabaseConfig()`,
+  `safeRedirectPath()` helper (prevents open-redirect via `?next=//…`).
+- `frontend/proxy.ts` — Next 16 Proxy (renamed from middleware) that
+  refreshes the session cookie and redirects unauthenticated traffic to
+  `/login?next=…`. Wrapped `supabase.auth.getUser()` in a 3s
+  `Promise.race` so a Supabase outage can't hang every request.
+- `frontend/app/login/page.tsx` — tabbed Sign in / Create account /
+  Reset password with friendly error mapping for common Supabase failures
+  (wrong creds, user-already-registered, SMTP missing, weak password,
+  DB-trigger-blocked signups).
+- `frontend/app/auth/callback/route.ts` — server-side PKCE code exchange
+  for magic links + signup confirmations; same-origin `next` guard.
+- `frontend/app/auth/reset/page.tsx` — landing page for password-reset
+  links, exchanges recovery code then shows a new-password form.
+  Guards against re-consuming the one-time code on refresh via
+  `getSession()` precheck + `history.replaceState`.
+- `frontend/components/auth-gate.tsx` — rewritten as a thin
+  `SessionContext` provider exposing `useSessionUser()`; route protection
+  moved to the Proxy.
+- `frontend/components/layout/header.tsx` — `UserMenu` dropdown (email
+  initial → full email + sign-out) next to the theme toggle.
+- `frontend/components/layout/app-chrome.tsx` — hides Header on
+  `/login` and `/auth/*` without restructuring 35 page directories.
+- `frontend/lib/api.ts::apiFetch` — attaches
+  `Authorization: Bearer <access_token>` on every backend call,
+  falls through silently when Supabase isn't configured.
+
+### Visual polish
+
+- **Heatmap unification**: added `heatmapTrace(t, kind, opts)`,
+  `heatmapColorscale(t, kind)`, `heatmapHeight(nRows)`, and `CHART_HEIGHT`
+  constants to `lib/chart-theme.ts`. Applied across 14 sites in the 4
+  migrated pages + calendar-spread. Fixes: inconsistent middle-of-scale
+  colors (was mixing `t.grid` / `t.plot` / `t.accent`), variable text
+  sizes (9/10/11), missing `hoverongaps: false` (null cells emitted
+  tooltips), no cell gap (cells ran together), heights ballooning to
+  1600px+ on large grids (now capped at 720px).
+- **Empty-state placeholders**: added a subtle guidance card on 4
+  migration pages (only when `!data && !isPending && !isError`) so users
+  understand what clicking "Run" produces.
+
+### Bug fixes (2 audit passes, ~10 fixes)
+
+First audit pass:
+- `scenario.py` CVaR empty-tail guard, `horizon_days` input validation.
+- `quant_lab.py` HRP weight normalization falls back to equal-weight on
+  degenerate covariance (was NaN-producing).
+- `fed_macro.py` NaN/numpy coercion in balance-sheet snapshot.
+- `quant-lab/page.tsx` `normalize()` handles empty/all-NaN arrays
+  (was `Math.min(...xs) = -Infinity`); conditional entropy guards
+  `stateBins.length - 1` division when < 2 samples.
+- `fed-macro/page.tsx` hides NaN delta on unemployment Metric when no
+  history loaded.
+- `meta-analysis/page.tsx` `MetaForecastCoverage.ticker` now required in
+  type (prevents React-key footgun); `useMemo`'d sorted components
+  (was re-sorting in 4 inline `.sort()` calls).
+
+Second audit pass (auth UI):
+- `proxy.ts` 3s timeout on `supabase.auth.getUser()` — Supabase outages
+  no longer hang every request.
+- `auth-gate.tsx` swallow `getUser()` rejection via `.catch`.
+- `login/page.tsx` + `header.tsx` UserMenu — replaced
+  `router.replace + router.refresh` with `window.location.assign` so the
+  Proxy re-runs with the new/cleared cookie (RSC refresh doesn't re-run
+  the Proxy).
+- `login/page.tsx` `callbackError` URL param now renders; signup success
+  path dead-code cleanup.
+- Open-redirect guard (`safeRedirectPath`) applied at all three auth
+  entry points.
+
+Backend (pre-existing bug surfaced during use):
+- `api/routes/tracking.py` imported `load_predictions` from
+  `src.prediction_tracker`, which only exposed the private
+  `_get_all_predictions`. `/api/tracking/accuracy` and `/predictions`
+  were both 500-ing, breaking the Track Record page. Added a public
+  alias.
+
+Yfinance `.info` per-ticker timeout in the Meta Analysis forecasts
+endpoint — one hung ticker can no longer drag the endpoint past the
+180s client budget. Uses `as_completed + fut.result(timeout=12)`.
+
+### Trim: removed `/live-scan` page
+
+The real-time 3D strategy-scan visualization was built as a demo.
+Deleted `frontend/app/live-scan/page.tsx` (343 LOC), nav entry, and
+the `GET /api/market/strategy-scan-stream` SSE endpoint + dedicated
+`StreamingResponse` / `asyncio` / `json` imports in `api/routes/market.py`
+(~198 lines). `@react-three/drei` / `@react-three/fiber` / `three`
+still in `package.json` — worth pruning next session if nothing else
+uses them.
+
+### Open / deferred
+
+- `/sector-analysis` full port — requested but not started. Current Next.js
+  version is ~15% coverage vs Streamlit. Handoff note in
+  `MIGRATION_STATUS.md` maps Streamlit source, reusable `src/` helpers,
+  and recommended backend endpoint shape for a fresh session.
+- Meta Analysis Forecasts tab EPS-momentum component is stubbed to 0%
+  until `/api/meta/eps-revisions` is added (~1 hour port).
+- Meta Analysis Universe Grid omits cross-group correlation + hierarchical
+  allocation (Streamlit extras; optional).
+- Scenario Analysis Grok refresh stays Streamlit-only (admin-gated Grok
+  API call with ~150 lines of hardcoded FOMC/Beige Book prompt context).
+- Fed Macro Gemini FOMC-diff AI analysis stays Streamlit-only.
+- Quant Lab SHAP dependency plots + cross-asset transfer entropy deferred.
+- Vercel still paused pending FastAPI deploy (Dockerfile currently
+  exposes both Streamlit and FastAPI ports; Cloud Run only surfaces one).
+
 ## 2026-04-16 — Next.js Migration Phase 1: ERCOT / Econ Calendar / Signal Scanner + Auth Kill-Switch
 
 ### Streamlit → Next.js Migration (3 of 8 thin pages completed)
