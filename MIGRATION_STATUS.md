@@ -41,6 +41,114 @@ Go in this order unless the user overrides. Sized by remaining gap:
 No pending migration tasks — all 8 pages shipped. Residual gaps are documented
 in the Notes section below.
 
+---
+
+## Open port request: `/sector-analysis` full parity (session continuation)
+
+**User request (2026-04-17):** the current Next.js `/sector-analysis` page
+(154 LOC, 3 tabs: Performance, Relative Strength, Correlation) is roughly
+10-15% of the Streamlit version. User wants a **full port** to match.
+
+**Streamlit source to mirror:**
+- `pages/24_Sector_Analysis.py` (387 LOC) — hub with 11 sector configs
+  (Energy, Financials, Technology, Healthcare, Industrials, Consumer Disc,
+  Consumer Staples, Utilities, Materials, Real Estate, Comms). Each
+  `SectorConfig` carries: companies dict (`ticker → name`), `subsectors`
+  groupings, `guidance_snapshot` (pre-loaded analyst data: rev/EPS
+  estimates, price targets, ratings, fwd P/E, outlook blurbs),
+  `macro_overlay` (FRED series + label, e.g. WTI for Energy, Fed Funds for
+  Financials), `factor_proxies` (list of ETFs for regression), and
+  `cot_commodities` (CFTC COT commodity keys for sectors where it applies).
+- `pages/25_Financials_Sector.py` through `34_RealEstate_Sector.py` —
+  thin wrappers that call `render_sector_page(SECTORS[name])`.
+- `src/sector_analysis.py` (1,950 LOC) — the real work. 8 tabs:
+  1. **Overview & Revenue** — revenue ranking, net margin bar, ROE bar,
+     quarterly revenue trend (abs or indexed Q1 2024=100) with analyst
+     estimate projections as starred markers, QoQ/YoY growth bars,
+     revenue volatility, margin trend, operating leverage, earnings
+     quality (OpCF/NI), composite ranking scorecard, financial ratios
+     table.
+  2. **CapEx Analysis** — latest-quarter CapEx, capital intensity
+     (CapEx/Revenue), CapEx trend (abs or indexed) with guidance projection
+     markers, YoY CapEx change, stacked sector CapEx, per-filing detail
+     table with form type (10-Q vs 10-K) and cumulative-to-quarterly
+     conversion.
+  3. **Valuation & Returns** — valuation summary (P/E, P/S, P/B, EV/EBITDA)
+     via `fetch_valuation_data`.
+  4. **Alpha Signals** — relative value map (valuation × momentum scatter),
+     price momentum bars, analyst estimate revision tracker
+     (`fetch_eps_revisions`), insider activity summary
+     (`fetch_insider_summary`).
+  5. **Risk Analytics** — max drawdown, VaR, risk-adjusted returns,
+     sector vs SPY, sub-sector decomposition, factor exposure regression
+     against `cfg.factor_proxies`.
+  6. **Guidance & Estimates** — earnings surprise heatmap
+     (`fetch_earnings_surprises`), live analyst estimates table, the
+     static guidance_snapshot (price targets, ratings, outlook blurbs)
+     rendered as per-company cards or table.
+  7. **Market & Positioning** — revenue vs macro overlay line chart
+     (FRED series from `cfg.macro_overlay`), CFTC COT positioning chart
+     for sectors with `cot_commodities` set.
+  8. **Pairs & Correlation** — cross-company correlation matrix +
+     pair-trading analysis.
+
+**Backend reuse (already in `src/`):**
+- `src/edgar.py`: `fetch_sector_financials`, `fetch_sector_analyst_estimates`,
+  `fetch_sector_revenue_history`, `fetch_sector_capex`,
+  `fetch_sector_capex_history`, `fetch_sector_margin_history`,
+  `fetch_sector_cashflow`
+- `src/market_data.py`: `fetch_energy_valuation_data` (used for all sectors,
+  aliased `fetch_valuation_data`), `fetch_energy_earnings_surprises`
+  (aliased `fetch_earnings_surprises`), `fetch_energy_price_history`
+  (aliased `fetch_price_history`), `fetch_fred_series`, `fetch_cftc_cot`,
+  `fetch_momentum_data`, `fetch_eps_revisions`, `fetch_insider_summary`
+- The guidance snapshots are static Python dicts embedded in
+  `pages/24_Sector_Analysis.py` (lines 11-400ish). Next.js will need these
+  ported either (a) inline in a TS const, or (b) served by a new
+  `/api/sectors/config` endpoint.
+
+**Recommended plan for new session:**
+
+1. **Build `api/routes/sectors.py`** with:
+   - `GET /api/sectors/configs` — returns all 11 sector configs (companies,
+     subsectors, guidance snapshot, macro overlay, factor proxies, COT
+     commodities). Static data.
+   - `POST /api/sectors/{etf}/overview` — financials, revenue history,
+     analyst estimates, margin history, cashflow (combined).
+   - `POST /api/sectors/{etf}/capex` — capex history with 10-Q/10-K
+     quarterly conversion baked in (port the Python logic around
+     `sector_analysis.py` line 580-650).
+   - `POST /api/sectors/{etf}/valuation` — price history + valuation data
+     + momentum data.
+   - `POST /api/sectors/{etf}/guidance` — earnings surprises + live
+     estimates + insider summary + EPS revisions.
+   - `POST /api/sectors/{etf}/market` — FRED series for overlay + COT if
+     applicable + revenue history for overlay.
+
+2. **Rewrite `frontend/app/sector-analysis/page.tsx`** with 8 tabs matching
+   the Streamlit layout exactly. Guidance snapshots can be served from
+   the config endpoint and rendered as a table.
+
+3. **Follow the migration recipe** in the top of this doc — reuse
+   chart-theme helpers (especially `heatmapTrace`, `heatmapHeight`,
+   `CHART_HEIGHT`), the `Metric` component, standard `space-y-4` patterns,
+   and the 307-redirect-safe `apiFetch` auth header.
+
+4. **Per-sector pages (`25_Financials` through `34_RealEstate`)** don't
+   need their own routes in Next.js — a single dynamic `/sector-analysis`
+   page with a sector picker (already there) handles all 11 via the
+   chosen config. Streamlit's one-per-file pattern was a quirk of the
+   multi-page framework, not a real requirement.
+
+5. **Scope estimate:** ~600-800 LOC backend + ~1,500-1,800 LOC frontend.
+   Comparable to the Meta Analysis port (#4).
+
+**Verification hooks:**
+- `npx tsc --noEmit`, `npx next build`, curl each new endpoint with
+  `{tickers: [...]}` / `{sector: "XLE"}` payloads.
+- Live compare to Streamlit on `localhost:8501` → 24 Sector Analysis
+  → pick same ETF → diff tab-by-tab.
+
 Note on Meta Analysis (now shipped): the Forecasts tab (tab 3) currently shows
 an informational placeholder — the forward-estimates workflow (analyst targets
 + EPS revisions + valuation + macro overlay) is still Streamlit-only. If you
