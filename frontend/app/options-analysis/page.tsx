@@ -284,7 +284,7 @@ export default function OptionsIntelligence() {
                       { type: "line", x0: pcStats.pcVol, x1: pcStats.pcVol, y0: 0, y1: 1, yref: "paper", line: { color: t.spot, width: 3 } },
                       { type: "line", x0: pcStats.histMean - pcStats.histStd, x1: pcStats.histMean - pcStats.histStd, y0: 0, y1: 1, yref: "paper", line: { color: t.gain, width: 1, dash: "dot" } },
                       { type: "line", x0: pcStats.histMean + pcStats.histStd, x1: pcStats.histMean + pcStats.histStd, y0: 0, y1: 1, yref: "paper", line: { color: t.loss, width: 1, dash: "dot" } },
-                    ], annotations: [{ x: pcStats.pcVol, y: 1, yref: "paper", text: `${pcStats.pcVol.toFixed(2)}`, showarrow: false, font: { size: 9, color: t.spot } }] }}
+                    ], annotations: [{ x: pcStats.pcVol, y: 1.05, yref: "paper", text: `${pcStats.pcVol.toFixed(2)}`, showarrow: false, font: { size: 10, color: t.spot }, xshift: 0, yshift: 0 }] }}
                   config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />;
               })()}
               {pcStats.z > 1.5 && <div className="text-xs text-gain bg-gain-bg border border-gain/20 rounded-lg px-3 py-2">Contrarian Bullish: extreme put buying historically marks bottoms.</div>}
@@ -313,10 +313,12 @@ export default function OptionsIntelligence() {
                   }
                   return pain;
                 });
+                const mpPct = (maxPain.strike - spot) / spot * 100;
+                const mpDesc = Math.abs(mpPct) < 0.5 ? "pinned at spot" : `${mpPct > 0 ? "+" : ""}${mpPct.toFixed(1)}% from spot (${mpPct > 0 ? "upward pin" : "downward pin"})`;
                 return (<>
                   <div className="pt-3 border-t border-border">
                     <h3 className="text-xs font-semibold uppercase tracking-wide">Max pain — {selectedExp}</h3>
-                    <p className="text-xs text-text-muted mt-0.5">Strike where aggregate option holders lose the most at expiration. Distance from spot: <strong>{((maxPain.strike - spot) / spot * 100).toFixed(1)}%</strong></p>
+                    <p className="text-xs text-text-muted mt-0.5">Strike where aggregate option holders lose the most at expiration: <strong>{mpDesc}</strong>.</p>
                   </div>
                   <Plot data={[{
                     x: strikes, y: pains, type: "scatter" as const, mode: "lines" as const,
@@ -399,16 +401,23 @@ export default function OptionsIntelligence() {
                     </tbody>
                   </table>
                 </div>
-                <Plot data={["call", "put"].map(ct => {
-                  const sub = unusual.filter(c => c.contract_type === ct);
-                  return { x: sub.map(c => c.open_interest), y: sub.map(c => c.volume), type: "scatter" as const, mode: "markers" as const,
-                    name: ct === "call" ? "Calls" : "Puts",
-                    marker: { color: ct === "call" ? t.gain : t.loss, size: sub.map(c => Math.min(c.vol_oi * 2, 50)), opacity: 0.7 },
-                    text: sub.map(c => `$${c.strike_price}`), hovertemplate: "Strike: %{text}<br>Vol: %{y:,}<br>OI: %{x:,}<extra></extra>" };
-                })} layout={{ height: 350, ...L, xaxis: { title: "Open Interest", gridcolor: t.grid }, yaxis: { title: "Volume", gridcolor: t.grid }, hovermode: "closest",
-                  shapes: unusual.length > 0 ? [{ type: "line", x0: 0, y0: 0, x1: Math.max(...unusual.map(c => c.open_interest)), y1: Math.max(...unusual.map(c => c.open_interest)), line: { color: t.muted, width: 1, dash: "dot" } }] : [] }}
-                  config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
-                <p className="text-xs text-text-muted">Bubble size = Vol/OI ratio. Dotted line = 1:1 ratio.</p>
+                {(() => {
+                  const axMax = Math.max(
+                    ...unusual.map(c => c.open_interest),
+                    ...unusual.map(c => c.volume),
+                    1,
+                  );
+                  return <Plot data={["call", "put"].map(ct => {
+                    const sub = unusual.filter(c => c.contract_type === ct);
+                    return { x: sub.map(c => c.open_interest), y: sub.map(c => c.volume), type: "scatter" as const, mode: "markers" as const,
+                      name: ct === "call" ? "Calls" : "Puts",
+                      marker: { color: ct === "call" ? t.gain : t.loss, size: sub.map(c => Math.min(c.vol_oi * 2, 50)), opacity: 0.7 },
+                      text: sub.map(c => `$${c.strike_price}`), hovertemplate: "Strike: %{text}<br>Vol: %{y:,}<br>OI: %{x:,}<extra></extra>" };
+                  })} layout={{ height: 350, ...L, xaxis: { title: "Open Interest", gridcolor: t.grid, range: [0, axMax * 1.05] }, yaxis: { title: "Volume", gridcolor: t.grid, range: [0, axMax * 1.05] }, hovermode: "closest",
+                    shapes: [{ type: "line", x0: 0, y0: 0, x1: axMax, y1: axMax, line: { color: t.muted, width: 1, dash: "dot" } }] }}
+                    config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />;
+                })()}
+                <p className="text-xs text-text-muted">Bubble size = Vol/OI ratio. Dotted line = 1:1 ratio — points above are unusual.</p>
               </>) : <p className="text-sm text-text-muted">No unusual activity with current filters.</p>}
 
               {/* Volume by strike */}
@@ -530,6 +539,10 @@ export default function OptionsIntelligence() {
               </div>
               {(() => {
                 const greekExps = expirations.slice(0, 8);
+                const greekLabels = greekExps.map(e => {
+                  const d = new Date(e + "T12:00:00");
+                  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${calcDTE(e)}d)`;
+                });
                 const strikes = [...new Set(chain.filter(c => c.strike_price >= strikeLo && c.strike_price <= strikeHi).map(c => c.strike_price))].sort((a, b) => a - b);
                 const z = greekExps.map(exp => strikes.map(k => {
                   const c = chain.find(c => c.expiration_date === exp && c.strike_price === k && c.contract_type === "call");
@@ -537,11 +550,11 @@ export default function OptionsIntelligence() {
                 }));
                 return (
                   <Plot data={[{
-                    type: "heatmap" as const, x: strikes, y: greekExps, z,
+                    type: "heatmap" as const, x: strikes, y: greekLabels, z,
                     colorscale: [[0, t.loss], [0.5, t.grid], [1, t.gain]], zmid: 0.5,
                     colorbar: { title: { text: "Delta", font: { size: 9 } }, thickness: 12 },
                     hovertemplate: "$%{x} %{y}<br>Delta: %{z:.3f}<extra></extra>",
-                  }]} layout={{ height: 380, ...L, margin: { l: 100, r: 20, t: 10, b: 50 },
+                  }]} layout={{ height: 380, ...L, margin: { l: 110, r: 20, t: 10, b: 50 },
                     xaxis: { title: "Strike", gridcolor: t.grid },
                     shapes: [{ type: "line", x0: spot, x1: spot, y0: 0, y1: 1, yref: "paper", line: { color: t.spot, width: 2, dash: "dot" } }] }}
                     config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
@@ -584,7 +597,12 @@ export default function OptionsIntelligence() {
         </>
       )}
 
-      {chain.length === 0 && !load.isPending && load.isSuccess && <div className="card text-center py-8 text-text-muted">No chain data returned.</div>}
+      {chain.length === 0 && !load.isPending && !load.isSuccess && !load.isError && (
+        <div className="card text-center py-8 text-sm text-text-muted">
+          Enter a ticker above and click <strong>Load Chain</strong> to see volatility skew, positioning, flow, Greeks, and full chain.
+        </div>
+      )}
+      {chain.length === 0 && !load.isPending && load.isSuccess && <div className="card text-center py-8 text-text-muted">No chain data returned for {loadedTicker}.</div>}
       {load.isError && <div className="card border-loss/30 bg-loss-bg text-loss text-sm">Failed: {(load.error as Error).message}</div>}
     </div>
   );
