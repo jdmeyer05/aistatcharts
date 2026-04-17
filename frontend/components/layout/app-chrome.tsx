@@ -7,11 +7,13 @@
 import { usePathname } from "next/navigation";
 import { Header } from "@/components/layout/header";
 
-const BARE_PATHS = new Set<string>(["/login"]);
+const BARE_PATHS = new Set<string>(["/login", "/auth/reset"]);
 
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  if (BARE_PATHS.has(pathname)) return <>{children}</>;
+  if (BARE_PATHS.has(pathname) || pathname.startsWith("/auth/")) {
+    return <>{children}</>;
+  }
 
   return (
     <>

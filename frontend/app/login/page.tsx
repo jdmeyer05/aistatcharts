@@ -5,82 +5,183 @@ import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { supabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 
-function LoginForm() {
+type Mode = "signin" | "signup" | "reset";
+
+/** Maps Supabase error messages to user-friendly copy. */
+function friendlyError(msg: string): string {
+  const lower = msg.toLowerCase();
+  if (lower.includes("error sending") && (lower.includes("email") || lower.includes("magic"))) {
+    return "Email delivery isn't configured for this project. Ask the admin to reset your password in the Supabase dashboard, or sign in with password.";
+  }
+  if (lower.includes("invalid login credentials")) return "Wrong email or password.";
+  if (lower.includes("user already registered")) return "An account with this email already exists. Use sign in instead.";
+  if (lower.includes("email not confirmed")) return "Your email isn't confirmed yet. Ask the admin to confirm you in the Supabase dashboard.";
+  if (lower.includes("weak password") || lower.includes("password should be")) return "Password too weak — use at least 6 characters.";
+  if (lower.includes("email rate limit")) return "Too many requests. Wait a minute and try again.";
+  if (lower.includes("database error creating new user")) return "Sign-up is currently disabled on the server side. Ask the admin to enable it.";
+  return msg;
+}
+
+function AuthForm() {
   const params = useSearchParams();
   const nextPath = params.get("next") || "/";
 
+  const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  const canSubmit = email.length > 3 && (mode === "reset" ? true : password.length >= 6) && (mode !== "signup" || password === confirm);
+
+  function resetState() {
     setError(null);
     setInfo(null);
+  }
+  function switchMode(m: Mode) {
+    resetState();
+    setMode(m);
+    setPassword("");
+    setConfirm("");
+  }
 
-    if (!hasSupabaseConfig()) {
-      setError("Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.");
-      return;
-    }
-
+  async function handleSignIn() {
+    if (!hasSupabaseConfig()) return setError("Supabase isn't configured. Check NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY.");
     setBusy(true);
     try {
       const supabase = supabaseBrowser();
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      if (signInError) {
-        setError(signInError.message);
-        return;
-      }
-      // Hard navigate (not router.replace) so the proxy runs with the new
-      // cookie attached. router.replace + router.refresh can race — the
-      // RSC refresh doesn't re-execute the proxy.
-      window.location.assign(nextPath);
-      return;
-    } catch (err) {
-      setError((err as Error).message);
+      const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+      if (err) setError(friendlyError(err.message));
+      else window.location.assign(nextPath);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
 
-  async function sendMagicLink() {
-    setError(null);
-    setInfo(null);
-    if (!email) {
-      setError("Enter your email above first.");
-      return;
-    }
-    if (!hasSupabaseConfig()) {
-      setError("Supabase is not configured.");
-      return;
-    }
+  async function handleSignUp() {
+    if (!hasSupabaseConfig()) return setError("Supabase isn't configured.");
+    if (password !== confirm) return setError("Passwords don't match.");
     setBusy(true);
     try {
       const supabase = supabaseBrowser();
-      const { error: otpError } = await supabase.auth.signInWithOtp({
+      const { data, error: err } = await supabase.auth.signUp({
         email,
-        options: { emailRedirectTo: `${window.location.origin}${nextPath}` },
+        password,
+        options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}` },
       });
-      if (otpError) setError(otpError.message);
-      else setInfo(`Magic link sent to ${email}. Check your inbox.`);
-    } catch (err) {
-      setError((err as Error).message);
+      if (err) {
+        setError(friendlyError(err.message));
+        return;
+      }
+      // If email confirmation is disabled in Supabase settings, the session is
+      // returned immediately and the user is effectively signed in.
+      if (data.session) {
+        window.location.assign(nextPath);
+        return;
+      }
+      // Otherwise Supabase queued a confirmation email. On projects without
+      // SMTP, the email never arrives — surface the admin-assist path.
+      setInfo(`Account created for ${email}. Check your email to confirm the address before signing in. If no email arrives, the project may not have SMTP configured — ask the admin to confirm you in the Supabase dashboard.`);
+      switchMode("signin");
+      setInfo(`Account created for ${email}. Sign in once the address is confirmed.`);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleReset() {
+    if (!hasSupabaseConfig()) return setError("Supabase isn't configured.");
+    setBusy(true);
+    try {
+      const supabase = supabaseBrowser();
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/reset?next=${encodeURIComponent(nextPath)}`,
+      });
+      if (err) setError(friendlyError(err.message));
+      else setInfo(`If an account exists for ${email}, a password-reset link has been sent.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleMagicLink() {
+    if (!email) return setError("Enter your email first.");
+    if (!hasSupabaseConfig()) return setError("Supabase isn't configured.");
+    setBusy(true);
+    try {
+      const supabase = supabaseBrowser();
+      const { error: err } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}` },
+      });
+      if (err) setError(friendlyError(err.message));
+      else setInfo(`Magic link sent to ${email}. Check your inbox.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    resetState();
+    if (!canSubmit) return;
+    if (mode === "signin") return handleSignIn();
+    if (mode === "signup") return handleSignUp();
+    if (mode === "reset") return handleReset();
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-bg px-4">
-      <form onSubmit={handleSubmit} className="card w-full max-w-sm space-y-4">
+      <form onSubmit={handleSubmit} className="card w-full max-w-md space-y-4">
+        {/* Header */}
         <div className="flex items-center gap-2 justify-center">
           <Image src="/favicon.png" alt="AI Statcharts" width={28} height={28} className="rounded" />
           <h1 className="text-xl font-bold tracking-widest uppercase">AI Statcharts</h1>
         </div>
-        <p className="text-xs text-text-muted text-center">Sign in to continue.</p>
 
+        {/* Tabs */}
+        {mode !== "reset" && (
+          <div className="flex gap-1 border-b border-border">
+            <button
+              type="button"
+              onClick={() => switchMode("signin")}
+              className={`flex-1 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                mode === "signin" ? "border-b-2 border-accent text-accent" : "text-text-muted hover:text-text"
+              }`}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode("signup")}
+              className={`flex-1 py-2 text-xs font-semibold uppercase tracking-wider transition-colors ${
+                mode === "signup" ? "border-b-2 border-accent text-accent" : "text-text-muted hover:text-text"
+              }`}
+            >
+              Create account
+            </button>
+          </div>
+        )}
+
+        {mode === "reset" && (
+          <div className="text-center">
+            <div className="text-sm font-semibold">Reset password</div>
+            <div className="text-xs text-text-muted mt-1">Enter your email — we&apos;ll send a reset link.</div>
+          </div>
+        )}
+
+        {/* Email */}
         <div>
           <label className="metric-label">Email</label>
           <input
@@ -89,43 +190,112 @@ function LoginForm() {
             onChange={(e) => setEmail(e.target.value)}
             required
             autoComplete="email"
-            className="mt-0.5 w-full px-3 py-2 border border-border rounded-lg text-sm bg-surface font-data"
-          />
-        </div>
-        <div>
-          <label className="metric-label">Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
+            autoFocus
             className="mt-0.5 w-full px-3 py-2 border border-border rounded-lg text-sm bg-surface font-data"
           />
         </div>
 
+        {/* Password (sign in + sign up) */}
+        {mode !== "reset" && (
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="metric-label">Password</label>
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="text-[0.65rem] text-text-muted hover:text-accent uppercase tracking-wider"
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
+              minLength={mode === "signup" ? 6 : undefined}
+              className="mt-0.5 w-full px-3 py-2 border border-border rounded-lg text-sm bg-surface font-data"
+            />
+            {mode === "signup" && password.length > 0 && password.length < 6 && (
+              <div className="text-[0.65rem] text-spot mt-1">At least 6 characters.</div>
+            )}
+          </div>
+        )}
+
+        {/* Confirm password (sign up only) */}
+        {mode === "signup" && (
+          <div>
+            <label className="metric-label">Confirm password</label>
+            <input
+              type={showPassword ? "text" : "password"}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password"
+              minLength={6}
+              className="mt-0.5 w-full px-3 py-2 border border-border rounded-lg text-sm bg-surface font-data"
+            />
+            {confirm.length > 0 && password !== confirm && (
+              <div className="text-[0.65rem] text-loss mt-1">Passwords don&apos;t match.</div>
+            )}
+          </div>
+        )}
+
+        {/* Messages */}
         {error && <p className="text-xs text-loss">{error}</p>}
         {info && <p className="text-xs text-gain">{info}</p>}
 
+        {/* Submit */}
         <button
           type="submit"
-          disabled={busy}
+          disabled={busy || !canSubmit}
           className="w-full py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm"
         >
-          {busy ? "Signing in…" : "Sign in"}
+          {busy
+            ? mode === "signin" ? "Signing in…" : mode === "signup" ? "Creating account…" : "Sending…"
+            : mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}
         </button>
 
-        <button
-          type="button"
-          onClick={sendMagicLink}
-          disabled={busy}
-          className="w-full py-2 border border-border text-text font-semibold rounded-lg hover:bg-surface-alt disabled:opacity-50 text-xs"
-        >
-          Email me a magic link instead
-        </button>
+        {/* Secondary actions */}
+        {mode === "signin" && (
+          <>
+            <button
+              type="button"
+              onClick={handleMagicLink}
+              disabled={busy}
+              className="w-full py-2 border border-border text-text font-semibold rounded-lg hover:bg-surface-alt disabled:opacity-50 text-xs"
+            >
+              Email me a magic link instead
+            </button>
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => switchMode("reset")}
+                className="text-xs text-text-muted hover:text-accent"
+              >
+                Forgot password?
+              </button>
+            </div>
+          </>
+        )}
 
-        <p className="text-xs text-text-muted text-center">
-          Private site. Contact the admin if you need access.
-        </p>
+        {mode === "reset" && (
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => switchMode("signin")}
+              className="text-xs text-text-muted hover:text-accent"
+            >
+              ← Back to sign in
+            </button>
+          </div>
+        )}
+
+        {mode === "signup" && (
+          <p className="text-[0.65rem] text-text-muted text-center leading-relaxed">
+            By creating an account you consent to server-side logging of requests
+            and any admin-controlled data policies. No personal data is sold.
+          </p>
+        )}
       </form>
     </div>
   );
@@ -134,7 +304,7 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <Suspense fallback={null}>
-      <LoginForm />
+      <AuthForm />
     </Suspense>
   );
 }

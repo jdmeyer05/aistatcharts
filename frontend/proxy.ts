@@ -9,7 +9,12 @@ import { createServerClient } from "@supabase/ssr";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-const PUBLIC_PATHS = new Set<string>(["/login", "/favicon.png"]);
+const PUBLIC_PATHS = new Set<string>([
+  "/login",
+  "/auth/callback",
+  "/auth/reset",
+  "/favicon.png",
+]);
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
