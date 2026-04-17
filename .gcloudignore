@@ -1,0 +1,67 @@
+# Files excluded from `gcloud builds submit` / `gcloud run deploy --source`.
+# Mirrors .dockerignore (which Docker-native builds use) — but Cloud Build
+# ONLY reads this file, so it must be complete.
+
+# Git
+.git/
+.gitignore
+.github/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Python bytecode + caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Secrets — NEVER ship these
+.env
+.env.*
+.streamlit/secrets.toml
+supabase_schema.sql
+supabase_schema.txt
+supabase_trump_decoder.sql
+supabase_rls_migration.sql
+
+# Next.js frontend — deployed on Vercel, never needed in FastAPI container.
+# This is the big one: frontend/node_modules alone is hundreds of MB.
+frontend/
+
+# Streamlit entrypoints — unused by FastAPI. (Builds the separate Dockerfile
+# if you want the Streamlit image.)
+pages/
+app.py
+
+# Local data caches — can be gigabytes
+data/
+*.sqlite
+*.db
+*.parquet
+*.csv.gz
+
+# Build artifacts
+*.log
+logs/
+dist/
+build/
+
+# Working notes / drafts
+MARKETING_PLAN.md
+TWEET_TEMPLATES.txt
+PROMPT_HISTORY.txt
+UX_IMPROVEMENTS_CHANGELOG.txt
+SECTOR_EXPANSION_PLAN.md
+rh_debug.py
+rh_login.py
+
+# Docker metadata (already handled by build, but safe to skip)
+.dockerignore

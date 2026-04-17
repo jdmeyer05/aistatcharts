@@ -1,0 +1,46 @@
+# FastAPI-only image for the Next.js backend.
+# Runs on Cloud Run — listens on $PORT (defaults to 8080).
+# Streamlit is NOT included here. The separate root Dockerfile builds
+# the Streamlit image; use this one when deploying the FastAPI service
+# that the Next.js frontend calls.
+
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8080
+
+# curl (healthcheck) + build tools for scipy/sklearn/shap C extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies — cached layer, only rebuilds when requirements.txt changes.
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# App code — `api/` + `src/` are what FastAPI needs. We copy the whole
+# repo so the existing dotted-path imports (e.g. `src.edgar`) keep working
+# without a packaging rewrite. `pages/`, `app.py`, and `frontend/` are
+# harmless extra MB that the Streamlit app would need.
+COPY . .
+
+# Cache directory used by some src/ modules (gdelt, ohlcv, etc.).
+RUN mkdir -p /app/data/gdelt_events
+
+EXPOSE 8080
+
+# Healthcheck hits the FastAPI health endpoint directly.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8080}/api/health || exit 1
+
+# Cloud Run sets $PORT dynamically; default to 8080 for local docker runs.
+# Two workers is a sensible default for a 1vCPU container running mostly
+# IO-bound work (Polygon, yfinance, FRED). Scale up with Cloud Run concurrency.
+# `python -m uvicorn` works even when the pip-installed `uvicorn` script
+# isn't on PATH.
+CMD ["sh", "-c", "python -m uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2"]

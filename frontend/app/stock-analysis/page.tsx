@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import {
-  fetchStockDataFull, fetchStockAIAnalysis,
+  fetchStockDataFull, fetchStockAIAnalysis, fetchPeerComparison,
   type StockDataFull, type StockAIResult, type StockModelResult,
 } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
@@ -34,6 +34,12 @@ export default function StockAnalysis() {
   const [data, setData] = useState<StockDataFull | null>(null);
   const [ai, setAI] = useState<StockAIResult | null>(null);
   const [tab, setTab] = useState(0);
+  const peersQ = useQuery({
+    queryKey: ["peers", data?.ticker],
+    queryFn: () => fetchPeerComparison(data!.ticker),
+    enabled: !!data?.ticker && tab === 5,
+    staleTime: 30 * 60 * 1000,
+  });
 
   const load = useMutation({
     mutationFn: ({ tk, days }: { tk: string; days: number }) => {
@@ -97,7 +103,7 @@ export default function StockAnalysis() {
     return p;
   }
 
-  const TABS = ["Chart & Technicals", "AI Analysis", "Insiders & EDGAR", "Financials", "Model Comparison"];
+  const TABS = ["Chart & Technicals", "AI Analysis", "Insiders & EDGAR", "Financials", "Model Comparison", "Peer Comparison"];
   const hist = data?.history || [];
   const tech = data?.technicals || {};
   const fund = data?.fundamentals || {};
@@ -685,6 +691,72 @@ export default function StockAnalysis() {
                     ))}
                   </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {/* ═══ Tab 5: Peer Comparison ═══ */}
+          {tab === 5 && (
+            <div className="space-y-4">
+              {peersQ.isPending && (
+                <div className="card text-center py-8">
+                  <div className="inline-block w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                  <div className="text-xs text-text-muted mt-2">Fetching related companies…</div>
+                </div>
+              )}
+              {peersQ.isSuccess && peersQ.data.peers.length <= 1 && (
+                <div className="card text-sm text-text-muted py-6 px-5">No peer companies found for {data?.ticker}.</div>
+              )}
+              {peersQ.isSuccess && peersQ.data.peers.length > 1 && (
+                <div className="card">
+                  <div className="font-semibold text-sm mb-2">Peer Comparison — {data?.ticker}</div>
+                  <div className="text-xs text-text-muted mb-3">Related companies via Polygon. Highlighted row = your ticker.</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs font-data">
+                      <thead className="border-b border-border text-text-muted">
+                        <tr>
+                          <th className="text-left py-1.5 px-2">Ticker</th>
+                          <th className="text-right py-1.5 px-2">Price</th>
+                          <th className="text-right py-1.5 px-2">Change</th>
+                          <th className="text-right py-1.5 px-2">Mkt Cap</th>
+                          <th className="text-right py-1.5 px-2">P/E</th>
+                          <th className="text-right py-1.5 px-2">P/B</th>
+                          <th className="text-right py-1.5 px-2">Rev Growth</th>
+                          <th className="text-right py-1.5 px-2">Margin</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {peersQ.data.peers.map(row => (
+                          <tr key={row.ticker}
+                            className={`border-b border-border/50 hover:bg-surface-alt ${row.is_target ? "font-bold" : ""}`}
+                            style={{ color: row.is_target ? t.accent : undefined }}>
+                            <td className="py-1 px-2">{row.ticker}</td>
+                            <td className="py-1 px-2 text-right">{row.price != null ? `$${row.price.toFixed(2)}` : "—"}</td>
+                            <td className={`py-1 px-2 text-right ${row.change > 0 ? "text-gain" : row.change < 0 ? "text-loss" : ""}`}>
+                              {row.change >= 0 ? "+" : ""}{row.change.toFixed(1)}%
+                            </td>
+                            <td className="py-1 px-2 text-right">
+                              {row.market_cap != null ? fmtMktCap(row.market_cap) : "—"}
+                            </td>
+                            <td className="py-1 px-2 text-right">{row.pe != null ? row.pe.toFixed(1) : "—"}</td>
+                            <td className="py-1 px-2 text-right">{row.pb != null ? row.pb.toFixed(1) : "—"}</td>
+                            <td className={`py-1 px-2 text-right ${(row.revenue_growth ?? 0) > 0 ? "text-gain" : (row.revenue_growth ?? 0) < 0 ? "text-loss" : ""}`}>
+                              {row.revenue_growth != null ? `${(row.revenue_growth * 100) >= 0 ? "+" : ""}${(row.revenue_growth * 100).toFixed(1)}%` : "—"}
+                            </td>
+                            <td className="py-1 px-2 text-right">
+                              {row.profit_margin != null ? `${(row.profit_margin * 100).toFixed(1)}%` : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {peersQ.isError && (
+                <div className="card border-loss/30 text-sm text-loss py-4 px-5">
+                  Peer comparison failed: {(peersQ.error as Error)?.message ?? "unknown error"}
+                </div>
               )}
             </div>
           )}

@@ -1,13 +1,14 @@
 # Streamlit → Next.js Migration — Status & Handoff
 
-**Last updated:** 2026-04-16 (session 2)
-**Session that left this note:** All 8 migration tasks now complete.
-Completed Meta Analysis (#4), Scenario Analysis (#5 — flagship), Quant Lab
-(#6), Fed Macro Drivers (#7), AND Calendar Spread polish (#8) in this
-session. New backends landed under `api/routes/meta_analysis.py`,
-`api/routes/scenario.py`, `api/routes/quant_lab.py`, and
-`api/routes/fed_macro.py`. Previous session completed the first 3
-thin-page migrations plus the auth kill-switch.
+**Last updated:** 2026-04-17 (session 3)
+**Session that left this note:** Sector Analysis full port shipped — all 11
+SPDR sectors, 8 tabs, dynamic page via ETF selector. New backend
+`api/routes/sectors.py` (~850 LOC including static configs). Frontend
+`frontend/app/sector-analysis/page.tsx` rewritten (~2100 LOC). Added types +
+fetchers for 7 new endpoints in `frontend/lib/api.ts`. Passed `npx tsc
+--noEmit` + `npx next build`. All 6 POST endpoints smoke-tested live on
+`:8001` with real data (financials, valuation, capex, guidance, prices,
+market). Previous session shipped the 8 migration tasks plus Phase 2 auth.
 
 This document is the entry point for the next session. Read it first.
 
@@ -30,6 +31,13 @@ the corresponding Streamlit page was substantial. The user wants "as close to
 | 6 | Quant Lab | 1,869 | 8 tabs, full port (~1,050 LOC) | uncommitted |
 | 7 | Fed Macro Drivers | 1,513 | 8 tabs, full port (~1,250 LOC) | uncommitted |
 | 8 | Calendar Spread polish | 2,585 | 525 → 926 LOC, gaps closed | uncommitted |
+| 9 | Sector Analysis (full port) | 2,337 (24+sector_analysis) | 154 → ~2,100 LOC, 8 tabs, 11 ETFs | uncommitted |
+| 10 | Smart Money (full port) | 813 | 160 → ~1,250 LOC, 6 tabs | uncommitted |
+| 11 | Correlation parity | 868 | 272 → ~970 LOC, 6 tabs (added Clustering, Breakdown Alerts, PCA) | uncommitted |
+| 12 | Factors parity | 718 | 275 → ~570 LOC, 5 tabs (expanded Timing, added Risk Decomposition) | uncommitted |
+| 13 | Portfolio-optimizer parity | 1,425 | 288 → ~890 LOC, 5 tabs (added Walk-Forward + Black-Litterman) | uncommitted |
+| 14 | Stock-analysis parity | 1,835 | 695 → ~760 LOC, 6 tabs (added Peer Comparison) | uncommitted |
+| 15 | Track-record parity | 865 | 227 → ~390 LOC, 5 tabs (added Signal Engine) | uncommitted |
 
 All four pass `npx tsc --noEmit` and `npx next build` cleanly. Each backend
 endpoint was tested live with curl before shipping.
@@ -43,7 +51,62 @@ in the Notes section below.
 
 ---
 
-## Open port request: `/sector-analysis` full parity (session continuation)
+## Sector Analysis full port (shipped 2026-04-17)
+
+All 8 tabs ported. Backend endpoints live at `api/routes/sectors.py`:
+- `GET /api/sectors/configs` — all 11 sector configs (Energy/XLE, Financials/XLF,
+  Tech/XLK, Healthcare/XLV, Industrials/XLI, Comms/XLC, Cons Disc/XLY, Cons
+  Staples/XLP, Utilities/XLU, Materials/XLB, Real Estate/XLRE). Returns
+  companies dict, subsectors grouping, guidance_snapshot (hardcoded), macro
+  overlay, factor proxies, CFTC COT commodities. Static data.
+- `POST /api/sectors/overview` body `{etf}` — financials + analyst forecasts +
+  revenue history + margin history + cashflow, parallelized with
+  ThreadPoolExecutor.
+- `POST /api/sectors/capex` — latest CapEx + quarterly-converted history
+  (Python port of the Streamlit 10-Q cumulative diff + 10-K → Q4 logic).
+- `POST /api/sectors/valuation` — valuation ratios + momentum (1M/3M/6M/12M).
+- `POST /api/sectors/alpha` — EPS revisions + insider activity.
+- `POST /api/sectors/prices` — 2Y daily close for sector tickers + SPY +
+  factor proxies (shared by Risk + Pairs tabs).
+- `POST /api/sectors/guidance` — live analyst estimates (yfinance) + earnings
+  surprise history.
+- `POST /api/sectors/market` — FRED macro series + CFTC COT positioning with
+  secondary FRED price series for overlay.
+
+Frontend `frontend/app/sector-analysis/page.tsx` uses `useQueries` to fire all
+7 endpoints in parallel, gated by a Load button. Tab list matches Streamlit
+exactly. Sector switch clears loaded state so the user has to re-click Load.
+
+**Client-side math (all in TS, no backend work):**
+- QoQ/YoY revenue growth, revenue volatility (CV), operating leverage (median
+  ΔOI/ΔRev), earnings quality (OpCF/NI), composite scorecard ranking
+- Max drawdown, VaR (hist + parametric), annualized vol, Sharpe/Sortino
+- Sector-vs-SPY equal-weighted cumulative performance, sub-sector decomposition
+- Factor regression via OLS (Gauss-Jordan solver in `solveLinear`)
+- Correlation matrix, rolling correlations (21D + 63D), spread z-score
+- COT positioning percentile, 4W MA, WoW changes, spec/comm divergence
+
+**Deviations from Streamlit:**
+- Skipped the full N×N pairs scatter matrix (10×10 subplots = slow); kept
+  correlation heatmap + pair deep-dive with normalized prices, spread z-score,
+  rolling correlation, and return distribution.
+- Guidance data snapshots (11 sectors × 10 companies = ~110 rows of hand-curated
+  price targets, ratings, outlook blurbs) are duplicated in
+  `api/routes/sectors.py`. They also live in `pages/24_Sector_Analysis.py` and
+  (for Energy) `src/edgar.py`. If snapshots get updated, need to update both
+  places — consider extracting to `src/sector_configs.py` as a future refactor.
+
+**Uvicorn restart needed:** the user's uvicorn on `:8000` was started before
+`api/routes/sectors.py` was added, so the new routes won't resolve until they
+restart the server. Smoke-tested on `:8001` before shipping.
+
+Note on per-sector pages (`pages/25_Financials_Sector.py` through
+`pages/34_RealEstate_Sector.py`): these thin wrappers still exist on the
+Streamlit side and reuse `src/sector_analysis.py::render_sector_page`. The
+Next.js side replaces all 11 with a single dynamic page + sector picker. No
+Next.js routes needed per sector.
+
+## Original open port request (now fulfilled)
 
 **User request (2026-04-17):** the current Next.js `/sector-analysis` page
 (154 LOC, 3 tabs: Performance, Relative Strength, Correlation) is roughly

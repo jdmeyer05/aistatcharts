@@ -63,22 +63,42 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
-# CORS — allow the Next.js frontend (and local dev)
+# CORS — allow the Next.js frontend.
+#
+# CORSMiddleware's `allow_origins` list is an exact-match check; wildcards
+# like `https://*.vercel.app` in that list DO NOT work. Vercel preview URLs
+# need `allow_origin_regex`. Origins are env-configurable so new Vercel
+# previews or custom domains don't need a code change.
+#
+# CORS_ALLOWED_ORIGINS — comma-separated list of exact origins
+# CORS_ALLOWED_ORIGIN_REGEX — single regex for wildcard-matching origins
+_default_origins = [
+    "http://localhost:3000",
+    "http://localhost:8501",
+    "https://aistatcharts.com",
+    "https://www.aistatcharts.com",
+]
+_env_origins = [o.strip() for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+_allow_origins = _env_origins or _default_origins
+
+# Default regex covers Vercel preview deployments for this project. Override
+# via env if the Vercel project slug changes. `or` (not the 2-arg form of
+# `get`) so a missing *or* empty-string env var both fall back to the default
+# — empty regex would silently disable Vercel preview matching.
+_default_origin_regex = r"^https://.*\.vercel\.app$"
+_allow_origin_regex = os.environ.get("CORS_ALLOWED_ORIGIN_REGEX") or _default_origin_regex
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8501",
-        "https://aistatcharts.com",
-        "https://*.vercel.app",
-    ],
+    allow_origins=_allow_origins,
+    allow_origin_regex=_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Register route modules
-from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro
+from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -93,6 +113,7 @@ app.include_router(meta_analysis.router, prefix="/api/meta", tags=["Meta Analysi
 app.include_router(scenario.router, prefix="/api/scenario", tags=["Scenario Analysis"])
 app.include_router(quant_lab.router, prefix="/api/quant-lab", tags=["Quant Lab"])
 app.include_router(fed_macro.router, prefix="/api/fed-macro", tags=["Fed Macro"])
+app.include_router(sectors.router, prefix="/api/sectors", tags=["Sector Analysis"])
 
 
 @app.get("/api/health")

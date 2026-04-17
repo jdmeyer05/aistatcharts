@@ -315,6 +315,126 @@ async def fred_series(
     return {"series_id": series_id, "data": df.to_dict(orient="records")}
 
 
+@router.get("/peers/{ticker}")
+async def peer_comparison(
+    ticker: str,
+    user: str = Depends(get_current_user),
+):
+    """Return a peer-comparison row set for a ticker.
+    Uses Polygon's related-companies endpoint + ticker details + batch snapshot.
+    """
+    from src.data_engine import fetch_related_companies, polygon_batch_snapshot, polygon_ticker_details
+    ticker = ticker.upper()
+
+    try:
+        peers = fetch_related_companies(ticker) or []
+    except Exception:
+        peers = []
+
+    candidates = [ticker] + [p for p in peers[:5] if p and p != ticker]
+    if len(candidates) < 2:
+        return {"ticker": ticker, "peers": []}
+
+    snaps = polygon_batch_snapshot(candidates) or {}
+    rows = []
+    for tk in candidates:
+        try:
+            details = polygon_ticker_details(tk) or {}
+            snap = snaps.get(tk) or {}
+            price = snap.get("price")
+            rows.append({
+                "ticker": tk,
+                "price": float(price) if price else None,
+                "change": float(snap.get("change") or 0),
+                "market_cap": details.get("marketCap") or details.get("market_cap"),
+                "pe": details.get("trailingPE") or details.get("forwardPE"),
+                "pb": details.get("priceToBook"),
+                "revenue_growth": details.get("revenueGrowth"),
+                "profit_margin": details.get("profitMargins"),
+                "is_target": tk == ticker,
+            })
+        except Exception:
+            continue
+    return {"ticker": ticker, "peers": rows}
+
+
+@router.get("/macro-dashboard")
+async def macro_dashboard(user: str = Depends(get_current_user)):
+    """Fetch the FRED macro dashboard — Fed Funds, 10Y, 2Y, yield curve, WTI, nat gas, UNRATE, CPI, GDP."""
+    from src.market_data import fetch_fred_macro_dashboard, FRED_SERIES
+    import numpy as np
+    import pandas as pd
+    import math
+
+    bundle = fetch_fred_macro_dashboard()
+    if not bundle:
+        return {"series": {}, "latest": {}, "labels": FRED_SERIES}
+
+    def _rows(df):
+        if df is None or df.empty:
+            return []
+        out = []
+        for _, r in df.iterrows():
+            d = r["date"]
+            v = r["value"]
+            if isinstance(v, (np.floating, float)):
+                f = float(v)
+                if math.isnan(f) or math.isinf(f):
+                    continue
+                v = f
+            out.append({"date": d.strftime("%Y-%m-%d") if isinstance(d, pd.Timestamp) else str(d), "value": v})
+        return out
+
+    series_out = {sid: _rows(df) for sid, df in bundle.items()}
+    latest = {}
+    for sid, rows in series_out.items():
+        if rows:
+            latest[sid] = rows[-1]["value"]
+    return {"series": series_out, "latest": latest, "labels": FRED_SERIES}
+
+
+@router.get("/analyst-estimates/{ticker}")
+async def analyst_estimates(
+    ticker: str,
+    user: str = Depends(get_current_user),
+):
+    """Yahoo Finance analyst consensus estimates, price targets, and key stats."""
+    from src.market_data import fetch_analyst_estimates
+    data = fetch_analyst_estimates(ticker.upper())
+    return {"ticker": ticker.upper(), "data": data or {}}
+
+
+@router.get("/earnings-history/{ticker}")
+async def earnings_history(
+    ticker: str,
+    user: str = Depends(get_current_user),
+):
+    """Yahoo Finance earnings surprise history (actual vs estimate)."""
+    import numpy as np
+    import pandas as pd
+    import math
+    from src.market_data import fetch_earnings_history
+    df = fetch_earnings_history(ticker.upper())
+    if df is None or df.empty:
+        return {"ticker": ticker.upper(), "data": []}
+    rows = []
+    for _, r in df.iterrows():
+        rec = {}
+        for col in df.columns:
+            val = r[col]
+            if isinstance(val, pd.Timestamp):
+                rec[col] = val.strftime("%Y-%m-%d")
+            elif isinstance(val, (np.floating, float)):
+                f = float(val)
+                rec[col] = None if (math.isnan(f) or math.isinf(f)) else f
+            elif isinstance(val, (np.integer, int)):
+                rec[col] = int(val)
+            else:
+                rec[col] = str(val) if val is not None else None
+        rows.append(rec)
+    return {"ticker": ticker.upper(), "data": rows}
+
+
 @router.get("/stock-data/{ticker}")
 async def stock_data_bundle(
     ticker: str,

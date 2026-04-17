@@ -1009,30 +1009,188 @@ export async function fetchEIASeries(
   return apiFetch(`/api/energy/eia/${seriesId}?rows=${rows}`);
 }
 
-// ─── EDGAR ───────────────────────────────────────────────────
+// ─── EDGAR / Smart Money ─────────────────────────────────────
 
 export async function fetchTrackedFunds(): Promise<{ funds: { name: string; cik: string }[] }> {
   return apiFetch("/api/edgar/funds");
 }
 
-export async function fetch13FHoldings(cik: string): Promise<{ cik: string; count: number; holdings: Record<string, unknown>[] }> {
-  return apiFetch(`/api/edgar/13f/${cik}`);
+export interface Holding13F {
+  company: string | null;
+  class: string | null;
+  cusip: string | null;
+  value: number | null;
+  shares: number | null;
+  put_call: string | null;
+  filing_date: string | null;
+}
+export interface Holdings13FResponse {
+  cik: string;
+  count: number;
+  filing_date: string | null;
+  holdings: Holding13F[];
+}
+export async function fetch13FHoldings(cik: string): Promise<Holdings13FResponse> {
+  return apiFetch(`/api/edgar/13f/${cik}`, { timeoutMs: 60_000 });
 }
 
 export async function fetchInsiderTransactions(ticker: string): Promise<{ ticker: string; data: Record<string, unknown>[] }> {
   return apiFetch(`/api/edgar/insider/${ticker}`);
 }
 
-export async function fetch8KEvents(ticker: string): Promise<{ ticker: string; data: Record<string, unknown>[] }> {
-  return apiFetch(`/api/edgar/8k/${ticker}`);
+export interface EightKEvent {
+  filed: string;
+  form: string;
+  company: string;
+  items: string;
+  url: string;
+}
+export async function fetch8KEvents(ticker: string, days = 30): Promise<{ ticker: string; count: number; data: EightKEvent[] }> {
+  return apiFetch(`/api/edgar/8k/${ticker}?days=${days}`, { timeoutMs: 60_000 });
 }
 
-export async function fetchRecent13D(): Promise<{ data: Record<string, unknown>[] }> {
-  return apiFetch("/api/edgar/13d");
+export interface Activist13D {
+  filed: string;
+  form: string;
+  is_new: boolean;
+  target: string;
+  ticker: string;
+  activist: string;
+  url: string;
+}
+export async function fetchRecent13D(days = 90): Promise<{ days: number; count: number; data: Activist13D[] }> {
+  return apiFetch(`/api/edgar/13d?days=${days}`, { timeoutMs: 60_000 });
 }
 
-export async function fetchCongressionalTrades(): Promise<{ data: Record<string, unknown>[] }> {
-  return apiFetch("/api/edgar/congressional-trades");
+export interface CongressionalTrade {
+  member: string;
+  state: string;
+  ticker: string;
+  type: string;            // "Purchase" | "Sale" | "Exchange"
+  date: string | null;
+  amount: string;
+  filed: string | null;
+}
+export async function fetchCongressionalTrades(params?: { year?: number; maxFilings?: number }): Promise<{ year: number | null; count: number; data: CongressionalTrade[] }> {
+  const qs = new URLSearchParams();
+  if (params?.year) qs.set("year", String(params.year));
+  if (params?.maxFilings) qs.set("max_filings", String(params.maxFilings));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiFetch(`/api/edgar/congressional-trades${suffix}`, { timeoutMs: 3 * 60_000 });
+}
+
+export interface GuidanceRow {
+  filed: string | null;
+  quarter: string | null;
+  revenue: number | null;
+  revenue_high: number | null;
+  revenue_growth_low?: number | null;
+  revenue_growth_high?: number | null;
+  gross_margin: number | null;
+  eps: number | null;
+  eps_high: number | null;
+  opex: number | null;
+  operating_income: number | null;
+  oi_high: number | null;
+  outlook: string | null;
+}
+export async function fetchGuidanceHistory(ticker: string, numQuarters = 6): Promise<{ ticker: string; count: number; data: GuidanceRow[] }> {
+  return apiFetch(`/api/edgar/guidance/${ticker}?num_quarters=${numQuarters}`, { timeoutMs: 2 * 60_000 });
+}
+
+export async function fetchTranscriptUrls(ticker: string, limit = 4): Promise<{ ticker: string; count: number; urls: string[] }> {
+  return apiFetch(`/api/edgar/transcript-urls/${ticker}?limit=${limit}`, { timeoutMs: 60_000 });
+}
+
+export async function fetchTranscriptGuidance(ticker: string, urls: string[]): Promise<{ ticker: string; count: number; data: GuidanceRow[] }> {
+  return apiFetch("/api/edgar/transcript-guidance", {
+    method: "POST",
+    body: JSON.stringify({ ticker, urls }),
+    timeoutMs: 3 * 60_000,
+  });
+}
+
+export interface EdgarEarningsCalendarRow {
+  filed: string;
+  ticker: string;
+  company: string;
+}
+export async function fetchEdgarEarningsCalendar(days = 7): Promise<{ days: number; count: number; data: EdgarEarningsCalendarRow[] }> {
+  return apiFetch(`/api/edgar/earnings-calendar?days=${days}`, { timeoutMs: 60_000 });
+}
+
+// ─── Macro / Analyst / Earnings History ──────────────────────
+
+export interface MacroDashboardResponse {
+  series: Record<string, { date: string; value: number }[]>;
+  latest: Record<string, number>;
+  labels: Record<string, string>;
+}
+export async function fetchMacroDashboard(): Promise<MacroDashboardResponse> {
+  return apiFetch("/api/market/macro-dashboard", { timeoutMs: 90_000 });
+}
+
+export interface AnalystEstimatesData {
+  price_target_mean?: number | null;
+  price_target_high?: number | null;
+  price_target_low?: number | null;
+  num_analysts?: number | null;
+  recommendation?: string | null;
+  forward_eps?: number | null;
+  trailing_eps?: number | null;
+  forward_pe?: number | null;
+  trailing_pe?: number | null;
+  short_pct_float?: number | null;
+  current_price?: number | null;
+  market_cap?: number | null;
+  sector?: string | null;
+  industry?: string | null;
+  eps_est_current_q?: number | null;
+  eps_est_current_y?: number | null;
+  eps_est_next_y?: number | null;
+  rev_est_current_q?: number | null;
+  rev_est_current_y?: number | null;
+  rev_growth_current_y?: number | null;
+  rec_strong_buy?: number | null;
+  rec_buy?: number | null;
+  rec_hold?: number | null;
+  rec_sell?: number | null;
+  rec_strong_sell?: number | null;
+  [key: string]: unknown;
+}
+export async function fetchAnalystEstimates(ticker: string): Promise<{ ticker: string; data: AnalystEstimatesData }> {
+  return apiFetch(`/api/market/analyst-estimates/${ticker}`, { timeoutMs: 60_000 });
+}
+
+export interface EarningsHistoryRow {
+  quarter: string;
+  actual: number | null;
+  estimate: number | null;
+  surprise_pct: number | null;
+  [key: string]: unknown;
+}
+export async function fetchEarningsHistory(ticker: string): Promise<{ ticker: string; data: EarningsHistoryRow[] }> {
+  return apiFetch(`/api/market/earnings-history/${ticker}`, { timeoutMs: 60_000 });
+}
+
+export interface FredPoint { date: string; value: number; }
+export async function fetchFredSeriesCustom(seriesId: string, periods = 252): Promise<{ series_id: string; data: FredPoint[] }> {
+  return apiFetch(`/api/market/fred/${seriesId}?periods=${periods}`, { timeoutMs: 60_000 });
+}
+
+export interface PeerRow {
+  ticker: string;
+  price: number | null;
+  change: number;
+  market_cap: number | null;
+  pe: number | null;
+  pb: number | null;
+  revenue_growth: number | null;
+  profit_margin: number | null;
+  is_target: boolean;
+}
+export async function fetchPeerComparison(ticker: string): Promise<{ ticker: string; peers: PeerRow[] }> {
+  return apiFetch(`/api/market/peers/${ticker}`, { timeoutMs: 30_000 });
 }
 
 // ─── Tracking ────────────────────────────────────────────────
@@ -1054,6 +1212,38 @@ export async function fetchAccuracySummary(): Promise<{
 
 export async function fetchClosedPositions(limit = 50): Promise<{ count: number; data: Record<string, unknown>[] }> {
   return apiFetch(`/api/tracking/closed-positions?limit=${limit}`);
+}
+
+export interface SignalEngineSummary {
+  n_tickers: number;
+  n_bullish: number;
+  n_bearish: number;
+  n_neutral?: number;
+  avg_conviction: number;
+  top_bulls?: string[];
+  top_bears?: string[];
+}
+
+export interface SignalEngineIdea {
+  ticker: string;
+  overall_direction: string;      // "bull" | "bear" | "neutral"
+  overall_conviction: number;     // 0..1
+  signal_agreement: number;       // 0..1
+  n_signals: number;
+  vol_regime?: string;
+  strength?: number;
+  direction_score?: number;
+  [k: string]: unknown;
+}
+
+export interface SignalEngineResponse {
+  summary: SignalEngineSummary;
+  source_weights: Record<string, number>;
+  ideas: SignalEngineIdea[];
+}
+
+export async function fetchSignalEngine(topN = 10): Promise<SignalEngineResponse> {
+  return apiFetch(`/api/tracking/signal-engine?top_n=${topN}`, { timeoutMs: 30_000 });
 }
 
 // ─── Vol Surface ─────────────────────────────────────────────
@@ -2067,5 +2257,308 @@ export async function fetchMetaForecasts(tickers: string[]): Promise<MetaForecas
     method: "POST",
     body: JSON.stringify({ tickers }),
     timeoutMs: 3 * 60_000,
+  });
+}
+
+// ── Sector Analysis ─────────────────────────────────────────────
+
+export interface SectorGuidanceCompany {
+  ticker: string;
+  company: string;
+  rev_est_y: number;
+  rev_growth: string;
+  eps_est_y: number;
+  eps_est_ny: number;
+  capex_guidance: number | null;
+  capex_note: string | null;
+  production: string | null;
+  price_target: number | null;
+  rating: string;
+  fwd_pe: number | null;
+  outlook: string;
+}
+
+export interface SectorConfig {
+  etf: string;
+  label: string;
+  title: string;
+  subtitle: string;
+  companies: Record<string, string>;
+  subsectors: Record<string, string[]>;
+  macro_overlay: { fred_series: string; label: string };
+  factor_proxies: string[];
+  cot_commodities: [string, string][] | null;
+  guidance_snapshot: { date: string; data: SectorGuidanceCompany[] };
+}
+
+export async function fetchSectorConfigs(): Promise<{ sectors: Record<string, SectorConfig> }> {
+  return apiFetch("/api/sectors/configs", { timeoutMs: 30_000 });
+}
+
+export interface SectorFinancialRow {
+  ticker: string;
+  company: string;
+  revenue: number | null;
+  net_income: number | null;
+  net_margin: number | null;
+  operating_margin: number | null;
+  roe: number | null;
+  roa: number | null;
+  debt_to_equity: number | null;
+  current_ratio: number | null;
+  eps: number | null;
+}
+
+export interface SectorForecastRow {
+  ticker: string;
+  company: string;
+  rev_est_q: number | null;
+  rev_est_y: number | null;
+  rev_growth: number | null;
+  eps_est_y: number | null;
+  eps_est_ny: number | null;
+  price_target: number | null;
+  recommendation: string | null;
+  forward_pe: number | null;
+  num_analysts: number | null;
+}
+
+export interface SectorRevenueRow {
+  ticker: string;
+  company: string;
+  date: string;
+  revenue: number;
+}
+
+export interface SectorMarginRow {
+  ticker: string;
+  date: string;
+  revenue: number | null;
+  net_income: number | null;
+  operating_income: number | null;
+}
+
+export interface SectorCashflowRow {
+  ticker: string;
+  operating_cf: number | null;
+  fcf: number | null;
+  market_cap: number | null;
+}
+
+export interface SectorOverviewResponse {
+  etf: string;
+  financials: SectorFinancialRow[];
+  forecasts: SectorForecastRow[];
+  revenue_history: SectorRevenueRow[];
+  margin_history: SectorMarginRow[];
+  cashflow: SectorCashflowRow[];
+}
+
+export async function fetchSectorOverview(etf: string): Promise<SectorOverviewResponse> {
+  return apiFetch("/api/sectors/overview", {
+    method: "POST",
+    body: JSON.stringify({ etf }),
+    timeoutMs: 2 * 60_000,
+  });
+}
+
+export interface SectorCapexLatestRow {
+  ticker: string;
+  company: string;
+  capex: number;
+  period: string;
+}
+
+export interface SectorCapexQuarterlyRow {
+  ticker: string;
+  company: string;
+  date: string;
+  q_capex: number;
+  form: string;
+  year: number;
+  quarter: number;
+}
+
+export interface SectorCapexResponse {
+  etf: string;
+  capex_latest: SectorCapexLatestRow[];
+  capex_quarterly: SectorCapexQuarterlyRow[];
+}
+
+export async function fetchSectorCapex(etf: string): Promise<SectorCapexResponse> {
+  return apiFetch("/api/sectors/capex", {
+    method: "POST",
+    body: JSON.stringify({ etf }),
+    timeoutMs: 2 * 60_000,
+  });
+}
+
+export interface SectorValuationRow {
+  ticker: string;
+  market_cap: number | null;
+  forward_pe: number | null;
+  trailing_pe: number | null;
+  price_to_book: number | null;
+  ev_ebitda: number | null;
+  dividend_yield: number | null;
+  dividend_rate: number | null;
+  payout_ratio: number | null;
+  fcf: number | null;
+  fcf_yield: number | null;
+  operating_cf: number | null;
+  total_debt: number | null;
+  total_cash: number | null;
+  ebitda: number | null;
+  net_debt: number | null;
+  net_debt_ebitda: number | null;
+  beta: number | null;
+  current_price: number | null;
+}
+
+export interface SectorMomentumRow {
+  ticker: string;
+  price: number;
+  "1M"?: number;
+  "3M"?: number;
+  "6M"?: number;
+  "12M"?: number;
+}
+
+export interface SectorValuationResponse {
+  etf: string;
+  valuation: SectorValuationRow[];
+  momentum: SectorMomentumRow[];
+}
+
+export async function fetchSectorValuation(etf: string): Promise<SectorValuationResponse> {
+  return apiFetch("/api/sectors/valuation", {
+    method: "POST",
+    body: JSON.stringify({ etf }),
+    timeoutMs: 2 * 60_000,
+  });
+}
+
+export interface SectorEpsRevisionRow {
+  ticker: string;
+  up_7d: number;
+  up_30d: number;
+  down_7d: number;
+  down_30d: number;
+  net_30d: number;
+}
+
+export interface SectorInsiderRow {
+  ticker: string;
+  buy_count: number;
+  sell_count: number;
+  buy_value: number;
+  sell_value: number;
+  net_value: number;
+}
+
+export interface SectorAlphaResponse {
+  etf: string;
+  eps_revisions: SectorEpsRevisionRow[];
+  insider: SectorInsiderRow[];
+}
+
+export async function fetchSectorAlpha(etf: string): Promise<SectorAlphaResponse> {
+  return apiFetch("/api/sectors/alpha", {
+    method: "POST",
+    body: JSON.stringify({ etf }),
+    timeoutMs: 2 * 60_000,
+  });
+}
+
+export interface SectorPricePoint {
+  date: string;
+  close: number;
+}
+
+export interface SectorPricesResponse {
+  etf: string;
+  prices: Record<string, SectorPricePoint[]>;
+}
+
+export async function fetchSectorPrices(etf: string): Promise<SectorPricesResponse> {
+  return apiFetch("/api/sectors/prices", {
+    method: "POST",
+    body: JSON.stringify({ etf }),
+    timeoutMs: 2 * 60_000,
+  });
+}
+
+export interface SectorLiveEstimate {
+  price_target?: number | null;
+  target_low?: number | null;
+  target_high?: number | null;
+  fwd_pe?: number | null;
+  trailing_pe?: number | null;
+  rating?: string | null;
+  n_analysts?: number | null;
+  current_price?: number | null;
+  fwd_eps?: number | null;
+  trailing_eps?: number | null;
+  rev_growth?: number | null;
+  earnings_growth?: number | null;
+}
+
+export interface SectorEarningsSurpriseRow {
+  ticker: string;
+  quarter: string;
+  actual: number | null;
+  estimate: number | null;
+  surprise_pct: number | null;
+}
+
+export interface SectorGuidanceResponse {
+  etf: string;
+  live_estimates: Record<string, SectorLiveEstimate>;
+  earnings_surprises: SectorEarningsSurpriseRow[];
+}
+
+export async function fetchSectorGuidance(etf: string): Promise<SectorGuidanceResponse> {
+  return apiFetch("/api/sectors/guidance", {
+    method: "POST",
+    body: JSON.stringify({ etf }),
+    timeoutMs: 2 * 60_000,
+  });
+}
+
+export interface SectorMacroPoint {
+  date: string;
+  value: number;
+}
+
+export interface SectorCotRow {
+  date: string;
+  spec_long: number | null;
+  spec_short: number | null;
+  spec_net: number | null;
+  comm_long: number | null;
+  comm_short: number | null;
+  comm_net: number | null;
+}
+
+export interface SectorCotBundle {
+  name: string;
+  key: string;
+  rows: SectorCotRow[];
+  price_history: SectorMacroPoint[];
+}
+
+export interface SectorMarketResponse {
+  etf: string;
+  macro_label: string;
+  macro_series_id: string;
+  macro_series: SectorMacroPoint[];
+  cot: SectorCotBundle[];
+}
+
+export async function fetchSectorMarket(etf: string): Promise<SectorMarketResponse> {
+  return apiFetch("/api/sectors/market", {
+    method: "POST",
+    body: JSON.stringify({ etf }),
+    timeoutMs: 2 * 60_000,
   });
 }

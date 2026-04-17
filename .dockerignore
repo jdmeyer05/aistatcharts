@@ -1,0 +1,47 @@
+# Never ship these into the image.
+.git
+.github
+.vscode
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Secrets / local-only state
+.env
+.env.*
+.streamlit/secrets.toml
+supabase_schema.sql
+supabase_schema.txt
+supabase_trump_decoder.sql
+supabase_rls_migration.sql
+
+# The Next.js frontend is deployed on Vercel — don't ship any of it in the
+# FastAPI container. Keeping `frontend/` out also prevents frontend edits from
+# invalidating the Docker build cache.
+frontend/
+
+# Streamlit entry points — not used by FastAPI. Builds the separate root
+# Dockerfile if you want the Streamlit image.
+pages/
+app.py
+
+# Local caches, dev artifacts
+data/gdelt_events/*.json
+data/*.sqlite
+data/*.db
+*.log
+logs/
+.DS_Store
+
+# Misc working files
+MARKETING_PLAN.md
+TWEET_TEMPLATES.txt
+PROMPT_HISTORY.txt
+UX_IMPROVEMENTS_CHANGELOG.txt
+SECTOR_EXPANSION_PLAN.md
+rh_debug.py
+rh_login.py

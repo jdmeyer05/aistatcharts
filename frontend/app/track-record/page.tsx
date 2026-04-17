@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import { fetchAccuracySummary, fetchPredictions, fetchClosedPositions } from "@/lib/api";
+import { fetchAccuracySummary, fetchPredictions, fetchClosedPositions, fetchSignalEngine } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { useState } from "react";
@@ -10,7 +10,16 @@ import dynamic from "next/dynamic";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
-const TABS = ["Platform Scorecard", "Tool Breakdown", "Position Performance", "Prediction Log"];
+const TABS = ["Platform Scorecard", "Tool Breakdown", "Signal Engine", "Position Performance", "Prediction Log"];
+
+const SOURCE_COLORS: Record<string, string> = {
+  stock_analysis: "#00d1ff", signal_scanner: "#00ff88",
+  scenario_analysis: "#ff2277", calendar_scanner: "#ffdd00",
+  rl_trading: "#a855f7", analyst_consensus: "#06b6d4",
+  vol_surface: "#f97316", market_expectations: "#eab308",
+  correlation: "#8b5cf6", ml_predictor: "#ec4899",
+  options_flow: "#f59e0b", tech_screener: "#94a3b8",
+};
 
 const SOURCE_LABELS: Record<string, string> = {
   stock_analysis: "Stock Analysis (AI)", signal_scanner: "Signal Scanner",
@@ -43,6 +52,33 @@ export default function TrackRecordPage() {
     queryFn: () => fetchClosedPositions(100),
     staleTime: 5 * 60 * 1000,
   });
+
+  const signalEngineQ = useQuery({
+    queryKey: ["signal-engine"],
+    queryFn: () => fetchSignalEngine(10),
+    enabled: activeTab === 2,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const agreementData = (() => {
+    if (!predictions) return null;
+    const rows: { conviction: number; correct: boolean; return: number }[] = [];
+    for (const pp of predictions.data) {
+      const p = pp as Record<string, unknown>;
+      const outcomes = (p.outcomes as Record<string, { correct?: boolean; return_pct?: number }> | undefined) ?? {};
+      const firstOutcome = Object.values(outcomes)[0];
+      const pred = (p.prediction as Record<string, unknown>) ?? p;
+      const conv = (pred.conviction as number | undefined) ?? (p.conviction as number | undefined);
+      if (firstOutcome?.correct != null && conv != null) {
+        rows.push({
+          conviction: conv,
+          correct: !!firstOutcome.correct,
+          return: firstOutcome.return_pct ?? 0,
+        });
+      }
+    }
+    return rows;
+  })();
 
   if (accLoading) {
     return (
@@ -139,8 +175,155 @@ export default function TrackRecordPage() {
         </div>
       )}
 
-      {/* Tab 2: Position Performance */}
+      {/* Tab 2: Signal Engine */}
       {activeTab === 2 && (
+        <div className="space-y-4">
+          {signalEngineQ.isPending && (
+            <div className="card text-center py-8">
+              <div className="inline-block w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+              <div className="text-xs text-text-muted mt-2">Loading signal engine…</div>
+            </div>
+          )}
+          {signalEngineQ.data && (() => {
+            const d = signalEngineQ.data;
+            const sortedWeights = Object.entries(d.source_weights).sort((a, b) => b[1] - a[1]);
+            // Bin conviction vs accuracy
+            const bins = [
+              { label: "0-30%", lo: 0, hi: 0.3 },
+              { label: "30-50%", lo: 0.3, hi: 0.5 },
+              { label: "50-70%", lo: 0.5, hi: 0.7 },
+              { label: "70-90%", lo: 0.7, hi: 0.9 },
+              { label: "90-100%", lo: 0.9, hi: 1.01 },
+            ];
+            const binStats = bins.map(b => {
+              const subset = (agreementData ?? []).filter(r => r.conviction >= b.lo && r.conviction < b.hi);
+              const correctN = subset.filter(r => r.correct).length;
+              return {
+                label: b.label,
+                count: subset.length,
+                acc: subset.length > 0 ? (correctN / subset.length) * 100 : 0,
+              };
+            });
+            const hasBins = (agreementData?.length ?? 0) >= 10;
+            return (
+              <>
+                <div className="card card-compact">
+                  <div className="flex flex-wrap gap-6">
+                    <Metric label="Active Signals" value={String(d.summary.n_tickers)} />
+                    <Metric label="Bullish" value={String(d.summary.n_bullish)} deltaType="gain" />
+                    <Metric label="Bearish" value={String(d.summary.n_bearish)} deltaType="loss" />
+                    <Metric label="Avg Conviction" value={`${(d.summary.avg_conviction * 100).toFixed(0)}%`} />
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="font-semibold text-sm mb-1">Source Weights</div>
+                  <div className="text-xs text-text-muted mb-2">Higher-weighted sources have more influence on composite signals.</div>
+                  <Plot
+                    data={[{
+                      type: "bar",
+                      x: sortedWeights.map(([src]) => SOURCE_LABELS[src] ?? src),
+                      y: sortedWeights.map(([, w]) => w),
+                      marker: { color: sortedWeights.map(([src]) => SOURCE_COLORS[src] ?? t.muted) },
+                      text: sortedWeights.map(([, w]) => `${w.toFixed(1)}x`),
+                      textposition: "outside",
+                    }]}
+                    layout={{
+                      height: 320, ...L,
+                      yaxis: { title: { text: "Weight Multiplier" }, gridcolor: t.grid },
+                      xaxis: { gridcolor: t.grid, tickangle: -30 },
+                      margin: { l: 50, r: 20, t: 10, b: 100 },
+                    }}
+                    config={{ displayModeBar: false, responsive: true }}
+                    style={{ width: "100%" }}
+                  />
+                </div>
+
+                <div className="card">
+                  <div className="font-semibold text-sm mb-2">Current Top Trade Ideas</div>
+                  {d.ideas.length === 0 ? (
+                    <div className="text-xs text-text-muted">No active trade ideas. Run analysis pages to generate signals.</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs font-data">
+                        <thead className="border-b border-border text-text-muted">
+                          <tr>
+                            <th className="text-left py-1.5 px-2">Ticker</th>
+                            <th className="text-left py-1.5 px-2">Direction</th>
+                            <th className="text-right py-1.5 px-2">Conviction</th>
+                            <th className="text-right py-1.5 px-2">Agreement</th>
+                            <th className="text-right py-1.5 px-2">Sources</th>
+                            <th className="text-left py-1.5 px-2">Vol View</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {d.ideas.map((idea, i) => (
+                            <tr key={i} className="border-b border-border/50 hover:bg-surface-alt">
+                              <td className="py-1 px-2 font-bold">{idea.ticker}</td>
+                              <td className="py-1 px-2">
+                                <span style={{ color: idea.overall_direction === "bull" ? t.gain : idea.overall_direction === "bear" ? t.loss : t.muted }}>
+                                  {idea.overall_direction.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="py-1 px-2 text-right">{(idea.overall_conviction * 100).toFixed(0)}%</td>
+                              <td className="py-1 px-2 text-right">{(idea.signal_agreement * 100).toFixed(0)}%</td>
+                              <td className="py-1 px-2 text-right">{idea.n_signals}</td>
+                              <td className="py-1 px-2 text-text-muted">{idea.vol_regime ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {hasBins ? (
+                  <div className="card">
+                    <div className="font-semibold text-sm mb-1">Agreement vs Outcome</div>
+                    <div className="text-xs text-text-muted mb-2">Do high-conviction predictions hit more often?</div>
+                    <Plot
+                      data={[
+                        {
+                          type: "bar", yaxis: "y1",
+                          x: binStats.map(b => b.label), y: binStats.map(b => b.acc),
+                          name: "Accuracy %",
+                          marker: { color: t.accent },
+                          text: binStats.map(b => `${b.acc.toFixed(0)}%`),
+                          textposition: "outside",
+                        },
+                        {
+                          type: "scatter", mode: "lines+markers", yaxis: "y2",
+                          x: binStats.map(b => b.label), y: binStats.map(b => b.count),
+                          name: "# Predictions",
+                          line: { color: t.muted, width: 2 }, marker: { size: 7 },
+                        },
+                      ]}
+                      layout={{
+                        height: 320, ...L,
+                        yaxis: { title: { text: "Accuracy %" }, gridcolor: t.grid, range: [0, 100] },
+                        yaxis2: { title: { text: "Count" }, overlaying: "y", side: "right" },
+                        xaxis: { gridcolor: t.grid },
+                        margin: { l: 60, r: 60, t: 10, b: 40 },
+                        legend: { orientation: "h", y: -0.2 },
+                        shapes: [{ type: "line", y0: 50, y1: 50, x0: 0, x1: 1, xref: "paper", line: { color: t.muted, dash: "dash" } }],
+                      }}
+                      config={{ displayModeBar: false, responsive: true }}
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                ) : (
+                  <div className="card text-xs text-text-muted py-4">
+                    Need 10+ evaluated predictions with conviction scores to analyze agreement vs accuracy.
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Tab 3: Position Performance */}
+      {activeTab === 3 && (
         <div className="card space-y-4">
           {closedPositions && closedPositions.data.length > 0 ? (<>
             {(() => {
@@ -188,8 +371,8 @@ export default function TrackRecordPage() {
         </div>
       )}
 
-      {/* Tab 3: Prediction Log */}
-      {activeTab === 3 && (
+      {/* Tab 4: Prediction Log */}
+      {activeTab === 4 && (
         <div className="card space-y-4">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-text-muted">Filter:</span>

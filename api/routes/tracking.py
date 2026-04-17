@@ -61,6 +61,34 @@ async def get_accuracy_summary(user: str = Depends(get_current_user)):
     }
 
 
+@router.get("/signal-engine")
+async def signal_engine(
+    top_n: int = Query(10, ge=1, le=50),
+    user: str = Depends(get_current_user),
+):
+    """Signal engine summary + top trade ideas + source weights.
+
+    Powers the Signal Engine tab on the track-record page.
+    """
+    try:
+        from src.signal_engine import get_signal_summary, get_top_trade_ideas, SOURCE_WEIGHTS
+        summary = get_signal_summary()
+        ideas = get_top_trade_ideas(top_n)
+    except Exception as e:
+        logger.warning(f"Signal engine load failed: {e}")
+        return {
+            "summary": {"n_tickers": 0, "n_bullish": 0, "n_bearish": 0, "avg_conviction": 0},
+            "source_weights": {},
+            "ideas": [],
+        }
+
+    return {
+        "summary": summary,
+        "source_weights": SOURCE_WEIGHTS,
+        "ideas": ideas,
+    }
+
+
 @router.get("/closed-positions")
 async def get_closed_positions(
     limit: int = Query(50, ge=1, le=200),

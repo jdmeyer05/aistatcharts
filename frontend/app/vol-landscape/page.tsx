@@ -135,56 +135,240 @@ export default function VolLandscapePage() {
               </select>
             </div>
 
-            {/* Smile Heatmap */}
+            {/* Smile — small multiples (one mini curve per ticker) */}
             {data.smile_data.length > 0 && (() => {
               const smiles = data.smile_data.filter(s => filteredTickers.includes(s.ticker));
-              const tickers = smiles.map(s => s.ticker);
-              const z = smiles.map(s => MONEYNESS_PTS.map(m => (s[m] as number) ?? 0));
+              // Clean each row: drop implausible IVs (illiquid wings routinely
+              // produce 400-800% blowout values).
+              const cleaned = smiles.map(s => {
+                const pts = MONEYNESS_PTS.map((m, i) => {
+                  const v = s[m];
+                  const iv = typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 200 ? v : null;
+                  return { label: MONEYNESS_LABELS[i], iv };
+                });
+                const atm = pts.find(p => p.label === "ATM")?.iv ?? null;
+                const validPuts = pts.slice(0, 3).map(p => p.iv).filter((v): v is number => v != null);
+                const validCalls = pts.slice(4).map(p => p.iv).filter((v): v is number => v != null);
+                const putSkew = atm && validPuts.length
+                  ? (validPuts.reduce((a, b) => a + b, 0) / validPuts.length) / atm
+                  : null;
+                const callSkew = atm && validCalls.length
+                  ? (validCalls.reduce((a, b) => a + b, 0) / validCalls.length) / atm
+                  : null;
+                return {
+                  ticker: s.ticker as string,
+                  pts,
+                  atm,
+                  // Skew ratio: >1 = puts pricier than ATM (crash premium)
+                  skew: putSkew && callSkew ? putSkew - callSkew : null,
+                };
+              });
+
+              // Color each smile by its put-skew intensity
+              const skewVals = cleaned.map(c => c.skew).filter((v): v is number => v != null);
+              const skewMax = skewVals.length ? Math.max(...skewVals.map(Math.abs), 0.1) : 0.1;
+              const colorFor = (skew: number | null) => {
+                if (skew == null) return t.muted;
+                // skew > 0 means put-heavy (fear) → warm; < 0 means call-heavy → cool
+                const norm = Math.max(-1, Math.min(1, skew / skewMax));
+                if (norm > 0.1) return t.loss;
+                if (norm < -0.1) return t.accent;
+                return t.spot;
+              };
+
               return (
                 <div className="card">
-                  <div className="text-sm font-bold mb-1">Volatility Smile (Front Month)</div>
-                  <div className="text-xs text-text-muted mb-2">Left = OTM puts (crash protection). Right = OTM calls. Center = ATM.</div>
-                  <Plot data={[{
-                    type: "heatmap" as const, z, x: MONEYNESS_LABELS, y: tickers,
-                    colorscale: "RdYlBu_r",
-                    text: z.map(row => row.map(v => v.toFixed(1))), texttemplate: "%{text}",
-                    textfont: { size: 10 },
-                    colorbar: { title: { text: "IV %", font: { size: 9 } }, thickness: 12, len: 0.6 },
-                    hovertemplate: "<b>%{y}</b> | %{x}<br>IV: %{z:.1f}%<extra></extra>",
-                  }]}
-                    layout={{ height: Math.max(350, tickers.length * 28 + 80), ...L, margin: { l: 60, r: 20, t: 10, b: 40 },
-                      xaxis: { title: "Moneyness", gridcolor: t.grid }, yaxis: { autorange: "reversed" } }}
-                    config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+                  <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
+                    <div>
+                      <div className="text-sm font-bold">Volatility Smile (Front Month)</div>
+                      <div className="text-xs text-text-muted">Each curve: IV across 90% → 110% moneyness. Red border = put-heavy skew (crash premium). Blue = call-heavy.</div>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] text-text-muted">
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: t.loss }} />Put-heavy</span>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: t.spot }} />Balanced</span>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: t.accent }} />Call-heavy</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 mt-3">
+                    {cleaned.map(c => {
+                      const xs = c.pts.map(p => p.label);
+                      const ys = c.pts.map(p => p.iv);
+                      const color = colorFor(c.skew);
+                      const validYs = ys.filter((v): v is number => v != null);
+                      const yMin = validYs.length ? Math.min(...validYs) : 0;
+                      const yMax = validYs.length ? Math.max(...validYs) : 1;
+                      const pad = Math.max((yMax - yMin) * 0.2, 1);
+                      return (
+                        <div key={c.ticker}
+                          className="rounded border border-border overflow-hidden"
+                          style={{ borderLeft: `3px solid ${color}` }}>
+                          <div className="flex items-baseline justify-between px-2 py-1 border-b border-border bg-surface-alt/50">
+                            <span className="text-xs font-bold font-data">{c.ticker}</span>
+                            <span className="text-[10px] text-text-muted font-data">
+                              ATM {c.atm != null ? `${c.atm.toFixed(0)}%` : "—"}
+                            </span>
+                          </div>
+                          <Plot
+                            data={[{
+                              x: xs, y: ys,
+                              type: "scatter", mode: "lines+markers",
+                              line: { color, width: 2, shape: "spline" as const },
+                              marker: { size: 5, color },
+                              connectgaps: false,
+                              hovertemplate: "%{x}<br>IV: %{y:.1f}%<extra></extra>",
+                            }]}
+                            layout={{
+                              ...L,
+                              height: 110,
+                              margin: { l: 32, r: 8, t: 4, b: 20 },
+                              paper_bgcolor: "transparent",
+                              plot_bgcolor: "transparent",
+                              showlegend: false,
+                              xaxis: {
+                                showgrid: false, zeroline: false,
+                                tickmode: "array",
+                                tickvals: ["90%", "ATM", "110%"],
+                                ticktext: ["90", "ATM", "110"],
+                                tickfont: { size: 8, color: t.muted },
+                              },
+                              yaxis: {
+                                gridcolor: t.grid, zeroline: false,
+                                range: [yMin - pad, yMax + pad],
+                                tickfont: { size: 8, color: t.muted },
+                                ticksuffix: "%",
+                                nticks: 3,
+                              },
+                              shapes: c.atm != null ? [{
+                                type: "line", x0: "ATM", x1: "ATM", y0: yMin - pad, y1: yMax + pad,
+                                line: { color: t.muted, width: 1, dash: "dot" as const },
+                              }] : [],
+                            }}
+                            config={{ displayModeBar: false, responsive: true, staticPlot: false }}
+                            style={{ width: "100%" }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })()}
 
-            {/* Term Structure Heatmap */}
+            {/* Term Structure — small multiples (one mini curve per ticker) */}
             {data.ts_data.length > 0 && (() => {
               const ts = data.ts_data.filter(s => filteredTickers.includes(s.ticker));
-              const maxCols = Math.max(...ts.map(s => s.term_structure.length));
-              const tickers = ts.map(s => s.ticker);
-              const dteLabels = ts[0]?.term_structure.map(t => `${t.dte}d`) ?? [];
-              const z = ts.map(s => {
-                const row = s.term_structure.map(t => t.iv);
-                while (row.length < maxCols) row.push(0);
-                return row;
+
+              const cleaned = ts.map(s => {
+                // Keep plausible points, sort by DTE ascending
+                const pts = [...s.term_structure]
+                  .filter(p => Number.isFinite(p.iv) && p.iv > 0 && p.iv <= 200)
+                  .sort((a, b) => a.dte - b.dte);
+                if (pts.length < 2) {
+                  return { ticker: s.ticker, pts, slope: null, front: null, back: null };
+                }
+                const front = pts[0].iv;
+                const back = pts[pts.length - 1].iv;
+                // Slope as % change per 30 days of DTE — positive = contango, negative = backwardation
+                const dayRange = pts[pts.length - 1].dte - pts[0].dte;
+                const slope = dayRange > 0 ? ((back - front) / front) * (30 / dayRange) * 100 : 0;
+                return { ticker: s.ticker, pts, slope, front, back };
               });
+
+              const colorFor = (slope: number | null) => {
+                if (slope == null) return t.muted;
+                if (slope < -2) return t.loss;    // meaningful backwardation → near-term fear
+                if (slope > 2) return t.accent;   // contango → normal/calm
+                return t.spot;                    // roughly flat
+              };
+
+              const labelFor = (slope: number | null) => {
+                if (slope == null) return "—";
+                if (slope < -2) return "Backwardated";
+                if (slope > 2) return "Contango";
+                return "Flat";
+              };
+
               return (
                 <div className="card">
-                  <div className="text-sm font-bold mb-1">ATM IV Term Structure</div>
-                  <div className="text-xs text-text-muted mb-2">Hotter left than right = backwardation (near-term fear).</div>
-                  <Plot data={[{
-                    type: "heatmap" as const, z, x: dteLabels.slice(0, maxCols), y: tickers,
-                    colorscale: "Viridis",
-                    text: z.map(row => row.map(v => v.toFixed(1))), texttemplate: "%{text}",
-                    textfont: { size: 10 },
-                    colorbar: { title: { text: "IV %", font: { size: 9 } }, thickness: 12, len: 0.6 },
-                    hovertemplate: "<b>%{y}</b> | %{x}<br>IV: %{z:.1f}%<extra></extra>",
-                  }]}
-                    layout={{ height: Math.max(350, tickers.length * 28 + 80), ...L, margin: { l: 60, r: 20, t: 10, b: 40 },
-                      xaxis: { title: "DTE", gridcolor: t.grid }, yaxis: { autorange: "reversed" } }}
-                    config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+                  <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
+                    <div>
+                      <div className="text-sm font-bold">ATM IV Term Structure</div>
+                      <div className="text-xs text-text-muted">Each curve: ATM IV across 5 nearest expirations. Downward slope = backwardation (near-term fear). Upward = contango.</div>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] text-text-muted">
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: t.loss }} />Backwardated</span>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: t.spot }} />Flat</span>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: t.accent }} />Contango</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 mt-3">
+                    {cleaned.map(c => {
+                      const xs = c.pts.map(p => p.dte);
+                      const ys = c.pts.map(p => p.iv);
+                      const color = colorFor(c.slope);
+                      const yMin = ys.length ? Math.min(...ys) : 0;
+                      const yMax = ys.length ? Math.max(...ys) : 1;
+                      const pad = Math.max((yMax - yMin) * 0.25, 0.8);
+                      return (
+                        <div key={c.ticker}
+                          className="rounded border border-border overflow-hidden"
+                          style={{ borderLeft: `3px solid ${color}` }}>
+                          <div className="flex items-baseline justify-between px-2 py-1 border-b border-border bg-surface-alt/50">
+                            <span className="text-xs font-bold font-data">{c.ticker}</span>
+                            <span className="text-[10px] font-data" style={{ color }}>
+                              {c.slope != null ? `${c.slope >= 0 ? "+" : ""}${c.slope.toFixed(1)}%/mo` : "—"}
+                            </span>
+                          </div>
+                          {c.pts.length >= 2 ? (
+                            <Plot
+                              data={[{
+                                x: xs, y: ys,
+                                type: "scatter", mode: "lines+markers",
+                                line: { color, width: 2, shape: "spline" as const },
+                                marker: { size: 5, color },
+                                hovertemplate: "DTE: %{x}d<br>IV: %{y:.1f}%<extra></extra>",
+                              }]}
+                              layout={{
+                                ...L,
+                                height: 110,
+                                margin: { l: 32, r: 8, t: 4, b: 20 },
+                                paper_bgcolor: "transparent",
+                                plot_bgcolor: "transparent",
+                                showlegend: false,
+                                xaxis: {
+                                  showgrid: false, zeroline: false,
+                                  tickfont: { size: 8, color: t.muted },
+                                  ticksuffix: "d",
+                                  nticks: 4,
+                                },
+                                yaxis: {
+                                  gridcolor: t.grid, zeroline: false,
+                                  range: [yMin - pad, yMax + pad],
+                                  tickfont: { size: 8, color: t.muted },
+                                  ticksuffix: "%",
+                                  nticks: 3,
+                                },
+                              }}
+                              config={{ displayModeBar: false, responsive: true }}
+                              style={{ width: "100%" }}
+                            />
+                          ) : (
+                            <div className="h-[110px] flex items-center justify-center text-[10px] text-text-muted">
+                              insufficient expirations
+                            </div>
+                          )}
+                          <div className="px-2 py-1 text-[9px] text-text-muted flex justify-between border-t border-border/50">
+                            <span>{labelFor(c.slope)}</span>
+                            <span className="font-data">
+                              {c.front != null && c.back != null
+                                ? `${c.front.toFixed(0)}→${c.back.toFixed(0)}%`
+                                : ""}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })()}
