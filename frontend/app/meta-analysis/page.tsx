@@ -694,6 +694,12 @@ function ForecastsTab({
 }) {
   const run = useMutation({ mutationFn: () => fetchMetaForecasts(tickers) });
   const data = run.data && !run.data.error ? run.data : null;
+  // Cache the sorted components once so the 4 inline chart .sort() calls
+  // stay aligned and don't re-sort on every render.
+  const sortedComponents = useMemo(
+    () => (data ? [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast) : []),
+    [data]
+  );
 
   return (
     <div className="space-y-4">
@@ -716,6 +722,7 @@ function ForecastsTab({
       )}
 
       {run.data?.error && <div className="card border-loss text-loss text-sm">{run.data.error}</div>}
+      {run.isError && <div className="card border-loss text-loss text-sm">Request failed: {(run.error as Error).message}</div>}
 
       {data && (
         <>
@@ -742,14 +749,14 @@ function ForecastsTab({
               data={[{
                 type: "bar" as const,
                 orientation: "h" as const,
-                y: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) => c.ticker),
-                x: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) => c.blended_forecast),
+                y: sortedComponents.map((c) => c.ticker),
+                x: sortedComponents.map((c) => c.blended_forecast),
                 marker: {
-                  color: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) =>
+                  color: sortedComponents.map((c) =>
                     c.blended_forecast > 5 ? t.gain : c.blended_forecast > 0 ? t.accent : t.loss
                   ),
                 },
-                text: [...data.components].sort((a, b) => a.blended_forecast - b.blended_forecast).map((c) => `${c.blended_forecast >= 0 ? "+" : ""}${c.blended_forecast.toFixed(1)}%`),
+                text: sortedComponents.map((c) => `${c.blended_forecast >= 0 ? "+" : ""}${c.blended_forecast.toFixed(1)}%`),
                 textposition: "outside" as const,
               }]}
               layout={{
@@ -799,6 +806,11 @@ function ForecastsTab({
             />
           </div>
 
+          {data.coverage.length === 0 && data.components.length > 0 && (
+            <div className="card card-compact text-xs text-text-muted">
+              No analyst coverage data available for these tickers. Blended forecast fell back to historical mean for the analyst component.
+            </div>
+          )}
           {data.coverage.length > 0 && (
             <div className="card">
               <div className="text-sm font-semibold mb-2">Analyst coverage &amp; valuation</div>

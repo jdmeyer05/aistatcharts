@@ -2037,7 +2037,7 @@ export interface MetaForecastComponent {
 }
 
 export interface MetaForecastCoverage {
-  ticker?: string;
+  ticker: string;
   current_price: number | null;
   target_price: number | null;
   target_low: number | null;

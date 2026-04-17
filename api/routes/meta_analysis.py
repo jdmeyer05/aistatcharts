@@ -508,8 +508,23 @@ def _fetch_analyst_targets(tickers: List[str]) -> pd.DataFrame:
             logger.warning(f"forecast fetch failed for {tk}: {e}")
             return None
 
+    # Per-ticker timeout so one hung yfinance call can't drag the endpoint past
+    # the frontend's 180s window. 12s per ticker comfortably covers normal
+    # latency (~2-5s) while still capping worst-case total at ~15s with 8 workers.
+    import concurrent.futures
+    rows: List[Dict] = []
     with ThreadPoolExecutor(max_workers=8) as ex:
-        rows = [r for r in ex.map(_one, tickers) if r is not None]
+        futures = {ex.submit(_one, tk): tk for tk in tickers}
+        for fut in concurrent.futures.as_completed(futures):
+            tk = futures[fut]
+            try:
+                r = fut.result(timeout=12)
+                if r is not None:
+                    rows.append(r)
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"forecast fetch timed out for {tk}")
+            except Exception as e:
+                logger.warning(f"forecast fetch failed for {tk}: {e}")
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 

@@ -1,12 +1,11 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { supabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 
 function LoginForm() {
-  const router = useRouter();
   const params = useSearchParams();
   const nextPath = params.get("next") || "/";
 
@@ -34,10 +33,11 @@ function LoginForm() {
         setError(signInError.message);
         return;
       }
-      // The session cookie is set by @supabase/ssr. Hard-navigate so the
-      // middleware sees the new cookie on the next request.
-      router.replace(nextPath);
-      router.refresh();
+      // Hard navigate (not router.replace) so the proxy runs with the new
+      // cookie attached. router.replace + router.refresh can race — the
+      // RSC refresh doesn't re-execute the proxy.
+      window.location.assign(nextPath);
+      return;
     } catch (err) {
       setError((err as Error).message);
     } finally {

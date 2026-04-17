@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState, useRef } from "react";
 import { NAV_GROUPS, findGroup, type NavGroup } from "@/lib/nav";
@@ -137,7 +137,6 @@ function NavDropdown({ group, isActive }: { group: NavGroup; isActive: boolean }
 
 function UserMenu() {
   const { email } = useSessionUser();
-  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -156,9 +155,9 @@ function UserMenu() {
     setBusy(true);
     try {
       await supabaseBrowser().auth.signOut();
-      router.replace("/login");
-      router.refresh();
-    } finally {
+      // Hard navigate so the proxy re-runs with the cleared cookie.
+      window.location.assign("/login");
+    } catch {
       setBusy(false);
     }
   }

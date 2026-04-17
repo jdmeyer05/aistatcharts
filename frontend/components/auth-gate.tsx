@@ -27,9 +27,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     if (!hasSupabaseConfig()) return;
     const supabase = supabaseBrowser();
 
-    supabase.auth.getUser().then(({ data }) => {
-      setUser({ email: data.user?.email ?? null, id: data.user?.id ?? null });
-    });
+    supabase.auth.getUser()
+      .then(({ data }) => {
+        setUser({ email: data.user?.email ?? null, id: data.user?.id ?? null });
+      })
+      .catch(() => {
+        // Network hiccup / Supabase unreachable — stay logged-out for now;
+        // onAuthStateChange below will pick up any session that appears.
+      });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser({ email: session?.user?.email ?? null, id: session?.user?.id ?? null });

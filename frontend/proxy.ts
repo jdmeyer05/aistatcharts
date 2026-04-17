@@ -41,7 +41,18 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  const { data: { user } } = await supabase.auth.getUser();
+  // Timeout the auth check at 3s so a Supabase outage doesn't hang every
+  // request. Fallback: if we can't verify, treat the user as logged out.
+  let user: { id: string } | null = null;
+  try {
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("auth timeout")), 3000)
+    );
+    const { data } = (await Promise.race([supabase.auth.getUser(), timeoutPromise])) as { data: { user: { id: string } | null } };
+    user = data.user;
+  } catch {
+    user = null;
+  }
 
   if (!user && !PUBLIC_PATHS.has(pathname)) {
     const url = request.nextUrl.clone();
