@@ -170,6 +170,11 @@ def record_predictions_batch(predictions: list[dict]) -> int:
     return count
 
 
+def load_predictions() -> list[dict]:
+    """Public alias for `_get_all_predictions` — used by api.routes.tracking."""
+    return _get_all_predictions()
+
+
 def _get_all_predictions() -> list[dict]:
     """Get all predictions from Supabase or local."""
     db = _db()
