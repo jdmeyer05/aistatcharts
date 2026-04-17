@@ -65,7 +65,7 @@ export default function MetaAnalysisPage() {
     const spyIdx = valid.indexOf("SPY");
     const spyEq = spyIdx >= 0 ? retArrays[spyIdx].reduce((eq, r) => { eq.push(eq[eq.length-1]*(1+r)); return eq; }, [1]) : [];
 
-    const annRets = equities.map(eq => (Math.pow(eq[eq.length-1]/eq[0], 252/eq.length) - 1) * 100);
+    const annRets = equities.map(eq => (Math.pow(eq[eq.length-1]/eq[0], 252/(eq.length-1)) - 1) * 100);
     const maxDDs = equities.map(eq => {
       let peak = eq[0], maxDD = 0;
       eq.forEach(v => { peak = Math.max(peak, v); maxDD = Math.min(maxDD, (v/peak-1)*100); });

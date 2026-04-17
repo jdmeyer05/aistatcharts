@@ -84,7 +84,7 @@ export default function SignalScannerPage() {
 
         // Composite: normalize and blend
         const momScore = (mom12m + mom1m * 2) / 3; // weight recent momentum more
-        const mrScore = (50 - Math.abs(rsi14 - 50)) + (50 - Math.abs(bbPct - 50)); // favor mean
+        const mrScore = Math.abs(rsi14 - 50) + Math.abs(bbPct - 50); // reward extremes (mean-reversion candidates)
         const compositeScore = momScore * 0.6 + mrScore * 0.02; // simplified
 
         rows.push({ ticker: tk, mom12m, mom1m, rsi14, bbPct, zScore, compositeScore });
