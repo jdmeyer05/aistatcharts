@@ -305,6 +305,46 @@ set in `.streamlit/secrets.toml` (or env) for admin-gated endpoints
 exported function from `middleware` → `proxy`. The old name still works in
 16.x but emits a warning and is scheduled for removal. Using the new name.
 
+### First-time Supabase user + end-to-end login test
+
+The JWT plumbing is done but the Supabase project has no SMTP configured,
+so magic-link email delivery fails with `500 unexpected_failure`. Two paths
+to get the first user logged in:
+
+**Option A — create the user manually** (fastest, no email needed):
+1. Open https://supabase.com/dashboard/project/diyhmmpegkxlwwhmqkyo/auth/users
+2. Click **Add user → Create new user**, enter `jdmeyer05@gmail.com` and a
+   password, toggle **Auto-confirm user** ON so no email verification is
+   required.
+3. Hit `http://localhost:3000/login`, sign in with that email+password.
+
+**Option B — configure SMTP then use magic links**:
+1. Supabase dashboard → Project Settings → Auth → SMTP Settings. Either
+   provide a custom SMTP (Resend, SendGrid, Postmark) or use the built-in
+   service (rate-limited to 4/hr in dev).
+2. After enabling, the "Email me a magic link instead" button on `/login`
+   works — no password needed.
+
+### Verifying the full round-trip
+
+Once signed in locally:
+
+```bash
+# Restart uvicorn so it picks up the new routes added this session.
+cd C:/Users/jdmey/aistatcharts
+LOCAL_DEV=true python -m uvicorn api.main:app --port 8000 --host 0.0.0.0
+```
+
+Then in the browser hit `/meta-analysis` → run a backtest. In DevTools →
+Network, confirm the request to `/api/meta/backtest` carries an
+`Authorization: Bearer <jwt>` header. The token decodes on the server
+via `api/deps.py::get_current_user` and `user` is set to the signed-in
+email (check the uvicorn logs).
+
+Admin-gated endpoints (`/api/positions/robinhood`, `/api/market/holding-deep-dive`,
+`/api/market/trade-architect`) require `ADMIN_EMAILS=jdmeyer05@gmail.com`
+in secrets. Without `LOCAL_DEV=true`, non-admin callers get 403.
+
 ## How to Resume
 
 1. Read this file first (this is the handoff).
