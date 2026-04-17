@@ -7,7 +7,7 @@
 import { usePathname } from "next/navigation";
 import { Header } from "@/components/layout/header";
 
-const BARE_PATHS = new Set<string>(["/login", "/auth/reset"]);
+const BARE_PATHS = new Set<string>(["/login"]);
 
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

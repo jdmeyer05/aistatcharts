@@ -9,12 +9,12 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
-import { supabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
+import { supabaseBrowser, hasSupabaseConfig, safeRedirectPath } from "@/lib/supabase";
 
 function ResetForm() {
   const params = useSearchParams();
   const code = params.get("code");
-  const nextPath = params.get("next") || "/";
+  const nextPath = safeRedirectPath(params.get("next"));
 
   const [ready, setReady] = useState(false);
   const [password, setPassword] = useState("");
@@ -29,20 +29,34 @@ function ResetForm() {
       return;
     }
     const supabase = supabaseBrowser();
-    if (code) {
+
+    // If we already have a session (e.g. the user refreshed this page after a
+    // successful exchange), don't re-consume the one-time code. Go straight
+    // to the password form.
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) {
+        setReady(true);
+        return;
+      }
+      if (!code) {
+        setError("No reset code in URL. Request a new reset link from the sign-in page.");
+        return;
+      }
       supabase.auth.exchangeCodeForSession(code).then(({ error: err }) => {
-        if (err) setError(`Reset link is invalid or expired: ${err.message}`);
-        else setReady(true);
+        if (err) {
+          setError(`Reset link is invalid or expired: ${err.message}`);
+          return;
+        }
+        setReady(true);
+        // Strip the code from the URL so a subsequent reload doesn't try
+        // to re-exchange and fail.
+        if (typeof window !== "undefined") {
+          const cleanUrl = window.location.pathname + (nextPath !== "/" ? `?next=${encodeURIComponent(nextPath)}` : "");
+          window.history.replaceState({}, "", cleanUrl);
+        }
       });
-    } else {
-      // No code — user may have navigated here directly. Check if they
-      // already have a session (magic-link flow landed here by mistake).
-      supabase.auth.getSession().then(({ data }) => {
-        if (data.session) setReady(true);
-        else setError("No reset code in URL. Request a new reset link from the sign-in page.");
-      });
-    }
-  }, [code]);
+    });
+  }, [code, nextPath]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

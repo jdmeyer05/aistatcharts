@@ -27,3 +27,17 @@ export function supabaseBrowser() {
 export function hasSupabaseConfig(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 }
+
+/**
+ * Validate a post-auth redirect target. Only allows same-origin absolute paths
+ * starting with a single "/" (not "//…" which browsers treat as external).
+ * Prevents open-redirect attacks via `?next=//evil.com` in the login flow.
+ */
+export function safeRedirectPath(raw: string | null | undefined, fallback = "/"): string {
+  if (!raw) return fallback;
+  if (typeof raw !== "string") return fallback;
+  if (!raw.startsWith("/")) return fallback;      // must be absolute path
+  if (raw.startsWith("//")) return fallback;       // protocol-relative → external
+  if (raw.startsWith("/\\")) return fallback;      // IE/legacy quirk
+  return raw;
+}

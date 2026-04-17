@@ -3,7 +3,7 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
-import { supabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
+import { supabaseBrowser, hasSupabaseConfig, safeRedirectPath } from "@/lib/supabase";
 
 type Mode = "signin" | "signup" | "reset";
 
@@ -24,7 +24,8 @@ function friendlyError(msg: string): string {
 
 function AuthForm() {
   const params = useSearchParams();
-  const nextPath = params.get("next") || "/";
+  const nextPath = safeRedirectPath(params.get("next"));
+  const callbackError = params.get("error");
 
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
@@ -86,9 +87,12 @@ function AuthForm() {
       }
       // Otherwise Supabase queued a confirmation email. On projects without
       // SMTP, the email never arrives — surface the admin-assist path.
-      setInfo(`Account created for ${email}. Check your email to confirm the address before signing in. If no email arrives, the project may not have SMTP configured — ask the admin to confirm you in the Supabase dashboard.`);
+      // Switch tab first (clears state) then set the message.
       switchMode("signin");
-      setInfo(`Account created for ${email}. Sign in once the address is confirmed.`);
+      setInfo(
+        `Account created for ${email}. Confirm your email (check inbox) before signing in. ` +
+        `If no email arrives, ask the admin to confirm you in the Supabase dashboard.`
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -241,6 +245,13 @@ function AuthForm() {
         )}
 
         {/* Messages */}
+        {!error && callbackError && (
+          <p className="text-xs text-loss">
+            {callbackError === "missing_code"
+              ? "Your login link is missing the verification code. Try again."
+              : `Sign-in link failed: ${friendlyError(callbackError)}`}
+          </p>
+        )}
         {error && <p className="text-xs text-loss">{error}</p>}
         {info && <p className="text-xs text-gain">{info}</p>}
 
