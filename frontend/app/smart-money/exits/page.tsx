@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn, shortDate } from "../_shared/utils";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -343,6 +344,34 @@ export default function ExitsPage() {
             <div className="text-xs text-text-muted">No insider sells for this ticker.</div>
           )}
         </div>
+      )}
+
+      {(congressionalExits.length > 0 || activistExitCandidates.length > 0 || insiderLoad.isSuccess) && (
+        <AIInterpretation
+          page="exits"
+          data={{
+            congressional_exits: congressionalExits.slice(0, 15).map((r) => ({
+              ticker: r.ticker,
+              buys: r.buys,
+              sells: r.sells,
+              net: r.net,
+              distinct_members: r.distinctMembers,
+            })),
+            recent_13d_amendments: activistExitCandidates.slice(0, 12).map((row) => ({
+              filed: row.filed,
+              ticker: row.ticker,
+              target: row.target,
+              activist: row.activist,
+            })),
+            per_ticker_insider: insiderLoad.isSuccess && insiderTicker ? {
+              ticker: insiderTicker.toUpperCase(),
+              buys: insiderExits.buyCount,
+              sells: insiderExits.sellCount,
+              net_value: insiderExits.netValue,
+              recent_sells: insiderExits.sells.slice(0, 6),
+            } : null,
+          }}
+        />
       )}
 
       <div className="card card-compact text-xs text-text-muted">

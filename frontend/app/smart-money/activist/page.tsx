@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { fetchRecent13D, type Activist13D } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import { shortDate } from "../_shared/utils";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -354,6 +355,24 @@ export default function ActivistPage() {
               </table>
             </div>
           </div>
+
+          <AIInterpretation
+            page="activist"
+            data={{
+              lookback_days: days,
+              total_filings: filings.length,
+              new_13d: newFilings.length,
+              amendments: amendments.length,
+              unique_targets: new Set(filings.map((f) => f.target)).size,
+              top_activists: topActivists.map(([name, count]) => ({ activist: name, filings: count })),
+              new_campaigns: newFilings.slice(0, 12).map((f) => ({
+                filed: f.filed,
+                ticker: f.ticker,
+                target: f.target,
+                activist: f.activist,
+              })),
+            }}
+          />
         </>
       )}
 

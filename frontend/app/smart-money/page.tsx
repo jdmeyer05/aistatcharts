@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn, shortDate } from "./_shared/utils";
 
 // ──────────────────────────────────────────────────────────────────
@@ -401,6 +402,40 @@ export default function SmartMoneyOverviewPage() {
           </div>
           );
         })()}
+
+        {conviction && (
+          <div className="mt-4">
+            <AIInterpretation
+              page="overview"
+              subject={conviction.ticker}
+              data={{
+                ticker: conviction.ticker,
+                score: conviction.score,
+                direction: conviction.direction,
+                families_firing: conviction.families,
+                insider: {
+                  buys: conviction.insiderBuys,
+                  sells: conviction.insiderSells,
+                  net_value: conviction.insiderNet,
+                  buy_cluster: conviction.insiderClusterBuy,
+                  sell_cluster: conviction.insiderClusterSell,
+                },
+                activist: {
+                  new_13d: conviction.activistNew,
+                  total_filings: conviction.activistFilings.length,
+                  filings: conviction.activistFilings.slice(0, 5).map((f) => ({
+                    filed: f.filed,
+                    activist: f.activist,
+                    is_new: f.is_new,
+                  })),
+                },
+                events: {
+                  eight_k_count_90d: conviction.recentEightK,
+                },
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* This week feeds */}

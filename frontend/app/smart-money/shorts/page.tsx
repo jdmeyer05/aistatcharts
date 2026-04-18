@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { fetchShortInterest, fetchShortsWatchlist } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn } from "../_shared/utils";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -286,6 +287,33 @@ export default function ShortsPage() {
           </>
         )}
       </div>
+
+      {(result?.ok || ranked.length > 0) && (
+        <AIInterpretation
+          page="shorts"
+          subject={result?.ok ? result.ticker : "watchlist"}
+          data={{
+            lookup: result?.ok && resultSqueeze ? {
+              ticker: result.ticker,
+              name: result.name,
+              short_pct_float: result.short_pct_float,
+              days_to_cover: result.short_ratio,
+              shares_short: result.shares_short,
+              delta_month_over_month: resultSqueeze.delta,
+              squeeze_score: resultSqueeze.score,
+              price: result.price,
+              market_cap: result.market_cap,
+            } : null,
+            watchlist_top10: ranked.slice(0, 10).map((r) => ({
+              ticker: r.ticker,
+              short_pct_float: r.short_pct_float,
+              days_to_cover: r.short_ratio,
+              delta: r.deltaShort,
+              squeeze: r.squeeze,
+            })),
+          }}
+        />
+      )}
 
       <div className="card card-compact text-[11px] text-text-muted">
         <strong>Data source:</strong> Yahoo Finance (proxy for FINRA biweekly short interest reports). Data is

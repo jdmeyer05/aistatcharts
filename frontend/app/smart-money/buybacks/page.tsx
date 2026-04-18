@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { fetchBuybacks } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn } from "../_shared/utils";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -224,6 +225,23 @@ export default function BuybacksPage() {
               </table>
             </div>
           </div>
+
+          <AIInterpretation
+            page="buybacks"
+            subject={d.ticker}
+            data={{
+              ticker: d.ticker,
+              name: d.name,
+              market_cap: d.market_cap,
+              ttm_buyback: d.ttm_repurchase,
+              ttm_dividend: d.ttm_dividend,
+              buyback_yield: d.buyback_yield,
+              dividend_yield: d.dividend_yield,
+              total_shareholder_yield: d.total_shareholder_yield,
+              quarterly: (d.quarterly ?? []).slice(0, 8),
+              annual: (d.annual ?? []).slice(0, 5),
+            }}
+          />
         </>
       )}
 

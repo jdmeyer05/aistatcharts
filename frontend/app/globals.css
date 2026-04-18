@@ -736,3 +736,92 @@ details summary {
 details summary:hover {
   color: var(--color-text);
 }
+
+/* ─── Markdown body (AI interpretation, dashboard intel) ─────────
+   Tailwind v4 preflight zeroes list-style and spacing. Since
+   @tailwindcss/typography isn't installed, restore the minimum
+   needed for readable Claude output: bullets, paragraph spacing,
+   bold weight, nested-list indent, compact headings.
+   ──────────────────────────────────────────────────────────── */
+.markdown-body p {
+  margin: 0.5rem 0;
+}
+.markdown-body p:first-child { margin-top: 0; }
+.markdown-body p:last-child { margin-bottom: 0; }
+
+.markdown-body ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
+}
+.markdown-body ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
+}
+.markdown-body li {
+  margin: 0.15rem 0;
+}
+.markdown-body li > ul, .markdown-body li > ol {
+  margin: 0.15rem 0;
+}
+
+.markdown-body strong {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.markdown-body em {
+  font-style: italic;
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0.75rem 0 0.25rem 0;
+  line-height: 1.2;
+}
+.markdown-body h1 { font-size: 1.05rem; }
+.markdown-body h2 { font-size: 0.95rem; }
+.markdown-body h3 { font-size: 0.9rem; }
+.markdown-body h4 { font-size: 0.85rem; }
+
+.markdown-body code {
+  font-family: var(--font-mono);
+  background: var(--color-surface-alt);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+
+.markdown-body pre {
+  background: var(--color-surface-alt);
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  border: 1px solid var(--color-border);
+}
+.markdown-body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
+  color: var(--color-text-secondary);
+}
+
+.markdown-body a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.markdown-body a:hover { color: var(--color-accent-hover); }
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 0.75rem 0;
+}

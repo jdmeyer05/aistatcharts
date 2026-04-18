@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { AIInterpretation } from "@/components/ai-interpretation";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -804,6 +805,45 @@ export default function PoliticalPage() {
               )}
             </div>
           </div>
+
+          {(trades.length > 0) && (
+            <AIInterpretation
+              page="political"
+              subject={`Congressional trades ${year}`}
+              data={{
+                year,
+                total_trades: trades.length,
+                unique_tickers: new Set(trades.map((tr) => tr.ticker).filter(Boolean)).size,
+                purchases: buys.length,
+                sales: sells.length,
+                top_bought: topBought.slice(0, 8).map(([tk, n]) => ({ ticker: tk, count: n })),
+                top_sold: topSold.slice(0, 8).map(([tk, n]) => ({ ticker: tk, count: n })),
+                top_politicians_by_volume: leaderboard.slice(0, 8).map((r) => ({
+                  member: r.member,
+                  state: r.state,
+                  buys: r.buys,
+                  sells: r.sells,
+                  estimated_volume_usd: r.volume,
+                })),
+                performance_vs_spy: performance ? {
+                  scored_trades: performance.totalScored,
+                  total_purchases: performance.totalPurchases,
+                  top_alpha: performance.rows.slice(0, 8).map((r) => ({
+                    member: r.member,
+                    scored_trades: r.scored,
+                    win_rate: r.winRate,
+                    avg_return: r.avgReturn,
+                    avg_alpha: r.avgAlpha,
+                  })),
+                  bottom_alpha: performance.rows.slice(-5).map((r) => ({
+                    member: r.member,
+                    avg_alpha: r.avgAlpha,
+                    win_rate: r.winRate,
+                  })),
+                } : null,
+              }}
+            />
+          )}
         </>
       )}
 

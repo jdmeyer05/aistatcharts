@@ -270,7 +270,7 @@ function MarketNews() {
         {data?.age_hours === 0 && <span className="text-[0.55rem] font-data dot-fresh">Live</span>}
       </div>
       {data?.content ? (
-        <div className="text-[0.78rem] leading-relaxed text-text-secondary prose prose-sm max-w-none dark:prose-invert prose-strong:text-text prose-p:my-1 prose-li:my-0.5">
+        <div className="text-[0.78rem] leading-relaxed text-text-secondary markdown-body">
           <ReactMarkdown>{data.content}</ReactMarkdown>
         </div>
       ) : <p className="text-xs text-text-muted">Updates hourly during market hours.</p>}

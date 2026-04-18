@@ -123,7 +123,11 @@ supabase_alerts_schema.sql  (run in Supabase SQL editor, or via CLI)
               <input
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && target.trim() && addAlert.mutate()}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  if (!target.trim() || addAlert.isPending || channels.length === 0) return;
+                  addAlert.mutate();
+                }}
                 placeholder={
                   type === "fund"
                     ? "0001067983"

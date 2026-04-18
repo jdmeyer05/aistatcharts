@@ -1103,6 +1103,34 @@ export async function patchAlert(id: string, body: { active?: boolean; label?: s
   return apiFetch(`/api/alerts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
 
+// ─── AI Interpretation ─────────────────────────
+
+export interface AIInterpretation {
+  ok: boolean;
+  model: string;
+  interpretation: string;
+  grounding?: {
+    grounded_count: number;
+    unverified_count: number;
+    unverified_tokens: string[];
+  };
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+export async function fetchInterpretation(params: {
+  page: string;
+  data: unknown;
+  subject?: string;
+}): Promise<AIInterpretation> {
+  return apiFetch("/api/ai/interpret", {
+    method: "POST",
+    body: JSON.stringify(params),
+    timeoutMs: 90_000,
+  });
+}
+
 export interface Holding13F {
   company: string | null;
   class: string | null;

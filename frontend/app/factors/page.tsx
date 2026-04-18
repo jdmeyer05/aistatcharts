@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import { fetchFamaFrench, fetchPriceHistory, type FFRecord } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import dynamic from "next/dynamic";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -289,6 +290,34 @@ export default function FactorDecomposition() {
           {activeTab === 4 && (
             <RiskDecompositionTab matched={matched} t={t} L={L} />
           )}
+
+          <AIInterpretation
+            page="factors"
+            subject={ticker}
+            data={{
+              ticker,
+              observations: matched.n,
+              r_squared: matched.reg.r2,
+              annualized_alpha_pct: matched.reg.alpha,
+              betas: {
+                market: matched.reg.betas[0],
+                size: matched.reg.betas[1],
+                value: matched.reg.betas[2],
+                profitability: matched.reg.betas[3],
+                investment: matched.reg.betas[4],
+              },
+              attribution: attribution ? {
+                ticker_annual_return_pct: attribution.totalRet,
+                risk_free_pct: attribution.rf,
+                factor_explained_pct: attribution.explained,
+                alpha_pct: matched.reg.alpha,
+                factor_contribs: attribution.factorContribs.map((c) => ({
+                  factor: c.name,
+                  contribution_pct: c.value,
+                })),
+              } : null,
+            }}
+          />
         </>
       )}
 
