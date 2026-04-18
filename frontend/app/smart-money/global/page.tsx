@@ -84,10 +84,14 @@ export default function GlobalSmartMoneyPage() {
   const fundsQ = useQuery({
     queryKey: ["global-funds"],
     queryFn: fetchGlobalFunds,
-    staleTime: Infinity,
+    // Stale for a day is enough — was Infinity, which meant a single early
+    // failure would stick until the next hard reload and the batch button
+    // stayed silently disabled.
+    staleTime: 24 * 60 * 60_000,
+    retry: 2,
   });
 
-  const funds: GlobalFund[] = fundsQ.data?.funds ?? [];
+  const funds: GlobalFund[] = useMemo(() => fundsQ.data?.funds ?? [], [fundsQ.data]);
 
   // Batch load all funds' 13Fs. Parallel — ~1s per fund, ~1-2s total.
   const batchLoad = useMutation({
@@ -175,12 +179,26 @@ export default function GlobalSmartMoneyPage() {
 
       <div className="card card-compact">
         <div className="flex flex-wrap gap-6">
-          <Metric label="Tracked funds" value={String(funds.length)} />
+          <Metric label="Tracked funds" value={fundsQ.isPending ? "…" : String(funds.length)} />
           <Metric label="Sovereign Wealth" value={String(categoryStats["Sovereign Wealth"] ?? 0)} />
           <Metric label="Public Pensions" value={String(categoryStats["Public Pension"] ?? 0)} />
           <Metric label="Endowments" value={String(categoryStats["Endowment"] ?? 0)} />
         </div>
       </div>
+
+      {/* Funds-list fetch error (kept visible so the batch button's disabled
+          state doesn't look like a silent bug) */}
+      {fundsQ.isError && (
+        <div className="card border-loss/30 bg-loss-bg text-loss text-sm flex items-center justify-between gap-3">
+          <span>Fund list failed to load: {(fundsQ.error as Error)?.message ?? "unknown error"}</span>
+          <button
+            onClick={() => fundsQ.refetch()}
+            className="px-3 py-1 text-xs font-semibold rounded border border-loss/40 hover:bg-loss/10"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Batch load */}
       <div className="card card-compact">
@@ -190,11 +208,18 @@ export default function GlobalSmartMoneyPage() {
             disabled={batchLoad.isPending || funds.length === 0}
             className="px-5 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm"
           >
-            {batchLoad.isPending ? "Loading all funds…" : "Load all funds' latest 13F"}
+            {batchLoad.isPending
+              ? "Loading all funds…"
+              : fundsQ.isPending
+                ? "Loading fund list…"
+                : "Load all funds' latest 13F"}
           </button>
           <div className="text-[11px] text-text-muted">
-            Parallel fetch of all {funds.length} latest 13F-HR filings. ~2-4 seconds total; individual funds can be
-            empty if SEC has nothing recent under that CIK.
+            {funds.length > 0
+              ? `Parallel fetch of all ${funds.length} latest 13F-HR filings. ~2-4 seconds total; individual funds can be empty if SEC has nothing recent under that CIK.`
+              : fundsQ.isError
+                ? "Fund list failed above — retry, or refresh the page."
+                : "Waiting for fund list from the API…"}
           </div>
         </div>
       </div>
