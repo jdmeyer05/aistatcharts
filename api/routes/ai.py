@@ -9,9 +9,11 @@ interpretations across users / pages keep cost low (~75% input discount on
 cache hits).
 """
 
+import hashlib
 import json
 import logging
 import re
+from datetime import datetime, timedelta
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
@@ -217,16 +219,48 @@ class InterpretRequest(BaseModel):
     subject: str | None = None  # e.g., ticker, fund name, politician — for context
 
 
+def _interpret_cache_key(page: str, data: dict, subject: str | None) -> str:
+    """Deterministic hash over the inputs. Uses sort_keys so reorderings of
+    the same data don't create duplicate cache entries."""
+    payload = json.dumps({"page": page, "data": data, "subject": subject}, sort_keys=True, default=str)
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:32]
+    return f"ai_interpret:{page}:{digest}"
+
+
+# TTL for AI interpretations. Payloads change weekly at most for positioning;
+# for other pages they change when the user's input changes. 24h is a sensible
+# compromise — re-interprets after a day even if inputs haven't moved.
+_AI_CACHE_TTL = timedelta(hours=24)
+
+
 @router.post("/interpret")
 async def interpret(
     body: InterpretRequest,
     user: str = Depends(get_current_user),
 ):
-    """Ask Claude to interpret the data on a page. Returns plain text."""
+    """Ask Claude to interpret the data on a page. Returns plain text.
+
+    Results are cached in the shared Supabase cftc_cache table keyed by a
+    hash of (page, data, subject). Saves Claude calls when the same page
+    data gets viewed across multiple users or sessions. Also cuts first-load
+    latency from ~3-8s to under 1s when the cache is hot."""
     # Auth gate: every Claude call costs real money, so reject anonymous
     # requests at the edge rather than relying on Cloud Run rate limits.
     if user == "anonymous":
         raise HTTPException(401, "Sign in required for AI interpretation")
+
+    # Cache check — Supabase-backed. Stale entries (> 24h) fall through to
+    # recompute + rewrite.
+    cache_key = _interpret_cache_key(body.page, body.data, body.subject)
+    try:
+        from src._cache_util import _supabase_get
+        entry = _supabase_get(cache_key)
+        if entry and (datetime.utcnow() - entry[0]) < _AI_CACHE_TTL:
+            cached_value = entry[1]
+            if isinstance(cached_value, dict) and cached_value.get("ok"):
+                return {**cached_value, "cache_hit": True}
+    except Exception as e:
+        logger.debug(f"ai interpret cache lookup failed: {e}")
 
     api_key = get_secret("ANTHROPIC_API_KEY")
     if not api_key:
@@ -262,7 +296,7 @@ async def interpret(
         text_blocks = [b.text for b in msg.content if hasattr(b, "text")]
         interpretation = "\n".join(text_blocks)
         grounding = _check_grounding(interpretation, body.data)
-        return {
+        result = {
             "ok": True,
             "model": MODEL,
             "interpretation": interpretation,
@@ -272,6 +306,19 @@ async def interpret(
             "input_tokens": msg.usage.input_tokens,
             "output_tokens": msg.usage.output_tokens,
         }
+
+        # Persist to shared cache only if the interpretation looks good —
+        # skip when the grounding check flagged everything unverified, since
+        # we don't want to re-serve a hallucinated answer for 24h.
+        grounded = grounding.get("grounded_count", 0) if isinstance(grounding, dict) else 0
+        unverified = grounding.get("unverified_count", 0) if isinstance(grounding, dict) else 0
+        if interpretation and (grounded + unverified == 0 or grounded >= unverified):
+            try:
+                from src._cache_util import _supabase_put
+                _supabase_put(cache_key, result)
+            except Exception as e:
+                logger.debug(f"ai interpret cache write failed: {e}")
+        return {**result, "cache_hit": False}
     except anthropic.BadRequestError as e:
         logger.warning(f"Claude rejected interpret request: {e}")
         raise HTTPException(400, f"Claude rejected the request: {e}")

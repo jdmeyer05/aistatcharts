@@ -365,33 +365,21 @@ RULES:
 # ─── Vol Landscape (cross-asset scan) ────────────────────────
 
 
-@router.get("/vol-landscape")
-async def vol_landscape_scan(
-    user: str = Depends(get_current_user),
-):
-    """Scan 20 ETFs for cross-asset vol metrics: IV, HV, skew, term structure, VRP, correlations.
+def _compute_vol_landscape() -> dict:
+    """Heavy scan: 20 ETFs × options chains + rolling stats. Cached via the
+    shared Supabase-backed `result_cached` so Cloud Run cold starts hydrate
+    instantly instead of re-fetching 20 chains + recomputing everything.
 
-    Heavy endpoint (~10-30s first call). Results cached 10 min via bundle cache.
-    """
-    import json
+    Underlying `load_universe_data` already parallelizes with 5 workers."""
     import numpy as np
     import pandas as pd
-
-    # Check cache
-    try:
-        from api.routes.energy import _get_bundle_cache, _set_bundle_cache
-        cached = _get_bundle_cache("vol_landscape_scan", ttl_minutes=10)
-        if cached:
-            return cached
-    except Exception:
-        pass
 
     from src.cross_asset_vol import (
         ALL_TICKERS, SCAN_UNIVERSE, get_rfr,
         load_universe_data, compute_cross_asset_metrics,
         interpolate_smile, compute_implied_correlation,
-        detect_divergences, compute_correlation_matrix,
-        fetch_earnings_dates, compute_benchmark_context,
+        detect_divergences,
+        fetch_earnings_dates,
     )
 
     rfr = get_rfr()
@@ -496,7 +484,7 @@ async def vol_landscape_scan(
         regime = "Normal Conditions"
         regime_action = "No broad signal. Single-name relative value."
 
-    result = {
+    return {
         "count": len(metrics_records),
         "metrics": metrics_records,
         "smile_data": smile_data,
@@ -516,11 +504,20 @@ async def vol_landscape_scan(
         },
     }
 
-    # Cache
-    try:
-        from api.routes.energy import _set_bundle_cache
-        _set_bundle_cache("vol_landscape_scan", result, ttl_minutes=10)
-    except Exception:
-        pass
 
-    return result
+# Wrap with the Supabase-backed result cache (12h TTL). Imported inline to
+# avoid pulling the cache util at module-import time if circular.
+from src._cache_util import result_cached as _result_cached
+_compute_vol_landscape = _result_cached("vol_landscape")(_compute_vol_landscape)
+
+
+@router.get("/vol-landscape")
+async def vol_landscape_scan(
+    user: str = Depends(get_current_user),
+):
+    """Scan 20 ETFs for cross-asset vol metrics: IV, HV, skew, term structure, VRP, correlations.
+
+    Backed by the shared cftc_cache Supabase table — cold Cloud Run instances
+    hydrate instantly if the cache is warm. First-ever call: ~15-30s.
+    Subsequent: sub-second."""
+    return _compute_vol_landscape()
