@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-AlertType = Literal["fund", "ticker", "politician", "activist", "keyword"]
+AlertType = Literal[
+    "fund", "ticker", "politician", "activist", "keyword",
+    # CFTC positioning alerts (target = contract code, label holds threshold):
+    "cftc_crowded_long", "cftc_crowded_short", "cftc_sign_flip", "cftc_new_extreme",
+]
 Channel = Literal["email", "sms", "push"]
 
 

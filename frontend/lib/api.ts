@@ -1072,7 +1072,9 @@ export async function fetchBuybacks(ticker: string): Promise<BuybacksResponse> {
 
 // ─── Smart Money Alerts ─────────────────────────
 
-export type AlertType = "fund" | "ticker" | "politician" | "activist" | "keyword";
+export type AlertType =
+  | "fund" | "ticker" | "politician" | "activist" | "keyword"
+  | "cftc_crowded_long" | "cftc_crowded_short" | "cftc_sign_flip" | "cftc_new_extreme";
 export type AlertChannel = "email" | "sms" | "push";
 export interface UserAlert {
   id: string;
@@ -2519,6 +2521,95 @@ export async function fetchCftcFlowRadar(minPctOi = 3.0): Promise<{ count: numbe
 
 export async function fetchCftcDashboard(): Promise<CftcDashboard> {
   return apiFetch("/api/cftc/dashboard", { timeoutMs: 180_000 });
+}
+
+// ─── CTA Model (ZeroHedge / Nomura framework) ────────────────────
+
+export type CtaBias = "all_buying" | "all_selling" | "mixed" | "neutral" | "unknown";
+
+export interface CtaTrigger {
+  type: string;
+  window: number;
+  level: number;
+  distance_pct: number;
+  side_if_breached: "long" | "short";
+}
+
+export interface CtaScenario {
+  target_price: number;
+  delta_exposure: number;
+  projected_exposure: number;
+}
+
+export interface CtaModelStatus {
+  code: string;
+  symbol: string | null;
+  name: string | null;
+  asset_class: CftcAssetClass | null;
+  yf_symbol: string | null;
+  last_price: number;
+  available: boolean;
+  reason?: string;
+  exposure?: number;
+  components?: Record<string, number>;
+  triggers?: CtaTrigger[];
+  scenarios?: {
+    current_exposure: number;
+    horizons: Record<string, Record<string, CtaScenario>>;
+    bias_1w?: CtaBias;
+    bias_1m?: CtaBias;
+    vol_1w_pct?: number;
+    vol_1m_pct?: number;
+  };
+}
+
+export interface CtaBiasRow {
+  code: string;
+  symbol: string | null;
+  name: string | null;
+  asset_class: CftcAssetClass | null;
+  last_price: number;
+  exposure: number;
+  bias_1w: CtaBias;
+  bias_1m: CtaBias;
+  vol_1w_pct: number | null;
+  flow_flat_1w: number | null;
+}
+
+export interface CtaPnlResponse {
+  dates: string[];
+  weekly_pnl: number[];
+  cumulative: number[];
+  contracts_used: number;
+}
+
+export interface HistoricalAnalogRow {
+  date: string;
+  cosine_similarity: number;
+  spy_fwd_1m: number | null;
+  spy_fwd_3m: number | null;
+}
+
+export interface HistoricalAnalogResponse {
+  current_date: string | null;
+  analogs: HistoricalAnalogRow[];
+  error?: string;
+}
+
+export async function fetchCtaModel(code: string): Promise<CtaModelStatus> {
+  return apiFetch(`/api/cftc/cta-model/${code}`, { timeoutMs: 60_000 });
+}
+
+export async function fetchCtaBiasScan(): Promise<{ count: number; rows: CtaBiasRow[] }> {
+  return apiFetch("/api/cftc/cta-bias-scan", { timeoutMs: 180_000 });
+}
+
+export async function fetchCtaPnl(lookbackWeeks = 156): Promise<CtaPnlResponse> {
+  return apiFetch(`/api/cftc/cta-pnl?lookback_weeks=${lookbackWeeks}`, { timeoutMs: 180_000 });
+}
+
+export async function fetchHistoricalAnalog(topN = 5): Promise<HistoricalAnalogResponse> {
+  return apiFetch(`/api/cftc/historical-analog?top_n=${topN}`, { timeoutMs: 180_000 });
 }
 
 export interface OecdCliResponse {

@@ -6,8 +6,10 @@ import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import {
   fetchCftcDashboard, fetchCftcHistory, fetchCftcContracts,
+  fetchCtaModel, fetchCtaBiasScan, fetchCtaPnl, fetchHistoricalAnalog,
+  createAlert, fetchAlerts,
   type CftcAssetClass, type CftcHeatmapTile, type CftcHistoryRow,
-  type CftcContract,
+  type CftcContract, type CtaBias, type CtaBiasRow,
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
@@ -15,7 +17,7 @@ import { AIInterpretation } from "@/components/ai-interpretation";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
-const TABS = ["Pulse", "Heatmap", "Divergence", "CTA Watch", "Drill-Down"] as const;
+const TABS = ["Pulse", "Heatmap", "Divergence", "CTA Watch", "CTA Model", "Historical", "Drill-Down"] as const;
 type Tab = (typeof TABS)[number];
 
 const ASSET_CLASSES: { key: CftcAssetClass | "all"; label: string }[] = [
@@ -214,6 +216,8 @@ function PulseTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQuer
           </table>
         </div>
       </div>
+
+      <CtaPnlChart />
 
       <AIInterpretation
         page="positioning"
@@ -436,6 +440,80 @@ function CtaWatchTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQ
 }
 
 /* ─────────────────────────────────────────────────────────────
+   Alerts panel — subscribe to CFTC positioning thresholds
+   ───────────────────────────────────────────────────────────── */
+
+const CFTC_ALERT_TYPES = [
+  { type: "cftc_crowded_long" as const, label: "Crowded long (≥95th pctile)" },
+  { type: "cftc_crowded_short" as const, label: "Crowded short (≤5th pctile)" },
+  { type: "cftc_sign_flip" as const, label: "Spec net crosses zero" },
+  { type: "cftc_new_extreme" as const, label: "New 3Y extreme" },
+];
+
+function AlertsPanel({ code, symbol }: { code: string; symbol: string }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>("");
+  const alertsQ = useQuery({ queryKey: ["user-alerts"], queryFn: fetchAlerts, staleTime: 60_000 });
+
+  const existing = (alertsQ.data?.data ?? []).filter((a) =>
+    typeof a.alert_type === "string" && a.alert_type.startsWith("cftc_") && a.target === code,
+  );
+
+  async function subscribe(type: (typeof CFTC_ALERT_TYPES)[number]["type"], label: string) {
+    setBusy(type);
+    setStatus("");
+    try {
+      await createAlert({
+        alert_type: type,
+        target: code,
+        label: `${symbol}: ${label}`,
+        channels: ["email"],
+      });
+      setStatus(`✓ ${label} subscribed`);
+      alertsQ.refetch();
+    } catch (e) {
+      setStatus((e as Error)?.message ?? "Subscription failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="card p-4 space-y-2">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-sm font-bold uppercase tracking-wider">Alerts for {symbol}</h3>
+        {existing.length > 0 && (
+          <span className="text-[0.6rem] text-gain">{existing.length} active</span>
+        )}
+      </div>
+      <p className="text-xs text-text-muted">
+        Get emailed when this contract hits a positioning threshold. One-click subscription per alert type.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {CFTC_ALERT_TYPES.map(({ type, label }) => {
+          const already = existing.some((a) => a.alert_type === type);
+          return (
+            <button
+              key={type}
+              onClick={() => subscribe(type, label)}
+              disabled={!!busy || already}
+              className={`px-3 py-1.5 text-xs rounded border ${
+                already
+                  ? "border-gain/40 bg-gain/10 text-gain"
+                  : "border-border hover:border-accent hover:bg-accent/10 disabled:opacity-50"
+              }`}
+            >
+              {already ? "✓ " : ""}{label}
+            </button>
+          );
+        })}
+      </div>
+      {status && <div className="text-[0.65rem] text-text-muted">{status}</div>}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
    Tab 5 — Contract drill-down (time series + all derivatives)
    ───────────────────────────────────────────────────────────── */
 
@@ -501,6 +579,8 @@ function DrillDownTab() {
           </div>
         );
       })()}
+
+      <AlertsPanel code={code} symbol={contracts.find((c) => c.code === code)?.symbol ?? code} />
 
       {rows.length > 0 && (
         <div className="card">
@@ -568,6 +648,387 @@ function DrillDownTab() {
 }
 
 /* ─────────────────────────────────────────────────────────────
+   Tab 6 — CTA Model (ZeroHedge/Nomura framework)
+   ───────────────────────────────────────────────────────────── */
+
+function biasColor(b: CtaBias | undefined): string {
+  if (b === "all_buying") return "bg-gain text-white";
+  if (b === "all_selling") return "bg-loss text-white";
+  if (b === "mixed") return "bg-warn/30 text-warn";
+  if (b === "neutral") return "bg-surface-alt text-text-muted";
+  return "bg-surface-alt text-text-muted";
+}
+
+function biasLabel(b: CtaBias | undefined): string {
+  switch (b) {
+    case "all_buying": return "Buying in all scenarios";
+    case "all_selling": return "Selling in all scenarios";
+    case "mixed": return "Mixed";
+    case "neutral": return "Neutral";
+    default: return "—";
+  }
+}
+
+function CtaModelTab() {
+  const biasQ = useQuery({
+    queryKey: ["cta-bias-scan"],
+    queryFn: fetchCtaBiasScan,
+    staleTime: 6 * 60 * 60_000,
+  });
+  const [selected, setSelected] = useState<string>("13874A"); // default ES
+  const modelQ = useQuery({
+    queryKey: ["cta-model", selected],
+    queryFn: () => fetchCtaModel(selected),
+    enabled: !!selected,
+    staleTime: 6 * 60 * 60_000,
+  });
+
+  const m = modelQ.data;
+  const biasRows: CtaBiasRow[] = biasQ.data?.rows ?? [];
+  const allBuying = biasRows.filter((r) => r.bias_1w === "all_buying");
+  const allSelling = biasRows.filter((r) => r.bias_1w === "all_selling");
+  const mixed = biasRows.filter((r) => r.bias_1w === "mixed" || r.bias_1w === "neutral");
+
+  return (
+    <div className="space-y-5">
+      <div className="card card-compact">
+        <p className="text-xs text-text-muted">
+          <strong>Framework:</strong> Replicates Nomura / GS CTA desk readouts (the &ldquo;we see buying in all scenarios&rdquo;
+          language from ZeroHedge). Each contract runs an SMA+breakout+momentum ensemble on the underlying futures.
+          <em className="text-gain ml-1">All buying</em> = CTAs add exposure in every price scenario over the horizon.
+          <em className="text-loss ml-1">All selling</em> = forced net selling regardless of direction.
+          <em className="text-warn ml-1">Mixed</em> = behavior depends on which way price moves.
+        </p>
+      </div>
+
+      {/* Bias tiles — quick glance */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="card p-4 border-l-4 border-l-gain">
+          <div className="text-sm font-bold uppercase tracking-wider text-gain mb-1">All Buying (1w)</div>
+          <div className="text-[0.65rem] text-text-muted mb-2">Asymmetric upside — flows in every scenario</div>
+          <div className="flex flex-wrap gap-1">
+            {allBuying.length > 0
+              ? allBuying.map((r) => (
+                  <button
+                    key={r.code}
+                    onClick={() => setSelected(r.code)}
+                    className="px-2 py-0.5 rounded border border-gain/40 text-xs font-data hover:bg-gain/10"
+                  >
+                    {r.symbol}
+                  </button>
+                ))
+              : <span className="text-xs text-text-muted">None this week</span>}
+          </div>
+        </div>
+        <div className="card p-4 border-l-4 border-l-loss">
+          <div className="text-sm font-bold uppercase tracking-wider text-loss mb-1">All Selling (1w)</div>
+          <div className="text-[0.65rem] text-text-muted mb-2">Forced-seller set-up — flows negative everywhere</div>
+          <div className="flex flex-wrap gap-1">
+            {allSelling.length > 0
+              ? allSelling.map((r) => (
+                  <button
+                    key={r.code}
+                    onClick={() => setSelected(r.code)}
+                    className="px-2 py-0.5 rounded border border-loss/40 text-xs font-data hover:bg-loss/10"
+                  >
+                    {r.symbol}
+                  </button>
+                ))
+              : <span className="text-xs text-text-muted">None this week</span>}
+          </div>
+        </div>
+        <div className="card p-4 border-l-4 border-l-warn">
+          <div className="text-sm font-bold uppercase tracking-wider text-warn mb-1">Mixed / Neutral</div>
+          <div className="text-[0.65rem] text-text-muted mb-2">Flow depends on direction — watch triggers</div>
+          <div className="flex flex-wrap gap-1">
+            {mixed.slice(0, 20).map((r) => (
+              <button
+                key={r.code}
+                onClick={() => setSelected(r.code)}
+                className="px-2 py-0.5 rounded border border-border text-xs font-data hover:bg-surface-alt"
+              >
+                {r.symbol}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Selected contract detail */}
+      {m && m.available && (
+        <div className="card p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold">{m.symbol} — {m.name}</h3>
+              <div className="text-[0.6rem] text-text-muted">
+                Last: {m.last_price.toFixed(2)} · yfinance: {m.yf_symbol}
+              </div>
+            </div>
+            <div className={`px-3 py-1 rounded text-xs font-bold ${biasColor(m.scenarios?.bias_1w)}`}>
+              1W: {biasLabel(m.scenarios?.bias_1w)}
+            </div>
+            <div className={`px-3 py-1 rounded text-xs font-bold ${biasColor(m.scenarios?.bias_1m)}`}>
+              1M: {biasLabel(m.scenarios?.bias_1m)}
+            </div>
+          </div>
+
+          {/* Exposure bar */}
+          <div>
+            <div className="flex justify-between text-[0.65rem] text-text-muted mb-1">
+              <span>Short -100</span>
+              <span>Current exposure</span>
+              <span>Long +100</span>
+            </div>
+            <div className="relative h-3 bg-surface-alt rounded-full overflow-hidden">
+              <div className="absolute left-1/2 top-0 bottom-0 w-px bg-text-muted/50" />
+              <div
+                className={`absolute top-0 bottom-0 ${(m.exposure ?? 0) >= 0 ? "bg-gain" : "bg-loss"}`}
+                style={{
+                  left: (m.exposure ?? 0) >= 0 ? "50%" : `${50 + (m.exposure ?? 0) / 2}%`,
+                  width: `${Math.abs((m.exposure ?? 0)) / 2}%`,
+                }}
+              />
+            </div>
+            <div className="text-center text-lg font-bold font-data mt-1">
+              {(m.exposure ?? 0) >= 0 ? "+" : ""}{m.exposure?.toFixed(1)}
+            </div>
+          </div>
+
+          {/* Scenario tables */}
+          {m.scenarios && (["1w", "1m"] as const).map((h) => {
+            const flows = m.scenarios!.horizons[h];
+            if (!flows) return null;
+            const sigma = h === "1w" ? m.scenarios!.vol_1w_pct : m.scenarios!.vol_1m_pct;
+            return (
+              <div key={h}>
+                <div className="text-xs font-semibold mb-1 uppercase tracking-wider">
+                  {h === "1w" ? "1-Week" : "1-Month"} scenarios
+                  {sigma != null && <span className="text-text-muted ml-2 font-normal">1σ = ±{sigma.toFixed(2)}%</span>}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs font-data">
+                    <thead className="text-text-muted border-b border-border">
+                      <tr>
+                        <th className="text-left py-1 px-2">Scenario</th>
+                        <th className="text-right py-1 px-2">Target Price</th>
+                        <th className="text-right py-1 px-2">Δ Exposure</th>
+                        <th className="text-right py-1 px-2">Projected Exposure</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {["down_2sig", "down_1sig", "flat", "up_1sig", "up_2sig"].map((k) => {
+                        const v = flows[k];
+                        if (!v) return null;
+                        return (
+                          <tr key={k} className="border-b border-border/30">
+                            <td className="py-1 px-2 capitalize">{k.replace("_", " ").replace("sig", "σ")}</td>
+                            <td className="py-1 px-2 text-right">{v.target_price.toFixed(2)}</td>
+                            <td className={`py-1 px-2 text-right font-semibold ${v.delta_exposure > 0 ? "text-gain" : v.delta_exposure < 0 ? "text-loss" : "text-text-muted"}`}>
+                              {v.delta_exposure > 0 ? "+" : ""}{v.delta_exposure.toFixed(1)}
+                            </td>
+                            <td className="py-1 px-2 text-right">
+                              {v.projected_exposure > 0 ? "+" : ""}{v.projected_exposure.toFixed(1)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Trigger ladder */}
+          <div>
+            <div className="text-xs font-semibold mb-1 uppercase tracking-wider">Nearest Triggers</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-data">
+                <thead className="text-text-muted border-b border-border">
+                  <tr>
+                    <th className="text-left py-1 px-2">Trigger</th>
+                    <th className="text-right py-1 px-2">Level</th>
+                    <th className="text-right py-1 px-2">Distance</th>
+                    <th className="text-right py-1 px-2">Flip to</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {m.triggers?.slice(0, 6).map((t, i) => (
+                    <tr key={i} className="border-b border-border/30">
+                      <td className="py-1 px-2">{t.type} {t.window}</td>
+                      <td className="py-1 px-2 text-right">{t.level.toFixed(2)}</td>
+                      <td className={`py-1 px-2 text-right ${t.distance_pct > 0 ? "text-gain" : "text-loss"}`}>
+                        {t.distance_pct > 0 ? "+" : ""}{t.distance_pct.toFixed(2)}%
+                      </td>
+                      <td className={`py-1 px-2 text-right font-semibold ${t.side_if_breached === "long" ? "text-gain" : "text-loss"}`}>
+                        {t.side_if_breached}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {m && !m.available && (
+        <div className="card text-sm text-text-muted py-4 px-5">
+          Price data unavailable for this contract ({m.reason ?? "no yfinance mapping"}).
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Tab 7 — Historical analog
+   ───────────────────────────────────────────────────────────── */
+
+function HistoricalTab() {
+  const analogQ = useQuery({
+    queryKey: ["cftc-historical-analog"],
+    queryFn: () => fetchHistoricalAnalog(5),
+    staleTime: 6 * 60 * 60_000,
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="card card-compact">
+        <p className="text-xs text-text-muted">
+          <strong>Framework:</strong> Build a positioning vector for each historical week (spec percentile + divergence Z
+          across all 45 contracts). Compare today&apos;s vector to every prior week via cosine similarity. Top-5 most similar
+          historical weeks are shown with the SPY forward 1-month and 3-month return that followed each. Not a
+          prediction — base-rate evidence.
+        </p>
+      </div>
+
+      {analogQ.isPending && <div className="text-xs text-text-muted">Scanning historical positioning vectors…</div>}
+      {analogQ.isError && (
+        <div className="card border-loss/30 bg-loss-bg text-loss text-sm">
+          Historical analog failed: {(analogQ.error as Error)?.message ?? "unknown error"}
+        </div>
+      )}
+      {analogQ.data && (
+        <div>
+          <div className="text-xs text-text-muted mb-2">
+            Current reporting date: <span className="font-semibold">{analogQ.data.current_date}</span>
+          </div>
+          <table className="w-full text-xs font-data">
+            <thead className="border-b border-border text-text-muted">
+              <tr>
+                <th className="text-left py-1.5 px-2">Analog Week</th>
+                <th className="text-right py-1.5 px-2">Cosine Similarity</th>
+                <th className="text-right py-1.5 px-2">SPY +1M</th>
+                <th className="text-right py-1.5 px-2">SPY +3M</th>
+              </tr>
+            </thead>
+            <tbody>
+              {analogQ.data.analogs.map((a, i) => (
+                <tr key={i} className="border-b border-border/40">
+                  <td className="py-1 px-2 font-semibold">{a.date}</td>
+                  <td className="py-1 px-2 text-right">{a.cosine_similarity.toFixed(4)}</td>
+                  <td className={`py-1 px-2 text-right ${(a.spy_fwd_1m ?? 0) > 0 ? "text-gain" : "text-loss"}`}>
+                    {a.spy_fwd_1m != null ? (a.spy_fwd_1m > 0 ? "+" : "") + a.spy_fwd_1m.toFixed(2) + "%" : "—"}
+                  </td>
+                  <td className={`py-1 px-2 text-right ${(a.spy_fwd_3m ?? 0) > 0 ? "text-gain" : "text-loss"}`}>
+                    {a.spy_fwd_3m != null ? (a.spy_fwd_3m > 0 ? "+" : "") + a.spy_fwd_3m.toFixed(2) + "%" : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {analogQ.data.analogs.length > 0 && (() => {
+            const m1 = analogQ.data.analogs.map((a) => a.spy_fwd_1m).filter((x): x is number => x != null);
+            const m3 = analogQ.data.analogs.map((a) => a.spy_fwd_3m).filter((x): x is number => x != null);
+            const avg1 = m1.length > 0 ? m1.reduce((s, x) => s + x, 0) / m1.length : null;
+            const avg3 = m3.length > 0 ? m3.reduce((s, x) => s + x, 0) / m3.length : null;
+            const pos1 = m1.filter((x) => x > 0).length;
+            const pos3 = m3.filter((x) => x > 0).length;
+            return (
+              <div className="card card-compact mt-4 text-xs">
+                <strong>Base rates across these analogs:</strong>{" "}
+                {avg1 != null && <>SPY 1M avg <span className={avg1 > 0 ? "text-gain" : "text-loss"}>{avg1 > 0 ? "+" : ""}{avg1.toFixed(2)}%</span> ({pos1}/{m1.length} positive)</>}
+                {avg3 != null && <> · SPY 3M avg <span className={avg3 > 0 ? "text-gain" : "text-loss"}>{avg3 > 0 ? "+" : ""}{avg3.toFixed(2)}%</span> ({pos3}/{m3.length} positive)</>}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
+   CTA P&L chart (embedded in Pulse tab)
+   ───────────────────────────────────────────────────────────── */
+
+function CtaPnlChart() {
+  const q = useQuery({
+    queryKey: ["cftc-cta-pnl"],
+    queryFn: () => fetchCtaPnl(156),
+    staleTime: 6 * 60 * 60_000,
+  });
+  const { resolvedTheme } = useTheme();
+  const t = getChartTheme(resolvedTheme === "dark");
+  const L = getBaseLayout(t);
+
+  if (q.isPending) {
+    return <div className="card h-64 bg-surface-alt animate-pulse rounded-lg" />;
+  }
+  if (q.isError || !q.data || q.data.dates.length === 0) {
+    return (
+      <div className="card card-compact text-xs text-text-muted">
+        CTA P&L reconstruction unavailable.
+      </div>
+    );
+  }
+
+  const last = q.data.cumulative[q.data.cumulative.length - 1];
+  const totalRet = (last - 1) * 100;
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-baseline justify-between mb-2">
+        <div>
+          <h3 className="text-sm font-bold uppercase tracking-wider">Reconstructed CTA P&L</h3>
+          <p className="text-[0.6rem] text-text-muted mt-0.5">
+            Managed-money positioning × forward weekly returns, OI-weighted. Approximates CTA composite performance.
+            Not a fund return — a signal-quality proxy.
+          </p>
+        </div>
+        <div className="text-right">
+          <div className={`text-lg font-bold font-data ${totalRet >= 0 ? "text-gain" : "text-loss"}`}>
+            {totalRet >= 0 ? "+" : ""}{totalRet.toFixed(1)}%
+          </div>
+          <div className="text-[0.55rem] text-text-muted">3Y cumulative</div>
+        </div>
+      </div>
+      <Plot
+        data={[{
+          x: q.data.dates,
+          y: q.data.cumulative,
+          name: "Cumulative",
+          type: "scatter",
+          mode: "lines",
+          line: { color: t.accent, width: 2 },
+          fill: "tozeroy",
+        }]}
+        layout={{
+          ...L,
+          height: CHART_HEIGHT.compact,
+          yaxis: { title: { text: "Cumulative (1.0 = start)" }, gridcolor: t.grid },
+          xaxis: { gridcolor: t.grid },
+          margin: { l: 50, r: 20, t: 10, b: 30 },
+        }}
+        config={{ displayModeBar: false, responsive: true }}
+        style={{ width: "100%" }}
+      />
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
    Top-level page
    ───────────────────────────────────────────────────────────── */
 
@@ -614,6 +1075,8 @@ export default function PositioningPage() {
         {tab === "Heatmap" && <HeatmapTab tiles={dashboard.data?.heatmap} />}
         {tab === "Divergence" && <DivergenceTab tiles={dashboard.data?.heatmap} />}
         {tab === "CTA Watch" && <CtaWatchTab dashboard={dashboard} />}
+        {tab === "CTA Model" && <CtaModelTab />}
+        {tab === "Historical" && <HistoricalTab />}
         {tab === "Drill-Down" && <DrillDownTab />}
       </div>
 

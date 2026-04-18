@@ -23,6 +23,13 @@ from src.cftc import (
     flow_radar,
     positioning_dashboard,
 )
+from src.cta_model import (
+    cta_model_status,
+    cta_bias_scan,
+    all_vol_percentiles,
+    reconstructed_cta_pnl,
+    historical_analog,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -125,8 +132,54 @@ async def get_cta_unwind(user: str = Depends(get_current_user)):
     """CTA forced-unwind risk scores. Higher = crowded positioning × elevated
     realized vol. When these align, trend-followers get stopped out on the
     next vol spike."""
-    rows = cta_unwind_risk()
+    # Real realized-vol percentiles per contract (was hardcoded 0.5).
+    try:
+        vol_map = all_vol_percentiles()
+    except Exception as e:
+        logger.warning(f"vol percentile fetch failed, falling back to default: {e}")
+        vol_map = None
+    rows = cta_unwind_risk(vol_pctile=vol_map)
     return {"count": len(rows), "rows": rows}
+
+
+@router.get("/cta-model/{code}")
+async def get_cta_model(code: str, user: str = Depends(get_current_user)):
+    """Full ZeroHedge / Nomura-style CTA readout for a single contract:
+    current exposure, trigger ladder, and scenario flows across ±1σ/±2σ
+    price moves over 1w and 1m horizons. Also returns bias classification
+    ('all_buying' / 'all_selling' / 'mixed' / 'neutral')."""
+    return cta_model_status(code)
+
+
+@router.get("/cta-bias-scan")
+async def get_cta_bias_scan(user: str = Depends(get_current_user)):
+    """CTA scenario bias across every mapped contract. Shows where CTAs are
+    'buying in all scenarios' (asymmetric upside) or 'selling in all' (the
+    inverse). Sorted by bias intensity."""
+    rows = cta_bias_scan()
+    return {"count": len(rows), "rows": rows}
+
+
+@router.get("/cta-pnl")
+async def get_cta_pnl(
+    lookback_weeks: int = Query(156, ge=26, le=520),
+    user: str = Depends(get_current_user),
+):
+    """Reconstructed CTA P&L curve — managed-money positioning × forward weekly
+    returns, OI-weighted aggregate. Approximates CTA composite performance
+    without needing SG CTA Index licensing."""
+    return reconstructed_cta_pnl(lookback_weeks=lookback_weeks)
+
+
+@router.get("/historical-analog")
+async def get_historical_analog(
+    top_n: int = Query(5, ge=1, le=20),
+    user: str = Depends(get_current_user),
+):
+    """Find historical weeks whose positioning vector is closest to now's
+    (cosine similarity across all contracts' spec percentiles + divergence
+    Z). Each analog includes the SPY forward 1M / 3M return that followed."""
+    return historical_analog(top_n=top_n)
 
 
 @router.get("/flow-radar")
