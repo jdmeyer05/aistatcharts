@@ -74,6 +74,8 @@ app = FastAPI(
 # CORS_ALLOWED_ORIGIN_REGEX — single regex for wildcard-matching origins
 _default_origins = [
     "http://localhost:3000",
+    "http://localhost:3001",  # Next.js auto-bumps to 3001 when 3000 is taken
+    "http://localhost:3002",
     "http://localhost:8501",
     "https://aistatcharts.com",
     "https://www.aistatcharts.com",
@@ -98,7 +100,7 @@ app.add_middleware(
 )
 
 # Register route modules
-from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors
+from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -114,6 +116,7 @@ app.include_router(scenario.router, prefix="/api/scenario", tags=["Scenario Anal
 app.include_router(quant_lab.router, prefix="/api/quant-lab", tags=["Quant Lab"])
 app.include_router(fed_macro.router, prefix="/api/fed-macro", tags=["Fed Macro"])
 app.include_router(sectors.router, prefix="/api/sectors", tags=["Sector Analysis"])
+app.include_router(alerts.router, prefix="/api", tags=["Smart Money Alerts"])
 
 
 @app.get("/api/health")

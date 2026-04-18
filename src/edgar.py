@@ -251,6 +251,32 @@ TRACKED_FUNDS = {
     "Baupost Group": "0001061768",
 }
 
+# Global long-horizon capital — sovereign wealth funds, public pensions, and
+# university endowments that file 13F-HR with the SEC. CIKs verified via
+# efts.sec.gov full-text search. These funds have 10+ year holding horizons;
+# their additions and removals are structural conviction signals rather than
+# tactical flow.
+GLOBAL_TRACKED_FUNDS: dict[str, dict] = {
+    # Sovereign Wealth
+    "Norges Bank (Norway GPFG)":             {"cik": "0001374170", "category": "Sovereign Wealth", "country": "NO"},
+    "Temasek Holdings (Singapore)":          {"cik": "0001021944", "category": "Sovereign Wealth", "country": "SG"},
+    "Public Investment Fund (Saudi Arabia)": {"cik": "0001767640", "category": "Sovereign Wealth", "country": "SA"},
+    "Abu Dhabi Investment Council":          {"cik": "0001634776", "category": "Sovereign Wealth", "country": "AE"},
+    "China Investment Corp":                 {"cik": "0001468702", "category": "Sovereign Wealth", "country": "CN"},
+    # Public Pensions
+    "CalPERS":                               {"cik": "0000919079", "category": "Public Pension",    "country": "US"},
+    "CalSTRS":                               {"cik": "0001081019", "category": "Public Pension",    "country": "US"},
+    "State of Wisconsin Investment Board":   {"cik": "0000854157", "category": "Public Pension",    "country": "US"},
+    "Florida SBA Retirement System":         {"cik": "0000938076", "category": "Public Pension",    "country": "US"},
+    "Ontario Teachers' Pension Plan":        {"cik": "0000937567", "category": "Public Pension",    "country": "CA"},
+    # University Endowments
+    "Harvard Management Co":                 {"cik": "0001082621", "category": "Endowment",         "country": "US"},
+    "Yale University":                       {"cik": "0000938582", "category": "Endowment",         "country": "US"},
+    "Stanford Management Co":                {"cik": "0001116949", "category": "Endowment",         "country": "US"},
+    "Trustees of Princeton University":      {"cik": "0001728827", "category": "Endowment",         "country": "US"},
+    "Massachusetts Institute of Technology": {"cik": "0000351051", "category": "Endowment",         "country": "US"},
+}
+
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def fetch_13f_holdings(fund_cik: str) -> pd.DataFrame:
@@ -574,10 +600,25 @@ _DATE_PAT = re.compile(r'(\d{2}/\d{2}/\d{4})')
 _TXN_TYPE_PAT = re.compile(r'\b(S \(partial\)|S \(full\)|[PSE])\s+\d{2}/')
 
 
+_PTR_CACHE: dict[str, list[dict]] = {}
+
+
 @st.cache_data(ttl=43200, show_spinner=False)
 def parse_ptr_pdf(pdf_url: str) -> list[dict]:
-    """Download and parse a House PTR PDF into individual trade records."""
+    """Download and parse a House PTR PDF into individual trade records.
+
+    Caches parsed results in a process-local dict keyed by URL. PTR PDF URLs
+    are immutable once filed, so no TTL is needed — the dict is bounded in
+    practice by the number of filings in a year (~20k).
+
+    The @st.cache_data decorator is kept for Streamlit compatibility but is
+    a no-op in the FastAPI runtime, so the dict is the real cache.
+    """
     import pdfplumber
+
+    cached = _PTR_CACHE.get(pdf_url)
+    if cached is not None:
+        return cached
 
     try:
         r = requests.get(pdf_url, headers={"User-Agent": _SEC_USER_AGENT}, timeout=20)
@@ -634,27 +675,41 @@ def parse_ptr_pdf(pdf_url: str) -> list[dict]:
             'amount': amount,
         })
 
+    _PTR_CACHE[pdf_url] = transactions
     return transactions
 
 
 @st.cache_data(ttl=43200, show_spinner="Parsing PTR filings...")
 def fetch_parsed_congressional_trades(year: int | None = None, max_filings: int = 50) -> pd.DataFrame:
-    """Fetch the PTR index, then parse the most recent PDFs for trade-level data."""
+    """Fetch the PTR index, then parse the most recent PDFs for trade-level data.
+
+    PDF download + parse dominates runtime; ~0.5-1s per filing. Parallelized
+    with a thread pool — the `requests` calls release the GIL, so we get near
+    linear speedup up to the clerk.house.gov server's connection limit.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     index_df = fetch_congressional_trades(year)
     if index_df.empty:
         return pd.DataFrame()
 
-    # Take most recent filings up to max_filings
     subset = index_df.head(max_filings)
-    all_trades = []
+    rows = list(subset.to_dict(orient="records"))
 
-    for _, row in subset.iterrows():
+    def _parse_one(row: dict) -> list[dict]:
         trades = parse_ptr_pdf(row["doc_url"])
         for t in trades:
             t["member"] = row["name"]
             t["state"] = row["state"]
             t["filed"] = row["filed"]
-        all_trades.extend(trades)
+        return trades
+
+    all_trades: list[dict] = []
+    # 12 workers is a good balance: clerk.house.gov tolerates this, and most
+    # of the time is spent on the network request, not the PDF parse.
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        for trades in pool.map(_parse_one, rows):
+            all_trades.extend(trades)
 
     if not all_trades:
         return pd.DataFrame()

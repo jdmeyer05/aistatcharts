@@ -69,9 +69,21 @@ async def get_insider_transactions(
     ticker: str,
     user: str = Depends(get_current_user),
 ):
-    """Fetch recent insider transactions from Polygon."""
-    from src.data_engine import fetch_insider_transactions
-    txns = fetch_insider_transactions(ticker.upper())
+    """Fetch recent Form 4 insider transactions via yfinance.
+
+    Polygon's experimental insiders endpoint returns empty for most major
+    tickers on our current tier; yfinance scrapes the same SEC Form 4 data
+    from Yahoo Finance and returns the richer schema (Start Date, Insider,
+    Position, Transaction, Shares, Value, Text) that the Smart Money frontend
+    relies on.
+    """
+    import yfinance as yf
+    try:
+        txns = yf.Ticker(ticker.upper()).insider_transactions
+        logger.warning(f"[insider] {ticker}: txns is None={txns is None}, empty={txns is None or txns.empty}, len={0 if txns is None or txns.empty else len(txns)}")
+    except Exception as e:
+        logger.warning(f"[insider] yfinance failed for {ticker}: {e}")
+        return {"ticker": ticker, "count": 0, "data": []}
     if txns is None or txns.empty:
         return {"ticker": ticker, "count": 0, "data": []}
     txns = txns.head(50).copy()
@@ -127,6 +139,204 @@ async def get_tracked_funds(user: str = Depends(get_current_user)):
     """Get list of tracked institutional funds with CIKs."""
     from src.edgar import TRACKED_FUNDS
     return {"funds": [{"name": name, "cik": cik} for name, cik in TRACKED_FUNDS.items()]}
+
+
+@router.get("/shorts/{ticker}")
+async def get_short_interest(
+    ticker: str,
+    user: str = Depends(get_current_user),
+):
+    """Short interest snapshot for a single ticker via yfinance.
+
+    yfinance.Ticker(tk).info pulls Yahoo's latest reported short interest —
+    shares short, float %, short ratio (days to cover). FINRA publishes
+    biweekly; Yahoo tracks those with a short lag.
+    """
+    import yfinance as yf
+    try:
+        info = yf.Ticker(ticker.upper()).info
+    except Exception as e:
+        logger.warning(f"yfinance short lookup failed for {ticker}: {e}")
+        return {"ticker": ticker, "ok": False, "error": str(e)}
+
+    def _num(v):
+        try:
+            n = float(v)
+            if math.isnan(n) or math.isinf(n):
+                return None
+            return n
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "ticker": ticker.upper(),
+        "ok": True,
+        "name": info.get("shortName") or info.get("longName"),
+        "price": _num(info.get("currentPrice") or info.get("regularMarketPrice")),
+        "market_cap": _num(info.get("marketCap")),
+        "float_shares": _num(info.get("floatShares")),
+        "shares_short": _num(info.get("sharesShort")),
+        "shares_short_prior": _num(info.get("sharesShortPriorMonth")),
+        "short_ratio": _num(info.get("shortRatio")),  # days to cover
+        "short_pct_float": _num(info.get("shortPercentOfFloat")),
+        "short_pct_outstanding": _num(info.get("sharesPercentSharesOut")),
+        "avg_volume_10d": _num(info.get("averageDailyVolume10Day")),
+        "last_updated": info.get("dateShortInterest"),
+    }
+
+
+@router.get("/shorts-watchlist")
+async def get_shorts_watchlist(
+    user: str = Depends(get_current_user),
+):
+    """Short interest summary for a curated watchlist of frequently-squeezed
+    or heavily-shorted names. Runs yfinance lookups in parallel.
+    """
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Mix of meme/squeeze candidates, biotechs, and a few benchmark mega-caps
+    # for context. Worth reviewing quarterly — short leaders rotate.
+    WATCHLIST = [
+        "GME", "AMC", "BBBYQ", "TSLA", "NVDA",
+        "PLTR", "BYND", "UPST", "CVNA", "SOFI",
+        "FUBO", "LCID", "RIVN", "NKLA", "MARA",
+        "RIOT", "COIN", "AFRM", "W", "ROKU",
+        "SNAP", "PINS", "PTON", "DKNG", "HOOD",
+    ]
+
+    def _fetch(tk: str):
+        try:
+            info = yf.Ticker(tk).info
+            return {
+                "ticker": tk,
+                "name": info.get("shortName") or info.get("longName"),
+                "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                "market_cap": info.get("marketCap"),
+                "short_pct_float": info.get("shortPercentOfFloat"),
+                "short_ratio": info.get("shortRatio"),
+                "shares_short": info.get("sharesShort"),
+                "shares_short_prior": info.get("sharesShortPriorMonth"),
+            }
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        rows = [r for r in pool.map(_fetch, WATCHLIST) if r]
+
+    cleaned = []
+    for r in rows:
+        out = {}
+        for k, v in r.items():
+            if isinstance(v, (np.floating, float)):
+                f = float(v)
+                out[k] = None if (math.isnan(f) or math.isinf(f)) else f
+            else:
+                out[k] = v
+        cleaned.append(out)
+    return {"count": len(cleaned), "data": cleaned}
+
+
+@router.get("/buybacks/{ticker}")
+async def get_buybacks(
+    ticker: str,
+    user: str = Depends(get_current_user),
+):
+    """Quarterly and annual share repurchase history via yfinance cashflow.
+
+    yfinance cashflow reports "Repurchase of Capital Stock" (or similar) as a
+    negative line item — we convert to positive dollars returned to
+    shareholders. Paired with market cap for buyback-yield context.
+    """
+    import yfinance as yf
+    try:
+        t = yf.Ticker(ticker.upper())
+        info = t.info
+        # yfinance exposes .quarterly_cashflow and .cashflow (annual)
+        q_cf = t.quarterly_cashflow
+        a_cf = t.cashflow
+    except Exception as e:
+        logger.warning(f"yfinance buybacks failed for {ticker}: {e}")
+        return {"ticker": ticker, "ok": False, "error": str(e)}
+
+    REPURCHASE_KEYS = [
+        "Repurchase Of Capital Stock",
+        "Repurchase of Stock",
+        "Purchase Of Stock",
+        "Net Common Stock Issuance",  # negative when net buyer
+        "Common Stock Issuance",
+    ]
+    DIVIDEND_KEYS = [
+        "Cash Dividends Paid",
+        "Common Stock Dividend Paid",
+    ]
+
+    def _extract(cf_df):
+        """Pull repurchase + dividend rows out of the cashflow frame.
+        yfinance transposes rows/cols — rows are line items, cols are periods."""
+        rows = []
+        if cf_df is None or cf_df.empty:
+            return rows
+        idx_norm = {str(i).strip().lower(): i for i in cf_df.index}
+        def _find(keys):
+            for k in keys:
+                lk = k.lower()
+                if lk in idx_norm:
+                    return idx_norm[lk]
+            return None
+        rep_idx = _find(REPURCHASE_KEYS)
+        div_idx = _find(DIVIDEND_KEYS)
+        for col in cf_df.columns:
+            date_str = col.strftime("%Y-%m-%d") if hasattr(col, "strftime") else str(col)
+            rec = {"period": date_str, "repurchase": None, "dividend": None}
+            if rep_idx is not None:
+                v = cf_df.loc[rep_idx, col]
+                if pd.notna(v):
+                    rec["repurchase"] = -float(v)  # yfinance reports as negative outflow
+            if div_idx is not None:
+                v = cf_df.loc[div_idx, col]
+                if pd.notna(v):
+                    rec["dividend"] = -float(v)
+            rows.append(rec)
+        return rows
+
+    quarterly = _extract(q_cf)
+    annual = _extract(a_cf)
+
+    market_cap = info.get("marketCap")
+    ttm_repurchase = sum(r["repurchase"] or 0 for r in quarterly[:4])
+    ttm_dividend = sum(r["dividend"] or 0 for r in quarterly[:4])
+    buyback_yield = (ttm_repurchase / market_cap) if market_cap and market_cap > 0 else None
+    dividend_yield = (ttm_dividend / market_cap) if market_cap and market_cap > 0 else None
+
+    return {
+        "ticker": ticker.upper(),
+        "ok": True,
+        "name": info.get("shortName") or info.get("longName"),
+        "market_cap": market_cap,
+        "ttm_repurchase": ttm_repurchase,
+        "ttm_dividend": ttm_dividend,
+        "buyback_yield": buyback_yield,
+        "dividend_yield": dividend_yield,
+        "total_shareholder_yield": (
+            (buyback_yield or 0) + (dividend_yield or 0)
+            if (buyback_yield is not None or dividend_yield is not None) else None
+        ),
+        "quarterly": quarterly,
+        "annual": annual,
+    }
+
+
+@router.get("/global-funds")
+async def get_global_funds(user: str = Depends(get_current_user)):
+    """Sovereign wealth + public pensions + endowments with CIKs and categories."""
+    from src.edgar import GLOBAL_TRACKED_FUNDS
+    return {
+        "funds": [
+            {"name": name, "cik": meta["cik"], "category": meta["category"], "country": meta["country"]}
+            for name, meta in GLOBAL_TRACKED_FUNDS.items()
+        ]
+    }
 
 
 # ─── Company Guidance ─────────────────────────────────────────────
