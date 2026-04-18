@@ -15,6 +15,9 @@ import { usePwa } from "@/components/pwa-provider";
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  // next-themes hydration gate: theme is unknown server-side, so we render a
+  // placeholder until we're mounted to avoid SSR/CSR icon flash + mismatch.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => setMounted(true), []);
   if (!mounted) return <div className="w-8 h-8" />;
 
@@ -90,8 +93,11 @@ function NavDropdown({ group, isActive }: { group: NavGroup; isActive: boolean }
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  // Close on route change
+  // Close on route change — catches browser back/forward and programmatic
+  // nav that bypasses the items' onClick. Link items also close on click
+  // but we can't rely on that for all entry points.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOpen(false);
   }, [pathname]);
 
@@ -308,7 +314,7 @@ export function Header() {
           {/* Logo — text hidden below lg to make room for 7 nav groups */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
             <Image src="/favicon.png" alt="AI Statcharts" width={22} height={22} className="rounded" />
-            <span className="text-sm font-bold tracking-widest uppercase hidden xl:inline">
+            <span className="text-sm font-bold tracking-widest uppercase hidden lg:inline">
               AI Statcharts
             </span>
           </Link>

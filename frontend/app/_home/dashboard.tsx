@@ -11,7 +11,7 @@ import {
 } from "@/lib/api";
 import { FreshnessBar } from "@/components/ui/freshness-dot";
 import ReactMarkdown from "react-markdown";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -138,7 +138,8 @@ function ivRankColor(pct: number | null): string {
 
 // Risk reversal = call IV - put IV. Negative = puts bid (skew-for-fear).
 // Magnitude tells you how one-sided the tail is.
-function skewBadge(rr: number): { tone: string; label: string } {
+function skewBadge(rr: number | null | undefined): { tone: string; label: string } {
+  if (rr == null) return { tone: "text-text-muted", label: "—" };
   if (rr <= -2) return { tone: "text-loss", label: "puts bid" };
   if (rr <= -0.5) return { tone: "text-warn", label: "put skew" };
   if (rr >= 2) return { tone: "text-gain", label: "calls bid" };
@@ -147,26 +148,31 @@ function skewBadge(rr: number): { tone: string; label: string } {
 }
 
 function VolTile({ m }: { m: VolLandscapeMetric }) {
+  // Types declare these as non-null, but the Python backend can return null
+  // for any metric it couldn't compute. Guard display so we show "—" instead
+  // of "NaN" or crashing on .toFixed().
   const ivPct = m.IV_Pctile != null ? Math.round(m.IV_Pctile * 100) : null;
   const skew = skewBadge(m.Risk_Rev);
   const ivhv = m.IV_HV;
+  const frontIv = m.Front_IV != null ? m.Front_IV * 100 : null;
+  const rr = m.Risk_Rev;
   return (
     <Link
       href="/vol-landscape"
       className="block rounded-lg border border-border bg-surface hover:border-accent/40 transition-colors p-3 h-[6.25rem]"
-      title={`${m.Ticker} — ${m.Label}. IV ${(m.Front_IV * 100).toFixed(1)}%, rank ${ivPct ?? "—"}, RR ${m.Risk_Rev.toFixed(2)}, IV/HV ${ivhv?.toFixed(2) ?? "—"}`}
+      title={`${m.Ticker} — ${m.Label ?? ""}. IV ${frontIv?.toFixed(1) ?? "—"}%, rank ${ivPct ?? "—"}, RR ${rr?.toFixed(2) ?? "—"}, IV/HV ${ivhv?.toFixed(2) ?? "—"}`}
     >
       <div className="flex items-center justify-between mb-1 gap-2">
         <div className="flex flex-col min-w-0">
           <span className="text-sm font-bold">{m.Ticker}</span>
-          <span className="text-[0.55rem] text-text-muted leading-tight truncate">{m.Label}</span>
+          <span className="text-[0.55rem] text-text-muted leading-tight truncate">{m.Label ?? ""}</span>
         </div>
         <span className={`text-[0.55rem] px-1.5 py-0.5 rounded font-data font-semibold shrink-0 ${ivRankColor(ivPct)}`}>
           {ivPct != null ? `${ivPct}r` : "—"}
         </span>
       </div>
       <div className="flex items-baseline gap-1 mt-1.5">
-        <span className="text-lg font-bold font-data">{(m.Front_IV * 100).toFixed(0)}</span>
+        <span className="text-lg font-bold font-data">{frontIv != null ? frontIv.toFixed(0) : "—"}</span>
         <span className="text-[0.55rem] text-text-muted">IV</span>
         {ivhv != null && (
           <span className={`ml-auto text-[0.6rem] font-data ${ivhv > 1.2 ? "text-loss" : ivhv < 0.9 ? "text-gain" : "text-text-muted"}`}>
@@ -176,7 +182,7 @@ function VolTile({ m }: { m: VolLandscapeMetric }) {
       </div>
       <div className="flex items-center justify-between mt-1 text-[0.6rem]">
         <span className={`font-data font-semibold ${skew.tone}`}>
-          RR {m.Risk_Rev >= 0 ? "+" : ""}{m.Risk_Rev.toFixed(1)}
+          {rr != null ? `RR ${rr >= 0 ? "+" : ""}${rr.toFixed(1)}` : "RR —"}
         </span>
         <span className="text-text-muted truncate ml-1">{skew.label}</span>
       </div>
@@ -191,8 +197,10 @@ function VolSnapshot() {
     staleTime: 10 * 60_000,
   });
 
-  const byTicker = new Map((data?.metrics ?? []).map(m => [m.Ticker, m]));
-  const rows = VOL_WATCH.map(t => byTicker.get(t)).filter((m): m is VolLandscapeMetric => !!m);
+  const rows = useMemo(() => {
+    const byTicker = new Map((data?.metrics ?? []).map(m => [m.Ticker, m]));
+    return VOL_WATCH.map(t => byTicker.get(t)).filter((m): m is VolLandscapeMetric => !!m);
+  }, [data]);
 
   return (
     <div className="space-y-3">
@@ -230,7 +238,7 @@ function VolSnapshot() {
 
 function SignalSpotlight() {
   const { data: summary } = useQuery({ queryKey: ["signal-summary"], queryFn: fetchSignalSummary, refetchInterval: 60_000 });
-  const { data: ideas } = useQuery({ queryKey: ["top-ideas"], queryFn: () => fetchTopIdeas(7), refetchInterval: 60_000 });
+  const { data: ideas, isLoading } = useQuery({ queryKey: ["top-ideas"], queryFn: () => fetchTopIdeas(7), refetchInterval: 60_000 });
 
   return (
     <div className="space-y-3">
@@ -243,7 +251,13 @@ function SignalSpotlight() {
           </div>
         )}
       </div>
-      {ideas && ideas.length > 0 ? (
+      {isLoading ? (
+        <div className="space-y-1">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-6 rounded bg-surface-alt animate-pulse" />
+          ))}
+        </div>
+      ) : ideas && ideas.length > 0 ? (
         <div className="space-y-1">
           {ideas.map(t => (
             <div
