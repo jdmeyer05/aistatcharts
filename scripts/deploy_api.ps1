@@ -21,8 +21,13 @@ $secretPairs = @(
   "ANTHROPIC_API_KEY=anthropic-api-key:latest",
   "GEMINI_API_KEY=gemini-api-key:latest",
   "GROK_API_KEY=grok-api-key:latest",
-  "FINNHUB_API_KEY=finnhub-api-key:latest",
-  "OI_CAPTURE_KEY=oi-capture-key:latest"
+  "FINNHUB_API_KEY=finnhub-api-key:latest"
+  # OI_CAPTURE_KEY removed 2026-04-18: the `oi-capture-key` secret was
+  # pre-registered here for the OI history worker, but the activation
+  # steps in OI_WORKER_SETUP.md (create secret + grant SA access) were
+  # never completed. Leaving it in blocked every deploy with a
+  # "secret not found" error. Add the line back when activating the
+  # worker — see project_oi_worker_pending memory.
 )
 $secrets = $secretPairs -join ","
 
