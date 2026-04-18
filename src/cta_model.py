@@ -99,26 +99,7 @@ CFTC_TO_YF: dict[str, str] = {
 _PRICE_CACHE: dict[str, tuple[datetime, pd.DataFrame]] = {}
 _PRICE_CACHE_TTL = timedelta(hours=4)
 
-# ── Result caches — the expensive scans recompute slowly; CFTC data only
-#    updates once a week so a long TTL is safe.
-_RESULT_CACHE: dict[str, tuple[datetime, object]] = {}
-_RESULT_TTL = timedelta(hours=12)
-
-
-def _result_cached(key: str):
-    """Decorator: memoize function result with the module-level TTL cache."""
-    def deco(fn):
-        def wrapper(*args, **kwargs):
-            full_key = f"{key}:{args}:{sorted(kwargs.items())}"
-            entry = _RESULT_CACHE.get(full_key)
-            if entry and (datetime.utcnow() - entry[0]) < _RESULT_TTL:
-                return entry[1]
-            v = fn(*args, **kwargs)
-            _RESULT_CACHE[full_key] = (datetime.utcnow(), v)
-            return v
-        wrapper.__name__ = fn.__name__
-        return wrapper
-    return deco
+from src._cache_util import result_cached as _result_cached, _RESULT_CACHE
 
 
 def _fetch_prices(cftc_code: str, lookback_days: int = 800) -> pd.DataFrame:

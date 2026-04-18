@@ -32,6 +32,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from src._cache_util import result_cached as _result_cached
+
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -203,12 +205,15 @@ _LEGACY_FIELDS = {
 _CACHE: dict[tuple[str, str], tuple[datetime, pd.DataFrame]] = {}
 _CACHE_TTL = timedelta(hours=24)
 
-# Circuit breaker for the Socrata API — when it's down it hard-fails every
-# contract request and spams the logs. After 3 consecutive failures at
-# cold-start we flip to direct-file fallback for the rest of this instance.
+# Circuit breaker for the Socrata API — during outages it hard-fails every
+# request and spams logs. After 3 consecutive failures we pause Socrata for
+# SOCRATA_BACKOFF and serve from direct-file fallback. Once the backoff window
+# elapses we retry — so when CFTC brings the API back we pick it up automatically
+# without a restart.
 _SOCRATA_FAIL_COUNT = 0
 _SOCRATA_FAIL_THRESHOLD = 3
-_SOCRATA_DISABLED = False
+_SOCRATA_DISABLED_UNTIL: datetime | None = None
+_SOCRATA_BACKOFF = timedelta(minutes=30)
 
 
 def _cache_key(report: ReportType, code: str) -> tuple[str, str]:
@@ -252,22 +257,28 @@ def _cached_fetch(report: ReportType, code: str, limit: int = 5000) -> pd.DataFr
     if cached and (datetime.utcnow() - cached[0]) < _CACHE_TTL:
         return cached[1]
 
-    global _SOCRATA_FAIL_COUNT, _SOCRATA_DISABLED
+    global _SOCRATA_FAIL_COUNT, _SOCRATA_DISABLED_UNTIL
     url = DATASETS[report]
     rows: list[dict] = []
-    if not _SOCRATA_DISABLED:
+    now = datetime.utcnow()
+    socrata_ok = _SOCRATA_DISABLED_UNTIL is None or now >= _SOCRATA_DISABLED_UNTIL
+    if socrata_ok:
         try:
             rows = _fetch_socrata(url, code, limit)
-            # Successful Socrata call — reset the breaker if it was tripped.
+            # Successful Socrata call — reset the breaker completely.
+            if _SOCRATA_FAIL_COUNT > 0 or _SOCRATA_DISABLED_UNTIL is not None:
+                logger.info("CFTC Socrata recovered — resuming primary path")
             _SOCRATA_FAIL_COUNT = 0
+            _SOCRATA_DISABLED_UNTIL = None
         except Exception as e:
             _SOCRATA_FAIL_COUNT += 1
             if _SOCRATA_FAIL_COUNT <= _SOCRATA_FAIL_THRESHOLD:
                 logger.warning(f"CFTC {report} Socrata fetch failed for {code}: {e}")
             if _SOCRATA_FAIL_COUNT >= _SOCRATA_FAIL_THRESHOLD:
-                _SOCRATA_DISABLED = True
+                _SOCRATA_DISABLED_UNTIL = now + _SOCRATA_BACKOFF
                 logger.warning(
-                    "CFTC Socrata disabled for this instance after %d failures; using direct-file fallback",
+                    "CFTC Socrata paused for %d min after %d failures; direct-file fallback active",
+                    int(_SOCRATA_BACKOFF.total_seconds() / 60),
                     _SOCRATA_FAIL_THRESHOLD,
                 )
             rows = []
@@ -498,6 +509,7 @@ def _heatmap_row(spec: ContractSpec) -> dict | None:
     }
 
 
+@_result_cached("heatmap_snapshot")
 def heatmap_snapshot() -> list[dict]:
     """One row per contract with today's positioning percentiles + deltas.
     Parallel fan-out across 45 contracts — cold time ~6× faster than serial."""
@@ -537,6 +549,7 @@ def _divergence_row(spec: ContractSpec, min_abs_z: float) -> dict | None:
     }
 
 
+@_result_cached("divergence_scan")
 def divergence_scan(min_abs_z: float = 1.0) -> list[dict]:
     """Rank contracts by |spec_vs_comm_z|. Parallel fan-out."""
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -556,6 +569,7 @@ def _latest_z(code: str) -> float | None:
     return float(h.iloc[-1]["spec_zscore_3y"])
 
 
+@_result_cached("regime_composites")
 def regime_composites() -> dict:
     """Four synthesized signals that don't exist per-contract:
 
@@ -624,6 +638,7 @@ def _unwind_row(spec: ContractSpec, vol_pctile: dict[str, float] | None) -> dict
     }
 
 
+@_result_cached("cta_unwind_risk")
 def cta_unwind_risk(vol_pctile: dict[str, float] | None = None) -> list[dict]:
     """Unwind-risk score = positioning_extreme × realized_vol_regime.
     Parallel fan-out."""
@@ -664,6 +679,7 @@ def _flow_row(spec: ContractSpec, min_abs_chg_pct: float) -> dict | None:
     }
 
 
+@_result_cached("flow_radar")
 def flow_radar(min_abs_chg_pct: float = 10.0) -> list[dict]:
     """Biggest WoW position changes, parallel fan-out."""
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -676,6 +692,7 @@ def flow_radar(min_abs_chg_pct: float = 10.0) -> list[dict]:
 # Public aggregator for the landing view
 # ═══════════════════════════════════════════════════════════════════
 
+@_result_cached("positioning_dashboard")
 def positioning_dashboard() -> dict:
     """Bundle of everything the landing tab needs in one payload."""
     return {
