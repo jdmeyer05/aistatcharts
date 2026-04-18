@@ -7,3 +7,4 @@ src/iran_conflict_history.json
 data/gdelt_events/
 data/acled_events.csv
 .claude/
+*.log
