@@ -49,16 +49,19 @@ export function ChartCard({
   const reservedHeight =
     typeof height === "number" ? height : isMobile ? height.mobile : height.desktop;
 
-  const [visible, setVisible] = useState(eager);
+  // Start visible if: eager, SSR (skeleton shows during hydration), or
+  // environment lacks IntersectionObserver (can't lazy-load anyway).
+  const [visible, setVisible] = useState(() => {
+    if (eager) return true;
+    if (typeof window === "undefined") return false;
+    return typeof IntersectionObserver === "undefined";
+  });
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (visible) return;
     const el = ref.current;
-    if (!el || typeof IntersectionObserver === "undefined") {
-      setVisible(true);
-      return;
-    }
+    if (!el) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
