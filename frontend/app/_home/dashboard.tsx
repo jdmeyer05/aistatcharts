@@ -3,14 +3,15 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchSnapshot, fetchMarketNews, fetchSignalSummary, fetchTopIdeas,
-  fetchPortfolioSummary, fetchHeatmap, fetchEvents, fetchRisk,
+  fetchHeatmap, fetchEvents, fetchRisk,
   fetchAccuracySummary, fetchTickerMetrics,
-  type HeatmapItem,
+  fetchVolLandscape, fetchPolymarket, fetchPolymarketHistory,
+  type HeatmapItem, type VolLandscapeMetric,
+  type PolymarketEvent, type PolymarketHistoryPoint,
 } from "@/lib/api";
-import { Metric } from "@/components/ui/metric";
 import { FreshnessBar } from "@/components/ui/freshness-dot";
 import ReactMarkdown from "react-markdown";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 /* ═══════════════════════════════════════════════════════════════
@@ -81,7 +82,6 @@ function RiskStrip() {
 
   return (
     <div className="flex flex-wrap items-center gap-x-8 gap-y-2 py-3 border-b border-border">
-      {/* Macro */}
       {data?.macro && (
         <div className="flex items-center gap-2">
           <span className="text-[0.55rem] text-text-muted uppercase tracking-wider">Regime</span>
@@ -89,7 +89,6 @@ function RiskStrip() {
           <span className="text-[0.55rem] text-text-muted">{data.macro.top_prob}%</span>
         </div>
       )}
-      {/* Vol */}
       {data?.vol && (
         <div className="flex items-center gap-2">
           <span className="text-[0.55rem] text-text-muted uppercase tracking-wider">IV</span>
@@ -100,7 +99,6 @@ function RiskStrip() {
           {p.atm_iv != null && <span className="text-[0.55rem] text-text-muted">{(Number(p.atm_iv) * 100).toFixed(0)}th</span>}
         </div>
       )}
-      {/* Strategy */}
       {data?.strategy && (
         <div className="flex items-center gap-2">
           <span className="text-[0.55rem] text-text-muted uppercase tracking-wider">Play</span>
@@ -112,17 +110,121 @@ function RiskStrip() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   SIGNAL ENGINE
+   VOL SNAPSHOT — cross-asset options lens (NEW)
    ═══════════════════════════════════════════════════════════════ */
 
-function SignalSpotlight() {
-  const { data: summary } = useQuery({ queryKey: ["signal-summary"], queryFn: fetchSignalSummary, refetchInterval: 60_000 });
-  const { data: ideas } = useQuery({ queryKey: ["top-ideas"], queryFn: () => fetchTopIdeas(5), refetchInterval: 60_000 });
+// Fixed display list: what a trader wants to check first. If vol-landscape
+// doesn't cover all of these, we show what it returns.
+const VOL_WATCH = ["SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "USO", "HYG", "EEM", "FXI", "XLE", "SMH"];
+
+function ivRankColor(pct: number | null): string {
+  if (pct == null) return "bg-surface-alt text-text-muted";
+  if (pct >= 80) return "bg-loss/70 text-white";
+  if (pct >= 60) return "bg-warn/40 text-warn";
+  if (pct >= 40) return "bg-surface-alt text-text";
+  if (pct >= 20) return "bg-gain/20 text-gain";
+  return "bg-gain/50 text-white";
+}
+
+// Risk reversal = call IV - put IV. Negative = puts bid (skew-for-fear).
+// Magnitude tells you how one-sided the tail is.
+function skewBadge(rr: number): { tone: string; label: string } {
+  if (rr <= -2) return { tone: "text-loss", label: "puts bid" };
+  if (rr <= -0.5) return { tone: "text-warn", label: "put skew" };
+  if (rr >= 2) return { tone: "text-gain", label: "calls bid" };
+  if (rr >= 0.5) return { tone: "text-info", label: "call skew" };
+  return { tone: "text-text-muted", label: "flat" };
+}
+
+function VolTile({ m }: { m: VolLandscapeMetric }) {
+  const ivPct = m.IV_Pctile != null ? Math.round(m.IV_Pctile * 100) : null;
+  const skew = skewBadge(m.Risk_Rev);
+  const ivhv = m.IV_HV;
+  return (
+    <Link
+      href={`/options-analysis?ticker=${m.Ticker}`}
+      className="block rounded-lg border border-border bg-surface hover:border-accent/40 transition-colors p-3"
+    >
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex flex-col">
+          <span className="text-sm font-bold">{m.Ticker}</span>
+          <span className="text-[0.55rem] text-text-muted leading-tight">{m.Label}</span>
+        </div>
+        <span className={`text-[0.55rem] px-1.5 py-0.5 rounded font-data font-semibold ${ivRankColor(ivPct)}`}>
+          {ivPct != null ? `${ivPct}r` : "—"}
+        </span>
+      </div>
+      <div className="flex items-baseline gap-1 mt-1.5">
+        <span className="text-lg font-bold font-data">{(m.Front_IV * 100).toFixed(0)}</span>
+        <span className="text-[0.55rem] text-text-muted">IV</span>
+        {ivhv != null && (
+          <span className={`ml-auto text-[0.6rem] font-data ${ivhv > 1.2 ? "text-loss" : ivhv < 0.9 ? "text-gain" : "text-text-muted"}`}>
+            {ivhv.toFixed(2)}× HV
+          </span>
+        )}
+      </div>
+      <div className="flex items-center justify-between mt-1 text-[0.6rem]">
+        <span className={`font-data font-semibold ${skew.tone}`}>
+          RR {m.Risk_Rev >= 0 ? "+" : ""}{m.Risk_Rev.toFixed(1)}
+        </span>
+        <span className="text-text-muted">{skew.label}</span>
+      </div>
+    </Link>
+  );
+}
+
+function VolSnapshot() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["vol-landscape-home"],
+    queryFn: fetchVolLandscape,
+    staleTime: 10 * 60_000,
+  });
+
+  const byTicker = new Map((data?.metrics ?? []).map(m => [m.Ticker, m]));
+  const rows = VOL_WATCH.map(t => byTicker.get(t)).filter((m): m is VolLandscapeMetric => !!m);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold uppercase tracking-wider">Signals</h2>
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-wider">Cross-Asset Vol</h2>
+          <p className="text-[0.6rem] text-text-muted mt-0.5">
+            IV · IV rank · skew (call-put RR) · IV/HV — what the options market is pricing
+          </p>
+        </div>
+        <Link href="/vol-landscape" className="text-[0.65rem] text-accent hover:underline shrink-0">
+          Full landscape →
+        </Link>
+      </div>
+      {isLoading ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="h-24 rounded-lg bg-surface-alt animate-pulse" />
+          ))}
+        </div>
+      ) : error || rows.length === 0 ? (
+        <div className="text-xs text-text-muted py-4">Vol landscape unavailable right now.</div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
+          {rows.map(m => <VolTile key={m.Ticker} m={m} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SIGNALS / TOP IDEAS
+   ═══════════════════════════════════════════════════════════════ */
+
+function SignalSpotlight() {
+  const { data: summary } = useQuery({ queryKey: ["signal-summary"], queryFn: fetchSignalSummary, refetchInterval: 60_000 });
+  const { data: ideas } = useQuery({ queryKey: ["top-ideas"], queryFn: () => fetchTopIdeas(7), refetchInterval: 60_000 });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wider">Top Ideas</h2>
         {summary && summary.n_tickers > 0 && (
           <div className="flex gap-3 text-xs font-data">
             <span className="text-gain">{summary.n_bullish} bull</span>
@@ -133,7 +235,11 @@ function SignalSpotlight() {
       {ideas && ideas.length > 0 ? (
         <div className="space-y-1">
           {ideas.map(t => (
-            <div key={t.ticker} className="flex items-center justify-between py-1.5">
+            <Link
+              key={t.ticker}
+              href={`/stock-analysis?ticker=${t.ticker}`}
+              className="flex items-center justify-between py-1.5 -mx-2 px-2 rounded hover:bg-surface-alt transition-colors"
+            >
               <div className="flex items-center gap-2">
                 <div className={`w-1 h-6 rounded-full ${t.overall_direction === "bull" ? "bg-gain" : t.overall_direction === "bear" ? "bg-loss" : "bg-text-muted"}`} />
                 <span className="font-semibold text-sm">{t.ticker}</span>
@@ -144,41 +250,10 @@ function SignalSpotlight() {
                 </div>
                 <span className="text-text-muted text-xs font-data w-8 text-right">{(t.overall_conviction * 100).toFixed(0)}%</span>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       ) : <p className="text-sm text-text-muted">No signals yet.</p>}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   POSITIONS
-   ═══════════════════════════════════════════════════════════════ */
-
-function PositionSummary() {
-  const { data } = useQuery({ queryKey: ["portfolio-summary"], queryFn: fetchPortfolioSummary, refetchInterval: 120_000 });
-  const pnl = data?.total_pnl ?? 0;
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold uppercase tracking-wider">Positions</h2>
-        {data && data.n_positions > 0 && (
-          <span className={`text-xs font-bold font-data ${pnl >= 0 ? "text-gain" : "text-loss"}`}>
-            {pnl >= 0 ? "+" : ""}${Math.abs(pnl).toLocaleString("en-US", { maximumFractionDigits: 0 })} P&L
-          </span>
-        )}
-      </div>
-      {data && data.n_positions > 0 ? (<>
-        {data.positions && (data.positions as { ticker: string; type: string; pnl?: number }[]).slice(0, 4).map((pos, i) => (
-          <div key={i} className="flex justify-between items-center text-xs py-1">
-            <span>{pos.ticker} <span className="text-text-muted">{pos.type}</span></span>
-            {pos.pnl !== undefined && <span className={`font-data font-semibold ${pos.pnl >= 0 ? "text-gain" : "text-loss"}`}>${pos.pnl.toFixed(0)}</span>}
-          </div>
-        ))}
-        <Link href="/options-portfolio-analysis?view=portfolio" className="text-[0.65rem] text-accent hover:underline">Manage →</Link>
-      </>) : <p className="text-xs text-text-muted">No open positions.</p>}
     </div>
   );
 }
@@ -195,7 +270,7 @@ function UpcomingEvents() {
       <h2 className="text-sm font-bold uppercase tracking-wider">Events</h2>
       {data?.events && data.events.length > 0 ? (
         <div className="space-y-0">
-          {data.events.slice(0, 5).map((ev, i) => (
+          {data.events.slice(0, 6).map((ev, i) => (
             <div key={i} className="flex justify-between items-center py-1.5 border-b border-border/50 last:border-0">
               <span className="text-xs">{ev.name}</span>
               <span className={`text-[0.6rem] font-data font-semibold ${ev.days_away === 0 ? "text-loss" : ev.days_away <= 2 ? "text-warn" : "text-text-muted"}`}>
@@ -279,6 +354,112 @@ function MarketNews() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   POLYMARKET PULSE — prediction markets (carried over from market-scan)
+   ═══════════════════════════════════════════════════════════════ */
+
+function Sparkline({ points, width = 160, height = 48 }: { points: PolymarketHistoryPoint[]; width?: number; height?: number }) {
+  if (points.length < 2) return null;
+  const prices = points.map(p => p.p);
+  const min = Math.min(...prices), max = Math.max(...prices), range = max - min || 1;
+  const pad = 4, textH = 12, w = width - pad * 2, h = height - pad - textH;
+  const d = points.map((pt, i) => {
+    const x = pad + (i / (points.length - 1)) * w;
+    const y = pad + h - ((pt.p - min) / range) * h;
+    return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const up = prices[prices.length - 1] >= prices[0];
+  const c = up ? "#22c55e" : "#ef4444";
+  return (
+    <svg width={width} height={height} style={{ display: "block" }}>
+      <path d={d} fill="none" stroke={c} strokeWidth="1.5" strokeLinejoin="round" />
+      <text x={pad} y={height - 1} fill="#888" fontSize="9" fontFamily="monospace">{prices[0].toFixed(0)}%</text>
+      <text x={width - pad} y={height - 1} fill={c} fontSize="9" fontFamily="monospace" textAnchor="end">{prices[prices.length - 1].toFixed(0)}%</text>
+    </svg>
+  );
+}
+
+function PolyPill({ ev }: { ev: PolymarketEvent }) {
+  const [open, setOpen] = useState(false);
+  const [history, setHistory] = useState<PolymarketHistoryPoint[] | null>(null);
+  const fetchedRef = useRef(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const top = ev.outcomes[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent | TouchEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
+  }, [open]);
+
+  if (!top) return null;
+  const shortTitle = ev.title.replace(/\?$/, "").replace(/^(Will |What |Who will |US )/, "");
+
+  const reveal = async () => {
+    setOpen(true);
+    if (!fetchedRef.current && top.token_id) {
+      fetchedRef.current = true;
+      try { const res = await fetchPolymarketHistory(top.token_id); if (res.success) setHistory(res.points); } catch {}
+    }
+  };
+
+  return (
+    <div ref={ref} className="relative" onMouseEnter={reveal} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        onClick={() => (open ? setOpen(false) : reveal())}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-surface-alt text-[0.6rem] font-data hover:border-accent/50 transition-colors cursor-pointer"
+      >
+        <span className="text-text-muted">{shortTitle.slice(0, 35)}</span>
+        <span className={`font-bold ${top.yes_pct >= 80 ? "text-gain" : top.yes_pct >= 40 ? "text-warn" : "text-text"}`}>
+          {top.label.slice(0, 20)}: {top.yes_pct}%
+        </span>
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full left-0 mt-1 p-2 rounded-lg border border-border bg-surface shadow-lg max-w-[calc(100vw-2rem)]" style={{ minWidth: 220 }}>
+          <div className="text-[0.6rem] font-semibold text-text mb-1">{ev.title}</div>
+          {ev.outcomes.slice(0, 4).map((o, j) => (
+            <div key={j} className="flex justify-between text-[0.55rem] font-data">
+              <span className="text-text-muted">{o.label}</span>
+              <span className={o.yes_pct >= 80 ? "text-gain font-bold" : o.yes_pct >= 40 ? "text-warn" : "text-text-muted"}>{o.yes_pct}%</span>
+            </div>
+          ))}
+          <div className="text-[0.5rem] text-text-muted mt-1">${(ev.volume_24h / 1000).toFixed(0)}k vol/24h · ${(ev.liquidity / 1000).toFixed(0)}k liq</div>
+          {history && history.length > 2 && (
+            <div className="mt-1.5 border-t border-border pt-1.5">
+              <div className="text-[0.5rem] text-text-muted mb-0.5">30-day trend</div>
+              <Sparkline points={history} />
+            </div>
+          )}
+          {history === null && top.token_id && <div className="mt-1.5 text-[0.5rem] text-text-muted animate-pulse">Loading chart...</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PolymarketPulse() {
+  const { data } = useQuery({ queryKey: ["polymarket"], queryFn: fetchPolymarket, staleTime: 5 * 60_000 });
+  const markets = (data?.markets ?? []).slice(0, 12);
+  if (markets.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <h2 className="text-sm font-bold uppercase tracking-wider">Prediction Markets</h2>
+      <div className="flex flex-wrap gap-1.5">
+        {markets.map((ev, i) => <PolyPill key={i} ev={ev} />)}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
    TRACK RECORD
    ═══════════════════════════════════════════════════════════════ */
 
@@ -322,12 +503,12 @@ function TrackRecord() {
    ═══════════════════════════════════════════════════════════════ */
 
 const TOOLS = [
-  { l: "Stock Analysis", h: "/stock-analysis" }, { l: "Vol Surface", h: "/vol-surface" },
-  { l: "Iron Condor", h: "/iron-condor" }, { l: "Signal Scanner", h: "/signal-scanner" },
-  { l: "Fed & Macro", h: "/fed-macro" },
-  { l: "Backtester", h: "/algo-backtester" }, { l: "Optimizer", h: "/portfolio-optimizer" },
-  { l: "Correlation", h: "/correlation" },
-  { l: "Calendar", h: "/economic-calendar" }, { l: "Track Record", h: "/track-record" },
+  { l: "Stock Analysis", h: "/stock-analysis" }, { l: "Vol Landscape", h: "/vol-landscape" },
+  { l: "Options Intelligence", h: "/options-analysis" }, { l: "Signal Scanner", h: "/signal-scanner" },
+  { l: "Fed & Macro", h: "/fed-macro" }, { l: "Backtester", h: "/algo-backtester" },
+  { l: "Optimizer", h: "/portfolio-optimizer" }, { l: "Correlation", h: "/correlation" },
+  { l: "Calendar", h: "/economic-calendar" }, { l: "Smart Money", h: "/smart-money" },
+  { l: "Track Record", h: "/track-record" },
 ];
 
 function QuickNav() {
@@ -347,48 +528,48 @@ function QuickNav() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   DASHBOARD
+   DASHBOARD — unified homebase
+   Order: quick pulse → options lens → performance → narrative →
+          predictions → your plays → events → trust.
    ═══════════════════════════════════════════════════════════════ */
 
 export function DashboardContent() {
   return (
     <div className="space-y-6">
-      {/* Ticker tape — edge-to-edge, no card */}
+      {/* Pulse: prices + regime/vol/play (fast-twitch signal) */}
       <TickerTape />
-
-      {/* Risk strip — inline metrics, no card */}
       <RiskStrip />
 
-      {/* Main content: 3-column on desktop */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left column: Signals + Positions (5/12) */}
-        <div className="lg:col-span-5 space-y-6">
-          <div className="card p-5">
-            <SignalSpotlight />
-          </div>
-          <div className="card p-5">
-            <PositionSummary />
-          </div>
-        </div>
+      {/* Cross-asset vol snapshot — what the options market is pricing */}
+      <VolSnapshot />
 
-        {/* Right column: Events + Track Record + News (7/12) */}
-        <div className="lg:col-span-7 space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="card p-5">
-              <UpcomingEvents />
-            </div>
-            <div className="card p-5">
-              <TrackRecord />
-            </div>
-          </div>
-          <div className="card p-5">
-            <MarketNews />
-          </div>
+      {/* Sector/asset performance heatmap */}
+      <MarketHeatmap />
+
+      {/* Intelligence + Prediction markets — market narrative */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-8 card p-5">
+          <MarketNews />
+        </div>
+        <div className="lg:col-span-4 card p-5">
+          <PolymarketPulse />
         </div>
       </div>
 
-      {/* Heatmap — full width, no card wrapper */}
-      <MarketHeatmap />
+      {/* Your plays + upcoming events */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-7 card p-5">
+          <SignalSpotlight />
+        </div>
+        <div className="lg:col-span-5 card p-5">
+          <UpcomingEvents />
+        </div>
+      </div>
+
+      {/* Trust signal */}
+      <div className="card p-5">
+        <TrackRecord />
+      </div>
 
       {/* Tool pills */}
       <QuickNav />
