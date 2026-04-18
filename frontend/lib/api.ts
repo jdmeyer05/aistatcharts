@@ -957,18 +957,6 @@ export async function fetchOilBundle(): Promise<OilBundle> {
   return apiFetch("/api/energy/oil", { timeoutMs: 60_000 });
 }
 
-export interface FuturesItem {
-  ticker: string;
-  name: string;
-  price: number;
-  change: number;
-  pct_change: number;
-}
-
-export async function fetchFuturesSnapshot(): Promise<Record<string, FuturesItem[]>> {
-  return apiFetch("/api/energy/futures-snapshot", { timeoutMs: 30_000 });
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function fetchErcotBundle(): Promise<Record<string, any>> {
   return apiFetch("/api/energy/ercot-bundle", { timeoutMs: 30_000 });

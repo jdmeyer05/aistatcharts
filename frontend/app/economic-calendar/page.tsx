@@ -21,19 +21,12 @@ const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 const TABS = [
   "Week at a Glance",
   "Economic Releases",
-  "Yield Curve",
   "Inflation",
   "Labor Market",
   "Macro Dashboard",
   "Earnings",
   "Treasury Auctions",
   "Surprise Tracker",
-];
-
-const YIELD_TENORS: Array<[string, string]> = [
-  ["DGS1MO", "1M"], ["DGS3MO", "3M"], ["DGS6MO", "6M"], ["DGS1", "1Y"],
-  ["DGS2", "2Y"], ["DGS3", "3Y"], ["DGS5", "5Y"], ["DGS7", "7Y"],
-  ["DGS10", "10Y"], ["DGS20", "20Y"], ["DGS30", "30Y"],
 ];
 
 const BIG_CAP = new Set([
@@ -114,21 +107,7 @@ export default function EconomicCalendar() {
   });
   const auctions: TreasuryAuction[] = auctionsQ.data?.auctions ?? [];
 
-  // ── Yield Curve (tab 2) ─────────────────────────────────────────
-  const ycQ = useQuery({
-    queryKey: ["yield-curve"],
-    queryFn: () => fetchFredBatch(YIELD_TENORS.map(([s]) => s), 260).then(parseFredBatch),
-    staleTime: 30 * 60 * 1000,
-    enabled: activeTab === 2,
-  });
-  const spreadQ = useQuery({
-    queryKey: ["fred-spread"],
-    queryFn: () => fetchFredBatch(["T10Y2Y", "FEDFUNDS"], 260).then(parseFredBatch),
-    staleTime: 30 * 60 * 1000,
-    enabled: activeTab === 2,
-  });
-
-  // ── Inflation (tab 3) ───────────────────────────────────────────
+  // ── Inflation (tab 2) ───────────────────────────────────────────
   const inflationQ = useQuery({
     queryKey: ["inflation"],
     queryFn: () => fetchFredBatch(
@@ -136,10 +115,10 @@ export default function EconomicCalendar() {
       24
     ).then(parseFredBatch),
     staleTime: 30 * 60 * 1000,
-    enabled: activeTab === 3,
+    enabled: activeTab === 2,
   });
 
-  // ── Labor (tab 4) ──────────────────────────────────────────────
+  // ── Labor (tab 3) ──────────────────────────────────────────────
   const laborQ = useQuery({
     queryKey: ["labor"],
     queryFn: () => fetchFredBatch(
@@ -147,10 +126,10 @@ export default function EconomicCalendar() {
       120
     ).then(parseFredBatch),
     staleTime: 30 * 60 * 1000,
-    enabled: activeTab === 4,
+    enabled: activeTab === 3,
   });
 
-  // ── Macro Dashboard (tab 5) ─────────────────────────────────────
+  // ── Macro Dashboard (tab 4) ─────────────────────────────────────
   const macroQ = useQuery({
     queryKey: ["macro-dashboard"],
     queryFn: () => fetchFredBatch(
@@ -158,10 +137,10 @@ export default function EconomicCalendar() {
       60
     ).then(parseFredBatch),
     staleTime: 30 * 60 * 1000,
-    enabled: activeTab === 5,
+    enabled: activeTab === 4,
   });
 
-  // ── Surprise Tracker (tab 8) ────────────────────────────────────
+  // ── Surprise Tracker (tab 7) ────────────────────────────────────
   const surpriseQ = useQuery({
     queryKey: ["surprise"],
     queryFn: () => fetchFredBatch(
@@ -169,7 +148,7 @@ export default function EconomicCalendar() {
       26
     ).then(parseFredBatch),
     staleTime: 30 * 60 * 1000,
-    enabled: activeTab === 8,
+    enabled: activeTab === 7,
   });
 
   // ── Today + hero ────────────────────────────────────────────────
@@ -190,7 +169,7 @@ export default function EconomicCalendar() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Economic Calendar</h1>
         <p className="text-text-secondary text-sm mt-1">
-          Upcoming macro releases, earnings, Treasury auctions, yield curve, and inflation data.
+          Upcoming macro releases, earnings, Treasury auctions, and inflation data.
         </p>
       </div>
 
@@ -221,26 +200,23 @@ export default function EconomicCalendar() {
       {/* Tab 1: Economic Releases */}
       {activeTab === 1 && <EconReleases events={events} today={today} t={t} L={L} />}
 
-      {/* Tab 2: Yield Curve */}
-      {activeTab === 2 && <YieldCurve yc={ycQ.data} spreads={spreadQ.data} events={events} isLoading={ycQ.isLoading || spreadQ.isLoading} t={t} L={L} />}
+      {/* Tab 2: Inflation */}
+      {activeTab === 2 && <InflationDashboard inf={inflationQ.data} isLoading={inflationQ.isLoading} t={t} L={L} />}
 
-      {/* Tab 3: Inflation */}
-      {activeTab === 3 && <InflationDashboard inf={inflationQ.data} isLoading={inflationQ.isLoading} t={t} L={L} />}
+      {/* Tab 3: Labor */}
+      {activeTab === 3 && <LaborDashboard labor={laborQ.data} isLoading={laborQ.isLoading} t={t} L={L} />}
 
-      {/* Tab 4: Labor */}
-      {activeTab === 4 && <LaborDashboard labor={laborQ.data} isLoading={laborQ.isLoading} t={t} L={L} />}
+      {/* Tab 4: Macro Dashboard */}
+      {activeTab === 4 && <MacroDashboard macro={macroQ.data} isLoading={macroQ.isLoading} t={t} L={L} />}
 
-      {/* Tab 5: Macro Dashboard */}
-      {activeTab === 5 && <MacroDashboard macro={macroQ.data} isLoading={macroQ.isLoading} t={t} L={L} />}
+      {/* Tab 5: Earnings */}
+      {activeTab === 5 && <EarningsTab earnings={earnings} isLoading={earningsQ.isLoading} t={t} />}
 
-      {/* Tab 6: Earnings */}
-      {activeTab === 6 && <EarningsTab earnings={earnings} isLoading={earningsQ.isLoading} t={t} />}
+      {/* Tab 6: Treasury Auctions */}
+      {activeTab === 6 && <AuctionsTab auctions={auctions} isLoading={auctionsQ.isLoading} t={t} L={L} today={today} />}
 
-      {/* Tab 7: Treasury Auctions */}
-      {activeTab === 7 && <AuctionsTab auctions={auctions} isLoading={auctionsQ.isLoading} t={t} L={L} today={today} />}
-
-      {/* Tab 8: Surprise Tracker */}
-      {activeTab === 8 && <SurpriseTracker series={surpriseQ.data} isLoading={surpriseQ.isLoading} t={t} L={L} />}
+      {/* Tab 7: Surprise Tracker */}
+      {activeTab === 7 && <SurpriseTracker series={surpriseQ.data} isLoading={surpriseQ.isLoading} t={t} L={L} />}
 
       {eventsQ.isLoading && events.length === 0 && (
         <div className="card text-center py-8"><div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div>
@@ -473,108 +449,7 @@ function EconReleases({ events, today, t, L }: { events: EconEvent[]; today: str
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Tab 2: Yield Curve
-// ───────────────────────────────────────────────────────────────────
-function YieldCurve({ yc, spreads, events, isLoading, t, L }: { yc?: Record<string, FredRow[]>; spreads?: Record<string, FredRow[]>; events: EconEvent[]; isLoading: boolean; t: ReturnType<typeof getChartTheme>; L: ReturnType<typeof getBaseLayout> }) {
-  if (isLoading || !yc) return <Spinner />;
-
-  const labels = YIELD_TENORS.filter(([sid]) => yc[sid] && yc[sid].length > 0).map(([, lb]) => lb);
-  const sids = YIELD_TENORS.filter(([sid]) => yc[sid] && yc[sid].length > 0).map(([sid]) => sid);
-  const current = sids.map(s => yc[s].slice(-1)[0].value);
-  const hist = (offset: number) => sids.map(s => { const arr = yc[s]; return arr.length > offset ? arr[arr.length - 1 - offset].value : null; });
-
-  const y2 = yc["DGS2"]?.slice(-1)[0]?.value ?? 0;
-  const y10 = yc["DGS10"]?.slice(-1)[0]?.value ?? 0;
-  const y30 = yc["DGS30"]?.slice(-1)[0]?.value ?? 0;
-  const spread = y10 - y2;
-  const inverted = spread < 0;
-
-  const spreadHist = spreads?.["T10Y2Y"] ?? [];
-  const fedFunds = spreads?.["FEDFUNDS"] ?? [];
-  const fomcDates = events.filter(e => e.event === "FOMC Rate Decision").map(e => e.date);
-
-  return (
-    <div className="space-y-4">
-      <div className="card">
-        <div className="text-sm font-semibold mb-2">US Treasury Yield Curve</div>
-        <Plot
-          data={[
-            { type: "scatter" as const, mode: "lines+markers" as const, name: "1 Year Ago", x: labels, y: hist(252), line: { color: t.hv60, width: 1.5, dash: "dot" as const }, marker: { size: 5 } },
-            { type: "scatter" as const, mode: "lines+markers" as const, name: "3 Months Ago", x: labels, y: hist(66), line: { color: t.hv20, width: 1.5, dash: "dot" as const }, marker: { size: 5 } },
-            { type: "scatter" as const, mode: "lines+markers" as const, name: "1 Month Ago", x: labels, y: hist(22), line: { color: t.muted, width: 1.5, dash: "dot" as const }, marker: { size: 5 } },
-            { type: "scatter" as const, mode: "lines+markers" as const, name: "Current", x: labels, y: current, line: { color: t.accent, width: 3 }, marker: { size: 8 } },
-          ]}
-          layout={{ height: 450, ...L, xaxis: { title: "Maturity", gridcolor: t.grid }, yaxis: { title: "Yield (%)", gridcolor: t.grid }, hovermode: "x unified" }}
-          config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }}
-        />
-      </div>
-
-      <div className="card card-compact">
-        <div className="flex flex-wrap gap-6">
-          <Metric label="2-Year" value={`${y2.toFixed(2)}%`} />
-          <Metric label="10-Year" value={`${y10.toFixed(2)}%`} />
-          <Metric label="2s10s Spread" value={`${spread.toFixed(2)}%`} deltaType={inverted ? "loss" : "gain"} />
-          <Metric label="30-Year" value={`${y30.toFixed(2)}%`} />
-        </div>
-      </div>
-
-      {inverted && (
-        <div className="card border-l-4 border-l-loss">
-          <div className="text-sm text-loss">
-            <strong>INVERTED</strong> — 2s10s at {spread.toFixed(2)}%. This has preceded every US recession since 1970.
-          </div>
-        </div>
-      )}
-
-      {spreadHist.length > 0 && (
-        <div className="card">
-          <div className="text-sm font-semibold mb-2">2s10s Spread History</div>
-          <Plot
-            data={[{ type: "scatter" as const, mode: "lines" as const, x: spreadHist.map(r => r.date), y: spreadHist.map(r => r.value), line: { color: t.accent, width: 2 } }]}
-            layout={{
-              height: 300, ...L,
-              yaxis: { title: "Spread (%)", gridcolor: t.grid },
-              xaxis: { gridcolor: t.grid },
-              shapes: [{ type: "line", x0: 0, x1: 1, xref: "paper", y0: 0, y1: 0, line: { color: t.text, width: 1 } }],
-              hovermode: "x unified",
-            }}
-            config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }}
-          />
-          <div className="text-[10px] text-text-muted mt-1">Below zero = inverted yield curve (historical recession signal).</div>
-        </div>
-      )}
-
-      {fedFunds.length > 0 && (
-        <div className="card">
-          <div className="text-sm font-semibold mb-2">Fed Funds Rate Path</div>
-          <Plot
-            data={[{ type: "scatter" as const, mode: "lines" as const, x: fedFunds.map(r => r.date), y: fedFunds.map(r => r.value), line: { color: t.accent, width: 2.5, shape: "hv" as const }, name: "Fed Funds" }]}
-            layout={{
-              height: 300, ...L,
-              yaxis: { title: "Rate (%)", gridcolor: t.grid },
-              xaxis: { gridcolor: t.grid },
-              shapes: fomcDates.map(d => ({ type: "line", x0: d, x1: d, yref: "paper", y0: 0, y1: 1, line: { color: t.hv20, width: 1, dash: "dot" as const } })),
-              hovermode: "x unified",
-            }}
-            config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }}
-          />
-          {y2 > 0 && fedFunds.length > 0 && (() => {
-            const currRate = fedFunds.slice(-1)[0].value;
-            const implied = Math.round((currRate - y2) / 0.25);
-            return implied !== 0 ? (
-              <div className="text-[11px] text-text-muted mt-1">
-                Market-implied: ~{Math.abs(implied)} rate {implied > 0 ? "cuts" : "hikes"} priced in (2Y at {y2.toFixed(2)}% vs Fed Funds {currRate.toFixed(2)}%).
-              </div>
-            ) : null;
-          })()}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ───────────────────────────────────────────────────────────────────
-// Tab 3: Inflation Dashboard
+// Tab 2: Inflation Dashboard
 // ───────────────────────────────────────────────────────────────────
 function yoyArray(series: FredRow[]): { dates: string[]; yoy: number[] } {
   if (series.length < 13) return { dates: [], yoy: [] };
@@ -702,7 +577,7 @@ function InflationDashboard({ inf, isLoading, t, L }: { inf?: Record<string, Fre
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Tab 4: Labor Market
+// Tab 3: Labor Market
 // ───────────────────────────────────────────────────────────────────
 function LaborDashboard({ labor, isLoading, t, L }: { labor?: Record<string, FredRow[]>; isLoading: boolean; t: ReturnType<typeof getChartTheme>; L: ReturnType<typeof getBaseLayout> }) {
   if (isLoading || !labor) return <Spinner />;
@@ -785,7 +660,7 @@ function LaborDashboard({ labor, isLoading, t, L }: { labor?: Record<string, Fre
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Tab 5: Macro Dashboard
+// Tab 4: Macro Dashboard
 // ───────────────────────────────────────────────────────────────────
 function MacroDashboard({ macro, isLoading, t, L }: { macro?: Record<string, FredRow[]>; isLoading: boolean; t: ReturnType<typeof getChartTheme>; L: ReturnType<typeof getBaseLayout> }) {
   if (isLoading || !macro) return <Spinner />;
@@ -876,7 +751,7 @@ function MacroDashboard({ macro, isLoading, t, L }: { macro?: Record<string, Fre
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Tab 6: Earnings
+// Tab 5: Earnings
 // ───────────────────────────────────────────────────────────────────
 function EarningsTab({ earnings, isLoading, t: _t }: { earnings: EarningsEntry[]; isLoading: boolean; t: ReturnType<typeof getChartTheme> }) {
   const [showAll, setShowAll] = useState(false);
@@ -946,7 +821,7 @@ function EarningsTab({ earnings, isLoading, t: _t }: { earnings: EarningsEntry[]
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Tab 7: Treasury Auctions
+// Tab 6: Treasury Auctions
 // ───────────────────────────────────────────────────────────────────
 function AuctionsTab({ auctions, isLoading, today, t, L }: { auctions: TreasuryAuction[]; isLoading: boolean; today: string; t: ReturnType<typeof getChartTheme>; L: ReturnType<typeof getBaseLayout> }) {
   if (isLoading) return <Spinner />;
@@ -1020,7 +895,7 @@ function AuctionsTab({ auctions, isLoading, today, t, L }: { auctions: TreasuryA
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Tab 8: Surprise Tracker
+// Tab 7: Surprise Tracker
 // ───────────────────────────────────────────────────────────────────
 type SurpriseType = "change" | "yoy" | "mom" | "level";
 type SurpriseRow = { date: string; indicator: string; actual: number; consensus: number; surprise: number; unit: string; z: number };

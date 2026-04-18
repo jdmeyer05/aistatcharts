@@ -54,27 +54,36 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "Sectors",
-    pages: [
-      { label: "Sector Analysis", href: "/sector-analysis", description: "All 11 SPDR sectors: revenue, CapEx, valuation, alpha", status: "live" },
-    ],
-  },
-  {
     label: "Energy",
     pages: [
       { label: "Oil Fundamentals", href: "/oil", description: "EIA crude data, supply/demand, term structure", status: "live" },
       { label: "Natural Gas", href: "/natgas", description: "EIA storage, supply, Henry Hub pricing", status: "live" },
       { label: "ERCOT Power", href: "/ercot-power", description: "Real-time Texas grid monitoring", status: "live" },
       { label: "ERCOT Capacity", href: "/ercot-capacity", description: "Generation pipeline and capacity outlook", status: "live" },
-      { label: "Futures", href: "/futures", description: "Multi-asset futures dashboard", status: "live" },
     ],
   },
   {
     label: "Macro",
     pages: [
-      { label: "Economic Calendar", href: "/economic-calendar", description: "FRED releases, yield curve, earnings, auctions", status: "live" },
+      { label: "Economic Calendar", href: "/economic-calendar", description: "FRED releases, earnings, auctions", status: "live" },
       { label: "Fed & Macro", href: "/fed-macro", description: "8-tab: signal matrix, FOMC, inflation, labor, yield curve", status: "live" },
-      { label: "Smart Money", href: "/smart-money", description: "13F holdings, congressional trades, activist investors", status: "live" },
+      { label: "Sector Analysis", href: "/sector-analysis", description: "All 11 SPDR sectors: revenue, CapEx, valuation, alpha", status: "live" },
+    ],
+  },
+  {
+    label: "Smart Money",
+    pages: [
+      { label: "Overview", href: "/smart-money", description: "Smart money conviction score — aggregate signals across sources", status: "live" },
+      { label: "Insider Activity", href: "/smart-money/insiders", description: "Form 4 officer/director trades + cluster buy detection", status: "live" },
+      { label: "Institutional Holdings", href: "/smart-money/13f", description: "13F filings + follow-the-leader fund clones", status: "live" },
+      { label: "Global Smart Money", href: "/smart-money/global", description: "Sovereign wealth funds + endowments + pensions", status: "stub" },
+      { label: "Congressional & Political", href: "/smart-money/political", description: "House/Senate trades + politician leaderboard", status: "live" },
+      { label: "Activist Campaigns", href: "/smart-money/activist", description: "13D filings + historical campaign win rates", status: "live" },
+      { label: "Short Side", href: "/smart-money/shorts", description: "Short interest, squeeze setups, short seller reports", status: "stub" },
+      { label: "Buybacks & Returns", href: "/smart-money/buybacks", description: "Repurchase authorizations + 10b5-1 plans + capital returns", status: "stub" },
+      { label: "Exit Signals", href: "/smart-money/exits", description: "Inverse tracker — who's leaving what smart money is selling", status: "live" },
+      { label: "Material Events", href: "/smart-money/events", description: "8-K filings + forward guidance from press releases", status: "live" },
+      { label: "Alerts", href: "/smart-money/alerts", description: "Notifications on tracked filings and positions", status: "stub" },
     ],
   },
 ];
