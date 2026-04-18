@@ -8,6 +8,7 @@ import { useEffect, useState, useRef } from "react";
 import { NAV_GROUPS, findGroup, type NavGroup } from "@/lib/nav";
 import { useSessionUser } from "@/components/auth-gate";
 import { supabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
+import { usePwa } from "@/components/pwa-provider";
 
 /* ─── Theme Toggle ────────────────────────────────────────── */
 
@@ -65,7 +66,7 @@ function NavLink({ group }: { group: NavGroup }) {
   const active = pathname === page.href;
   return (
     <Link href={page.href}
-      className={`px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wider transition-colors ${
+      className={`shrink-0 px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wider whitespace-nowrap transition-colors ${
         active ? "bg-white/15 text-white" : "text-white/60 hover:text-white hover:bg-white/10"
       }`}>
       {group.label}
@@ -95,10 +96,10 @@ function NavDropdown({ group, isActive }: { group: NavGroup; isActive: boolean }
   }, [pathname]);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative shrink-0">
       <button
         onClick={() => setOpen(!open)}
-        className={`px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wider transition-colors flex items-center gap-1 ${
+        className={`px-2.5 py-1 rounded text-xs font-semibold uppercase tracking-wider whitespace-nowrap transition-colors flex items-center gap-1 ${
           isActive ? "bg-white/15 text-white" : "text-white/60 hover:text-white hover:bg-white/10"
         }`}
       >
@@ -196,10 +197,30 @@ function UserMenu() {
 
 /* ─── Mobile drawer ──────────────────────────────────────── */
 
+function InstallButton() {
+  const { canInstall, isStandalone, promptInstall } = usePwa();
+  if (isStandalone || !canInstall) return null;
+  return (
+    <button
+      onClick={() => promptInstall()}
+      className="mx-4 mt-3 mb-2 px-3 py-2 min-h-[44px] rounded border border-accent/60 bg-accent/10 text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-accent/20 active:bg-accent/30"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Install app
+    </button>
+  );
+}
+
 function MobileNav({ open, onClose }: { open: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+
+  // Keep the ref up to date without mutating during render.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   // Close when the route changes. Ref avoids re-running on every parent
   // re-render (onClose is a fresh inline function each time).
@@ -237,6 +258,7 @@ function MobileNav({ open, onClose }: { open: boolean; onClose: () => void }) {
             </svg>
           </button>
         </div>
+        <InstallButton />
         <nav className="flex-1 py-2">
           {NAV_GROUPS.map((group) => (
             <div key={group.label} className="py-2 border-b border-white/5 last:border-0">
@@ -283,16 +305,17 @@ export function Header() {
     <header className="sticky top-0 z-50 bg-[#1a2332] dark:bg-[#161b22] text-white border-b border-transparent dark:border-border">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-11 gap-2">
-          {/* Logo */}
+          {/* Logo — text hidden below lg to make room for 7 nav groups */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
             <Image src="/favicon.png" alt="AI Statcharts" width={22} height={22} className="rounded" />
-            <span className="text-sm font-bold tracking-widest uppercase hidden sm:inline">
+            <span className="text-sm font-bold tracking-widest uppercase hidden lg:inline">
               AI Statcharts
             </span>
           </Link>
 
-          {/* Desktop nav (md+) */}
-          <nav className="hidden md:flex items-center gap-0.5">
+          {/* Desktop nav (md+). Min-w-0 + overflow-x-auto lets it gracefully
+              scroll horizontally on tablets where 7 groups don't fit cleanly. */}
+          <nav className="hidden md:flex items-center gap-0.5 min-w-0 overflow-x-auto scrollbar-thin">
             {NAV_GROUPS.map((group) =>
               group.pages.length === 1 ? (
                 <NavLink key={group.label} group={group} />

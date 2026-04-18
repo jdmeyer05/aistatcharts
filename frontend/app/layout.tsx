@@ -19,8 +19,16 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "AI Statcharts",
   description: "Quantitative trading & analysis platform",
+  manifest: "/manifest.webmanifest",
+  applicationName: "AI Statcharts",
+  appleWebApp: {
+    capable: true,
+    title: "Statcharts",
+    statusBarStyle: "black-translucent",
+  },
   icons: {
     icon: "/favicon.png",
+    apple: "/icon-192.png",
   },
 };
 
