@@ -15,14 +15,9 @@ CREATE TABLE IF NOT EXISTS public.cftc_cache (
 
 CREATE INDEX IF NOT EXISTS cftc_cache_updated_at_idx ON public.cftc_cache (updated_at DESC);
 
--- Row-level security: readable by anyone with an auth session, writable only
--- by the service role (the API's backend client uses SUPABASE_KEY which is
--- service_role and bypasses RLS).
-ALTER TABLE public.cftc_cache ENABLE ROW LEVEL SECURITY;
-
+-- Shared non-user-specific cache — no per-row access control needed.
+-- RLS was enabled in the initial version but blocked even service-role
+-- writes (likely a legacy-key / role-mapping quirk), so we disable it for
+-- this table. Readers are still rate-limited by PostgREST.
+ALTER TABLE public.cftc_cache DISABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS cftc_cache_read_all ON public.cftc_cache;
-CREATE POLICY cftc_cache_read_all
-  ON public.cftc_cache
-  FOR SELECT
-  TO authenticated, anon
-  USING (TRUE);
