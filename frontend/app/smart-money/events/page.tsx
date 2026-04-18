@@ -38,18 +38,35 @@ export default function MaterialEventsPage() {
     mutationFn: async () => {
       const tk = ticker.trim().toUpperCase();
       if (!tk) throw new Error("Enter a ticker");
+
+      // Transcript URL discovery scrapes Motley Fool and is flaky — it
+      // should NEVER block the press-release guidance path. Catch any
+      // failure (timeout, 429, 500) and fall back to zero transcripts
+      // so the user still gets the 8-K guidance they're waiting on.
+      const urlsP: Promise<{ urls: string[] }> = transcriptUrls.trim()
+        ? Promise.resolve({
+            urls: transcriptUrls.split("\n").map((s) => s.trim()).filter((u) => u.startsWith("http")),
+          })
+        : fetchTranscriptUrls(tk, 4)
+            .then((r) => ({ urls: r.urls }))
+            .catch((e) => {
+              console.warn("transcript URL discovery failed — skipping transcripts", e);
+              return { urls: [] as string[] };
+            });
+
       const [pressRes, discovered] = await Promise.all([
         fetchGuidanceHistory(tk, quarters),
-        transcriptUrls.trim()
-          ? Promise.resolve({ urls: transcriptUrls.split("\n").map((s) => s.trim()).filter((u) => u.startsWith("http")) })
-          : fetchTranscriptUrls(tk, 4).then((r) => ({ urls: r.urls })),
+        urlsP,
       ]);
+
       let callRows: GuidanceRow[] = [];
+      let transcriptError: string | null = null;
       if (discovered.urls.length > 0) {
         try {
           const res = await fetchTranscriptGuidance(tk, discovered.urls);
           callRows = res.data;
         } catch (e) {
+          transcriptError = (e as Error)?.message ?? "transcript parse failed";
           console.warn("transcript guidance failed", e);
         }
       }
@@ -58,6 +75,7 @@ export default function MaterialEventsPage() {
         press: pressRes.data.map((r) => ({ ...r, source: "8-K Press Release" as const })),
         call: callRows.map((r) => ({ ...r, source: "Earnings Call" as const })),
         discoveredUrls: discovered.urls,
+        transcriptError,
       };
     },
   });
@@ -229,6 +247,14 @@ export default function MaterialEventsPage() {
           {guidance.data.discoveredUrls.length === 0 && (
             <> To add earnings-call data, paste Motley Fool transcript URLs above and re-run.</>
           )}
+        </div>
+      )}
+
+      {guidance.data && guidance.data.transcriptError && (
+        <div className="card text-xs text-text-muted py-2 px-4 border-l-2 border-l-warn">
+          <strong className="text-warn">Transcript parse skipped:</strong> {guidance.data.transcriptError}.
+          {" "}8-K data above is complete — earnings-call guidance requires Motley Fool transcripts which
+          didn&apos;t load in time. Paste URLs manually above to retry just the transcript step.
         </div>
       )}
 

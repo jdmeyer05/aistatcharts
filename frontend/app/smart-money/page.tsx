@@ -9,6 +9,7 @@ import {
   fetchEdgarEarningsCalendar,
   fetch8KEvents,
   fetchInsiderTransactions,
+  fetchPriceHistory,
   type Activist13D,
 } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
@@ -50,7 +51,11 @@ interface ConvictionBreakdown {
   recentEightK: number;
   score: number;             // 0..100
   families: number;          // how many signal families fired in user's direction
-  direction: "bullish" | "bearish" | "neutral";
+  direction: "bullish" | "bearish" | "neutral" | "inconclusive";
+  // 90-day price context — fills in once the price-history fetch resolves
+  stockReturn90d?: number | null;
+  spyReturn90d?: number | null;
+  alpha90d?: number | null;
 }
 
 function classify(txn: string, text: string): "BUY" | "SELL" | "OTHER" {
@@ -66,6 +71,7 @@ function computeConviction(
   activistFilings: Activist13D[],
   eightKCount: number,
   ticker: string,
+  price: { stock90d?: number | null; spy90d?: number | null } = {},
 ): ConvictionBreakdown {
   let buyCount = 0;
   let sellCount = 0;
@@ -140,17 +146,42 @@ function computeConviction(
   bearFamilies += eventPulse;
 
   const netFamilies = bullFamilies - bearFamilies;
-  const direction: "bullish" | "bearish" | "neutral" =
-    netFamilies > 0.3 ? "bullish" : netFamilies < -0.3 ? "bearish" : "neutral";
+  const topFamilies = Math.max(bullFamilies, bearFamilies);
 
-  // Score 0-100 — combines confluence count with magnitude
+  // Direction labeling follows the stated methodology: single-family signals
+  // are noise, 2+ family confluence is where the edge lives. Only apply
+  // bullish/bearish labels when at least 1 full family has fired on that side.
+  // "inconclusive" means "data exists but doesn't clear the noise floor".
+  let direction: "bullish" | "bearish" | "neutral" | "inconclusive";
+  if (topFamilies < 1) {
+    direction = "inconclusive";
+  } else if (netFamilies > 0.3) {
+    direction = "bullish";
+  } else if (netFamilies < -0.3) {
+    direction = "bearish";
+  } else {
+    direction = "neutral";
+  }
+
+  // Score 0-100 — combines confluence count with magnitude.
+  // Weaken the family multiplier when top family is < 1 so "half-signal"
+  // setups like a lone 0.5-weight cluster sell don't push score far from 50.
   let score = 50;
-  // Family confluence drives most of the variance.
-  score += netFamilies * 18;
-  // Magnitude from raw $-flow (capped so a single huge trade doesn't dominate).
-  const magSignal = Math.max(-1, Math.min(1, insiderNet / 5e7)); // saturate at $50M net
-  score += magSignal * 10;
+  const familyWeight = topFamilies < 1 ? 10 : 18;
+  score += netFamilies * familyWeight;
+  const magSignal = Math.max(-1, Math.min(1, insiderNet / 5e7));
+  score += magSignal * (topFamilies < 1 ? 5 : 10);
   score = Math.max(0, Math.min(100, Math.round(score)));
+
+  // 90-day price context
+  let stockReturn90d: number | null = null;
+  let spyReturn90d: number | null = null;
+  let alpha90d: number | null = null;
+  if (price.stock90d != null) stockReturn90d = price.stock90d;
+  if (price.spy90d != null) spyReturn90d = price.spy90d;
+  if (stockReturn90d != null && spyReturn90d != null) {
+    alpha90d = stockReturn90d - spyReturn90d;
+  }
 
   return {
     insiderNet,
@@ -162,8 +193,11 @@ function computeConviction(
     activistFilings: relevantActivist,
     recentEightK: eightKCount,
     score,
-    families: Math.max(bullFamilies, bearFamilies),
+    families: topFamilies,
     direction,
+    stockReturn90d,
+    spyReturn90d,
+    alpha90d,
   };
 }
 
@@ -195,20 +229,35 @@ export default function SmartMoneyOverviewPage() {
     staleTime: 30 * 60_000,
   });
 
-  // Ticker lookup for conviction score
+  // Ticker lookup for conviction score — also grabs 90d price history for the
+  // ticker and SPY so we can show price-action context next to the signal read.
   const [ticker, setTicker] = useState("");
   const convictionLoad = useMutation({
     mutationFn: async () => {
       const tk = ticker.trim().toUpperCase();
       if (!tk) throw new Error("Enter a ticker");
-      const [insider, events] = await Promise.all([
+      // 63 trading days ≈ 90 calendar days — matches the 8-K / insider
+      // windows used elsewhere in this conviction score. Passing 90 here
+      // gave ~130 calendar days which made the price-context mismatch
+      // the signal-window period.
+      const [insider, events, stockHist, spyHist] = await Promise.all([
         fetchInsiderTransactions(tk).catch(() => ({ ticker: tk, count: 0, data: [] })),
         fetch8KEvents(tk, 90).catch(() => ({ ticker: tk, count: 0, data: [] })),
+        fetchPriceHistory(tk, 63).catch(() => ({ ticker: tk, data: [] })),
+        fetchPriceHistory("SPY", 63).catch(() => ({ ticker: "SPY", data: [] })),
       ]);
+      const ret = (bars: { Close: number }[]) => {
+        if (!bars || bars.length < 2) return null;
+        const first = bars[0].Close;
+        const last = bars[bars.length - 1].Close;
+        return first > 0 ? (last - first) / first : null;
+      };
       return {
         ticker: tk,
         insiderRaw: insider.data,
         eightKCount: events.count,
+        stock90d: ret(stockHist.data),
+        spy90d: ret(spyHist.data),
       };
     },
   });
@@ -223,6 +272,7 @@ export default function SmartMoneyOverviewPage() {
         activists,
         convictionLoad.data.eightKCount,
         convictionLoad.data.ticker,
+        { stock90d: convictionLoad.data.stock90d, spy90d: convictionLoad.data.spy90d },
       ),
     };
   }, [convictionLoad.data, activist90dQ.data]);
@@ -307,32 +357,71 @@ export default function SmartMoneyOverviewPage() {
             );
           }
 
+          // Color both the direction label AND the score card based on the
+          // meaningful confluence. Inconclusive / neutral force a muted color
+          // regardless of score number — prevents a 40-score-that's-really-
+          // inconclusive from looking bearish (purple hv60 band).
+          const dirColor =
+            conviction.direction === "bullish"
+              ? t.gain
+              : conviction.direction === "bearish"
+                ? t.loss
+                : t.muted;
+          const cardColor =
+            conviction.direction === "inconclusive" || conviction.direction === "neutral"
+              ? t.muted
+              : scoreColor(conviction.score, t);
+
           return (
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Score card */}
             <div
               className="rounded-lg p-5 text-center"
               style={{
-                border: `2px solid ${scoreColor(conviction.score, t)}`,
-                background: `${scoreColor(conviction.score, t)}15`,
+                border: `2px solid ${cardColor}`,
+                background: `${cardColor}15`,
               }}
             >
               <div className="text-xs font-bold uppercase tracking-wider text-text-muted">Score</div>
               <div
                 className="text-5xl font-bold my-1"
-                style={{ color: scoreColor(conviction.score, t) }}
+                style={{ color: cardColor }}
               >
                 {conviction.score}
               </div>
               <div
                 className="text-sm font-bold uppercase tracking-wider"
-                style={{ color: scoreColor(conviction.score, t) }}
+                style={{ color: dirColor }}
               >
                 {conviction.direction}
               </div>
               <div className="text-xs text-text-muted mt-2">
                 {conviction.families.toFixed(1)} signal {conviction.families === 1 ? "family" : "families"} firing
               </div>
+              {/* 90-day price context */}
+              {conviction.stockReturn90d != null && (
+                <div className="mt-3 pt-3 border-t border-border/50 text-xs space-y-0.5">
+                  <div>
+                    <span className="text-text-muted">90d: </span>
+                    <span className={conviction.stockReturn90d >= 0 ? "text-gain font-semibold" : "text-loss font-semibold"}>
+                      {conviction.stockReturn90d >= 0 ? "+" : ""}
+                      {(conviction.stockReturn90d * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  {conviction.spyReturn90d != null && (
+                    <div className="text-[10px] text-text-muted">
+                      SPY {conviction.spyReturn90d >= 0 ? "+" : ""}
+                      {(conviction.spyReturn90d * 100).toFixed(1)}%
+                      {conviction.alpha90d != null && (
+                        <span className={`ml-1 ${conviction.alpha90d >= 0 ? "text-gain" : "text-loss"}`}>
+                          (α {conviction.alpha90d >= 0 ? "+" : ""}
+                          {(conviction.alpha90d * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Signal breakdown */}
@@ -431,6 +520,11 @@ export default function SmartMoneyOverviewPage() {
                 },
                 events: {
                   eight_k_count_90d: conviction.recentEightK,
+                },
+                price_context_90d: {
+                  stock_return: conviction.stockReturn90d,
+                  spy_return: conviction.spyReturn90d,
+                  alpha: conviction.alpha90d,
                 },
               }}
             />
