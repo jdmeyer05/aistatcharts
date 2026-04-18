@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { fetchFamaFrench, fetchPriceHistory, type FFRecord } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
@@ -23,8 +23,8 @@ const FACTORS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"] as const;
 // Simple OLS regression: y = Xb + e
 function ols(y: number[], X: number[][]): { betas: number[]; r2: number; alpha: number } {
   const n = y.length;
-  const k = X[0].length;
-  if (n < k + 5) return { betas: Array(k).fill(0), r2: 0, alpha: 0 };
+  const k = X[0]?.length ?? 0;
+  if (k === 0 || n < k + 5) return { betas: Array(k).fill(0), r2: 0, alpha: 0 };
 
   // Add intercept
   const Xa = X.map(row => [1, ...row]);
@@ -79,16 +79,23 @@ export default function FactorDecomposition() {
   const L = getBaseLayout(t);
   const [activeTab, setActiveTab] = useState(0);
   const [ticker, setTicker] = useState("SPY");
-  const [factors, setFactors] = useState<FFRecord[]>([]);
   const [stockReturns, setStockReturns] = useState<{ date: string; ret: number }[]>([]);
+
+  // FF factor data is the same regardless of ticker — fetch once, reuse.
+  // staleTime 24h: FF releases daily with a lag; no need to refetch within a session.
+  const ffQ = useQuery({
+    queryKey: ["ff-factors", 504],
+    queryFn: () => fetchFamaFrench(504),
+    staleTime: 24 * 60 * 60 * 1000,
+  });
+  const factors: FFRecord[] = ffQ.data?.factors ?? [];
 
   const load = useMutation({
     mutationFn: async (tk: string) => {
-      const [ff, hist] = await Promise.all([fetchFamaFrench(504), fetchPriceHistory(tk, 504)]);
-      return { ff: ff.factors, hist: hist.data };
+      const hist = await fetchPriceHistory(tk, 504);
+      return { hist: hist.data };
     },
     onSuccess: (d) => {
-      setFactors(d.ff);
       const closes = d.hist;
       const rets = closes.slice(1).map((bar, i) => ({
         date: bar.Date,
@@ -116,6 +123,34 @@ export default function FactorDecomposition() {
     return { rows, y, X, reg, n: rows.length };
   }, [factors, stockReturns]);
 
+  // Tab 0: precompute cumulative factor returns once per matched dataset.
+  const cumFactorReturns = useMemo(() => {
+    if (!matched) return null;
+    const xs = matched.rows.map(r => r.date);
+    const series = FACTORS.map(f => {
+      const y: number[] = [];
+      let cum = 1;
+      for (const row of matched.rows) { cum *= (1 + row.ff[f]); y.push((cum - 1) * 100); }
+      return { factor: f, y };
+    });
+    return { xs, series };
+  }, [matched]);
+
+  // Tab 2: precompute alpha attribution once per matched dataset.
+  const attribution = useMemo(() => {
+    if (!matched) return null;
+    const n = matched.n;
+    const totalRet = matched.rows.reduce((s, r) => s + r.stockRet, 0) * 252 / n * 100;
+    const rf = matched.rows.reduce((s, r) => s + r.ff.RF, 0) * 252 / n * 100;
+    const factorContribs = FACTORS.map((f, i) => ({
+      name: FACTOR_NAMES[f],
+      value: matched.reg.betas[i] * matched.rows.reduce((s, r) => s + r.ff[f], 0) * 252 / n * 100,
+      color: FACTOR_COLORS[f],
+    }));
+    const explained = factorContribs.reduce((s, c) => s + c.value, 0);
+    return { totalRet, rf, factorContribs, explained };
+  }, [matched]);
+
   return (
     <div className="space-y-5">
       <div>
@@ -126,28 +161,54 @@ export default function FactorDecomposition() {
       <div className="card card-compact">
         <div className="flex items-center gap-3">
           <input type="text" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
-            onKeyDown={e => e.key === "Enter" && load.mutate(ticker)}
+            onKeyDown={e => {
+              if (e.key === "Enter" && !load.isPending && ticker && factors.length > 0) load.mutate(ticker);
+            }}
             placeholder="SPY" className="w-32 px-3 py-2 border border-border rounded-lg text-sm font-data bg-surface" />
-          <button onClick={() => load.mutate(ticker)} disabled={load.isPending}
+          <button onClick={() => load.mutate(ticker)} disabled={load.isPending || !ticker || factors.length === 0}
             className="px-6 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm">
-            {load.isPending ? "Loading..." : "Decompose"}
+            {load.isPending ? "Loading..." : factors.length === 0 ? "Loading factors..." : "Decompose"}
           </button>
+          <div className="text-[11px] text-text-muted ml-auto">
+            Fama-French 5-factor model: Market, Size, Value, Profitability, Investment. 504 trading days (~2y).
+          </div>
         </div>
       </div>
+
+      {ffQ.isError && (
+        <div className="card border-loss/30 bg-loss-bg text-loss text-sm flex items-center justify-between">
+          <span>Failed to load Fama-French factor data: {(ffQ.error as Error)?.message ?? "unknown error"}.</span>
+          <button onClick={() => ffQ.refetch()} className="px-3 py-1 text-xs rounded border border-loss hover:bg-loss/10">Retry</button>
+        </div>
+      )}
 
       {load.isPending && (
         <div className="card text-center py-12">
           <div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-text-muted mt-3">Fetching FF factors + price history...</p>
+          <p className="text-sm text-text-muted mt-3">Fetching {ticker} price history…</p>
         </div>
       )}
 
       {matched && (
         <>
           <div className="card card-compact">
-            <div className="flex flex-wrap gap-6">
+            <div className="flex flex-wrap gap-6 items-center">
               <Metric label="Observations" value={String(matched.n)} />
-              <Metric label="R²" value={`${(matched.reg.r2 * 100).toFixed(1)}%`} />
+              <div>
+                <div className="metric-label">R²</div>
+                <div className="text-xl font-bold" style={{ color: matched.reg.r2 > 0.7 ? t.gain : matched.reg.r2 > 0.4 ? t.hv20 : t.loss }}>
+                  {(matched.reg.r2 * 100).toFixed(1)}%
+                </div>
+                <div className="w-24 h-1 bg-surface-alt rounded-full overflow-hidden mt-1">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, matched.reg.r2 * 100))}%`,
+                      background: matched.reg.r2 > 0.7 ? t.gain : matched.reg.r2 > 0.4 ? t.hv20 : t.loss,
+                    }}
+                  />
+                </div>
+              </div>
               <Metric label="Ann. Alpha" value={`${matched.reg.alpha > 0 ? "+" : ""}${matched.reg.alpha.toFixed(2)}%`}
                 deltaType={matched.reg.alpha > 0 ? "gain" : "loss"} />
               {FACTORS.map((f, i) => (
@@ -167,15 +228,13 @@ export default function FactorDecomposition() {
           </div>
 
           {/* Tab 0: Factor Returns */}
-          {activeTab === 0 && (
+          {activeTab === 0 && cumFactorReturns && (
             <div className="card">
-              <Plot data={FACTORS.map(f => {
-                const cumRet: number[] = [];
-                let cum = 1;
-                for (const row of matched.rows) { cum *= (1 + row.ff[f]); cumRet.push((cum - 1) * 100); }
-                return { x: matched.rows.map(r => r.date), y: cumRet, type: "scatter" as const, mode: "lines" as const,
-                  name: FACTOR_NAMES[f], line: { color: FACTOR_COLORS[f], width: 1.5 } };
-              })}
+              <Plot data={cumFactorReturns.series.map(s => ({
+                x: cumFactorReturns.xs, y: s.y,
+                type: "scatter" as const, mode: "lines" as const,
+                name: FACTOR_NAMES[s.factor], line: { color: FACTOR_COLORS[s.factor], width: 1.5 },
+              }))}
                 layout={{ height: 400, ...L, yaxis: { title: "Cumulative Return (%)", gridcolor: t.grid }, xaxis: { gridcolor: t.grid }, hovermode: "x unified",
                   legend: { x: 0.01, y: 0.99, bgcolor: "transparent" } }}
                 config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
@@ -200,37 +259,24 @@ export default function FactorDecomposition() {
           )}
 
           {/* Tab 2: Alpha Attribution — waterfall */}
-          {activeTab === 2 && (
+          {activeTab === 2 && attribution && (
             <div className="card space-y-4">
-              {(() => {
-                const totalRet = matched.rows.reduce((s, r) => s + r.stockRet, 0) * 252 / matched.n * 100;
-                const rf = matched.rows.reduce((s, r) => s + r.ff.RF, 0) * 252 / matched.n * 100;
-                const factorContribs = FACTORS.map((f, i) => ({
-                  name: FACTOR_NAMES[f],
-                  value: matched.reg.betas[i] * matched.rows.reduce((s, r) => s + r.ff[f], 0) * 252 / matched.n * 100,
-                  color: FACTOR_COLORS[f],
-                }));
-                const explained = factorContribs.reduce((s, c) => s + c.value, 0);
-
-                return (<>
-                  <div className="flex gap-6">
-                    <Metric label={`${ticker} Ann. Return`} value={`${totalRet.toFixed(1)}%`} />
-                    <Metric label="Risk-Free" value={`${rf.toFixed(1)}%`} />
-                    <Metric label="Factor-Explained" value={`${explained.toFixed(1)}%`} />
-                    <Metric label="Alpha (Unexplained)" value={`${matched.reg.alpha.toFixed(2)}%`} deltaType={matched.reg.alpha > 0 ? "gain" : "loss"} />
-                  </div>
-                  <Plot data={[{
-                    x: [...factorContribs.map(c => c.name), "Alpha"],
-                    y: [...factorContribs.map(c => c.value), matched.reg.alpha],
-                    type: "bar" as const,
-                    marker: { color: [...factorContribs.map(c => c.color), matched.reg.alpha > 0 ? t.gain : t.loss] },
-                    text: [...factorContribs.map(c => `${c.value > 0 ? "+" : ""}${c.value.toFixed(1)}%`), `${matched.reg.alpha > 0 ? "+" : ""}${matched.reg.alpha.toFixed(2)}%`],
-                    textposition: "outside" as const, textfont: { size: 10, color: t.text },
-                  }]} layout={{ height: 350, ...L, yaxis: { title: "Ann. Return Attribution (%)", gridcolor: t.grid },
-                    shapes: [{ type: "line", y0: 0, y1: 0, x0: 0, x1: 1, xref: "paper", line: { color: t.muted, width: 1 } }] }}
-                    config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
-                </>);
-              })()}
+              <div className="flex gap-6 flex-wrap">
+                <Metric label={`${ticker} Ann. Return`} value={`${attribution.totalRet.toFixed(1)}%`} />
+                <Metric label="Risk-Free" value={`${attribution.rf.toFixed(1)}%`} />
+                <Metric label="Factor-Explained" value={`${attribution.explained.toFixed(1)}%`} />
+                <Metric label="Alpha (Unexplained)" value={`${matched.reg.alpha.toFixed(2)}%`} deltaType={matched.reg.alpha > 0 ? "gain" : "loss"} />
+              </div>
+              <Plot data={[{
+                x: [...attribution.factorContribs.map(c => c.name), "Alpha"],
+                y: [...attribution.factorContribs.map(c => c.value), matched.reg.alpha],
+                type: "bar" as const,
+                marker: { color: [...attribution.factorContribs.map(c => c.color), matched.reg.alpha > 0 ? t.gain : t.loss] },
+                text: [...attribution.factorContribs.map(c => `${c.value > 0 ? "+" : ""}${c.value.toFixed(1)}%`), `${matched.reg.alpha > 0 ? "+" : ""}${matched.reg.alpha.toFixed(2)}%`],
+                textposition: "outside" as const, textfont: { size: 10, color: t.text },
+              }]} layout={{ height: 350, ...L, yaxis: { title: "Ann. Return Attribution (%)", gridcolor: t.grid },
+                shapes: [{ type: "line", y0: 0, y1: 0, x0: 0, x1: 1, xref: "paper", line: { color: t.muted, width: 1 } }] }}
+                config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
             </div>
           )}
 
@@ -505,8 +551,10 @@ function RiskDecompositionTab({
     const pctSystematic = totalVar > 1e-10 ? (factorVar / totalVar) * 100 : 0;
     const pctIdio = totalVar > 1e-10 ? (idioVar / totalVar) * 100 : 0;
 
-    // Annualized vol for marginal contributions
-    const totalVol = Math.sqrt(variance(matched.rows.map(r => r.stockRet)) * 252) * 100;
+    // Annualized vol — keep the base consistent with totalVar (which is computed
+    // on y = excess return). Previously this used stockRet variance which mixes
+    // two different bases when computing volContrib = (factorContrib/totalVar) * totalVol.
+    const totalVol = Math.sqrt(totalVar * 252) * 100;
     const mrc = FACTORS.map((f, i) => ({
       factor: FACTOR_NAMES[f],
       code: f,

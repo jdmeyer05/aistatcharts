@@ -22,11 +22,14 @@ interface InsiderRow {
   direction: "BUY" | "SELL" | "OTHER";
 }
 
-function classifyTransaction(txn: string): "BUY" | "SELL" | "OTHER" {
-  if (!txn) return "OTHER";
-  const lower = txn.toLowerCase();
-  if (lower.includes("purchase") || lower.includes("buy") || lower.includes("acquire")) return "BUY";
-  if (lower.includes("sale") || lower.includes("sell") || lower.includes("dispose")) return "SELL";
+function classifyTransaction(txn: string, text: string): "BUY" | "SELL" | "OTHER" {
+  // yfinance typically leaves Transaction blank and puts the action in Text
+  // ("Sale at price X", "Purchase at price Y"). Combine both fields so we
+  // classify consistently regardless of which one Yahoo populated.
+  const haystack = `${txn} ${text}`.toLowerCase();
+  if (!haystack.trim()) return "OTHER";
+  if (haystack.includes("purchase") || haystack.includes(" buy") || haystack.startsWith("buy") || haystack.includes("acquire")) return "BUY";
+  if (haystack.includes("sale") || haystack.includes(" sell") || haystack.startsWith("sell") || haystack.includes("dispose")) return "SELL";
   return "OTHER";
 }
 
@@ -96,15 +99,16 @@ export default function InsidersPage() {
       .map((raw) => {
         const r = raw as Record<string, unknown>;
         const txn = String(r.Transaction ?? "");
+        const text = String(r.Text ?? "");
         return {
           date: toIso(String(r["Start Date"] ?? "")),
           insider: String(r.Insider ?? ""),
           position: String(r.Position ?? ""),
-          transaction: txn,
+          transaction: txn || text,
           shares: Number(r.Shares ?? 0) || 0,
           value: Number(r.Value ?? 0) || 0,
-          text: String(r.Text ?? ""),
-          direction: classifyTransaction(txn),
+          text,
+          direction: classifyTransaction(txn, text),
         } satisfies InsiderRow;
       })
       .filter((r) => r.date);

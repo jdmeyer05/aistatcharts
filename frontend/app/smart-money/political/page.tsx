@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import {
   fetchCongressionalTrades,
+  fetchPriceHistoryBatch,
   type CongressionalTrade,
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
@@ -22,6 +23,32 @@ function parseAmountMidpoint(raw: string): number {
   if (vals.length === 0) return 0;
   if (vals.length === 1) return vals[0];
   return (vals[0] + vals[vals.length - 1]) / 2;
+}
+
+/** Find the close price on the first trading day ON OR AFTER the given ISO date.
+ *  Returns null if the nearest match is more than `toleranceDays` after the
+ *  requested date — guards against scoring trades whose true date falls before
+ *  our price window (e.g., a 3-year-old trade with 2-year history would
+ *  otherwise silently match the first bar in our window and produce bogus
+ *  alpha). Assumes `bars` is chronologically ascending. */
+function priceOnOrAfter(
+  bars: { Date: string; Close: number }[],
+  isoDate: string,
+  toleranceDays = 30,
+): number | null {
+  if (!bars || bars.length === 0 || !isoDate) return null;
+  let lo = 0, hi = bars.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid].Date < isoDate) lo = mid + 1;
+    else hi = mid;
+  }
+  if (bars[lo].Date < isoDate) return null;
+  const matched = bars[lo].Date.slice(0, 10);
+  const gap =
+    (new Date(matched + "T00:00:00").getTime() - new Date(isoDate.slice(0, 10) + "T00:00:00").getTime()) / 86400000;
+  if (gap > toleranceDays) return null;
+  return bars[lo].Close;
 }
 
 export default function PoliticalPage() {
@@ -83,6 +110,183 @@ export default function PoliticalPage() {
     if (!selectedMember) return [];
     return trades.filter((tr) => tr.member === selectedMember);
   }, [trades, selectedMember]);
+
+  // Unique tickers bought (Purchase trades) for performance tracking. Limit
+  // to the 80 most-traded so the batch fetch stays fast (~4-5s for 80 tickers).
+  const trackedTickers = useMemo(() => {
+    const freq = new Map<string, number>();
+    for (const tr of trades) {
+      if (tr.type !== "Purchase" || !tr.ticker || !tr.date || tr.date === "NaT") continue;
+      freq.set(tr.ticker, (freq.get(tr.ticker) ?? 0) + 1);
+    }
+    const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 80).map(([tk]) => tk);
+    return sorted;
+  }, [trades]);
+
+  // Fetch price history for the tracked tickers + SPY. Enabled only when we
+  // have trades to score. 2y lookback covers typical PTR windows. Dedupe
+  // against SPY in case a politician traded SPY itself.
+  const priceBatchQ = useQuery({
+    queryKey: ["political-prices", [...trackedTickers].sort().join(",")],
+    queryFn: () => {
+      const set = new Set(trackedTickers);
+      set.add("SPY");
+      return fetchPriceHistoryBatch([...set], 504);
+    },
+    enabled: trackedTickers.length > 0,
+    staleTime: 30 * 60_000,
+  });
+
+  // Per-politician performance vs SPY: for each Purchase, compare stock return
+  // since trade date to SPY return over the same window. Alpha = stock − SPY.
+  // Only count politicians with >= 3 scored trades so stats are meaningful.
+  const performance = useMemo(() => {
+    if (!priceBatchQ.data) return null;
+    const priceMap = priceBatchQ.data;
+    const spyBars = priceMap["SPY"];
+    if (!spyBars || spyBars.length === 0) return null;
+    const spyCurrent = spyBars[spyBars.length - 1].Close;
+
+    type Rec = { trades: number; scored: number; winners: number; totalReturn: number; totalAlpha: number; totalVolume: number };
+    const byPol = new Map<string, Rec>();
+
+    for (const tr of trades) {
+      if (tr.type !== "Purchase" || !tr.ticker || !tr.date || tr.date === "NaT") continue;
+      if (!tr.member) continue;
+      const rec = byPol.get(tr.member) ?? { trades: 0, scored: 0, winners: 0, totalReturn: 0, totalAlpha: 0, totalVolume: 0 };
+      rec.trades++;
+      rec.totalVolume += parseAmountMidpoint(tr.amount);
+
+      const tickerBars = priceMap[tr.ticker];
+      const tradeIso = tr.date.slice(0, 10);
+      const buyPrice = tickerBars ? priceOnOrAfter(tickerBars, tradeIso) : null;
+      const spyBuy = priceOnOrAfter(spyBars, tradeIso);
+      if (buyPrice != null && buyPrice > 0 && spyBuy != null && spyBuy > 0 && tickerBars && tickerBars.length > 0) {
+        const current = tickerBars[tickerBars.length - 1].Close;
+        const stockRet = (current - buyPrice) / buyPrice;
+        const spyRet = (spyCurrent - spyBuy) / spyBuy;
+        const alpha = stockRet - spyRet;
+        rec.scored++;
+        if (alpha > 0) rec.winners++;
+        rec.totalReturn += stockRet;
+        rec.totalAlpha += alpha;
+      }
+      byPol.set(tr.member, rec);
+    }
+
+    const rows = [...byPol.entries()]
+      .map(([member, r]) => ({
+        member,
+        trades: r.trades,
+        scored: r.scored,
+        winRate: r.scored > 0 ? r.winners / r.scored : 0,
+        avgReturn: r.scored > 0 ? r.totalReturn / r.scored : 0,
+        avgAlpha: r.scored > 0 ? r.totalAlpha / r.scored : 0,
+        volume: r.totalVolume,
+      }))
+      .filter((r) => r.scored >= 3)
+      .sort((a, b) => b.avgAlpha - a.avgAlpha);
+
+    const totalScored = rows.reduce((s, r) => s + r.scored, 0);
+    const totalPurchases = trades.filter((tr) => tr.type === "Purchase" && tr.ticker && tr.date && tr.date !== "NaT").length;
+    return { rows, totalScored, totalPurchases };
+  }, [trades, priceBatchQ.data]);
+
+  // Relative performance curves — equal-weighted "politician portfolio" vs SPY.
+  // For each date in the SPY timeline, each scored trade contributes its cumulative
+  // return since trade date. Portfolio value at T = average(1 + return_i(T)) across
+  // all of the politician's Purchase trades that are in-window.
+  const perfSeries = useMemo(() => {
+    if (!performance || performance.rows.length === 0 || !priceBatchQ.data) return null;
+    const priceMap = priceBatchQ.data;
+    const spyBars = priceMap["SPY"];
+    if (!spyBars || spyBars.length < 2) return null;
+
+    // Timeline from SPY (shared grid).
+    const dates = spyBars.map((b) => b.Date.slice(0, 10));
+    const spyValues = spyBars.map((b) => b.Close);
+
+    // Top 6 by alpha for the chart — any more and it becomes unreadable.
+    const top = performance.rows.slice(0, 6);
+
+    const series = top.map((pol) => {
+      const polTrades = trades.filter(
+        (tr) =>
+          tr.member === pol.member &&
+          tr.type === "Purchase" &&
+          tr.ticker &&
+          tr.date &&
+          tr.date !== "NaT",
+      );
+
+      // For each trade: precompute entry bar index on SPY timeline and the entry
+      // price on the ticker itself.
+      const legs: { entryIdx: number; entryPrice: number; tickerBars: { Date: string; Close: number }[] }[] = [];
+      for (const tr of polTrades) {
+        const tickerBars = priceMap[tr.ticker];
+        if (!tickerBars || tickerBars.length === 0) continue;
+        const tradeIso = tr.date!.slice(0, 10);
+        const entryPrice = priceOnOrAfter(tickerBars, tradeIso);
+        if (entryPrice == null || entryPrice <= 0) continue;
+        // Find entry index on the SPY timeline so all legs share the same grid.
+        let idx = 0;
+        for (let k = 0; k < dates.length; k++) {
+          if (dates[k] >= tradeIso) { idx = k; break; }
+          idx = k;
+        }
+        legs.push({ entryIdx: idx, entryPrice, tickerBars });
+      }
+
+      if (legs.length === 0) return null;
+      const values: (number | null)[] = new Array(dates.length).fill(null);
+      // Cache: for each leg, map SPY-date-index → ticker close via searching forward.
+      for (let i = 0; i < dates.length; i++) {
+        const active = legs.filter((l) => l.entryIdx <= i);
+        if (active.length === 0) continue;
+        let accum = 0;
+        let ok = 0;
+        for (const leg of active) {
+          const tBars = leg.tickerBars;
+          // Find ticker bar at or before dates[i] — most recent close up to that point.
+          const target = dates[i];
+          let lo = 0, hi = tBars.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (tBars[mid].Date.slice(0, 10) <= target) lo = mid;
+            else hi = mid - 1;
+          }
+          const close = tBars[lo]?.Close;
+          if (close != null && close > 0) {
+            accum += close / leg.entryPrice; // growth factor
+            ok++;
+          }
+        }
+        if (ok > 0) values[i] = (accum / ok) * 100; // index 100 at entry
+      }
+      return { member: pol.member, values };
+    }).filter((s): s is { member: string; values: (number | null)[] } => s !== null);
+
+    if (series.length === 0) return null;
+
+    // Find the earliest date any politician's portfolio started.
+    let firstActive = dates.length;
+    for (const s of series) {
+      for (let i = 0; i < s.values.length; i++) {
+        if (s.values[i] != null) { firstActive = Math.min(firstActive, i); break; }
+      }
+    }
+    if (firstActive >= dates.length - 1) return null;
+
+    // SPY normalized to same start.
+    const spyBase = spyValues[firstActive];
+    const spyIndex = spyValues.map((v, i) => (i < firstActive ? null : (v / spyBase) * 100));
+
+    return {
+      dates: dates.slice(firstActive),
+      spy: spyIndex.slice(firstActive),
+      series: series.map((s) => ({ member: s.member, values: s.values.slice(firstActive) })),
+    };
+  }, [performance, priceBatchQ.data, trades]);
 
   const filtered = useMemo(() => {
     const searchTickers = tickerSearch
@@ -319,6 +523,154 @@ export default function PoliticalPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Performance vs SPY */}
+          <div className="card">
+            <div className="flex items-baseline justify-between flex-wrap gap-2 mb-2">
+              <div>
+                <div className="font-semibold text-sm">Performance vs SPY</div>
+                <div className="text-xs text-text-muted">
+                  For each Purchase, compares the stock&apos;s return from trade date to today against SPY over the
+                  same window. Alpha = stock return − SPY return. Only politicians with ≥ 3 scored trades shown.
+                </div>
+              </div>
+              {performance && (
+                <div className="text-[11px] text-text-muted">
+                  {performance.totalScored.toLocaleString()} / {performance.totalPurchases.toLocaleString()} purchases scored
+                </div>
+              )}
+            </div>
+
+            {priceBatchQ.isPending && (
+              <div className="text-center py-6">
+                <div className="inline-block w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                <div className="text-xs text-text-muted mt-2">Fetching 2-year price history for top {trackedTickers.length} tickers + SPY…</div>
+              </div>
+            )}
+
+            {priceBatchQ.isError && (
+              <div className="text-sm text-loss py-4">
+                Price batch failed: {(priceBatchQ.error as Error)?.message ?? "unknown error"}
+              </div>
+            )}
+
+            {performance && performance.rows.length > 0 && (
+              <>
+                {/* Relative performance — equal-weighted portfolio vs SPY */}
+                {perfSeries && (
+                  <Plot
+                    data={[
+                      ...perfSeries.series.map((s, i) => ({
+                        type: "scatter" as const,
+                        mode: "lines" as const,
+                        name: s.member,
+                        x: perfSeries.dates,
+                        y: s.values,
+                        line: {
+                          color: [t.accent, t.gain, t.spot, t.hv20, t.hv60, t.loss][i % 6],
+                          width: 2,
+                        },
+                        connectgaps: false,
+                      })),
+                      {
+                        type: "scatter" as const,
+                        mode: "lines" as const,
+                        name: "SPY",
+                        x: perfSeries.dates,
+                        y: perfSeries.spy,
+                        line: { color: t.muted, width: 2.5, dash: "dash" as const },
+                      },
+                    ]}
+                    layout={{
+                      ...L,
+                      height: CHART_HEIGHT.tall,
+                      title: { text: "Portfolio value — each politician's Purchase trades vs SPY (indexed to 100 at first trade)", font: { size: 12, color: t.text } },
+                      yaxis: { title: { text: "Indexed value" }, gridcolor: t.grid },
+                      xaxis: { gridcolor: t.grid },
+                      hovermode: "x unified" as const,
+                      legend: { orientation: "h" as const, y: -0.18 },
+                      margin: { l: 60, r: 20, t: 50, b: 60 },
+                      shapes: [
+                        { type: "line", x0: 0, x1: 1, xref: "paper", y0: 100, y1: 100, line: { color: t.muted, width: 0.5, dash: "dot" as const } },
+                      ],
+                    }}
+                    config={{ displayModeBar: false, responsive: true }}
+                    style={{ width: "100%" }}
+                  />
+                )}
+
+                <Plot
+                  data={[
+                    {
+                      type: "bar" as const,
+                      orientation: "h" as const,
+                      y: performance.rows.slice(0, 20).map((r) => r.member),
+                      x: performance.rows.slice(0, 20).map((r) => r.avgAlpha * 100),
+                      marker: {
+                        color: performance.rows.slice(0, 20).map((r) => (r.avgAlpha > 0 ? t.gain : t.loss)),
+                      },
+                      text: performance.rows.slice(0, 20).map((r) => `${r.avgAlpha >= 0 ? "+" : ""}${(r.avgAlpha * 100).toFixed(1)}%`),
+                      textposition: "outside" as const,
+                      hovertemplate: "%{y}<br>Alpha: %{x:.1f}%<extra></extra>",
+                    },
+                  ]}
+                  layout={{
+                    ...L,
+                    height: CHART_HEIGHT.tall,
+                    title: { text: "Average alpha per trade — top 20 politicians", font: { size: 12, color: t.text } },
+                    xaxis: { title: { text: "Average alpha per trade (%)" }, gridcolor: t.grid, zeroline: true, zerolinecolor: t.muted },
+                    yaxis: { gridcolor: t.grid, autorange: "reversed" },
+                    margin: { l: 200, r: 80, t: 50, b: 40 },
+                  }}
+                  config={{ displayModeBar: false, responsive: true }}
+                  style={{ width: "100%" }}
+                />
+                <div className="overflow-x-auto max-h-[400px] mt-3">
+                  <table className="w-full text-xs font-data">
+                    <thead className="border-b border-border text-text-muted sticky top-0 bg-surface">
+                      <tr>
+                        <th className="text-left py-1.5 px-2">#</th>
+                        <th className="text-left py-1.5 px-2">Member</th>
+                        <th className="text-right py-1.5 px-2">Scored</th>
+                        <th className="text-right py-1.5 px-2">Win rate</th>
+                        <th className="text-right py-1.5 px-2">Avg return</th>
+                        <th className="text-right py-1.5 px-2">Avg alpha vs SPY</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {performance.rows.map((r, i) => (
+                        <tr key={r.member} className="border-b border-border/50 hover:bg-surface-alt">
+                          <td className="py-1 px-2 text-text-muted">{i + 1}</td>
+                          <td className="py-1 px-2 font-semibold">{r.member}</td>
+                          <td className="py-1 px-2 text-right">
+                            {r.scored}{r.scored < r.trades && <span className="text-text-muted"> / {r.trades}</span>}
+                          </td>
+                          <td className="py-1 px-2 text-right">{(r.winRate * 100).toFixed(0)}%</td>
+                          <td className={`py-1 px-2 text-right ${r.avgReturn >= 0 ? "text-gain" : "text-loss"}`}>
+                            {r.avgReturn >= 0 ? "+" : ""}{(r.avgReturn * 100).toFixed(1)}%
+                          </td>
+                          <td className={`py-1 px-2 text-right font-semibold ${r.avgAlpha >= 0 ? "text-gain" : "text-loss"}`}>
+                            {r.avgAlpha >= 0 ? "+" : ""}{(r.avgAlpha * 100).toFixed(1)}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="text-[11px] text-text-muted mt-2">
+                  <strong>Caveat:</strong> we score only Purchase trades where the ticker is in the top {trackedTickers.length} most-traded
+                  names AND the trade date is within our 2-year price window. Return is cumulative from trade date to today — a trade made
+                  2 years ago carries more weight than one made last week. Treat directionally, not as risk-adjusted performance.
+                </div>
+              </>
+            )}
+
+            {performance && performance.rows.length === 0 && !priceBatchQ.isPending && (
+              <div className="text-xs text-text-muted py-4">
+                No politician had ≥ 3 scored Purchase trades. Try loading more filings.
               </div>
             )}
           </div>

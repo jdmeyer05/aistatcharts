@@ -22,14 +22,14 @@ import { fmtBn, shortDate } from "./_shared/utils";
 const CATEGORIES: { label: string; href: string; description: string; tag?: "new" | "pending" }[] = [
   { label: "Insider Activity", href: "/smart-money/insiders", description: "Form 4 trades + cluster buy detection", tag: "new" },
   { label: "13F Holdings", href: "/smart-money/13f", description: "Institutional holdings from SEC filings" },
-  { label: "Global Smart Money", href: "/smart-money/global", description: "Sovereign wealth, pensions, endowments", tag: "pending" },
+  { label: "Global Smart Money", href: "/smart-money/global", description: "Sovereign wealth, pensions, endowments", tag: "new" },
   { label: "Congressional & Political", href: "/smart-money/political", description: "House/Senate trades + leaderboard" },
   { label: "Activist Campaigns", href: "/smart-money/activist", description: "13D filings + track records" },
-  { label: "Short Side", href: "/smart-money/shorts", description: "Short interest + squeeze setups", tag: "pending" },
-  { label: "Buybacks & Returns", href: "/smart-money/buybacks", description: "Repurchases + 10b5-1 plans", tag: "pending" },
+  { label: "Short Side", href: "/smart-money/shorts", description: "Short interest + squeeze setups", tag: "new" },
+  { label: "Buybacks & Returns", href: "/smart-money/buybacks", description: "Repurchases + 10b5-1 plans", tag: "new" },
   { label: "Exit Signals", href: "/smart-money/exits", description: "Inverse tracker — where smart money is leaving", tag: "new" },
   { label: "Material Events", href: "/smart-money/events", description: "8-K filings + guidance" },
-  { label: "Alerts", href: "/smart-money/alerts", description: "Notifications on tracked filings", tag: "pending" },
+  { label: "Alerts", href: "/smart-money/alerts", description: "Notifications on tracked filings", tag: "new" },
 ];
 
 // ──────────────────────────────────────────────────────────────────
@@ -52,10 +52,11 @@ interface ConvictionBreakdown {
   direction: "bullish" | "bearish" | "neutral";
 }
 
-function classify(txn: string): "BUY" | "SELL" | "OTHER" {
-  const s = (txn ?? "").toLowerCase();
-  if (s.includes("purchase") || s.includes("buy") || s.includes("acquire")) return "BUY";
-  if (s.includes("sale") || s.includes("sell") || s.includes("dispose")) return "SELL";
+function classify(txn: string, text: string): "BUY" | "SELL" | "OTHER" {
+  // yfinance puts action in Text; Transaction often blank. Match against both.
+  const s = `${txn ?? ""} ${text ?? ""}`.toLowerCase();
+  if (s.includes("purchase") || s.includes("acquire")) return "BUY";
+  if (s.includes("sale") || s.includes("dispose")) return "SELL";
   return "OTHER";
 }
 
@@ -74,7 +75,8 @@ function computeConviction(
 
   for (const raw of insiderRaw) {
     const txn = String(raw.Transaction ?? "");
-    const dir = classify(txn);
+    const text = String(raw.Text ?? "");
+    const dir = classify(txn, text);
     const value = Number(raw.Value ?? 0) || 0;
     const date = String(raw["Start Date"] ?? "").slice(0, 10);
     const insider = String(raw.Insider ?? "");
@@ -117,12 +119,16 @@ function computeConviction(
   const activistNew = relevantActivist.some((f) => f.is_new);
 
   // Families: insider-flow, activist, events. Each can fire bullish or bearish.
+  // Insider asymmetry: buys are high-signal (execs buy for one reason — they
+  // think the stock goes up). Sells are noisy — routine 10b5-1, options
+  // exercises, diversification, tax. We weight bearish insider flow at 0.5
+  // so it takes corroboration from another family to drive a bearish score.
   let bullFamilies = 0;
   let bearFamilies = 0;
 
   // Family 1: insider flow
   if (insiderClusterBuy || (insiderNet > 0 && buyCount >= 2)) bullFamilies++;
-  if (insiderClusterSell || (insiderNet < 0 && sellCount >= 3 && totalAction >= 4)) bearFamilies++;
+  if (insiderClusterSell || (insiderNet < -1e7 && sellCount >= 3 && totalAction >= 4)) bearFamilies += 0.5;
 
   // Family 2: activist (new campaigns are bullish; amendments are neutral here)
   if (activistNew) bullFamilies++;

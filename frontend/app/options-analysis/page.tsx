@@ -638,12 +638,20 @@ function OIChangesPanel({ ticker, theme: t, baseLayout: L }: { ticker: string; t
   if (isError) {
     return <div className="card border-loss/30 bg-loss-bg text-loss text-sm p-4">Failed to load OI history: {(error as Error)?.message}</div>;
   }
-  if (!data || data.n_days_captured < 2) {
+  if (!data) {
+    return (
+      <div className="card space-y-3 py-6 text-center">
+        <div className="text-sm font-semibold">No data</div>
+        <p className="text-xs text-text-muted">OI history endpoint returned no payload for {ticker}.</p>
+      </div>
+    );
+  }
+  if (data.n_days_captured < 2) {
     return (
       <div className="card space-y-3 py-6 text-center">
         <div className="text-sm font-semibold">Accumulating data</div>
         <p className="text-xs text-text-muted max-w-md mx-auto">
-          {data?.n_days_captured === 0
+          {data.n_days_captured === 0
             ? `No history captured yet for ${ticker}. The daily worker writes a snapshot each trading day at 4:30 PM ET — check back after 2+ weekdays of captures.`
             : `Only ${data.n_days_captured} day of history so far. Need at least 2 to compute change. The worker captures daily post-close.`}
         </p>

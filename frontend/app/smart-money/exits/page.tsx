@@ -92,14 +92,15 @@ export default function ExitsPage() {
     }[] = [];
     for (const raw of insiderLoad.data.data) {
       const r = raw as Record<string, unknown>;
-      const txn = String(r.Transaction ?? "").toLowerCase();
+      // yfinance puts the action in Text, leaving Transaction blank — match both.
+      const haystack = `${String(r.Transaction ?? "")} ${String(r.Text ?? "")}`.toLowerCase();
       const value = Number(r.Value ?? 0) || 0;
       const date = String(r["Start Date"] ?? "").slice(0, 10);
       const insider = String(r.Insider ?? "");
       const position = String(r.Position ?? "");
       const shares = Number(r.Shares ?? 0) || 0;
-      const isBuy = txn.includes("purchase") || txn.includes("buy");
-      const isSell = txn.includes("sale") || txn.includes("sell") || txn.includes("dispose");
+      const isBuy = haystack.includes("purchase") || haystack.includes("acquire");
+      const isSell = haystack.includes("sale") || haystack.includes("dispose");
       if (isBuy) {
         buyCount++;
         netValue += value;

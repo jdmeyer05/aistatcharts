@@ -4,10 +4,13 @@ import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { DashboardContent } from "./_home/dashboard";
 import { MarketScanContent } from "./_home/market-scan";
-import { PositionMonitorContent } from "./_home/position-monitor";
 import { TradeIdeasContent } from "./_home/trade-ideas";
 
-type View = "dashboard" | "market-scan" | "position-monitor" | "trade-ideas";
+// Position Monitor is temporarily hidden — Robinhood creds aren't mounted on
+// Cloud Run so the tab errors out in prod. Re-add to VALID_VIEWS / VIEW_META
+// (and restore the PositionMonitorContent import) once the RH pipeline is
+// deployed.
+type View = "dashboard" | "market-scan" | "trade-ideas";
 
 const VIEW_META: Record<View, { label: string; subtitle: string }> = {
   "dashboard": {
@@ -18,17 +21,13 @@ const VIEW_META: Record<View, { label: string; subtitle: string }> = {
     label: "Market Scan",
     subtitle: "Market intelligence, opportunities, and fact-checked news across your watchlist.",
   },
-  "position-monitor": {
-    label: "Position Monitor",
-    subtitle: "Live Robinhood positions — P&L, Greeks, strike distance, MC sims.",
-  },
   "trade-ideas": {
     label: "Trade Ideas",
     subtitle: "24-strategy consensus scanner with family-weighted conviction ranking.",
   },
 };
 
-const VALID_VIEWS: View[] = ["dashboard", "market-scan", "position-monitor", "trade-ideas"];
+const VALID_VIEWS: View[] = ["dashboard", "market-scan", "trade-ideas"];
 
 function HomeInner() {
   const params = useSearchParams();
@@ -78,7 +77,6 @@ function HomeInner() {
       <div key={view}>
         {view === "dashboard" && <DashboardContent />}
         {view === "market-scan" && <MarketScanContent />}
-        {view === "position-monitor" && <PositionMonitorContent />}
         {view === "trade-ideas" && <TradeIdeasContent />}
       </div>
     </div>

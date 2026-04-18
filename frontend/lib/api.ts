@@ -1003,6 +1003,106 @@ export async function fetchTrackedFunds(): Promise<{ funds: { name: string; cik:
   return apiFetch("/api/edgar/funds");
 }
 
+export interface GlobalFund {
+  name: string;
+  cik: string;
+  category: "Sovereign Wealth" | "Public Pension" | "Endowment";
+  country: string;
+}
+export async function fetchGlobalFunds(): Promise<{ funds: GlobalFund[] }> {
+  return apiFetch("/api/edgar/global-funds");
+}
+
+export interface ShortInterest {
+  ticker: string;
+  ok: boolean;
+  name?: string | null;
+  price?: number | null;
+  market_cap?: number | null;
+  float_shares?: number | null;
+  shares_short?: number | null;
+  shares_short_prior?: number | null;
+  short_ratio?: number | null;
+  short_pct_float?: number | null;
+  short_pct_outstanding?: number | null;
+  avg_volume_10d?: number | null;
+  last_updated?: number | string | null;
+  error?: string;
+}
+export async function fetchShortInterest(ticker: string): Promise<ShortInterest> {
+  return apiFetch(`/api/edgar/shorts/${ticker}`, { timeoutMs: 30_000 });
+}
+
+export interface ShortsWatchlistRow {
+  ticker: string;
+  name?: string | null;
+  price?: number | null;
+  market_cap?: number | null;
+  short_pct_float?: number | null;
+  short_ratio?: number | null;
+  shares_short?: number | null;
+  shares_short_prior?: number | null;
+}
+export async function fetchShortsWatchlist(): Promise<{ count: number; data: ShortsWatchlistRow[] }> {
+  return apiFetch(`/api/edgar/shorts-watchlist`, { timeoutMs: 60_000 });
+}
+
+export interface BuybackPeriod {
+  period: string;
+  repurchase: number | null;
+  dividend: number | null;
+}
+export interface BuybacksResponse {
+  ticker: string;
+  ok: boolean;
+  name?: string | null;
+  market_cap?: number | null;
+  ttm_repurchase?: number | null;
+  ttm_dividend?: number | null;
+  buyback_yield?: number | null;
+  dividend_yield?: number | null;
+  total_shareholder_yield?: number | null;
+  quarterly?: BuybackPeriod[];
+  annual?: BuybackPeriod[];
+  error?: string;
+}
+export async function fetchBuybacks(ticker: string): Promise<BuybacksResponse> {
+  return apiFetch(`/api/edgar/buybacks/${ticker}`, { timeoutMs: 30_000 });
+}
+
+// ─── Smart Money Alerts ─────────────────────────
+
+export type AlertType = "fund" | "ticker" | "politician" | "activist" | "keyword";
+export type AlertChannel = "email" | "sms" | "push";
+export interface UserAlert {
+  id: string;
+  user_email: string;
+  alert_type: AlertType;
+  target: string;
+  label: string | null;
+  channels: AlertChannel[];
+  active: boolean;
+  created_at: string;
+  last_fired_at: string | null;
+}
+export async function fetchAlerts(): Promise<{ count: number; data: UserAlert[]; setup_required?: boolean }> {
+  return apiFetch("/api/alerts");
+}
+export async function createAlert(body: {
+  alert_type: AlertType;
+  target: string;
+  label?: string;
+  channels?: AlertChannel[];
+}): Promise<{ ok: boolean; alert: UserAlert }> {
+  return apiFetch("/api/alerts", { method: "POST", body: JSON.stringify(body) });
+}
+export async function deleteAlert(id: string): Promise<{ ok: boolean; deleted: number }> {
+  return apiFetch(`/api/alerts/${id}`, { method: "DELETE" });
+}
+export async function patchAlert(id: string, body: { active?: boolean; label?: string; channels?: AlertChannel[] }): Promise<{ ok: boolean; changed: number }> {
+  return apiFetch(`/api/alerts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+}
+
 export interface Holding13F {
   company: string | null;
   class: string | null;

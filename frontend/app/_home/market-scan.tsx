@@ -1133,7 +1133,9 @@ export function MarketScanContent() {
                         </span>
                       )}
                       <button onClick={() => {
-                        const saved = JSON.parse(localStorage.getItem("saved_trades") || "[]");
+                        let saved: unknown[] = [];
+                        try { saved = JSON.parse(localStorage.getItem("saved_trades") || "[]"); } catch { saved = []; }
+                        if (!Array.isArray(saved)) saved = [];
                         saved.unshift({
                           ticker: t.legs[0]?.ticker || "?", label: t.label, type: t.type,
                           max_profit: t.max_profit, max_risk: t.max_risk, rr_ratio: t.rr_ratio,
