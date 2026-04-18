@@ -38,9 +38,8 @@ export const NAV_GROUPS: NavGroup[] = [
     pages: [
       { label: "Options Intelligence", href: "/options-analysis", description: "Volatility, positioning, flow, Greeks, chain — unified", status: "live" },
       { label: "Spread Analysis", href: "/spread-analysis", description: "Calendar, iron condor, vertical spreads — unified scanner + builder", status: "live" },
-      { label: "Options Lab", href: "/options-lab", description: "Strategy modeler, BS-MJD pricing, Greeks lab", status: "live" },
+      { label: "Options Portfolio Analysis", href: "/options-portfolio-analysis", description: "Strategy lab + portfolio-level Greeks, scenarios, delta hedging", status: "live" },
       { label: "Vol Surface", href: "/vol-surface", description: "9-tab IV surface with AI trade ideas", status: "live" },
-      { label: "Portfolio Greeks", href: "/portfolio-greeks", description: "Position-level Greeks with delta hedging", status: "live" },
       { label: "Higher Greeks", href: "/higher-greeks", description: "2nd/3rd order Greeks, Vanna-Volga pricing", status: "live" },
     ],
   },
