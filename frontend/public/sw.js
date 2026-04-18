@@ -5,7 +5,7 @@
 // re-launches are instant. Live data / API / Plotly chunks always go to the
 // network — this app is useless offline and we don't pretend otherwise.
 
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL_CACHE = `shell-${VERSION}`;
 
 // Pre-cache only stable, already-built static assets. Don't pre-cache pages —

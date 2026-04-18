@@ -240,7 +240,7 @@ function MobileNav({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) return null;
 
   return (
-    <div className="md:hidden fixed inset-0 z-50" role="dialog" aria-modal="true">
+    <div className="lg:hidden fixed inset-0 z-50" role="dialog" aria-modal="true">
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
@@ -308,14 +308,14 @@ export function Header() {
           {/* Logo — text hidden below lg to make room for 7 nav groups */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
             <Image src="/favicon.png" alt="AI Statcharts" width={22} height={22} className="rounded" />
-            <span className="text-sm font-bold tracking-widest uppercase hidden lg:inline">
+            <span className="text-sm font-bold tracking-widest uppercase hidden xl:inline">
               AI Statcharts
             </span>
           </Link>
 
-          {/* Desktop nav (md+). Min-w-0 + overflow-x-auto lets it gracefully
-              scroll horizontally on tablets where 7 groups don't fit cleanly. */}
-          <nav className="hidden md:flex items-center gap-0.5 min-w-0 overflow-x-auto scrollbar-thin">
+          {/* Desktop nav at lg+ only — 7 groups don't fit cleanly below 1024px,
+              and overflow-x-auto clips absolutely-positioned dropdowns. */}
+          <nav className="hidden lg:flex items-center gap-0.5 min-w-0">
             {NAV_GROUPS.map((group) =>
               group.pages.length === 1 ? (
                 <NavLink key={group.label} group={group} />
@@ -336,7 +336,7 @@ export function Header() {
             <button
               onClick={() => setMobileOpen(true)}
               aria-label="Open navigation"
-              className="md:hidden w-10 h-10 flex items-center justify-center rounded-md text-white/70 hover:text-white hover:bg-white/10 -mr-2"
+              className="lg:hidden w-10 h-10 flex items-center justify-center rounded-md text-white/70 hover:text-white hover:bg-white/10 -mr-2"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
