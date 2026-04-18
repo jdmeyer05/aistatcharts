@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import {
   fetchCftcDashboard, fetchCftcHistory, fetchCftcContracts,
   fetchCtaModel, fetchCtaBiasScan, fetchCtaPnl, fetchHistoricalAnalog,
-  createAlert, fetchAlerts,
+  createAlert, fetchAlerts, fetchAlertFirings,
   type CftcAssetClass, type CftcHeatmapTile, type CftcHistoryRow,
   type CftcContract, type CtaBias, type CtaBiasRow,
 } from "@/lib/api";
@@ -454,10 +454,12 @@ function AlertsPanel({ code, symbol }: { code: string; symbol: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
   const alertsQ = useQuery({ queryKey: ["user-alerts"], queryFn: fetchAlerts, staleTime: 60_000 });
+  const firingsQ = useQuery({ queryKey: ["alert-firings"], queryFn: () => fetchAlertFirings(10), staleTime: 60_000 });
 
   const existing = (alertsQ.data?.data ?? []).filter((a) =>
     typeof a.alert_type === "string" && a.alert_type.startsWith("cftc_") && a.target === code,
   );
+  const firingsForCode = (firingsQ.data?.firings ?? []).filter((f) => f.target === code);
 
   async function subscribe(type: (typeof CFTC_ALERT_TYPES)[number]["type"], label: string) {
     setBusy(type);
@@ -509,6 +511,33 @@ function AlertsPanel({ code, symbol }: { code: string; symbol: string }) {
         })}
       </div>
       {status && <div className="text-[0.65rem] text-text-muted">{status}</div>}
+
+      {firingsForCode.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-border/50">
+          <div className="text-[0.65rem] font-semibold uppercase tracking-wider text-text-muted mb-1">
+            Recent firings for {symbol}
+          </div>
+          <div className="space-y-1">
+            {firingsForCode.slice(0, 5).map((f) => {
+              const ctx = f.context as Record<string, string | number | undefined>;
+              const label = f.alert_type.replace("cftc_", "").replace("_", " ");
+              return (
+                <div key={f.id} className="flex items-baseline justify-between text-[0.65rem] font-data">
+                  <span className="text-text">
+                    <span className="font-semibold text-warn">{label}</span>
+                    {ctx.pctile_3y != null && <> · pctile {Math.round(Number(ctx.pctile_3y) * 100)}%</>}
+                    {ctx.direction && <> · {String(ctx.direction)}</>}
+                    {ctx.extreme && <> · {String(ctx.extreme)}</>}
+                  </span>
+                  <span className="text-text-muted">
+                    {new Date(f.fired_at).toLocaleDateString()}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

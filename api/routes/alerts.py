@@ -13,7 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from api.deps import get_current_user, get_db
+from api.deps import get_current_user, get_db, require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -122,6 +122,54 @@ async def update_alert(
     except Exception as e:
         logger.warning(f"update_alert failed: {e}")
         raise HTTPException(500, f"Alert update failed: {e}")
+
+
+@router.get("/alerts/firings")
+async def list_firings(
+    limit: int = 20,
+    user: str = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Recent alert firings for the current user. Lets the UI show 'you have N
+    new alerts' and a list of what triggered."""
+    if user == "anonymous":
+        raise HTTPException(401, "Sign in required")
+    try:
+        # user_alert_firings.user_id is a UUID; look up the auth user's id
+        # from user_alerts to avoid having to pass the UUID through the API.
+        uid_rows = (
+            db.table("user_alerts")
+            .select("user_id")
+            .eq("user_email", user)
+            .limit(1)
+            .execute()
+        )
+        if not uid_rows.data:
+            return {"count": 0, "firings": []}
+        user_id = uid_rows.data[0]["user_id"]
+        res = (
+            db.table("user_alert_firings")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("fired_at", desc=True)
+            .limit(max(1, min(limit, 100)))
+            .execute()
+        )
+        return {"count": len(res.data or []), "firings": res.data or []}
+    except Exception as e:
+        logger.warning(f"list_firings failed: {e}")
+        raise HTTPException(500, f"Firings fetch failed: {e}")
+
+
+@router.post("/alerts/run-worker")
+async def run_worker(user: str = Depends(require_admin)):
+    """Evaluate all active CFTC alerts against the latest data and persist
+    firings. Admin-only (and eventually called by a Cloud Scheduler cron).
+    Safe to re-run — idempotent per (alert, report_date)."""
+    from src.alert_worker import evaluate_cftc_alerts, send_pending_notifications
+    eval_result = evaluate_cftc_alerts()
+    notif_result = send_pending_notifications()
+    return {"evaluation": eval_result, "notifications": notif_result}
 
 
 @router.delete("/alerts/{alert_id}")

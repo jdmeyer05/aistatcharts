@@ -1101,6 +1101,22 @@ export async function createAlert(body: {
 export async function deleteAlert(id: string): Promise<{ ok: boolean; deleted: number }> {
   return apiFetch(`/api/alerts/${id}`, { method: "DELETE" });
 }
+export interface AlertFiring {
+  id: string;
+  alert_id: string;
+  user_id: string;
+  alert_type: AlertType;
+  target: string;
+  fired_at: string;
+  context: Record<string, unknown>;
+  notified_at: string | null;
+  notify_error: string | null;
+}
+
+export async function fetchAlertFirings(limit = 20): Promise<{ count: number; firings: AlertFiring[] }> {
+  return apiFetch(`/api/alerts/firings?limit=${limit}`);
+}
+
 export async function patchAlert(id: string, body: { active?: boolean; label?: string; channels?: AlertChannel[] }): Promise<{ ok: boolean; changed: number }> {
   return apiFetch(`/api/alerts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 }
