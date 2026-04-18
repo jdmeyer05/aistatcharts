@@ -639,9 +639,15 @@ def _unwind_row(spec: ContractSpec, vol_pctile: dict[str, float] | None) -> dict
 
 
 @_result_cached("cta_unwind_risk")
-def cta_unwind_risk(vol_pctile: dict[str, float] | None = None) -> list[dict]:
+def cta_unwind_risk() -> list[dict]:
     """Unwind-risk score = positioning_extreme × realized_vol_regime.
-    Parallel fan-out."""
+    Fetches realized-vol percentiles internally (cta_model is cached) so
+    the cache key stays clean. Parallel fan-out across contracts."""
+    try:
+        from src.cta_model import all_vol_percentiles
+        vol_pctile = all_vol_percentiles()
+    except Exception:
+        vol_pctile = {}
     with ThreadPoolExecutor(max_workers=8) as pool:
         rows = [r for r in pool.map(lambda s: _unwind_row(s, vol_pctile), CONTRACTS) if r is not None]
     rows.sort(key=lambda r: -r["unwind_score"])

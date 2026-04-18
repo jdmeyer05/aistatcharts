@@ -9,6 +9,7 @@ Table: public.cftc_cache (see supabase_cftc_cache_schema.sql).
 
 from __future__ import annotations
 
+import inspect
 import logging
 from datetime import datetime, timedelta
 
@@ -51,13 +52,46 @@ def _supabase_put(key: str, value: object) -> None:
         logger.debug(f"cftc_cache supabase put failed for {key}: {e}")
 
 
+def _should_cache(value: object) -> bool:
+    """Skip caching substantively-empty results so transient failures don't
+    lock in bad state for the full TTL."""
+    if value is None:
+        return False
+    if isinstance(value, (list, dict)) and len(value) == 0:
+        return False
+    if isinstance(value, dict) and value.get("error"):
+        return False
+    return True
+
+
+def _stable_key(key: str, fn, args, kwargs) -> str:
+    """Build a cache key that treats positional and keyword args as identical
+    when they bind to the same parameter. Also skips any arg whose name starts
+    with `_no_cache_` so big in-memory payloads don't bloat the key."""
+    try:
+        sig = inspect.signature(fn)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        normalized = {k: v for k, v in bound.arguments.items() if not k.startswith("_no_cache_")}
+        # Only hash simple scalars to keep keys small. Complex values (dicts,
+        # lists) drop out of the key entirely — functions that accept those
+        # should fetch their own data internally to avoid this.
+        items = sorted(
+            (k, v) for k, v in normalized.items()
+            if isinstance(v, (int, float, str, bool, type(None)))
+        )
+        return f"{key}:{items}"
+    except (TypeError, ValueError):
+        return f"{key}:{args}:{sorted(kwargs.items())}"
+
+
 def result_cached(key: str):
     """Two-tier cache decorator. Memory first, then Supabase; on miss compute
     + write back. 12h TTL applies to both tiers. CFTC data is weekly-cadence
     so this is conservative."""
     def deco(fn):
         def wrapper(*args, **kwargs):
-            full_key = f"{key}:{args}:{sorted(kwargs.items())}"
+            full_key = _stable_key(key, fn, args, kwargs)
             entry = _RESULT_CACHE.get(full_key)
             if entry and (datetime.utcnow() - entry[0]) < _RESULT_TTL:
                 return entry[1]
@@ -66,8 +100,9 @@ def result_cached(key: str):
                 _RESULT_CACHE[full_key] = sb
                 return sb[1]
             v = fn(*args, **kwargs)
-            _RESULT_CACHE[full_key] = (datetime.utcnow(), v)
-            _supabase_put(full_key, v)
+            if _should_cache(v):
+                _RESULT_CACHE[full_key] = (datetime.utcnow(), v)
+                _supabase_put(full_key, v)
             return v
         wrapper.__name__ = fn.__name__
         return wrapper

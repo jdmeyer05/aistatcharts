@@ -131,14 +131,8 @@ async def get_regime(user: str = Depends(get_current_user)):
 async def get_cta_unwind(user: str = Depends(get_current_user)):
     """CTA forced-unwind risk scores. Higher = crowded positioning × elevated
     realized vol. When these align, trend-followers get stopped out on the
-    next vol spike."""
-    # Real realized-vol percentiles per contract (was hardcoded 0.5).
-    try:
-        vol_map = all_vol_percentiles()
-    except Exception as e:
-        logger.warning(f"vol percentile fetch failed, falling back to default: {e}")
-        vol_map = None
-    rows = cta_unwind_risk(vol_pctile=vol_map)
+    next vol spike. Vol-percentile fetching is cached inside the scan."""
+    rows = cta_unwind_risk()
     return {"count": len(rows), "rows": rows}
 
 
