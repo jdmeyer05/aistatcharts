@@ -885,6 +885,25 @@ details summary:hover {
   }
 }
 
+/* Mobile nav hamburger — belt-and-suspenders visibility.
+   Tailwind's `lg:hidden` on the button should be enough, but users have
+   reported the hamburger missing on phones where we couldn't reproduce
+   it locally. These rules force the button to render regardless of any
+   cascade/theme/stacking context issue that might hide it. */
+@media (max-width: 1023px) {
+  header button[aria-label="Open navigation"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+}
+@media (min-width: 1024px) {
+  header button[aria-label="Open navigation"] {
+    display: none !important;
+  }
+}
+
 /* Touch devices without hover: make sure hover-only rules do not
    leave components broken. Applied regardless of breakpoint so
    tablet landscape also works. */
