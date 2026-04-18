@@ -25,6 +25,7 @@ toml>=0.10.0
 fastapi>=0.115.0
 uvicorn>=0.32.0
 PyJWT>=2.8.0
+cryptography>=42.0.0
 
 # Robinhood integration (admin-only endpoints: /api/positions/robinhood,
 # /api/market/holding-deep-dive, /api/market/trade-architect)

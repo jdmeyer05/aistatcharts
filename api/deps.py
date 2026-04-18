@@ -1,6 +1,7 @@
 """FastAPI dependency injection — auth, database, user context."""
 
 import os
+from functools import lru_cache
 from fastapi import Depends, HTTPException, Header
 from src.api_keys import get_secret
 from src.db import get_client, set_user_id
@@ -25,16 +26,51 @@ def _admin_emails() -> set[str]:
     return {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
-def _decode_jwt(token: str) -> dict | None:
-    """Verify a Supabase HS256 JWT and return its claims, or None on failure."""
-    secret = get_secret("SUPABASE_JWT_SECRET")
-    if not secret:
+@lru_cache(maxsize=1)
+def _jwks_client():
+    """Build a PyJWKClient pointed at Supabase's JWKS endpoint.
+
+    Cached: PyJWKClient keeps fetched keys in memory and refreshes on an
+    unknown kid, so a single instance is reused across requests.
+    """
+    import jwt
+    url = get_secret("SUPABASE_URL")
+    if not url:
         return None
+    jwks_url = f"{url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+    return jwt.PyJWKClient(jwks_url, cache_keys=True, lifespan=3600)
+
+
+def _decode_jwt(token: str) -> dict | None:
+    """Verify a Supabase JWT and return its claims, or None on failure.
+
+    Picks verification path by the token header's `alg`:
+      - ES256/RS256 → fetch public key from Supabase JWKS
+      - HS256       → legacy shared secret (transition fallback)
+
+    Remove the HS256 branch after revoking the legacy JWT secret in Supabase.
+    """
+    import jwt
     try:
-        import jwt
-        return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
+        alg = jwt.get_unverified_header(token).get("alg", "")
     except Exception:
         return None
+
+    try:
+        if alg in ("ES256", "RS256"):
+            client = _jwks_client()
+            if client is None:
+                return None
+            key = client.get_signing_key_from_jwt(token).key
+            return jwt.decode(token, key, algorithms=[alg], audience="authenticated")
+        if alg == "HS256":
+            secret = get_secret("SUPABASE_JWT_SECRET")
+            if not secret:
+                return None
+            return jwt.decode(token, secret, algorithms=["HS256"], audience="authenticated")
+    except Exception:
+        return None
+    return None
 
 
 async def get_current_user(authorization: str = Header(None)) -> str:
