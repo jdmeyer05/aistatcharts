@@ -197,7 +197,17 @@ PAGE_CONTEXT: dict[str, str] = {
     "exits": "Inverse smart-money tracker — where institutional and political money is reducing exposure. Congressional net selling + activist amendments + cluster insider sells on the same ticker is a coordinated exit signal.",
     "global": "Sovereign wealth funds, public pensions, and endowments — 10+ year horizon. Cross-fund consensus picks (held by 3+ global funds) are structural conviction blue chips. Quarter-over-quarter deltas reveal rotation.",
     "factors": "Fama-French 5-factor regression on a single ticker. Betas quantify exposure to Market / Size / Value / Profitability / Investment factors. Alpha is the excess return unexplained by factor exposures — what's left after stripping out the systematic bets.",
-    "positioning": "CFTC Commitments of Traders across 45 flagship contracts. Speculator data is Managed Money (commodities) or Leveraged Funds (financials) — both proxy for CTAs and hedge funds. Commercials are Producer/Merchant + Swap Dealer (hedging real flow). Regime composites synthesize z-scores across contract baskets: risk_on_off (ES+NQ+CL+HG+RTY, net of VIX), reflation (oil + copper - dollar - bonds), safe_haven (gold + bonds + JPY), dollar (short the non-USD majors). Extreme |Z|≥2 and |divergence_z|≥2 are historically actionable contrarian signals. COT Index normalizes net position to 0..1 over 3Y. Managed-money 95th-percentile + elevated realized vol = forced-unwind risk. Connect this data to price action — positioning extremes are most actionable when price is simultaneously at a multi-month extreme.",
+    "positioning": (
+        "CFTC Commitments of Traders snapshot — 45 flagship contracts. "
+        "Data fields the user can see: four regime composites (risk_on_off, reflation, safe_haven, dollar; each a z-score aggregate across multi-contract baskets), top_divergences (spec-vs-commercial spread Z), top_unwind (positioning extremity × realized-vol regime), top_flows (largest WoW net changes as % of OI).\n"
+        "Interpretation rules:\n"
+        "- |regime z| ≥ 1.5 is meaningful, ≥ 2 is extreme.\n"
+        "- |divergence_z| ≥ 2 is the historical threshold for contrarian setups (2008-oil, 2013-gold, 2020-bonds).\n"
+        "- Commercials are producers/hedgers = smart money; when specs crowded one way AND commercials the other, commercials usually win over 8-12 weeks.\n"
+        "- Managed-money percentile ≥ 0.95 + rising vol = forced-unwind risk.\n"
+        "- Cross-validate: if ≥2 regime composites + ≥1 divergence align, that's a real thesis. A single number in isolation is usually noise.\n"
+        "What to produce: the 1-2 most notable reads in this week's data, the confluences that tie them together, and what price action would confirm or invalidate. Do NOT repeat the definitions above — the user knows them."
+    ),
 }
 
 
