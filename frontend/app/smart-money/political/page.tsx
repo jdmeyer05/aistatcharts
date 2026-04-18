@@ -12,6 +12,7 @@ import {
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
+import { ErrorBanner } from "../_shared/error-banner";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -349,6 +350,10 @@ export default function PoliticalPage() {
           </button>
         </div>
       </div>
+
+      {load.isError && (
+        <ErrorBanner title="Congressional trade parse failed" error={load.error} onRetry={() => load.mutate()} />
+      )}
 
       {load.isPending && (
         <div className="card text-center py-10">

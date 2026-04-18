@@ -16,6 +16,7 @@ import {
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { fmtBn, shortDate, EIGHT_K_ITEM_NAMES } from "../_shared/utils";
+import { ErrorBanner } from "../_shared/error-banner";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -170,6 +171,10 @@ export default function MaterialEventsPage() {
       </div>
 
       {/* 8-K events */}
+      {eightK.isError && (
+        <ErrorBanner title="8-K lookup failed" error={eightK.error} onRetry={() => ticker && eightK.mutate()} />
+      )}
+
       {eightK.isPending && (
         <div className="card text-center py-10">
           <div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />

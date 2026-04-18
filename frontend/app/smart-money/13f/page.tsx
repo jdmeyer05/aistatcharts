@@ -9,6 +9,7 @@ import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn } from "../_shared/utils";
+import { ErrorBanner } from "../_shared/error-banner";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -17,11 +18,15 @@ export default function Institutional13FPage() {
   const t = getChartTheme(resolvedTheme === "dark");
   const L = getBaseLayout(t);
 
-  const { data: funds } = useQuery({
+  const fundsQ = useQuery({
     queryKey: ["tracked-funds"],
     queryFn: fetchTrackedFunds,
-    staleTime: Infinity,
+    // Was Infinity — meant a single failed fetch stuck forever and the
+    // dropdown silently stayed empty. 24h + retry is enough.
+    staleTime: 24 * 60 * 60_000,
+    retry: 2,
   });
+  const funds = fundsQ.data;
   const [fund, setFund] = useState<string>("");
   const load = useMutation({ mutationFn: (cik: string) => fetch13FHoldings(cik) });
 
@@ -50,7 +55,7 @@ export default function Institutional13FPage() {
             onChange={(e) => setFund(e.target.value)}
             className="px-3 py-2 border border-border rounded-lg text-sm bg-surface min-w-[240px]"
           >
-            <option value="">Select fund…</option>
+            <option value="">{fundsQ.isPending ? "Loading funds…" : "Select fund…"}</option>
             {funds?.funds.map((f) => (
               <option key={f.cik} value={f.cik}>
                 {f.name}
@@ -66,6 +71,13 @@ export default function Institutional13FPage() {
           </button>
         </div>
       </div>
+
+      {fundsQ.isError && (
+        <ErrorBanner title="Fund list failed to load" error={fundsQ.error} onRetry={() => fundsQ.refetch()} />
+      )}
+      {load.isError && (
+        <ErrorBanner title="Holdings fetch failed" error={load.error} onRetry={() => fund && load.mutate(fund)} />
+      )}
 
       {load.isPending && (
         <div className="card text-center py-10">

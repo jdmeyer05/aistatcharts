@@ -14,6 +14,7 @@ import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn, shortDate } from "../_shared/utils";
+import { ErrorBanner } from "../_shared/error-banner";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -161,6 +162,10 @@ export default function ExitsPage() {
         </div>
       </div>
 
+      {congressLoad.isError && (
+        <ErrorBanner title="Congressional load failed" error={congressLoad.error} onRetry={() => congressLoad.mutate()} />
+      )}
+
       {congressLoad.isPending && (
         <div className="card text-center py-6">
           <div className="inline-block w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
@@ -222,6 +227,10 @@ export default function ExitsPage() {
           </button>
         </div>
       </div>
+
+      {activistLoad.isError && (
+        <ErrorBanner title="13D load failed" error={activistLoad.error} onRetry={() => activistLoad.mutate(days13d)} />
+      )}
 
       {activistExitCandidates.length > 0 && (
         <div className="card">
@@ -289,6 +298,10 @@ export default function ExitsPage() {
           </button>
         </div>
       </div>
+
+      {insiderLoad.isError && (
+        <ErrorBanner title="Insider flow fetch failed" error={insiderLoad.error} onRetry={() => insiderLoad.mutate()} />
+      )}
 
       {insiderLoad.isSuccess && insiderLoad.data && (
         <div className="card">

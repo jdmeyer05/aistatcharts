@@ -9,6 +9,7 @@ import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
 import { shortDate } from "../_shared/utils";
+import { ErrorBanner } from "../_shared/error-banner";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
@@ -133,6 +134,10 @@ export default function ActivistPage() {
           </button>
         </div>
       </div>
+
+      {load.isError && (
+        <ErrorBanner title="13D search failed" error={load.error} onRetry={() => load.mutate(days)} />
+      )}
 
       {load.isPending && (
         <div className="card text-center py-10">

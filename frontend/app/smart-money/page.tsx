@@ -16,6 +16,7 @@ import { getChartTheme } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn, shortDate } from "./_shared/utils";
+import { ErrorBanner } from "./_shared/error-banner";
 
 // ──────────────────────────────────────────────────────────────────
 // Category nav — matches the Smart Money section in lib/nav.ts
@@ -327,6 +328,16 @@ export default function SmartMoneyOverviewPage() {
           </button>
         </div>
 
+        {convictionLoad.isError && (
+          <div className="mt-4">
+            <ErrorBanner
+              title="Conviction score failed"
+              error={convictionLoad.error}
+              onRetry={() => ticker && convictionLoad.mutate()}
+            />
+          </div>
+        )}
+
         {convictionLoad.isPending && (
           <div className="mt-4 text-center py-4">
             <div className="inline-block w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
@@ -544,6 +555,13 @@ export default function SmartMoneyOverviewPage() {
           {activist90dQ.isPending && (
             <div className="text-xs text-text-muted">Loading 13D feed…</div>
           )}
+          {activist90dQ.isError && (
+            <div className="text-xs text-loss">
+              13D feed failed:{" "}
+              {(activist90dQ.error as Error)?.message ?? "unknown error"}.{" "}
+              <button onClick={() => activist90dQ.refetch()} className="underline font-semibold">retry</button>
+            </div>
+          )}
           {recentNew13D.length > 0 ? (
             <div className="space-y-2">
               {recentNew13D.map((f, i) => (
@@ -578,6 +596,13 @@ export default function SmartMoneyOverviewPage() {
           </div>
           {earningsCalQ.isPending && (
             <div className="text-xs text-text-muted">Loading earnings feed…</div>
+          )}
+          {earningsCalQ.isError && (
+            <div className="text-xs text-loss">
+              Earnings feed failed:{" "}
+              {(earningsCalQ.error as Error)?.message ?? "unknown error"}.{" "}
+              <button onClick={() => earningsCalQ.refetch()} className="underline font-semibold">retry</button>
+            </div>
           )}
           {earningsCalQ.data && earningsCalQ.data.count > 0 ? (
             <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
