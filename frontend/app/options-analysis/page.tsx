@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { fetchOptionsChain, fetchSnapshot, fetchOIHistory } from "@/lib/api";
@@ -564,7 +564,7 @@ export default function OptionsIntelligence() {
           )}
 
           {/* ═══ Tab 4: OI Changes (historical) ═══ */}
-          {activeTab === 4 && <OIChangesPanel ticker={loadedTicker} themeKeys={t} baseLayout={L} />}
+          {activeTab === 4 && <OIChangesPanel ticker={loadedTicker} theme={t} baseLayout={L} />}
 
           {/* ═══ Tab 5: Chain ═══ */}
           {activeTab === 5 && (
@@ -620,7 +620,7 @@ export default function OptionsIntelligence() {
 type ChartTheme = ReturnType<typeof getChartTheme>;
 type BaseLayout = ReturnType<typeof getBaseLayout>;
 
-function OIChangesPanel({ ticker, themeKeys: t, baseLayout: L }: { ticker: string; themeKeys: ChartTheme; baseLayout: BaseLayout }) {
+function OIChangesPanel({ ticker, theme: t, baseLayout: L }: { ticker: string; theme: ChartTheme; baseLayout: BaseLayout }) {
   const [lookback, setLookback] = useState(10);
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["oi-history", ticker, lookback],
@@ -661,7 +661,7 @@ function OIChangesPanel({ ticker, themeKeys: t, baseLayout: L }: { ticker: strin
           {[5, 10, 20, 30, 60].map(n => <option key={n} value={n}>{n}</option>)}
         </select>
         <span className="text-xs text-text-muted">
-          {data.n_days_captured} days shown · {data.total_days_available} total captured · first: {data.dates[0]} · last: {data.dates[data.dates.length - 1]}
+          {data.n_days_captured} days shown{data.total_days_available ? ` · ${data.total_days_available} total captured` : ""} · first: {data.dates[0]} · last: {data.dates[data.dates.length - 1]}
         </span>
       </div>
 

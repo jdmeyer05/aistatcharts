@@ -21,7 +21,8 @@ $secretPairs = @(
   "ANTHROPIC_API_KEY=anthropic-api-key:latest",
   "GEMINI_API_KEY=gemini-api-key:latest",
   "GROK_API_KEY=grok-api-key:latest",
-  "FINNHUB_API_KEY=finnhub-api-key:latest"
+  "FINNHUB_API_KEY=finnhub-api-key:latest",
+  "OI_CAPTURE_KEY=oi-capture-key:latest"
 )
 $secrets = $secretPairs -join ","
 
@@ -36,7 +37,7 @@ $deployArgs = @(
   "--cpu=2",
   "--min-instances=0",
   "--max-instances=10",
-  "--timeout=180",
+  "--timeout=540",
   "--concurrency=40",
   "--set-env-vars=$envVars",
   "--set-secrets=$secrets"

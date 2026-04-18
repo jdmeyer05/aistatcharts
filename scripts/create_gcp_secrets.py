@@ -44,6 +44,12 @@ SECRETS: list[dict] = [
     {"gcp_name": "gemini-api-key",       "source_key": "GEMINI_API_KEY",       "required": True},
     {"gcp_name": "grok-api-key",         "source_key": "GROK_API_KEY",         "required": False},
     {"gcp_name": "finnhub-api-key",      "source_key": "FINNHUB_API_KEY",      "required": False},
+    {"gcp_name": "oi-capture-key",       "source_key": "OI_CAPTURE_KEY",       "required": False,
+     "hint": "random token shared with Cloud Scheduler — generate via `python -c \"import secrets; print(secrets.token_urlsafe(32))\"`"},
+    {"gcp_name": "polygon-s3-access-key","source_key": "POLYGON_S3_ACCESS_KEY","required": False,
+     "hint": "Polygon S3 flat files access key — unused in Cloud Run today but available for future flat-file ingest"},
+    {"gcp_name": "polygon-s3-secret-key","source_key": "POLYGON_S3_SECRET_KEY","required": False,
+     "hint": "Polygon S3 flat files secret key — paired with access key above"},
 ]
 
 
