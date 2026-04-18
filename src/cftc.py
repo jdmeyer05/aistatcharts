@@ -202,6 +202,13 @@ _LEGACY_FIELDS = {
 _CACHE: dict[tuple[str, str], tuple[datetime, pd.DataFrame]] = {}
 _CACHE_TTL = timedelta(hours=24)
 
+# Circuit breaker for the Socrata API — when it's down it hard-fails every
+# contract request and spams the logs. After 3 consecutive failures at
+# cold-start we flip to direct-file fallback for the rest of this instance.
+_SOCRATA_FAIL_COUNT = 0
+_SOCRATA_FAIL_THRESHOLD = 3
+_SOCRATA_DISABLED = False
+
 
 def _cache_key(report: ReportType, code: str) -> tuple[str, str]:
     return (report, code)
@@ -244,22 +251,49 @@ def _cached_fetch(report: ReportType, code: str, limit: int = 5000) -> pd.DataFr
     if cached and (datetime.utcnow() - cached[0]) < _CACHE_TTL:
         return cached[1]
 
+    global _SOCRATA_FAIL_COUNT, _SOCRATA_DISABLED
     url = DATASETS[report]
-    try:
-        rows = _fetch_socrata(url, code, limit)
-    except Exception as e:
-        logger.warning(f"CFTC {report} fetch failed for {code}: {e}")
-        # Serve stale on failure if we have any
-        if cached:
-            return cached[1]
-        return pd.DataFrame()
+    rows: list[dict] = []
+    if not _SOCRATA_DISABLED:
+        try:
+            rows = _fetch_socrata(url, code, limit)
+            # Successful Socrata call — reset the breaker if it was tripped.
+            _SOCRATA_FAIL_COUNT = 0
+        except Exception as e:
+            _SOCRATA_FAIL_COUNT += 1
+            if _SOCRATA_FAIL_COUNT <= _SOCRATA_FAIL_THRESHOLD:
+                logger.warning(f"CFTC {report} Socrata fetch failed for {code}: {e}")
+            if _SOCRATA_FAIL_COUNT >= _SOCRATA_FAIL_THRESHOLD:
+                _SOCRATA_DISABLED = True
+                logger.warning(
+                    "CFTC Socrata disabled for this instance after %d failures; using direct-file fallback",
+                    _SOCRATA_FAIL_THRESHOLD,
+                )
+            rows = []
 
-    if not rows:
-        df = pd.DataFrame()
+    # Socrata path produced data — normalize and cache.
+    if rows:
+        df = _normalize(report, rows)
         _CACHE[key] = (datetime.utcnow(), df)
         return df
 
-    df = _normalize(report, rows)
+    # Socrata empty or down — try the direct-file fallback (cftc.gov archives).
+    # Supplemental not yet supported there; only disaggregated / tff / legacy.
+    if report in ("disaggregated", "tff", "legacy"):
+        try:
+            from src.cftc_direct import fetch_history
+            df = fetch_history(report, code, years=5)
+            if not df.empty:
+                logger.info(f"CFTC {report} served via direct-file fallback for {code}: {len(df)} rows")
+                _CACHE[key] = (datetime.utcnow(), df)
+                return df
+        except Exception as e:
+            logger.warning(f"CFTC {report} direct-file fallback failed for {code}: {e}")
+
+    # Nothing worked — serve stale if we have any, else empty.
+    if cached:
+        return cached[1]
+    df = pd.DataFrame()
     _CACHE[key] = (datetime.utcnow(), df)
     return df
 
