@@ -177,7 +177,7 @@ function PositionSummary() {
             {pos.pnl !== undefined && <span className={`font-data font-semibold ${pos.pnl >= 0 ? "text-gain" : "text-loss"}`}>${pos.pnl.toFixed(0)}</span>}
           </div>
         ))}
-        <Link href="/portfolio-greeks" className="text-[0.65rem] text-accent hover:underline">Manage →</Link>
+        <Link href="/options-portfolio-analysis?view=portfolio" className="text-[0.65rem] text-accent hover:underline">Manage →</Link>
       </>) : <p className="text-xs text-text-muted">No open positions.</p>}
     </div>
   );

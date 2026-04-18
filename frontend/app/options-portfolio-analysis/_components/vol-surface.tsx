@@ -919,7 +919,7 @@ export function VolSurfaceContent() {
                   <div className="border border-border rounded-lg p-3">
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-xs font-semibold">Higher-Order Greeks (Front ATM)</div>
-                      <a href="/higher-greeks" className="text-[0.6rem] text-accent hover:underline">Full analysis →</a>
+                      <a href="/options-portfolio-analysis?view=higher-greeks" className="text-[0.6rem] text-accent hover:underline">Full analysis →</a>
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                       <div>
