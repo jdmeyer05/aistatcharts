@@ -314,7 +314,9 @@ export function Header() {
           {/* Logo — text hidden below lg to make room for 7 nav groups */}
           <Link href="/" className="flex items-center gap-2 shrink-0">
             <Image src="/favicon.png" alt="AI Statcharts" width={22} height={22} className="rounded" />
-            <span className="text-sm font-bold tracking-widest uppercase hidden lg:inline">
+            {/* Show wordmark on mobile (fills the justify-between gap) and on xl+
+                desktop. Hide on 1024-1279px where 7 nav dropdowns need the room. */}
+            <span className="text-sm font-bold tracking-widest uppercase inline lg:hidden xl:inline">
               AI Statcharts
             </span>
           </Link>
