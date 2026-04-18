@@ -153,7 +153,6 @@ export function IronCondorContent() {
 
   return (
     <div className="space-y-4">
-
       {/* How it works expander */}
       <button onClick={() => setShowHowItWorks(!showHowItWorks)}
         className="text-xs text-accent hover:underline">

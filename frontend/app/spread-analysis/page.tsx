@@ -57,6 +57,7 @@ function SpreadAnalysisInner() {
           <button
             key={s}
             onClick={() => setStrategy(s)}
+            title={STRATEGY_META[s].subtitle}
             className={`px-4 py-1.5 text-xs font-semibold rounded-t-md transition-colors whitespace-nowrap ${
               strategy === s
                 ? "bg-accent text-white"

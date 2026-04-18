@@ -100,7 +100,6 @@ export function VerticalSpreadContent() {
 
   return (
     <div className="space-y-4">
-
       {/* Config */}
       <div className="card">
         {/* Spread type selector */}
