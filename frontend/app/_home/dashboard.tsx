@@ -33,7 +33,17 @@ const FUT_TICKERS = [
 function TickerTape() {
   const { data: eq } = useQuery({ queryKey: ["pulse-eq"], queryFn: () => fetchSnapshot(EQ_TICKERS.map(t => t.s)), refetchInterval: 120_000 });
   const { data: fut, dataUpdatedAt } = useQuery({ queryKey: ["pulse-fut"], queryFn: () => fetchSnapshot(FUT_TICKERS.map(t => t.s)), refetchInterval: 120_000 });
-  const ageMin = dataUpdatedAt ? (Date.now() - dataUpdatedAt) / 60000 : null;
+
+  // Age derived via clock tick, not Date.now() in render (purity).
+  // Initial value null → no stale timestamp during SSR; first interval populates.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const ageMin = dataUpdatedAt && now != null ? (now - dataUpdatedAt) / 60_000 : null;
 
   const all = [...EQ_TICKERS.map(t => ({ ...t, snap: eq?.[t.s] })), ...FUT_TICKERS.map(t => ({ ...t, snap: fut?.[t.s] }))];
 
@@ -142,15 +152,16 @@ function VolTile({ m }: { m: VolLandscapeMetric }) {
   const ivhv = m.IV_HV;
   return (
     <Link
-      href={`/options-analysis?ticker=${m.Ticker}`}
-      className="block rounded-lg border border-border bg-surface hover:border-accent/40 transition-colors p-3"
+      href="/vol-landscape"
+      className="block rounded-lg border border-border bg-surface hover:border-accent/40 transition-colors p-3 h-[6.25rem]"
+      title={`${m.Ticker} — ${m.Label}. IV ${(m.Front_IV * 100).toFixed(1)}%, rank ${ivPct ?? "—"}, RR ${m.Risk_Rev.toFixed(2)}, IV/HV ${ivhv?.toFixed(2) ?? "—"}`}
     >
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex flex-col">
+      <div className="flex items-center justify-between mb-1 gap-2">
+        <div className="flex flex-col min-w-0">
           <span className="text-sm font-bold">{m.Ticker}</span>
-          <span className="text-[0.55rem] text-text-muted leading-tight">{m.Label}</span>
+          <span className="text-[0.55rem] text-text-muted leading-tight truncate">{m.Label}</span>
         </div>
-        <span className={`text-[0.55rem] px-1.5 py-0.5 rounded font-data font-semibold ${ivRankColor(ivPct)}`}>
+        <span className={`text-[0.55rem] px-1.5 py-0.5 rounded font-data font-semibold shrink-0 ${ivRankColor(ivPct)}`}>
           {ivPct != null ? `${ivPct}r` : "—"}
         </span>
       </div>
@@ -167,7 +178,7 @@ function VolTile({ m }: { m: VolLandscapeMetric }) {
         <span className={`font-data font-semibold ${skew.tone}`}>
           RR {m.Risk_Rev >= 0 ? "+" : ""}{m.Risk_Rev.toFixed(1)}
         </span>
-        <span className="text-text-muted">{skew.label}</span>
+        <span className="text-text-muted truncate ml-1">{skew.label}</span>
       </div>
     </Link>
   );
@@ -199,7 +210,7 @@ function VolSnapshot() {
       {isLoading ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
           {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="h-24 rounded-lg bg-surface-alt animate-pulse" />
+            <div key={i} className="h-[6.25rem] rounded-lg bg-surface-alt animate-pulse" />
           ))}
         </div>
       ) : error || rows.length === 0 ? (
@@ -235,10 +246,9 @@ function SignalSpotlight() {
       {ideas && ideas.length > 0 ? (
         <div className="space-y-1">
           {ideas.map(t => (
-            <Link
+            <div
               key={t.ticker}
-              href={`/stock-analysis?ticker=${t.ticker}`}
-              className="flex items-center justify-between py-1.5 -mx-2 px-2 rounded hover:bg-surface-alt transition-colors"
+              className="flex items-center justify-between py-1.5"
             >
               <div className="flex items-center gap-2">
                 <div className={`w-1 h-6 rounded-full ${t.overall_direction === "bull" ? "bg-gain" : t.overall_direction === "bear" ? "bg-loss" : "bg-text-muted"}`} />
@@ -250,7 +260,7 @@ function SignalSpotlight() {
                 </div>
                 <span className="text-text-muted text-xs font-data w-8 text-right">{(t.overall_conviction * 100).toFixed(0)}%</span>
               </div>
-            </Link>
+            </div>
           ))}
         </div>
       ) : <p className="text-sm text-text-muted">No signals yet.</p>}
@@ -445,16 +455,25 @@ function PolyPill({ ev }: { ev: PolymarketEvent }) {
 }
 
 function PolymarketPulse() {
-  const { data } = useQuery({ queryKey: ["polymarket"], queryFn: fetchPolymarket, staleTime: 5 * 60_000 });
-  const markets = (data?.markets ?? []).slice(0, 12);
-  if (markets.length === 0) return null;
+  const { data, isLoading } = useQuery({ queryKey: ["polymarket"], queryFn: fetchPolymarket, staleTime: 5 * 60_000 });
+  const markets = (data?.markets ?? []).slice(0, 10);
 
   return (
     <div className="space-y-2">
       <h2 className="text-sm font-bold uppercase tracking-wider">Prediction Markets</h2>
-      <div className="flex flex-wrap gap-1.5">
-        {markets.map((ev, i) => <PolyPill key={i} ev={ev} />)}
-      </div>
+      {isLoading ? (
+        <div className="flex flex-wrap gap-1.5">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-5 w-32 rounded bg-surface-alt animate-pulse" />
+          ))}
+        </div>
+      ) : markets.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {markets.map((ev, i) => <PolyPill key={i} ev={ev} />)}
+        </div>
+      ) : (
+        <p className="text-xs text-text-muted">No active markets right now.</p>
+      )}
     </div>
   );
 }
