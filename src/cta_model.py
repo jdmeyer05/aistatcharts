@@ -27,6 +27,7 @@ Also provides:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -410,32 +411,34 @@ def cta_model_status(cftc_code: str) -> dict:
 # Bias scan across all contracts — landing-tab feed
 # ═══════════════════════════════════════════════════════════════════
 
+def _bias_row(code: str) -> dict | None:
+    prices = _fetch_prices(code)
+    if prices.empty or len(prices) < 100:
+        return None
+    close = prices["Close"]
+    base = compute_exposure(close)
+    scens = compute_scenarios(close)
+    from src.cftc import CONTRACTS_BY_CODE
+    spec = CONTRACTS_BY_CODE.get(code)
+    return {
+        "code": code,
+        "symbol": spec.symbol if spec else None,
+        "name": spec.name if spec else None,
+        "asset_class": spec.asset_class if spec else None,
+        "last_price": round(float(close.iloc[-1]), 4),
+        "exposure": base["exposure"],
+        "bias_1w": scens.get("bias_1w"),
+        "bias_1m": scens.get("bias_1m"),
+        "vol_1w_pct": scens.get("vol_1w_pct"),
+        "flow_flat_1w": scens["horizons"]["1w"]["flat"]["delta_exposure"] if "1w" in scens.get("horizons", {}) else None,
+    }
+
+
 @_result_cached("cta_bias_scan")
 def cta_bias_scan() -> list[dict]:
-    """Run the scenario model across every mapped contract, return bias summary."""
-    rows = []
-    for code in CFTC_TO_YF:
-        prices = _fetch_prices(code)
-        if prices.empty or len(prices) < 100:
-            continue
-        close = prices["Close"]
-        base = compute_exposure(close)
-        scens = compute_scenarios(close)
-        from src.cftc import CONTRACTS_BY_CODE
-        spec = CONTRACTS_BY_CODE.get(code)
-        rows.append({
-            "code": code,
-            "symbol": spec.symbol if spec else None,
-            "name": spec.name if spec else None,
-            "asset_class": spec.asset_class if spec else None,
-            "last_price": round(float(close.iloc[-1]), 4),
-            "exposure": base["exposure"],
-            "bias_1w": scens.get("bias_1w"),
-            "bias_1m": scens.get("bias_1m"),
-            "vol_1w_pct": scens.get("vol_1w_pct"),
-            "flow_flat_1w": scens["horizons"]["1w"]["flat"]["delta_exposure"] if "1w" in scens.get("horizons", {}) else None,
-        })
-    # Sort: "all_buying" first, then "all_selling", then "mixed"
+    """Run the scenario model across every mapped contract. Parallel."""
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        rows = [r for r in pool.map(_bias_row, list(CFTC_TO_YF.keys())) if r is not None]
     order = {"all_buying": 0, "all_selling": 1, "mixed": 2, "neutral": 3, "unknown": 4}
     rows.sort(key=lambda r: (order.get(r["bias_1w"], 5), -abs(r["exposure"])))
     return rows
@@ -463,16 +466,18 @@ def realized_vol_percentile(cftc_code: str, window: int = 20, lookback: int = 75
 @_result_cached("all_vol_percentiles")
 def all_vol_percentiles() -> dict[str, float]:
     """Realized vol percentile for every mapped contract, keyed by SYMBOL
-    (to match the format cta_unwind_risk expects)."""
+    (to match the format cta_unwind_risk expects). Parallel fan-out."""
     from src.cftc import CONTRACTS_BY_CODE
-    out: dict[str, float] = {}
-    for code, yf in CFTC_TO_YF.items():
+
+    def _pair(code: str) -> tuple[str, float] | None:
         spec = CONTRACTS_BY_CODE.get(code)
         if not spec:
-            continue
-        pct = realized_vol_percentile(code)
-        out[spec.symbol] = pct
-    return out
+            return None
+        return (spec.symbol, realized_vol_percentile(code))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pairs = [p for p in pool.map(_pair, list(CFTC_TO_YF.keys())) if p is not None]
+    return dict(pairs)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -492,53 +497,53 @@ def _weekly_returns_from_daily(prices: pd.DataFrame) -> pd.Series:
     return weekly.pct_change().dropna()
 
 
+def _pnl_contribs_for(code: str, lookback_weeks: int) -> list[tuple[pd.Timestamp, float, float]]:
+    """Per-contract (date, contribution, oi) tuples. Pure function — safe to
+    run across threads, no shared mutation."""
+    from src.cftc import contract_history, CONTRACTS_BY_CODE
+    spec = CONTRACTS_BY_CODE.get(code)
+    if not spec:
+        return []
+    cot = contract_history(code, lookback_weeks=max(lookback_weeks + 20, 200))
+    if cot.empty or "spec_pct_oi" not in cot.columns:
+        return []
+    prices = _fetch_prices(code)
+    if prices.empty:
+        return []
+    ret = _weekly_returns_from_daily(prices)
+    if ret.empty:
+        return []
+    cot2 = cot.set_index("date")
+    out: list[tuple[pd.Timestamp, float, float]] = []
+    for dt, row in cot2.iterrows():
+        pos = row.get("spec_pct_oi")
+        if pos is None or np.isnan(pos):
+            continue
+        next_ret_date = dt + pd.Timedelta(days=7)
+        closest = ret.index[(ret.index >= next_ret_date - pd.Timedelta(days=3)) &
+                            (ret.index <= next_ret_date + pd.Timedelta(days=3))]
+        if len(closest) == 0:
+            continue
+        r = float(ret.loc[closest[0]])
+        contrib = (pos / 100.0) * r
+        out.append((closest[0], contrib, float(row.get("oi", 1.0) or 1.0)))
+    return out
+
+
 @_result_cached("cta_pnl")
 def reconstructed_cta_pnl(lookback_weeks: int = 156) -> dict:
     """Model CTA P&L as positioning × forward weekly return, aggregated across
-    contracts with OI weighting.
-
-    Returns:
-      {
-        "dates": [...],
-        "weekly_pnl": [...],   # weekly rebalanced "return" in % of NAV
-        "cumulative": [...],   # cumulative (1+r) product
-        "contracts_used": N,
-      }
-    """
-    from src.cftc import contract_history, CONTRACTS_BY_CODE
-    # Accumulate per-week contributions
+    contracts with OI weighting. Parallel per-contract data gathering."""
     contrib_by_date: dict[pd.Timestamp, list[tuple[float, float]]] = {}
+    codes = list(CFTC_TO_YF.keys())
+    contracts_used = 0
 
-    for code in CFTC_TO_YF:
-        spec = CONTRACTS_BY_CODE.get(code)
-        if not spec:
-            continue
-        cot = contract_history(code, lookback_weeks=max(lookback_weeks + 20, 200))
-        if cot.empty or "spec_pct_oi" not in cot.columns:
-            continue
-        prices = _fetch_prices(code)
-        if prices.empty:
-            continue
-        ret = _weekly_returns_from_daily(prices)
-        if ret.empty:
-            continue
-        # Align COT reports (Tuesday) with weekly returns ending Tuesday.
-        cot2 = cot.set_index("date")
-        for dt, row in cot2.iterrows():
-            pos = row.get("spec_pct_oi")
-            if pos is None or np.isnan(pos):
-                continue
-            # Positioning is as of Tuesday t; forward return is t→t+1 week.
-            next_ret_date = dt + pd.Timedelta(days=7)
-            # Find closest weekly-return index within ±3 days
-            closest = ret.index[(ret.index >= next_ret_date - pd.Timedelta(days=3)) &
-                                (ret.index <= next_ret_date + pd.Timedelta(days=3))]
-            if len(closest) == 0:
-                continue
-            r = float(ret.loc[closest[0]])
-            # positioning_pct × return, signed. 10% long × 2% up = +0.2pp to portfolio
-            contrib = (pos / 100.0) * r
-            contrib_by_date.setdefault(closest[0], []).append((contrib, row.get("oi", 1.0)))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for result in pool.map(lambda c: _pnl_contribs_for(c, lookback_weeks), codes):
+            if result:
+                contracts_used += 1
+            for date, contrib, oi in result:
+                contrib_by_date.setdefault(date, []).append((contrib, oi))
 
     dates = sorted(contrib_by_date.keys())[-lookback_weeks:]
     pnl_weekly: list[float] = []
@@ -559,7 +564,7 @@ def reconstructed_cta_pnl(lookback_weeks: int = 156) -> dict:
         "dates": [d.strftime("%Y-%m-%d") for d in dates],
         "weekly_pnl": [round(r * 100, 3) for r in pnl_weekly],  # pct
         "cumulative": cum,
-        "contracts_used": len({c for c in CFTC_TO_YF if contract_history(c, 20).shape[0] > 0}),
+        "contracts_used": contracts_used,
     }
 
 
@@ -579,14 +584,18 @@ def historical_analog(top_n: int = 5) -> dict:
     """
     from src.cftc import contract_history, CONTRACTS_BY_CODE
 
-    # 1. Pull every contract's history ONCE. Keep a date-indexed DataFrame.
-    histories: dict[str, pd.DataFrame] = {}
-    for code in sorted(CONTRACTS_BY_CODE.keys()):
+    # 1. Pull every contract's history ONCE, in parallel. Keep a date-indexed DataFrame.
+    def _fetch_one(code: str) -> tuple[str, pd.DataFrame]:
         h = contract_history(code, lookback_weeks=260)
         if h.empty:
-            continue
-        h = h.set_index("date").sort_index()
-        histories[code] = h
+            return (code, pd.DataFrame())
+        return (code, h.set_index("date").sort_index())
+
+    histories: dict[str, pd.DataFrame] = {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for code, df in pool.map(_fetch_one, sorted(CONTRACTS_BY_CODE.keys())):
+            if not df.empty:
+                histories[code] = df
     if not histories:
         return {"current_date": None, "analogs": [], "error": "No contract data available"}
 

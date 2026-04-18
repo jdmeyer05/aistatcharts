@@ -6,11 +6,15 @@ Run alongside Streamlit: uvicorn api.main:app --port 8000
 All src/ modules work in both contexts — no dual-mode hacks needed.
 """
 
+import asyncio
+import logging
 import os
 import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+logger = logging.getLogger(__name__)
 
 # Ensure project root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,11 +49,34 @@ except Exception:
     pass
 
 
+async def _warm_cftc_caches() -> None:
+    """Fire the slow CFTC dashboards in background so the first user hits
+    warm caches instead of a 2-minute cold wait. Non-fatal if any fail."""
+    def _warm_sync() -> None:
+        try:
+            from src.cftc import positioning_dashboard
+            from src.cta_model import cta_bias_scan, reconstructed_cta_pnl, historical_analog, all_vol_percentiles
+            positioning_dashboard()
+            all_vol_percentiles()
+            cta_bias_scan()
+            reconstructed_cta_pnl()
+            historical_analog(5)
+            logger.info("CFTC caches pre-warmed")
+        except Exception as e:
+            logger.warning(f"CFTC pre-warm failed: {e}")
+
+    # Run the sync work off the event loop so FastAPI isn't blocked.
+    await asyncio.get_event_loop().run_in_executor(None, _warm_sync)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: initialize Supabase client."""
+    """Startup: initialize Supabase client + pre-warm CFTC caches in the
+    background. The app accepts requests immediately; caches fill asynchronously."""
     from src.db import get_client
     get_client()  # warm the connection
+    # Fire-and-forget background warmup. Don't await — server starts now.
+    asyncio.create_task(_warm_cftc_caches())
     yield
 
 
