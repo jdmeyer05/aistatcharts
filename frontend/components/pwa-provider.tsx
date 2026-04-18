@@ -55,46 +55,26 @@ export function PwaProvider({ children }: { children: ReactNode }) {
     window.addEventListener("beforeinstallprompt", onPrompt);
     window.addEventListener("appinstalled", onInstalled);
 
-    // Register service worker. Only in production — dev mode serves chunks
-    // from the dev server and caching them would shadow hot-reload.
-    let updateIntervalId: ReturnType<typeof setInterval> | null = null;
-    let reloadOnControllerChange = false;
-    const onControllerChange = () => {
-      // A fresh SW just took control (new build deployed). Reload so the page
-      // picks up the new HTML/JS instead of continuing on a stale shell.
-      // Guard against Chrome's page-open-during-first-install case where
-      // controllerchange fires immediately with no controller to replace.
-      if (reloadOnControllerChange) window.location.reload();
-    };
-    if (
-      "serviceWorker" in navigator &&
-      process.env.NODE_ENV === "production"
-    ) {
-      // Only arm the reload path if the page already had a controller on
-      // load — meaning a subsequent controllerchange is a genuine update.
-      reloadOnControllerChange = !!navigator.serviceWorker.controller;
-      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
-
-      navigator.serviceWorker
-        .register("/sw.js", { scope: "/" })
-        .then((registration) => {
-          // Poll for updates every 15 minutes so long-open tabs don't miss
-          // deploys. Also fires once up-front.
-          const checkForUpdate = () => registration.update().catch(() => undefined);
-          checkForUpdate();
-          updateIntervalId = setInterval(checkForUpdate, 15 * 60_000);
-        })
+    // One-time cleanup: any user who previously installed our v1/v2/v3
+    // service worker has it still controlling navigations and serving a
+    // stale shell. Unregister every SW on our scope + purge caches so the
+    // page reverts to plain HTTP caching on next navigation. Remove this
+    // block once all active users have visited post-deploy.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistrations()
+        .then((regs) => Promise.all(regs.map((r) => r.unregister())))
         .catch(() => undefined);
+      if ("caches" in window) {
+        caches.keys()
+          .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+          .catch(() => undefined);
+      }
     }
 
     return () => {
       mql.removeEventListener("change", update);
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
-      }
-      if (updateIntervalId != null) clearInterval(updateIntervalId);
     };
   }, []);
 
