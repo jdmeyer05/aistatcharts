@@ -2356,6 +2356,171 @@ export async function fetchCotPositioning(): Promise<CotPositioningResponse> {
   return apiFetch("/api/fed-macro/cot", { timeoutMs: 60_000 });
 }
 
+// ─── CFTC / Positioning (wide universe) ──────────────────────────
+
+export type CftcAssetClass = "equity" | "rates" | "fx" | "energy" | "metals" | "grains" | "softs" | "meats";
+export type CftcReportType = "disaggregated" | "tff" | "legacy" | "supplemental";
+
+export interface CftcContract {
+  code: string;
+  symbol: string;
+  name: string;
+  asset_class: CftcAssetClass;
+  spec_report: CftcReportType;
+  track_legacy: boolean;
+  priority: number;
+}
+
+export interface CftcHeatmapTile {
+  code: string;
+  symbol: string;
+  name: string;
+  asset_class: CftcAssetClass;
+  report_type: CftcReportType;
+  date: string | null;
+  spec_net: number | null;
+  spec_pct_oi: number | null;
+  pctile_3y: number | null;
+  pctile_1y: number | null;
+  cot_index_3y: number | null;
+  zscore_3y: number | null;
+  chg_1w: number | null;
+  chg_4w: number | null;
+  chg_1w_sign: "up" | "down";
+  comm_pctile_3y: number | null;
+  divergence_z: number | null;
+  oi: number | null;
+  conc_lt4: number | null;
+}
+
+export interface CftcHistoryRow {
+  date: string;
+  oi: number;
+  spec_long: number;
+  spec_short: number;
+  spec_spread: number;
+  spec_net: number;
+  spec_gross: number;
+  spec_pct_oi: number | null;
+  spec_n_traders_long?: number;
+  spec_n_traders_short?: number;
+  spec_n_traders?: number;
+  conc_gross_lt4?: number;
+  conc_gross_lt8?: number;
+  comm_long?: number;
+  comm_short?: number;
+  comm_net?: number | null;
+  comm_pct_oi?: number | null;
+  spec_pctile_3y: number | null;
+  spec_pctile_1y: number | null;
+  cot_index_3y: number | null;
+  spec_zscore_3y: number | null;
+  spec_chg_1w: number | null;
+  spec_chg_4w: number | null;
+  comm_pctile_3y: number | null;
+  spec_vs_comm_z: number | null;
+  conc_lt4_chg_4w: number | null;
+  traders_zscore_3y: number | null;
+}
+
+export interface CftcHistoryResponse {
+  code: string;
+  symbol: string;
+  name: string;
+  asset_class: CftcAssetClass;
+  spec_report: CftcReportType;
+  count: number;
+  data: CftcHistoryRow[];
+}
+
+export interface CftcDivergenceRow {
+  code: string;
+  symbol: string;
+  name: string;
+  asset_class: CftcAssetClass;
+  date: string;
+  divergence_z: number;
+  spec_pctile_3y: number | null;
+  comm_pctile_3y: number | null;
+  spec_net: number;
+  comm_net: number | null;
+}
+
+export interface CftcRegime {
+  risk_on_off: number;
+  reflation: number;
+  safe_haven: number;
+  dollar: number;
+  interpretation: Record<string, string>;
+}
+
+export interface CftcUnwindRow {
+  code: string;
+  symbol: string;
+  name: string;
+  asset_class: CftcAssetClass;
+  pctile_3y: number;
+  vol_pctile: number;
+  unwind_score: number;
+  direction: "long" | "short";
+  extremity: number;
+}
+
+export interface CftcFlowRow {
+  code: string;
+  symbol: string;
+  name: string;
+  asset_class: CftcAssetClass;
+  date: string;
+  chg_1w: number;
+  chg_1w_pct_oi: number;
+  chg_4w: number | null;
+  conc_lt4_chg_4w: number | null;
+  spec_net: number;
+  pctile_3y: number | null;
+}
+
+export interface CftcDashboard {
+  regime: CftcRegime;
+  heatmap: CftcHeatmapTile[];
+  divergence_top: CftcDivergenceRow[];
+  flow_radar_top: CftcFlowRow[];
+  cta_unwind_top: CftcUnwindRow[];
+}
+
+export async function fetchCftcContracts(assetClass?: CftcAssetClass): Promise<{ count: number; contracts: CftcContract[] }> {
+  const q = assetClass ? `?asset_class=${assetClass}` : "";
+  return apiFetch(`/api/cftc/contracts${q}`, { timeoutMs: 30_000 });
+}
+
+export async function fetchCftcHistory(code: string, lookbackWeeks = 260): Promise<CftcHistoryResponse> {
+  return apiFetch(`/api/cftc/history/${code}?lookback_weeks=${lookbackWeeks}`, { timeoutMs: 60_000 });
+}
+
+export async function fetchCftcHeatmap(): Promise<{ count: number; tiles: CftcHeatmapTile[] }> {
+  return apiFetch("/api/cftc/heatmap", { timeoutMs: 120_000 });
+}
+
+export async function fetchCftcDivergence(minAbsZ = 1.0): Promise<{ count: number; threshold: number; rows: CftcDivergenceRow[] }> {
+  return apiFetch(`/api/cftc/divergence?min_abs_z=${minAbsZ}`, { timeoutMs: 120_000 });
+}
+
+export async function fetchCftcRegime(): Promise<CftcRegime> {
+  return apiFetch("/api/cftc/regime", { timeoutMs: 120_000 });
+}
+
+export async function fetchCftcCtaUnwind(): Promise<{ count: number; rows: CftcUnwindRow[] }> {
+  return apiFetch("/api/cftc/cta-unwind", { timeoutMs: 120_000 });
+}
+
+export async function fetchCftcFlowRadar(minPctOi = 3.0): Promise<{ count: number; threshold_pct_oi: number; rows: CftcFlowRow[] }> {
+  return apiFetch(`/api/cftc/flow-radar?min_pct_oi=${minPctOi}`, { timeoutMs: 120_000 });
+}
+
+export async function fetchCftcDashboard(): Promise<CftcDashboard> {
+  return apiFetch("/api/cftc/dashboard", { timeoutMs: 180_000 });
+}
+
 export interface OecdCliResponse {
   dates: string[];
   series: Record<string, (number | null)[]>;

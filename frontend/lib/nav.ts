@@ -68,6 +68,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Economic Calendar", href: "/economic-calendar", description: "FRED releases, earnings, auctions", status: "live" },
       { label: "Fed & Macro", href: "/fed-macro", description: "8-tab: signal matrix, FOMC, inflation, labor, yield curve", status: "live" },
       { label: "Sector Analysis", href: "/sector-analysis", description: "All 11 SPDR sectors: revenue, CapEx, valuation, alpha", status: "live" },
+      { label: "Positioning (CFTC)", href: "/positioning", description: "45-contract COT: managed money / leveraged funds, divergence Z, regime composites, CTA unwind risk", status: "live" },
     ],
   },
   {
