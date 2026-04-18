@@ -17,12 +17,9 @@ export interface NavGroup {
 
 export const NAV_GROUPS: NavGroup[] = [
   {
-    label: "Summary",
+    label: "Home",
     pages: [
-      { label: "Dashboard", href: "/", description: "Market pulse, signals, positions, heatmap, risk", status: "live" },
-      { label: "Market Scan", href: "/daily-briefing", description: "Market intelligence, opportunities, and fact-checked news", status: "live" },
-      { label: "Position Monitor", href: "/position-monitor", description: "Live Robinhood positions, P&L, strike distance", status: "live" },
-      { label: "Trade Ideas", href: "/trade-ideas", description: "24-strategy consensus scanner — family-weighted conviction ranking", status: "live" },
+      { label: "Home", href: "/", description: "Dashboard, market scan, position monitor, trade ideas — unified", status: "live" },
     ],
   },
   {
@@ -38,9 +35,7 @@ export const NAV_GROUPS: NavGroup[] = [
     pages: [
       { label: "Options Intelligence", href: "/options-analysis", description: "Volatility, positioning, flow, Greeks, chain — unified", status: "live" },
       { label: "Spread Analysis", href: "/spread-analysis", description: "Calendar, iron condor, vertical spreads — unified scanner + builder", status: "live" },
-      { label: "Options Portfolio Analysis", href: "/options-portfolio-analysis", description: "Strategy lab + portfolio-level Greeks, scenarios, delta hedging", status: "live" },
-      { label: "Vol Surface", href: "/vol-surface", description: "9-tab IV surface with AI trade ideas", status: "live" },
-      { label: "Higher Greeks", href: "/higher-greeks", description: "2nd/3rd order Greeks, Vanna-Volga pricing", status: "live" },
+      { label: "Options Portfolio Analysis", href: "/options-portfolio-analysis", description: "Strategy lab, higher Greeks, portfolio Greeks, vol surface — unified", status: "live" },
     ],
   },
   {

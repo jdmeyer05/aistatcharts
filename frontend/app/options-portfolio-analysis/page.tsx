@@ -3,18 +3,28 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { OptionsLabContent } from "./_components/lab";
+import { HigherGreeksContent } from "./_components/higher-greeks";
 import { PortfolioGreeksContent } from "./_components/greeks";
+import { VolSurfaceContent } from "./_components/vol-surface";
 
-type View = "lab" | "portfolio";
+type View = "lab" | "higher-greeks" | "portfolio" | "vol-surface";
 
 const VIEW_META: Record<View, { label: string; subtitle: string }> = {
   "lab": {
     label: "Strategy Lab",
     subtitle: "Black-Scholes pricing, Greeks calculator, and multi-leg strategy P&L modeler.",
   },
+  "higher-greeks": {
+    label: "Higher-Order Greeks",
+    subtitle: "Second and third order sensitivities — vanna, charm, volga, speed, zomma, color.",
+  },
   "portfolio": {
     label: "Portfolio Greeks",
     subtitle: "Enter live positions, see aggregate risk, model scenarios, plan delta hedges.",
+  },
+  "vol-surface": {
+    label: "Vol Surface",
+    subtitle: "Institutional vol surface analysis — skew metrics, gamma scalping, regime comparison, AI trade ideas.",
   },
 };
 
@@ -22,7 +32,8 @@ function OptionsPortfolioInner() {
   const params = useSearchParams();
   const router = useRouter();
   const qp = (params.get("view") || "").toLowerCase();
-  const initialView: View = qp === "portfolio" ? "portfolio" : "lab";
+  const validViews: View[] = ["lab", "higher-greeks", "portfolio", "vol-surface"];
+  const initialView: View = validViews.includes(qp as View) ? (qp as View) : "lab";
   const [view, setView] = useState<View>(initialView);
 
   useEffect(() => {
@@ -43,8 +54,8 @@ function OptionsPortfolioInner() {
         <p className="text-text-secondary text-sm mt-1">{meta.subtitle}</p>
       </div>
 
-      <div className="flex gap-1 border-b border-border pb-1">
-        {(Object.keys(VIEW_META) as View[]).map(v => (
+      <div className="flex gap-1 border-b border-border pb-1 overflow-x-auto">
+        {validViews.map(v => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -62,7 +73,9 @@ function OptionsPortfolioInner() {
 
       <div key={view}>
         {view === "lab" && <OptionsLabContent />}
+        {view === "higher-greeks" && <HigherGreeksContent />}
         {view === "portfolio" && <PortfolioGreeksContent />}
+        {view === "vol-surface" && <VolSurfaceContent />}
       </div>
     </div>
   );
