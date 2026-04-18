@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { fetchVolLandscape, fetchAITradeIdeas, type VolLandscapeScan } from "@/lib/api";
@@ -29,6 +29,17 @@ export default function VolLandscapePage() {
     mutationFn: fetchVolLandscape,
     onSuccess: d => { setData(d); setAiContent(""); },
   });
+
+  // Auto-scan once on mount so the page is useful without a click.
+  // Ref guard prevents StrictMode double-invocation from firing twice.
+  const autoScannedRef = useRef(false);
+  useEffect(() => {
+    if (autoScannedRef.current) return;
+    autoScannedRef.current = true;
+    load.mutate();
+    // load.mutate is stable; omitting from deps on purpose — mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadAI = useMutation({
     mutationFn: async () => {
@@ -73,7 +84,7 @@ export default function VolLandscapePage() {
       <div className="card card-compact">
         <button onClick={() => load.mutate()} disabled={load.isPending}
           className="px-6 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm">
-          {load.isPending ? "Scanning 20 ETFs (~15s)..." : "Scan Market"}
+          {load.isPending ? "Scanning 20 ETFs (~15s)..." : data ? "Rescan" : "Scan Market"}
         </button>
       </div>
 
