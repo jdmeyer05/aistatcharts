@@ -13,6 +13,7 @@ import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Compress responses ≥ 1 KB. Dashboards are 5-25 KB JSON; compression ratio
+# is typically 6-10× for pretty-printed JSON. Material win on mobile networks.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+
+
+# Path-based Cache-Control hints. Tabular data that only updates weekly
+# (CFTC, vol-landscape) can safely sit in the browser cache for a few
+# minutes — saves a full round-trip when users jump tabs quickly.
+_PATH_CACHE_HINTS = (
+    ("/api/cftc/",              "private, max-age=300, stale-while-revalidate=3600"),
+    ("/api/options/vol-landscape", "private, max-age=300, stale-while-revalidate=3600"),
+    ("/api/fed-macro/",         "private, max-age=300, stale-while-revalidate=3600"),
+    ("/api/sectors/",           "private, max-age=600, stale-while-revalidate=3600"),
+)
+
+
+@app.middleware("http")
+async def _cache_control_middleware(request, call_next):
+    """Stamp Cache-Control on read endpoints so browsers + CDNs can hold
+    responses for short windows. Write endpoints keep default (no-cache)."""
+    response = await call_next(request)
+    if request.method == "GET" and 200 <= response.status_code < 300:
+        path = request.url.path
+        for prefix, header in _PATH_CACHE_HINTS:
+            if path.startswith(prefix):
+                response.headers["Cache-Control"] = header
+                break
+    return response
 
 # Register route modules
 from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts, ai, cftc

@@ -4,6 +4,10 @@ Every endpoint serves normalized data from src/cftc.py. Heavy endpoints
 (`/dashboard`, `/heatmap`) fan out to ~45 contracts × multiple reports via
 the Socrata API; first-call warm-up is 5-15 seconds cold, sub-second warm
 (in-memory cache in src/cftc.py has a 24h TTL).
+
+Cache-Control headers on the responses are set by a global middleware in
+api/main.py based on the request path (see _PATH_CACHE_HINTS), so endpoints
+don't need to set them individually.
 """
 
 import logging
