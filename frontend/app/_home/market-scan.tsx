@@ -123,17 +123,32 @@ function Sparkline({ points, width = 160, height = 48 }: { points: PolymarketHis
   );
 }
 
-// ── Polymarket pill with hover tooltip ──
+// ── Polymarket pill with hover/tap tooltip ──
 function PolyPill({ ev }: { ev: PolymarketEvent }) {
-  const [hovered, setHovered] = useState(false);
+  const [open, setOpen] = useState(false);
   const [history, setHistory] = useState<PolymarketHistoryPoint[] | null>(null);
   const fetchedRef = useRef(false);
+  const ref = useRef<HTMLDivElement>(null);
   const top = ev.outcomes[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent | TouchEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
+  }, [open]);
+
   if (!top) return null;
   const shortTitle = ev.title.replace(/\?$/, "").replace(/^(Will |What |Who will |US )/, "");
 
-  const handleEnter = async () => {
-    setHovered(true);
+  const reveal = async () => {
+    setOpen(true);
     if (!fetchedRef.current && top.token_id) {
       fetchedRef.current = true;
       try { const res = await fetchPolymarketHistory(top.token_id); if (res.success) setHistory(res.points); } catch {}
@@ -141,15 +156,19 @@ function PolyPill({ ev }: { ev: PolymarketEvent }) {
   };
 
   return (
-    <div className="relative" onMouseEnter={handleEnter} onMouseLeave={() => setHovered(false)}>
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-surface-alt text-[0.6rem] font-data hover:border-accent/50 transition-colors cursor-pointer">
+    <div ref={ref} className="relative" onMouseEnter={reveal} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        onClick={() => (open ? setOpen(false) : reveal())}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-surface-alt text-[0.6rem] font-data hover:border-accent/50 transition-colors cursor-pointer"
+      >
         <span className="text-text-muted">{shortTitle.slice(0, 35)}</span>
         <span className={`font-bold ${top.yes_pct >= 80 ? "text-gain" : top.yes_pct >= 40 ? "text-warn" : "text-text"}`}>
           {top.label.slice(0, 20)}: {top.yes_pct}%
         </span>
-      </span>
-      {hovered && (
-        <div className="absolute z-50 top-full left-0 mt-1 p-2 rounded-lg border border-border bg-surface shadow-lg" style={{ minWidth: 220 }}>
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full left-0 mt-1 p-2 rounded-lg border border-border bg-surface shadow-lg max-w-[calc(100vw-2rem)]" style={{ minWidth: 220 }}>
           <div className="text-[0.6rem] font-semibold text-text mb-1">{ev.title}</div>
           {ev.outcomes.slice(0, 4).map((o, j) => (
             <div key={j} className="flex justify-between text-[0.55rem] font-data">
@@ -357,7 +376,15 @@ function OppTooltip({ opp }: { opp: OppData }) {
 function OppRow({ opp, i, isBooked, onBook }: { opp: OppData & Record<string, unknown>; i: number; isBooked: boolean; onBook: (o: any) => void }) {
   const [hovered, setHovered] = useState(false);
   return (
-    <div className="relative" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    <div
+      className="relative"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("button")) return;
+        setHovered((v) => !v);
+      }}
+    >
       <div className={`border rounded-lg p-2.5 bg-surface ${i === 0 ? "border-accent" : "border-border"}`}>
         <div className="flex justify-between items-start">
           <div>
@@ -1047,7 +1074,12 @@ export function MarketScanContent() {
                 return (
                   <div key={i} className={`relative rounded-lg border-l-4 ${colors[t.type] || "border-border"} border border-border p-3 bg-surface`}
                     onMouseEnter={(e) => { const tt = e.currentTarget.querySelector("[data-trade-tooltip]") as HTMLElement; if (tt) tt.style.display = "block"; }}
-                    onMouseLeave={(e) => { const tt = e.currentTarget.querySelector("[data-trade-tooltip]") as HTMLElement; if (tt) tt.style.display = "none"; }}>
+                    onMouseLeave={(e) => { const tt = e.currentTarget.querySelector("[data-trade-tooltip]") as HTMLElement; if (tt) tt.style.display = "none"; }}
+                    onClick={(e) => {
+                      if ((e.target as HTMLElement).closest("button")) return;
+                      const tt = e.currentTarget.querySelector("[data-trade-tooltip]") as HTMLElement;
+                      if (tt) tt.style.display = tt.style.display === "block" ? "none" : "block";
+                    }}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <span className="w-6 h-6 rounded-full flex items-center justify-center text-[0.6rem] font-bold bg-surface-alt text-text-muted">

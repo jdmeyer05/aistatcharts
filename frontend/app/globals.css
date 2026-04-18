@@ -635,6 +635,16 @@ body {
   font-family: var(--font-mono);
 }
 
+/* Mobile: any .data-table nested in this wrapper scrolls horizontally
+   without forcing the whole page to scroll. Pair with existing tables
+   where a wrapper isn't already provided. */
+.data-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
 .data-table th {
   text-align: left;
   padding: 6px 10px;
@@ -824,4 +834,62 @@ details summary:hover {
   border: none;
   border-top: 1px solid var(--color-border);
   margin: 0.75rem 0;
+}
+
+/* ═══════════════════════════════════════════════
+   MOBILE ADJUSTMENTS (< 640px)
+   Desktop-first app — these tighten dense data
+   surfaces so they remain usable on phones.
+   ═══════════════════════════════════════════════ */
+@media (max-width: 639px) {
+  /* Any table not already wrapped should overflow its ancestor,
+     not the viewport. Pair with min-width on wide tables. */
+  table.data-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 6px 8px;
+  }
+
+  /* Slightly larger section title breathing room */
+  .section-title {
+    font-size: 0.78rem;
+    margin-bottom: 8px;
+  }
+
+  /* Touch targets — bump tiny buttons to 36px minimum visual,
+     but keep tab rows compact */
+  button,
+  [role="button"] {
+    touch-action: manipulation;
+  }
+
+  /* Kill 300ms tap delay for all links */
+  a {
+    touch-action: manipulation;
+  }
+
+  /* Prevent auto-zoom on input focus in iOS Safari — needs 16px */
+  input[type="text"],
+  input[type="number"],
+  input[type="email"],
+  input[type="password"],
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Touch devices without hover: make sure hover-only rules do not
+   leave components broken. Applied regardless of breakpoint so
+   tablet landscape also works. */
+@media (hover: none) {
+  .data-table tr:hover {
+    background: inherit;
+  }
 }

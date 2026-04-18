@@ -3,6 +3,8 @@
  * Returns colors and layout defaults that match the current light/dark mode.
  */
 
+import { useEffect, useState } from "react";
+
 export interface ChartTheme {
   paper: string;
   plot: string;
@@ -54,13 +56,28 @@ export function getChartTheme(isDark: boolean): ChartTheme {
 
 /** Base Plotly layout merged with theme colors */
 export function getBaseLayout(t: ChartTheme, overrides?: Record<string, unknown>) {
+  const mobile = typeof window !== "undefined" && window.innerWidth < 640;
   return {
     paper_bgcolor: t.paper,
     plot_bgcolor: t.plot,
-    font: { family: "Inter, sans-serif", color: t.text, size: 10 },
-    margin: { l: 50, r: 20, t: 20, b: 50 },
+    font: { family: "Inter, sans-serif", color: t.text, size: mobile ? 9 : 10 },
+    margin: mobile
+      ? { l: 36, r: 10, t: 18, b: 36 }
+      : { l: 50, r: 20, t: 20, b: 50 },
     ...overrides,
   };
+}
+
+/** Hook: returns true when viewport is below the given breakpoint (default 640). */
+export function useIsMobile(breakpoint: number = 640): boolean {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const check = () => setMobile(window.innerWidth < breakpoint);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, [breakpoint]);
+  return mobile;
 }
 
 /** Standard chart heights. Prefer these over magic numbers. */
@@ -70,6 +87,24 @@ export const CHART_HEIGHT = {
   normal: 340,     // primary chart
   tall: 460,       // detail view / 2-row subplot
 } as const;
+
+/** Mobile-adjusted chart height. Shrinks by ~25% on phones so
+ *  charts don't dominate the viewport. */
+export function responsiveHeight(base: number, isMobile: boolean): number {
+  return isMobile ? Math.max(200, Math.round(base * 0.75)) : base;
+}
+
+/** Shared Plotly config that enables responsive resize, disables the
+ *  mode bar on mobile (it's useless with no mouse), and removes
+ *  pinch-to-zoom conflicts. Spread into <Plot config={...}/>. */
+export function getPlotConfig(isMobile: boolean = false): Record<string, unknown> {
+  return {
+    responsive: true,
+    displayModeBar: !isMobile,
+    displaylogo: false,
+    scrollZoom: false,
+  };
+}
 
 /** Standard heatmap text size + cell gap. */
 export const HEATMAP_FONT_SIZE = 10;
