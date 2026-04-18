@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import { fetchPriceHistoryBatch } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT, heatmapTrace, heatmapHeight, type ChartTheme } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
+import { ChartCard } from "@/components/ui/chart-card";
 import dynamic from "next/dynamic";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
@@ -602,7 +603,7 @@ export default function CorrelationPage() {
 
           {/* Tab 0: Matrix */}
           {activeTab === 0 && (
-            <div className="card">
+            <ChartCard height={heatmapHeight(n, { compact: n > 15, padding: 120 })}>
               <Plot data={[{
                 ...heatmapTrace(t, "correlation", { colorbarTitle: "Corr" }),
                 z: corrMatrix,
@@ -619,13 +620,15 @@ export default function CorrelationPage() {
                   yaxis: { autorange: "reversed", tickfont: { size: 9, color: t.text }, gridcolor: t.grid },
                 }}
                 config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
-            </div>
+            </ChartCard>
           )}
 
           {/* Tab 1: Rolling Correlation */}
           {activeTab === 1 && (
-            <div className="card space-y-4">
-              <p className="text-xs text-text-muted">63-day rolling correlation of each asset vs SPY.</p>
+            <ChartCard
+              subtitle="63-day rolling correlation of each asset vs SPY."
+              height={CHART_HEIGHT.tall}
+            >
               {(() => {
                 const spyRet = returns["SPY"];
                 const window = 63;
@@ -661,13 +664,15 @@ export default function CorrelationPage() {
                     config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
                 );
               })()}
-            </div>
+            </ChartCard>
           )}
 
           {/* Tab 2: Regime Analysis */}
           {activeTab === 2 && (
-            <div className="card space-y-4">
-              <p className="text-xs text-text-muted">Average correlation vs SPY by asset class, split by calm vs stress days (|SPY return| median).</p>
+            <ChartCard
+              subtitle="Average correlation vs SPY by asset class, split by calm vs stress days (|SPY return| median)."
+              height={CHART_HEIGHT.normal + 20}
+            >
               {(() => {
                 const spyRet = returns["SPY"];
                 if (!spyRet) return null;
@@ -710,7 +715,7 @@ export default function CorrelationPage() {
                     config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
                 );
               })()}
-            </div>
+            </ChartCard>
           )}
 
           {/* Tab 3: Clustering */}
@@ -814,7 +819,7 @@ function ClusteringView({
         </div>
       </div>
 
-      <div className="card">
+      <ChartCard height={CHART_HEIGHT.tall}>
         <Plot
           data={dendroResult.traces as never}
           layout={{
@@ -828,7 +833,7 @@ function ClusteringView({
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />
-      </div>
+      </ChartCard>
 
       <div className="card">
         <div className="font-semibold text-sm mb-2">Cluster Composition</div>
@@ -858,8 +863,10 @@ function ClusteringView({
         </div>
       </div>
 
-      <div className="card">
-        <div className="font-semibold text-sm mb-2">Correlation Matrix (Reordered by Cluster)</div>
+      <ChartCard
+        title="Correlation Matrix (Reordered by Cluster)"
+        height={heatmapHeight(n, { compact: n > 15, padding: 120 })}
+      >
         <Plot
           data={[{
             ...heatmapTrace(t, "correlation", { colorbarTitle: "Corr" }),
@@ -878,7 +885,7 @@ function ClusteringView({
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />
-      </div>
+      </ChartCard>
     </div>
   );
 }
@@ -994,10 +1001,10 @@ function BreakdownView({
       </div>
 
       {detailRolling && detailRolling.length > 0 && (
-        <div className="card">
-          <div className="font-semibold text-sm mb-2">
-            Top Alert Detail — {topAlert.pair} · {topAlert.signal} (Z = {topAlert.z >= 0 ? "+" : ""}{topAlert.z.toFixed(1)})
-          </div>
+        <ChartCard
+          title={`Top Alert Detail — ${topAlert.pair} · ${topAlert.signal} (Z = ${topAlert.z >= 0 ? "+" : ""}${topAlert.z.toFixed(1)})`}
+          height={CHART_HEIGHT.normal}
+        >
           <Plot
             data={[{
               x: dates.slice(-detailRolling.length),
@@ -1023,7 +1030,7 @@ function BreakdownView({
             config={{ displayModeBar: false, responsive: true }}
             style={{ width: "100%" }}
           />
-        </div>
+        </ChartCard>
       )}
     </div>
   );
@@ -1115,7 +1122,7 @@ function PcaView({
       </div>
 
       {/* Scree plot */}
-      <div className="card">
+      <ChartCard height={CHART_HEIGHT.normal + 40}>
         <Plot
           data={[
             {
@@ -1146,7 +1153,7 @@ function PcaView({
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />
-      </div>
+      </ChartCard>
 
       <div className="card card-compact">
         <div className="flex flex-wrap gap-6">
@@ -1158,9 +1165,11 @@ function PcaView({
       </div>
 
       {/* Factor loadings heatmap */}
-      <div className="card">
-        <div className="font-semibold text-sm">Factor Loadings</div>
-        <div className="text-xs text-text-muted mb-2">How each asset loads onto the principal components. High absolute loading = strong exposure to that factor.</div>
+      <ChartCard
+        title="Factor Loadings"
+        subtitle="How each asset loads onto the principal components. High absolute loading = strong exposure to that factor."
+        height={heatmapHeight(sortedTickers.length, { compact: sortedTickers.length > 15 })}
+      >
         <Plot
           data={[{
             ...heatmapTrace(t, "correlation", { colorbarTitle: "Loading" }),
@@ -1180,7 +1189,7 @@ function PcaView({
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />
-      </div>
+      </ChartCard>
 
       {/* Factor interpretation */}
       <div className="card space-y-3">
@@ -1214,9 +1223,11 @@ function PcaView({
       </div>
 
       {/* Asset map */}
-      <div className="card">
-        <div className="font-semibold text-sm">Asset Map (PC1 vs PC2)</div>
-        <div className="text-xs text-text-muted mb-2">Assets close together in PC space have similar risk profiles. Distance = dissimilarity.</div>
+      <ChartCard
+        title="Asset Map (PC1 vs PC2)"
+        subtitle="Assets close together in PC space have similar risk profiles. Distance = dissimilarity."
+        height={CHART_HEIGHT.tall + 60}
+      >
         <Plot
           data={Object.entries(assetMap).map(([cls, grp]) => ({
             x: grp.x, y: grp.y,
@@ -1238,7 +1249,7 @@ function PcaView({
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: "100%" }}
         />
-      </div>
+      </ChartCard>
     </div>
   );
 }
