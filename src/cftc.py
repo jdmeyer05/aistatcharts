@@ -387,6 +387,12 @@ def weekly_change(series: pd.Series, lag: int = 1) -> pd.Series:
 # Unified contract view — the main per-contract API
 # ═══════════════════════════════════════════════════════════════════
 
+# Cache for contract_history outputs (the rolling percentile computations are
+# the real expense, not the raw fetch). Keyed by (code, lookback_weeks).
+_HISTORY_CACHE: dict[tuple[str, int], tuple[datetime, pd.DataFrame]] = {}
+_HISTORY_TTL = timedelta(hours=24)
+
+
 def contract_history(code: str, lookback_weeks: int = 260) -> pd.DataFrame:
     """One DataFrame per contract with speculator + commercial signals,
     percentiles, COT Index, z-score, weekly/4w changes, divergence Z.
@@ -394,6 +400,13 @@ def contract_history(code: str, lookback_weeks: int = 260) -> pd.DataFrame:
     Speculator side = Managed Money (commodities) or Leveraged Funds (financials).
     Commercial side = Producer/Merchant (commodities) or Legacy Commercials (if enabled).
     """
+    # Result-level cache — rolling percentile/z-score computations dominate
+    # runtime for the cross-contract analog match and the P&L reconstruction.
+    cache_key = (code, lookback_weeks)
+    cached_entry = _HISTORY_CACHE.get(cache_key)
+    if cached_entry and (datetime.utcnow() - cached_entry[0]) < _HISTORY_TTL:
+        return cached_entry[1]
+
     spec = CONTRACTS_BY_CODE.get(code)
     if not spec:
         return pd.DataFrame()
@@ -447,6 +460,7 @@ def contract_history(code: str, lookback_weeks: int = 260) -> pd.DataFrame:
 
     if lookback_weeks and len(out) > lookback_weeks:
         out = out.tail(lookback_weeks).reset_index(drop=True)
+    _HISTORY_CACHE[cache_key] = (datetime.utcnow(), out)
     return out
 
 

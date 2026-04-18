@@ -98,6 +98,27 @@ CFTC_TO_YF: dict[str, str] = {
 _PRICE_CACHE: dict[str, tuple[datetime, pd.DataFrame]] = {}
 _PRICE_CACHE_TTL = timedelta(hours=4)
 
+# ── Result caches — the expensive scans recompute slowly; CFTC data only
+#    updates once a week so a long TTL is safe.
+_RESULT_CACHE: dict[str, tuple[datetime, object]] = {}
+_RESULT_TTL = timedelta(hours=12)
+
+
+def _result_cached(key: str):
+    """Decorator: memoize function result with the module-level TTL cache."""
+    def deco(fn):
+        def wrapper(*args, **kwargs):
+            full_key = f"{key}:{args}:{sorted(kwargs.items())}"
+            entry = _RESULT_CACHE.get(full_key)
+            if entry and (datetime.utcnow() - entry[0]) < _RESULT_TTL:
+                return entry[1]
+            v = fn(*args, **kwargs)
+            _RESULT_CACHE[full_key] = (datetime.utcnow(), v)
+            return v
+        wrapper.__name__ = fn.__name__
+        return wrapper
+    return deco
+
 
 def _fetch_prices(cftc_code: str, lookback_days: int = 800) -> pd.DataFrame:
     """Pull daily OHLC for the mapped yfinance symbol. Returns empty on failure.
@@ -389,6 +410,7 @@ def cta_model_status(cftc_code: str) -> dict:
 # Bias scan across all contracts — landing-tab feed
 # ═══════════════════════════════════════════════════════════════════
 
+@_result_cached("cta_bias_scan")
 def cta_bias_scan() -> list[dict]:
     """Run the scenario model across every mapped contract, return bias summary."""
     rows = []
@@ -438,6 +460,7 @@ def realized_vol_percentile(cftc_code: str, window: int = 20, lookback: int = 75
     return float(pct)
 
 
+@_result_cached("all_vol_percentiles")
 def all_vol_percentiles() -> dict[str, float]:
     """Realized vol percentile for every mapped contract, keyed by SYMBOL
     (to match the format cta_unwind_risk expects)."""
@@ -469,6 +492,7 @@ def _weekly_returns_from_daily(prices: pd.DataFrame) -> pd.Series:
     return weekly.pct_change().dropna()
 
 
+@_result_cached("cta_pnl")
 def reconstructed_cta_pnl(lookback_weeks: int = 156) -> dict:
     """Model CTA P&L as positioning × forward weekly return, aggregated across
     contracts with OI weighting.
@@ -543,64 +567,72 @@ def reconstructed_cta_pnl(lookback_weeks: int = 156) -> dict:
 # Historical analog — which past week looks most like today
 # ═══════════════════════════════════════════════════════════════════
 
-def _positioning_vector_at(target_date: pd.Timestamp, min_contracts: int = 20) -> np.ndarray | None:
-    """Build a feature vector: for each contract, (spec_net_pctile, divergence_z, vol_if_mapped).
-    Returns None if we can't compute enough."""
+@_result_cached("historical_analog")
+def historical_analog(top_n: int = 5) -> dict:
+    """Find the historical weeks whose positioning vector is closest to now's.
+    Returns: { "current_date": ..., "analogs": [{date, cosine_sim, spy_fwd_1m, spy_fwd_3m}...] }
+
+    Performance: pre-fetches all contract histories once, then builds weekly
+    feature vectors from the cached DataFrames. Prior implementation called
+    contract_history inside a double loop (260 dates × 45 contracts) which
+    recomputed rolling percentiles 11,700 times and hung for minutes.
+    """
     from src.cftc import contract_history, CONTRACTS_BY_CODE
-    features: list[float] = []
-    contracts_found = 0
+
+    # 1. Pull every contract's history ONCE. Keep a date-indexed DataFrame.
+    histories: dict[str, pd.DataFrame] = {}
     for code in sorted(CONTRACTS_BY_CODE.keys()):
         h = contract_history(code, lookback_weeks=260)
         if h.empty:
-            features.extend([0.0, 0.0])
             continue
-        # Find the row closest to target_date (within 7 days)
-        h2 = h.set_index("date")
-        window = h2[(h2.index >= target_date - pd.Timedelta(days=10)) &
-                    (h2.index <= target_date + pd.Timedelta(days=7))]
-        if window.empty:
-            features.extend([0.0, 0.0])
-            continue
-        row = window.iloc[-1]
-        pctile = row.get("spec_pctile_3y")
-        divz = row.get("spec_vs_comm_z")
-        features.append(float(pctile) if pctile is not None and not np.isnan(pctile) else 0.0)
-        features.append(float(divz) if divz is not None and not np.isnan(divz) else 0.0)
-        contracts_found += 1
-    if contracts_found < min_contracts:
-        return None
-    return np.array(features, dtype=np.float32)
+        h = h.set_index("date").sort_index()
+        histories[code] = h
+    if not histories:
+        return {"current_date": None, "analogs": [], "error": "No contract data available"}
 
-
-def historical_analog(top_n: int = 5) -> dict:
-    """Find the historical weeks whose positioning vector is closest to now's.
-    Returns: { "current_date": ..., "analogs": [{date, cosine_sim, spy_fwd_1m, spy_fwd_3m}...] }"""
-    from src.cftc import contract_history, CONTRACTS_BY_CODE
-
-    # 1. Gather all Tuesdays in history from any available contract
+    # 2. Collect the union of Tuesday report dates across all contracts.
     all_dates: set[pd.Timestamp] = set()
-    for code in list(CONTRACTS_BY_CODE.keys())[:10]:  # sample 10 to speed up
-        h = contract_history(code, lookback_weeks=260)
-        if h.empty:
-            continue
-        all_dates.update(h["date"].tolist())
+    for h in histories.values():
+        all_dates.update(h.index.tolist())
     dates = sorted(all_dates)
     if len(dates) < 50:
         return {"current_date": None, "analogs": [], "error": "Insufficient history"}
 
-    current_vec = _positioning_vector_at(dates[-1])
+    codes = sorted(histories.keys())
+
+    def build_vector(target_date: pd.Timestamp) -> np.ndarray | None:
+        features: list[float] = []
+        found = 0
+        for code in codes:
+            h = histories[code]
+            # Find nearest row within ±10 days
+            window = h[(h.index >= target_date - pd.Timedelta(days=10)) &
+                       (h.index <= target_date + pd.Timedelta(days=7))]
+            if window.empty:
+                features.extend([0.0, 0.0])
+                continue
+            row = window.iloc[-1]
+            p = row.get("spec_pctile_3y")
+            z = row.get("spec_vs_comm_z")
+            features.append(float(p) if p is not None and not np.isnan(p) else 0.0)
+            features.append(float(z) if z is not None and not np.isnan(z) else 0.0)
+            found += 1
+        if found < 20:
+            return None
+        return np.array(features, dtype=np.float32)
+
+    current_vec = build_vector(dates[-1])
     if current_vec is None:
         return {"current_date": str(dates[-1]), "analogs": [], "error": "Could not build current vector"}
 
-    # Compare against every prior date (skip the most recent 4 weeks to avoid
-    # trivial near-in-time matches)
-    candidates = dates[:-4]
+    # 3. Compare current vs. every prior date in the last 3Y, excluding the
+    # most recent 4 weeks (to avoid trivial near-in-time matches).
+    candidates = [d for d in dates[-156:-4] if d < dates[-1]]
     similarities: list[tuple[pd.Timestamp, float]] = []
-    for d in candidates[-260:]:  # search over last 5 years
-        v = _positioning_vector_at(d)
+    for d in candidates:
+        v = build_vector(d)
         if v is None or v.shape != current_vec.shape:
             continue
-        # Cosine similarity
         num = float(np.dot(current_vec, v))
         den = float(np.linalg.norm(current_vec) * np.linalg.norm(v))
         if den == 0:
