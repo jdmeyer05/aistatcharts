@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import { fetchInterpretation } from "@/lib/api";
 
 interface Props {
-  /** Page identifier, one of: overview, insiders, 13f, political, activist, shorts, buybacks, exits, global, factors */
+  /** Page identifier. Must match a key in api/routes/ai.py:PAGE_CONTEXT. */
   page: string;
   /** Compact JSON summary of what's currently rendered. Keep under ~10KB for quick responses. */
   data: unknown;

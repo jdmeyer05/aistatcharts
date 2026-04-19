@@ -142,9 +142,13 @@ def _check_grounding(interpretation: str, data: dict) -> dict:
 
         # Fuzzy numeric match within 2% tolerance against any payload number.
         # For percentage tokens, also check the decimal form — payloads often
-        # store "15.3%" as 0.153.
+        # store "15.3%" as 0.153. Also try the /100 form for bare integers in
+        # 1..100 (likely implicit percentile / percentage claims like
+        # "95th percentile" when the payload stores 0.95).
         candidates = [n]
         if is_pct:
+            candidates.append(n / 100.0)
+        elif "." not in token and "%" not in token and 1 <= n <= 100 and n == int(n):
             candidates.append(n / 100.0)
         matched = False
         for c in candidates:
@@ -211,38 +215,41 @@ PAGE_CONTEXT: dict[str, str] = {
         "What to produce: the 1-2 most notable reads in this week's data, the confluences that tie them together, and what price action would confirm or invalidate. Do NOT repeat the definitions above — the user knows them."
     ),
     "positioning_heatmap": (
-        "CFTC positioning heatmap — one tile per contract showing 3Y percentile of speculator net position (Managed Money for commodities, Leveraged Funds for financials). Red = crowded long, green = crowded short, grey = mid-range. Also includes 1Y percentile, COT Index (0..1 over 3Y), Z-score 3Y, 1w/4w delta, and divergence Z vs commercials.\n"
+        "CFTC positioning heatmap payload: per-tile `symbol`, `name`, `asset_class`, `pctile_3y` (spec net percentile, 0..1), `zscore_3y`, `chg_1w` (WoW contracts change), `divergence_z` (spec vs commercial spread Z).\n"
         "Interpretation rules:\n"
-        "- Group findings by asset class. Are equities / rates / FX / commodities coherent or conflicted?\n"
-        "- |pctile − 0.5| ≥ 0.45 (≤5th or ≥95th) = meaningful extreme.\n"
+        "- Group by asset_class. Check if equities / rates / FX / commodities are coherent or conflicted.\n"
+        "- pctile_3y ≤ 0.05 or ≥ 0.95 is a meaningful extreme.\n"
         "- Large chg_1w with high pctile = accelerating crowd. Large chg_1w with mid pctile = fresh positioning building.\n"
-        "- divergence_z ≥ +2 → commercials taking the other side of a crowded spec long (contrarian bearish). ≤ -2 inverse.\n"
-        "What to produce: the 2-3 most striking groupings or outliers, what they imply for the broader regime, and which single contract is the 'sharpest' name to watch. Skip definitions."
+        "- divergence_z ≥ 2 → commercials taking the other side of a crowded spec long (contrarian bearish). ≤ -2 inverse.\n"
+        "What to produce: the 2-3 most striking groupings or outliers, what they imply for the broader regime, and which single contract is the 'sharpest' name to watch. Use the symbol plus a price direction (e.g., 'CL structurally long, fade bounces'). Skip definitions."
     ),
     "positioning_divergence": (
-        "Spec-vs-commercial divergence Z ranked across every contract with both sides available. Positive Z = speculators crowded long while commercials (producers / swap dealers hedging real flow) are crowded short. Negative = inverse.\n"
+        "Spec-vs-commercial divergence Z ranked table. Positive Z = speculators crowded long while commercials (producers / swap dealers hedging real flow) are crowded short. Negative Z = inverse.\n"
         "Interpretation rules:\n"
-        "- |Z| ≥ 2 is the historical threshold where commercials systematically win over 8-12 weeks — 2008 oil (specs +3σ), 2013 gold (specs -2.8σ), 2020 bonds (specs -2.5σ) all fit.\n"
+        "- |Z| ≥ 2 is the historical threshold where commercials systematically win over 8-12 weeks — this has caught most major commodity and rate reversals of the last two decades.\n"
         "- Concentration matters: if divergences cluster in a theme (all energies, all grains, all rates), it's a sector call, not noise.\n"
         "- Single-name extremes without confirming signal elsewhere are contrarian lottery tickets; themed divergences are real.\n"
-        "What to produce: the single most actionable divergence (with magnitude + the implied trade direction), plus any cluster pattern across the table. Flag when the top row is just barely past threshold vs genuinely extreme."
+        "- A row at |Z| barely over 2 is a weak read; a row at |Z| ≥ 3 is where the historical base rate is strongest.\n"
+        "What to produce: the single most actionable divergence (with its Z and the implied trade direction), plus any cluster pattern across the table. Do NOT cite specific historical years — refer to past setups by regime or asset (e.g., 'similar to the prior oil-top setup')."
     ),
     "positioning_cta_watch": (
-        "CTA forced-unwind watch: top rows ranked by `unwind_score` = positioning extremity × realized-vol percentile. Below that, this-week's biggest WoW flows normalized by OI.\n"
+        "CTA forced-unwind watch payload: `unwind` list ranked by unwind_score (positioning extremity × realized-vol percentile). `flows` list ranked by this-week WoW change as % of open interest.\n"
         "Interpretation rules:\n"
-        "- Unwind score > 0.7 AND direction=long AND vol_pctile > 0.7 = forced-seller setup on the next vol spike.\n"
-        "- Large flow_radar entries in the SAME contract as a high unwind score is a near-term tell — crowd just got more crowded right before vol crosses up.\n"
-        "- If flow and unwind disagree (spec BUILDING in a contract not yet at extremity), it's either early trend or late noise — check duration.\n"
-        "What to produce: the single setup most likely to unwind this month, any cross-contract thread, and what vol or price trigger confirms. Skip the formula."
+        "- unwind_score ≥ 0.7 with direction=long and vol_pctile ≥ 0.7 is the forced-seller setup — next vol spike triggers deleveraging.\n"
+        "- When a contract appears near the top of BOTH tables, the crowd just got more crowded right before vol crosses up. Strong near-term tell.\n"
+        "- If `flows` shows specs building (chg_1w_pct_oi > 0) in a contract NOT yet at high pctile_3y, treat as early trend, not late extreme.\n"
+        "- Direction-based flow vs positioning conflicts (spec net short AND net buying aggressively) often signal a capitulation-in-progress.\n"
+        "What to produce: the single setup most likely to unwind this month, any cross-contract thread between the two lists, and the vol or price trigger that would confirm. Skip repeating what unwind_score means."
     ),
     "positioning_cta_model": (
-        "CTA model for one contract — replicates Nomura / GS CTA desk readouts. Fields: current `exposure` (-100..+100 = max short..max long), `bias_1w` / `bias_1m` ('all_buying' / 'all_selling' / 'mixed' / 'neutral'), a scenario table showing projected exposure under ±1σ/±2σ price moves, and the `triggers` ladder listing nearest prices where the model's component signals flip.\n"
+        "CTA model for ONE contract — replicates Nomura / GS CTA desk readouts. Payload fields: `exposure` (signed, -100..+100; -100 = max short, +100 = max long), `bias_1w` and `bias_1m` (values: all_buying, all_selling, mixed, neutral), `triggers` (nearest prices where the ensemble's component signals flip, with type + distance_pct), `scenarios_1w` and `scenarios_1m` (grid of ±1σ/±2σ terminal-price moves with projected exposure).\n"
         "Interpretation rules:\n"
-        "- bias='all_buying' means CTAs add exposure in EVERY scenario — asymmetric upside for whoever is already long.\n"
-        "- bias='all_selling' is the inverse: forced-seller setup, expect pressure.\n"
-        "- bias='mixed' means direction of CTA flow depends on which way price goes — look at the trigger ladder for the nearest flip level.\n"
-        "- Exposure near ±100 means near-max positioning: flow becomes asymmetric (can only go the other way).\n"
-        "What to produce: the crisp bias call (buying/selling/mixed) for the shown contract, the nearest trigger that would flip the model, and whether the scenario grid implies a good risk/reward entry. Skip explanations of what CTAs are."
+        "- bias='all_buying' → asymmetric upside tailwind (CTAs buy in every scenario on this horizon).\n"
+        "- bias='all_selling' → forced-seller setup, expect systematic supply.\n"
+        "- bias='mixed' → CTA flow direction depends on which way price resolves; the `triggers` ladder shows nearest flip prices.\n"
+        "- Exposure near ±100 means near-max positioning; flow becomes asymmetric because CTAs can only go the other way.\n"
+        "- Distance_pct < 3% on a nearby trigger means it's within normal-week price noise — high probability of firing.\n"
+        "What to produce: crisp bias call for the contract (buying / selling / mixed with the key scenario), the nearest trigger that would flip the model (cite level + distance_pct), and whether the scenario grid implies favorable risk/reward from the current exposure. Skip explanations of what CTAs are."
     ),
 }
 
