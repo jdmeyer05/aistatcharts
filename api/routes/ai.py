@@ -271,9 +271,16 @@ class InterpretRequest(BaseModel):
 
 
 def _interpret_cache_key(page: str, data: dict, subject: str | None) -> str:
-    """Deterministic hash over the inputs. Uses sort_keys so reorderings of
-    the same data don't create duplicate cache entries."""
-    payload = json.dumps({"page": page, "data": data, "subject": subject}, sort_keys=True, default=str)
+    """Deterministic hash over the inputs AND the prompt text. Including
+    BASE_SYSTEM + PAGE_CONTEXT means any prompt edit automatically invalidates
+    cached answers for the affected page — no manual cache-wipe needed. Old
+    entries sit orphaned until their 24h TTL expires."""
+    ctx = PAGE_CONTEXT.get(page, "")
+    payload = json.dumps(
+        {"page": page, "system": BASE_SYSTEM, "ctx": ctx, "data": data, "subject": subject},
+        sort_keys=True,
+        default=str,
+    )
     digest = hashlib.sha256(payload.encode()).hexdigest()[:32]
     return f"ai_interpret:{page}:{digest}"
 
