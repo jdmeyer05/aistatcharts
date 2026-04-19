@@ -205,14 +205,19 @@ PAGE_CONTEXT: dict[str, str] = {
     "factors": "Fama-French 5-factor regression on a single ticker. Betas quantify exposure to Market / Size / Value / Profitability / Investment factors. Alpha is the excess return unexplained by factor exposures — what's left after stripping out the systematic bets.",
     "positioning": (
         "CFTC Commitments of Traders snapshot — 45 flagship contracts. "
-        "Data fields the user can see: four regime composites (risk_on_off, reflation, safe_haven, dollar; each a z-score aggregate across multi-contract baskets), top_divergences (spec-vs-commercial spread Z), top_unwind (positioning extremity × realized-vol regime), top_flows (largest WoW net changes as % of OI).\n"
+        "Data fields: four regime composites (risk_on_off, reflation, safe_haven, dollar; each a z-score aggregate across multi-contract baskets), top_divergences (spec-vs-commercial spread Z), top_unwind (positioning extremity × realized-vol regime), top_flows (largest WoW net changes as % of OI).\n"
         "Interpretation rules:\n"
         "- |regime z| ≥ 1.5 is meaningful, ≥ 2 is extreme.\n"
-        "- |divergence_z| ≥ 2 is the historical threshold for contrarian setups (2008-oil, 2013-gold, 2020-bonds).\n"
-        "- Commercials are producers/hedgers = smart money; when specs crowded one way AND commercials the other, commercials usually win over 8-12 weeks.\n"
+        "- |divergence_z| ≥ 2 is the historical threshold for contrarian setups; ≥ 3 is where base rates are strongest.\n"
+        "- Commercials are producers / hedgers — smart money. When specs crowded one way AND commercials the other, commercials usually win over 8-12 weeks.\n"
         "- Managed-money percentile ≥ 0.95 + rising vol = forced-unwind risk.\n"
         "- Cross-validate: if ≥2 regime composites + ≥1 divergence align, that's a real thesis. A single number in isolation is usually noise.\n"
-        "What to produce: the 1-2 most notable reads in this week's data, the confluences that tie them together, and what price action would confirm or invalidate. Do NOT repeat the definitions above — the user knows them."
+        "Coverage requirement — do NOT cherry-pick. Go through every row of top_divergences and top_unwind and account for ANY contract at |divergence_z| ≥ 3 OR unwind_score ≥ 0.7. The common failure mode is optimizing for a clean thematic cluster (e.g., 5 grains) and skipping single-name extremes that don't fit the theme (e.g., a lone FX cross at the top of the unwind list). Those are often the sharpest individual trades — name them.\n"
+        "Output structure:\n"
+        "1) Lead with the 1-2 strongest thematic or single-name reads.\n"
+        "2) A short 'Also in this data' section listing any other contract at |divergence_z| ≥ 3 or unwind_score ≥ 0.7 that wasn't already covered, with one-line implication each. Skip this section only if genuinely none exist.\n"
+        "3) Price action that would confirm or invalidate the top read.\n"
+        "Do NOT repeat the field definitions — the user knows them. Do NOT cite specific historical years."
     ),
     "positioning_heatmap": (
         "CFTC positioning heatmap payload: per-tile `symbol`, `name`, `asset_class`, `pctile_3y` (spec net percentile, 0..1), `zscore_3y`, `chg_1w` (WoW contracts change), `divergence_z` (spec vs commercial spread Z).\n"
@@ -226,11 +231,16 @@ PAGE_CONTEXT: dict[str, str] = {
     "positioning_divergence": (
         "Spec-vs-commercial divergence Z ranked table. Positive Z = speculators crowded long while commercials (producers / swap dealers hedging real flow) are crowded short. Negative Z = inverse.\n"
         "Interpretation rules:\n"
-        "- |Z| ≥ 2 is the historical threshold where commercials systematically win over 8-12 weeks — this has caught most major commodity and rate reversals of the last two decades.\n"
-        "- Concentration matters: if divergences cluster in a theme (all energies, all grains, all rates), it's a sector call, not noise.\n"
-        "- Single-name extremes without confirming signal elsewhere are contrarian lottery tickets; themed divergences are real.\n"
-        "- A row at |Z| barely over 2 is a weak read; a row at |Z| ≥ 3 is where the historical base rate is strongest.\n"
-        "What to produce: the single most actionable divergence (with its Z and the implied trade direction), plus any cluster pattern across the table. Do NOT cite specific historical years — refer to past setups by regime or asset (e.g., 'similar to the prior oil-top setup')."
+        "- |Z| ≥ 2 is the historical threshold where commercials systematically win over 8-12 weeks — has caught most major commodity and rate reversals of the last two decades.\n"
+        "- |Z| ≥ 3 is where base rates are strongest.\n"
+        "- Concentration matters: if divergences cluster in a theme (all energies, all grains, all rates), it's a sector call. But the cluster and individual single-name extremes coexist — don't pick one at the expense of the other.\n"
+        "- A row at |Z| barely over 2 is a weak read.\n"
+        "Coverage requirement: account for EVERY row in the table at |Z| ≥ 3. If the top read is a thematic cluster, still call out any |Z| ≥ 3 contract that sits outside the cluster — those are often the sharpest individual tickets.\n"
+        "Output structure:\n"
+        "1) The top thematic or single-name read, with implied trade direction.\n"
+        "2) An 'Also extreme' list covering every remaining |Z| ≥ 3 row with one-line implication.\n"
+        "3) A flag on whether the strongest row is genuinely at |Z| ≥ 3 or merely barely past 2 (weaker signal).\n"
+        "Do NOT cite specific historical years — refer to past setups by asset (e.g., 'similar to prior oil-top setups')."
     ),
     "positioning_cta_watch": (
         "CTA forced-unwind watch payload: `unwind` list ranked by unwind_score (positioning extremity × realized-vol percentile). `flows` list ranked by this-week WoW change as % of open interest.\n"
