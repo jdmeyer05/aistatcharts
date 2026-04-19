@@ -70,9 +70,10 @@ export const metadata: Metadata = {
     follow: true,
     googleBot: { index: true, follow: true, "max-image-preview": "large", "max-snippet": -1 },
   },
-  alternates: {
-    canonical: SITE_URL,
-  },
+  // Intentionally no alternates.canonical at the layout level — a root-URL
+  // canonical would make every page (e.g. /positioning) claim it's a duplicate
+  // of /. Omitted so each page canonicalizes to its own URL by default. Pages
+  // that need a different canonical can set their own alternates.
   appleWebApp: {
     capable: true,
     title: "Statcharts",
