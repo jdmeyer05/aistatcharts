@@ -19,7 +19,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} themes={["light", "dark", "retro", "matrix"]}>
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} themes={["light", "dark", "retro", "matrix"]}>
       <QueryClientProvider client={queryClient}>
         <PwaProvider>{children}</PwaProvider>
       </QueryClientProvider>
