@@ -275,6 +275,15 @@ function HeatmapTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
   if (!tiles) return <div className="text-xs text-text-muted">Loading heatmap…</div>;
 
   const filtered = filter === "all" ? tiles : tiles.filter((t) => t.asset_class === filter);
+  // AI payload — slim records so the context stays under 10 KB
+  const aiPayload = {
+    filter,
+    tiles: filtered.map((t) => ({
+      symbol: t.symbol, name: t.name, asset_class: t.asset_class,
+      pctile_3y: t.pctile_3y, zscore_3y: t.zscore_3y,
+      chg_1w: t.chg_1w, divergence_z: t.divergence_z,
+    })),
+  };
 
   return (
     <div className="space-y-4">
@@ -323,6 +332,8 @@ function HeatmapTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
           </div>
         ))}
       </div>
+
+      <AIInterpretation page="positioning_heatmap" data={aiPayload} buttonLabel="Interpret Heatmap" />
     </div>
   );
 }
@@ -336,6 +347,14 @@ function DivergenceTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
   const ranked = tiles
     .filter((t) => t.divergence_z != null)
     .sort((a, b) => Math.abs((b.divergence_z ?? 0)) - Math.abs((a.divergence_z ?? 0)));
+  const aiPayload = {
+    ranked: ranked.slice(0, 20).map((t) => ({
+      symbol: t.symbol, name: t.name, asset_class: t.asset_class,
+      divergence_z: t.divergence_z,
+      spec_pctile_3y: t.pctile_3y, comm_pctile_3y: t.comm_pctile_3y,
+      spec_net: t.spec_net,
+    })),
+  };
 
   return (
     <div className="space-y-3">
@@ -379,6 +398,8 @@ function DivergenceTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
           </tbody>
         </table>
       </div>
+
+      <AIInterpretation page="positioning_divergence" data={aiPayload} buttonLabel="Interpret Divergences" />
     </div>
   );
 }
@@ -390,6 +411,10 @@ function DivergenceTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
 function CtaWatchTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQuery> }) {
   const d = dashboard.data;
   if (!d) return <div className="text-xs text-text-muted">Loading…</div>;
+  const aiPayload = {
+    unwind: d.cta_unwind_top,
+    flows: d.flow_radar_top,
+  };
 
   return (
     <div className="space-y-5">
@@ -468,6 +493,8 @@ function CtaWatchTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQ
           </table>
         </div>
       </div>
+
+      <AIInterpretation page="positioning_cta_watch" data={aiPayload} buttonLabel="Interpret CTA Setup" />
     </div>
   );
 }
@@ -938,6 +965,25 @@ function CtaModelTab() {
         <div className="card text-sm text-text-muted py-4 px-5">
           Price data unavailable for this contract ({m.reason ?? "no yfinance mapping"}).
         </div>
+      )}
+
+      {m && m.available && (
+        <AIInterpretation
+          page="positioning_cta_model"
+          subject={m.name ?? m.symbol ?? undefined}
+          data={{
+            symbol: m.symbol, name: m.name, asset_class: m.asset_class,
+            last_price: m.last_price,
+            exposure: m.exposure,
+            bias_1w: m.scenarios?.bias_1w,
+            bias_1m: m.scenarios?.bias_1m,
+            vol_1w_pct: m.scenarios?.vol_1w_pct,
+            triggers: m.triggers?.slice(0, 8),
+            scenarios_1w: m.scenarios?.horizons?.["1w"],
+            scenarios_1m: m.scenarios?.horizons?.["1m"],
+          }}
+          buttonLabel="Interpret CTA Model"
+        />
       )}
     </div>
   );
