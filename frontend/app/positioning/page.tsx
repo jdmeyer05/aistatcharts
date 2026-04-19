@@ -161,6 +161,16 @@ function PulseTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQuer
 
   return (
     <div className="space-y-5">
+      <AIInterpretation
+        page="positioning"
+        data={{
+          regime: d.regime,
+          top_divergences: d.divergence_top.slice(0, 10),
+          top_unwind: d.cta_unwind_top.slice(0, 10),
+          top_flows: d.flow_radar_top.slice(0, 10),
+        }}
+      />
+
       <div>
         <h2 className="text-sm font-bold uppercase tracking-wider mb-2">Regime Composites</h2>
         <p className="text-xs text-text-muted mb-3">
@@ -251,16 +261,6 @@ function PulseTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQuer
       </div>
 
       <CtaPnlChart />
-
-      <AIInterpretation
-        page="positioning"
-        data={{
-          regime: d.regime,
-          top_divergences: d.divergence_top.slice(0, 10),
-          top_unwind: d.cta_unwind_top.slice(0, 10),
-          top_flows: d.flow_radar_top.slice(0, 10),
-        }}
-      />
     </div>
   );
 }
@@ -287,6 +287,8 @@ function HeatmapTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
 
   return (
     <div className="space-y-4">
+      <AIInterpretation page="positioning_heatmap" data={aiPayload} buttonLabel="Interpret Heatmap" />
+
       <div className="flex gap-1 flex-wrap">
         {ASSET_CLASSES.map((c) => (
           <button
@@ -332,8 +334,6 @@ function HeatmapTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
           </div>
         ))}
       </div>
-
-      <AIInterpretation page="positioning_heatmap" data={aiPayload} buttonLabel="Interpret Heatmap" />
     </div>
   );
 }
@@ -358,6 +358,8 @@ function DivergenceTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
 
   return (
     <div className="space-y-3">
+      <AIInterpretation page="positioning_divergence" data={aiPayload} buttonLabel="Interpret Divergences" />
+
       <p className="text-xs text-text-muted">
         <strong>How to read:</strong> Z-score of the spread between speculator net and commercial (producer/merchant) net.
         <strong className="text-loss ml-1">Positive</strong> = specs crowded long + commercials crowded short (classic
@@ -399,7 +401,6 @@ function DivergenceTab({ tiles }: { tiles: CftcHeatmapTile[] | undefined }) {
         </table>
       </div>
 
-      <AIInterpretation page="positioning_divergence" data={aiPayload} buttonLabel="Interpret Divergences" />
     </div>
   );
 }
@@ -418,6 +419,8 @@ function CtaWatchTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQ
 
   return (
     <div className="space-y-5">
+      <AIInterpretation page="positioning_cta_watch" data={aiPayload} buttonLabel="Interpret CTA Setup" />
+
       <div>
         <h3 className="text-sm font-bold uppercase tracking-wider mb-1">CTA Unwind Risk</h3>
         <p className="text-xs text-text-muted mb-3">
@@ -494,7 +497,6 @@ function CtaWatchTab({ dashboard }: { dashboard: ReturnType<typeof useDashboardQ
         </div>
       </div>
 
-      <AIInterpretation page="positioning_cta_watch" data={aiPayload} buttonLabel="Interpret CTA Setup" />
     </div>
   );
 }
@@ -845,6 +847,23 @@ function CtaModelTab() {
 
       {/* Selected contract detail */}
       {m && m.available && (
+        <>
+        <AIInterpretation
+          page="positioning_cta_model"
+          subject={m.name ?? m.symbol ?? undefined}
+          data={{
+            symbol: m.symbol, name: m.name, asset_class: m.asset_class,
+            last_price: m.last_price,
+            exposure: m.exposure,
+            bias_1w: m.scenarios?.bias_1w,
+            bias_1m: m.scenarios?.bias_1m,
+            vol_1w_pct: m.scenarios?.vol_1w_pct,
+            triggers: m.triggers?.slice(0, 8),
+            scenarios_1w: m.scenarios?.horizons?.["1w"],
+            scenarios_1m: m.scenarios?.horizons?.["1m"],
+          }}
+          buttonLabel="Interpret CTA Model"
+        />
         <div className="card p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -959,6 +978,7 @@ function CtaModelTab() {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {m && !m.available && (
@@ -967,24 +987,6 @@ function CtaModelTab() {
         </div>
       )}
 
-      {m && m.available && (
-        <AIInterpretation
-          page="positioning_cta_model"
-          subject={m.name ?? m.symbol ?? undefined}
-          data={{
-            symbol: m.symbol, name: m.name, asset_class: m.asset_class,
-            last_price: m.last_price,
-            exposure: m.exposure,
-            bias_1w: m.scenarios?.bias_1w,
-            bias_1m: m.scenarios?.bias_1m,
-            vol_1w_pct: m.scenarios?.vol_1w_pct,
-            triggers: m.triggers?.slice(0, 8),
-            scenarios_1w: m.scenarios?.horizons?.["1w"],
-            scenarios_1m: m.scenarios?.horizons?.["1m"],
-          }}
-          buttonLabel="Interpret CTA Model"
-        />
-      )}
     </div>
   );
 }
