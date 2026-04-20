@@ -1073,9 +1073,10 @@ function HistoricalTab() {
    ───────────────────────────────────────────────────────────── */
 
 function CtaPnlChart() {
+  const [lookback, setLookback] = useState<52 | 156 | 260>(156);
   const q = useQuery({
-    queryKey: ["cftc-cta-pnl"],
-    queryFn: () => fetchCtaPnl(156),
+    queryKey: ["cftc-cta-pnl", lookback],
+    queryFn: () => fetchCtaPnl(lookback),
     staleTime: 6 * 60 * 60_000,
   });
   const { resolvedTheme } = useTheme();
@@ -1083,7 +1084,7 @@ function CtaPnlChart() {
   const L = getBaseLayout(t);
 
   if (q.isPending) {
-    return <div className="card h-64 bg-surface-alt animate-pulse rounded-lg" />;
+    return <div className="card h-96 bg-surface-alt animate-pulse rounded-lg" />;
   }
   if (q.isError || !q.data || q.data.dates.length === 0) {
     return (
@@ -1093,42 +1094,122 @@ function CtaPnlChart() {
     );
   }
 
-  const last = q.data.cumulative[q.data.cumulative.length - 1];
+  const { dates, weekly_pnl, cumulative } = q.data;
+  const n = cumulative.length;
+  const last = cumulative[n - 1];
+
+  // Summary stats — everything derived here since backend only ships the series.
   const totalRet = (last - 1) * 100;
+  const yearsOfData = n / 52;
+  const cagr = yearsOfData > 0 ? (Math.pow(last, 1 / yearsOfData) - 1) * 100 : 0;
+
+  // Drawdown curve in percent-from-peak. Running max walks forward so DD of a
+  // new peak is 0; DD only goes negative below the most recent peak.
+  let runningMax = cumulative[0] ?? 1;
+  const drawdown: number[] = [];
+  for (const v of cumulative) {
+    if (v > runningMax) runningMax = v;
+    drawdown.push(((v - runningMax) / runningMax) * 100);
+  }
+  const maxDD = drawdown.length ? Math.min(...drawdown) : 0;
+  const currentDD = drawdown[n - 1] ?? 0;
+
+  // Annualized Sharpe — weekly_pnl is in percent, so convert to decimal first.
+  // Use sample stdev (n-1) for unbiased estimator — convention for Sharpe.
+  const rets = weekly_pnl.map((r) => r / 100);
+  const mean = rets.reduce((a, b) => a + b, 0) / (rets.length || 1);
+  const variance = rets.length > 1
+    ? rets.reduce((s, r) => s + (r - mean) ** 2, 0) / (rets.length - 1)
+    : 0;
+  const stdev = Math.sqrt(variance);
+  const sharpe = stdev > 0 ? (mean * 52) / (stdev * Math.sqrt(52)) : 0;
+
+  const periodLabel = lookback === 52 ? "1Y" : lookback === 156 ? "3Y" : "5Y";
 
   return (
     <div className="card p-4">
-      <div className="flex items-baseline justify-between mb-2">
+      <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
         <div>
           <h3 className="text-sm font-bold uppercase tracking-wider">Reconstructed CTA P&L</h3>
-          <p className="text-[0.6rem] text-text-muted mt-0.5">
+          <p className="text-[0.6rem] text-text-muted mt-0.5 max-w-xl">
             Managed-money positioning × forward weekly returns, OI-weighted. Approximates CTA composite performance.
             Not a fund return — a signal-quality proxy.
           </p>
         </div>
-        <div className="text-right">
-          <div className={`text-lg font-bold font-data ${totalRet >= 0 ? "text-gain" : "text-loss"}`}>
-            {totalRet >= 0 ? "+" : ""}{totalRet.toFixed(1)}%
-          </div>
-          <div className="text-[0.55rem] text-text-muted">3Y cumulative</div>
+        <div className="flex gap-1">
+          {([52, 156, 260] as const).map((w) => (
+            <button
+              key={w}
+              onClick={() => setLookback(w)}
+              className={`px-2 py-1 text-[0.65rem] font-semibold rounded transition-colors ${
+                lookback === w ? "bg-accent text-white" : "text-text-muted hover:text-text hover:bg-surface-alt"
+              }`}
+            >
+              {w === 52 ? "1Y" : w === 156 ? "3Y" : "5Y"}
+            </button>
+          ))}
         </div>
       </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <Metric
+          label={`${periodLabel} Cumulative`}
+          value={`${totalRet >= 0 ? "+" : ""}${totalRet.toFixed(1)}%`}
+          deltaType={totalRet >= 0 ? "gain" : "loss"}
+        />
+        <Metric label="Annualized (CAGR)" value={`${cagr >= 0 ? "+" : ""}${cagr.toFixed(1)}%`} />
+        <Metric
+          label="Max Drawdown"
+          value={`${maxDD.toFixed(1)}%`}
+          delta={currentDD < -0.5 ? `currently ${currentDD.toFixed(1)}%` : "at peak"}
+          deltaType={currentDD < -0.5 ? "loss" : "gain"}
+        />
+        <Metric label="Sharpe (ann)" value={sharpe.toFixed(2)} />
+      </div>
+
       <Plot
-        data={[{
-          x: q.data.dates,
-          y: q.data.cumulative,
-          name: "Cumulative",
-          type: "scatter",
-          mode: "lines",
-          line: { color: t.accent, width: 2 },
-          fill: "tozeroy",
-        }]}
+        data={[
+          {
+            x: dates,
+            y: cumulative,
+            name: "Equity",
+            type: "scatter",
+            mode: "lines",
+            line: { color: t.accent, width: 2 },
+            hovertemplate: "%{x}<br>Growth: %{y:.3f}<extra></extra>",
+          },
+          {
+            x: dates,
+            y: drawdown,
+            name: "Drawdown",
+            type: "scatter",
+            mode: "lines",
+            yaxis: "y2",
+            line: { color: t.loss, width: 1 },
+            fill: "tozeroy",
+            fillcolor: t.loss + "30",
+            hovertemplate: "%{x}<br>DD: %{y:.1f}%<extra></extra>",
+          },
+        ]}
         layout={{
           ...L,
-          height: CHART_HEIGHT.compact,
-          yaxis: { title: { text: "Cumulative (1.0 = start)" }, gridcolor: t.grid },
-          xaxis: { gridcolor: t.grid },
-          margin: { l: 50, r: 20, t: 10, b: 30 },
+          height: CHART_HEIGHT.tall,
+          showlegend: false,
+          yaxis: {
+            title: { text: "Growth of $1" },
+            gridcolor: t.grid,
+            domain: [0.32, 1],
+          },
+          yaxis2: {
+            title: { text: "DD %" },
+            gridcolor: t.grid,
+            domain: [0, 0.24],
+            tickformat: ".0f",
+            rangemode: "tozero",
+          },
+          xaxis: { gridcolor: t.grid, anchor: "y2" },
+          hovermode: "x unified",
+          margin: { l: 60, r: 20, t: 10, b: 30 },
         }}
         config={{ displayModeBar: false, responsive: true }}
         style={{ width: "100%" }}
