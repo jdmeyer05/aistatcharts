@@ -146,26 +146,45 @@ export default function OilFundamentals() {
       </div>
 
       {/* Tab 0: Inventories + 5-Year Band */}
-      {activeTab === 0 && (
-        <div className="card">
-          <Plot data={[
-            ...(fiveYrStats.length > 0 ? [{
-              x: [...fiveYrStats.map(s => `${currentYear}-W${String(s.week).padStart(2, "0")}`), ...fiveYrStats.slice().reverse().map(s => `${currentYear}-W${String(s.week).padStart(2, "0")}`)],
-              y: [...fiveYrStats.map(s => s.max), ...fiveYrStats.slice().reverse().map(s => s.min)],
-              fill: "toself" as const, fillcolor: t.accent + "12", line: { color: "transparent", width: 0 },
-              name: "5-Year Range", hoverinfo: "skip" as const, type: "scatter" as const, mode: "lines" as const,
-            }, {
-              x: fiveYrStats.map(s => `${currentYear}-W${String(s.week).padStart(2, "0")}`),
-              y: fiveYrStats.map(s => s.avg), type: "scatter" as const, mode: "lines" as const,
-              name: "5-Year Average", line: { color: t.spot, width: 2, dash: "dash" as const },
-            }] : []),
-            { x: inv.filter(r => yearOf(r.period) >= currentYear - 4).map(r => r.period),
-              y: inv.filter(r => yearOf(r.period) >= currentYear - 4).map(r => r.value / 1000),
-              type: "scatter" as const, mode: "lines" as const, name: "Actual Inventories", line: { color: t.hv20, width: 2.5 } },
-          ]} layout={{ height: 500, ...L, yaxis: { title: "Millions of Barrels", gridcolor: t.grid }, xaxis: { gridcolor: t.grid }, hovermode: "x unified", legend: { x: 0.01, y: 0.99, bgcolor: "transparent" } }}
-            config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
-        </div>
-      )}
+      {activeTab === 0 && (() => {
+        // All three traces share a numeric week-of-year (1-52) x-axis so the
+        // current-year actuals overlay the historical band directly. Prior
+        // bug: band used string week labels while actuals used date strings,
+        // so Plotly treated them as categorical and laid them side-by-side.
+        const currentYearInv = inv
+          .filter(r => yearOf(r.period) === currentYear)
+          .map(r => ({ week: weekOfYear(r.period), value: r.value / 1000 }))
+          .sort((a, b) => a.week - b.week);
+        return (
+          <div className="card">
+            <Plot data={[
+              ...(fiveYrStats.length > 0 ? [{
+                x: [...fiveYrStats.map(s => s.week), ...fiveYrStats.slice().reverse().map(s => s.week)],
+                y: [...fiveYrStats.map(s => s.max), ...fiveYrStats.slice().reverse().map(s => s.min)],
+                fill: "toself" as const, fillcolor: t.accent + "12", line: { color: "transparent", width: 0 },
+                name: "5-Year Range", hoverinfo: "skip" as const, type: "scatter" as const, mode: "lines" as const,
+              }, {
+                x: fiveYrStats.map(s => s.week),
+                y: fiveYrStats.map(s => s.avg), type: "scatter" as const, mode: "lines" as const,
+                name: "5-Year Average", line: { color: t.spot, width: 2, dash: "dash" as const },
+              }] : []),
+              {
+                x: currentYearInv.map(d => d.week),
+                y: currentYearInv.map(d => d.value),
+                type: "scatter" as const, mode: "lines" as const,
+                name: `${currentYear} Actual`, line: { color: t.hv20, width: 2.5 },
+              },
+            ]} layout={{
+              height: 500, ...L,
+              yaxis: { title: "Millions of Barrels", gridcolor: t.grid },
+              xaxis: { title: "Week of Year", gridcolor: t.grid, range: [1, 52], dtick: 4 },
+              hovermode: "x unified",
+              legend: { x: 0.01, y: 0.99, bgcolor: "transparent" },
+            }}
+              config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+          </div>
+        );
+      })()}
 
       {/* Tab 1: YoY Seasonality */}
       {activeTab === 1 && (
