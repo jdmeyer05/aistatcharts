@@ -315,6 +315,7 @@ RULES:
 
         from google import genai
         from google.genai import types
+        import time
 
         client = genai.Client(api_key=api_key)
 
@@ -329,11 +330,29 @@ RULES:
             # Single turn: system prompt + surface context
             full_prompt = f"{system_prompt}\n\n{inp.context}"
 
-        response = client.models.generate_content(
-            model="gemini-3.1-pro-preview",
-            contents=full_prompt,
-            config=types.GenerateContentConfig(max_output_tokens=20000, temperature=0.4),
-        )
+        # Gemini returns 503 UNAVAILABLE during demand spikes — usually transient.
+        # Retry twice with short backoff before surfacing failure. Total added
+        # latency on the worst case is ~3s, well inside Cloud Run's 180s budget.
+        _RETRY_DELAYS = (1.0, 2.0)
+        last_err: Exception | None = None
+        response = None
+        for attempt in range(len(_RETRY_DELAYS) + 1):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(max_output_tokens=20000, temperature=0.4),
+                )
+                break
+            except Exception as e:
+                last_err = e
+                err_s = str(e).lower()
+                is_transient = "503" in err_s or "unavailable" in err_s or "overload" in err_s
+                if is_transient and attempt < len(_RETRY_DELAYS):
+                    time.sleep(_RETRY_DELAYS[attempt])
+                    continue
+                raise
+        assert response is not None  # loop either broke on success or raised
         content = response.text or ""
         cost = 0.05
 
@@ -352,6 +371,8 @@ RULES:
         error_msg = str(e).lower()
         if "api_key" in error_msg or "authentication" in error_msg:
             content = "Invalid Gemini API key. Check GEMINI_API_KEY configuration."
+        elif "503" in error_msg or "unavailable" in error_msg or "overload" in error_msg:
+            content = "Gemini is currently overloaded — demand spike on Google's side. Try again in a minute or two."
         elif "quota" in error_msg or "rate" in error_msg or "429" in error_msg:
             content = "Rate limit exceeded. Try again in 30 seconds."
         elif "404" in error_msg or "not found" in error_msg:
