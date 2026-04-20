@@ -6,9 +6,8 @@ import { fetchOilBundle, type EIARecord } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { useState, useMemo } from "react";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = [
   "Inventories + 5-Year Band", "YoY Seasonality", "Weekly Builds / Draws", "WTI Price Overlay",

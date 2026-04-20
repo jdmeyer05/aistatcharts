@@ -6,9 +6,8 @@ import { fetchNatGasBundle, type EIARecord } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { useState, useMemo } from "react";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Storage + 5-Year Band", "Year-over-Year", "Injections / Withdrawals", "Regional Breakdown", "Henry Hub Overlay"];
 

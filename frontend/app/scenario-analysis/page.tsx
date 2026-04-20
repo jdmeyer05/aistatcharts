@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetchPortfolioImpact,
   fetchGbmProjection,
@@ -18,7 +18,6 @@ import {
 import { getChartTheme, getBaseLayout, heatmapTrace, heatmapHeight } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = [
   "Macro Portfolio Scenarios",

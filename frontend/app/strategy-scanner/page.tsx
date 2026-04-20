@@ -6,9 +6,8 @@ import { useTheme } from "next-themes";
 import { fetchStrategyScan, fetchOptimizeStrategy, fetchDeepScan, fetchComboScan, type StrategyScanResult, type StrategyScanResponse, type OptimizeResponse, type DeepScanResponse, type ComboScanResponse } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const DEFAULT_TICKERS = ["SPY","QQQ","AAPL","MSFT","NVDA","TSLA","AMD","AMZN","META","GOOGL","NFLX","JPM","BA","GLD","TLT","SMH","XLF","EEM"];
 

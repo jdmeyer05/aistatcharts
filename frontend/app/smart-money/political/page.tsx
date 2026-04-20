@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetchCongressionalTrades,
   fetchPriceHistoryBatch,
@@ -14,7 +14,6 @@ import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
 import { ErrorBanner } from "../_shared/error-banner";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 /** Rough midpoint of an amount range like "$1,001 - $15,000". */
 function parseAmountMidpoint(raw: string): number {

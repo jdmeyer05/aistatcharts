@@ -14,9 +14,8 @@ import {
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = [
   "Week at a Glance",
@@ -77,11 +76,36 @@ function parseFredBatch(raw: Record<string, Record<string, unknown>[]> | undefin
   return out;
 }
 
+const LS_HIGH_IMPACT = "econ-cal:highImpactOnly";
+const LS_WATCHLIST = "econ-cal:earningsWatchlist";
+
+function loadLS<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const v = window.localStorage.getItem(key);
+    return v == null ? fallback : (JSON.parse(v) as T);
+  } catch {
+    return fallback;
+  }
+}
+
 export default function EconomicCalendar() {
   const { resolvedTheme } = useTheme();
   const t = getChartTheme(resolvedTheme === "dark");
   const L = getBaseLayout(t);
   const [activeTab, setActiveTab] = useState(0);
+  const [highImpactOnly, setHighImpactOnly] = useState<boolean>(() => loadLS(LS_HIGH_IMPACT, false));
+  const [watchlistInput, setWatchlistInput] = useState<string>(() => (loadLS<string[]>(LS_WATCHLIST, [])).join(", "));
+  const watchlist = useMemo(
+    () => watchlistInput.split(",").map(s => s.trim().toUpperCase()).filter(Boolean),
+    [watchlistInput]
+  );
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem(LS_HIGH_IMPACT, JSON.stringify(highImpactOnly));
+  }, [highImpactOnly]);
+  useEffect(() => {
+    if (typeof window !== "undefined") window.localStorage.setItem(LS_WATCHLIST, JSON.stringify(watchlist));
+  }, [watchlist]);
 
   // ── Core queries ─────────────────────────────────────────────────
   const eventsQ = useQuery({
@@ -184,6 +208,34 @@ export default function EconomicCalendar() {
         </div>
       </div>
 
+      {/* Preferences — persisted in localStorage */}
+      <div className="card card-compact">
+        <div className="flex flex-wrap gap-6 items-end">
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={highImpactOnly}
+              onChange={e => setHighImpactOnly(e.target.checked)}
+              className="accent-accent"
+            />
+            <span>High-impact macro only</span>
+          </label>
+          <div className="flex-1 min-w-[260px]">
+            <label className="metric-label mb-1 block">Earnings watchlist (tickers)</label>
+            <input
+              type="text"
+              value={watchlistInput}
+              onChange={e => setWatchlistInput(e.target.value.toUpperCase())}
+              placeholder="e.g. AAPL, MSFT, NVDA"
+              className="w-full px-2 py-1 border border-border rounded text-xs font-data bg-surface"
+            />
+            <div className="text-[10px] text-text-muted mt-0.5">
+              {watchlist.length > 0 ? `Filtering to ${watchlist.length} ticker${watchlist.length > 1 ? "s" : ""}` : "Leave empty to see all big-cap earnings"}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border pb-1 overflow-x-auto">
         {TABS.map((tab, i) => (
@@ -195,7 +247,7 @@ export default function EconomicCalendar() {
       </div>
 
       {/* Tab 0: Week at a Glance */}
-      {activeTab === 0 && <WeekAtGlance events={events} earnings={earnings} auctions={auctions} thisWeekEnd={thisWeekEnd} today={today} t={t} L={L} />}
+      {activeTab === 0 && <WeekAtGlance events={events} earnings={earnings} auctions={auctions} thisWeekEnd={thisWeekEnd} today={today} highImpactOnly={highImpactOnly} watchlist={watchlist} t={t} L={L} />}
 
       {/* Tab 1: Economic Releases */}
       {activeTab === 1 && <EconReleases events={events} today={today} t={t} L={L} />}
@@ -210,7 +262,7 @@ export default function EconomicCalendar() {
       {activeTab === 4 && <MacroDashboard macro={macroQ.data} isLoading={macroQ.isLoading} t={t} L={L} />}
 
       {/* Tab 5: Earnings */}
-      {activeTab === 5 && <EarningsTab earnings={earnings} isLoading={earningsQ.isLoading} t={t} />}
+      {activeTab === 5 && <EarningsTab earnings={earnings} watchlist={watchlist} isLoading={earningsQ.isLoading} t={t} />}
 
       {/* Tab 6: Treasury Auctions */}
       {activeTab === 6 && <AuctionsTab auctions={auctions} isLoading={auctionsQ.isLoading} t={t} L={L} today={today} />}
@@ -230,18 +282,23 @@ export default function EconomicCalendar() {
 // ───────────────────────────────────────────────────────────────────
 type WeekRow = { date: string; day: string; dateLabel: string; event: string; type: "Macro" | "Earnings" | "Auction"; impact: "High" | "Medium" | "Low"; countdown: string };
 
-function WeekAtGlance({ events, earnings, auctions, thisWeekEnd, today, t, L: _L }: { events: EconEvent[]; earnings: EarningsEntry[]; auctions: TreasuryAuction[]; thisWeekEnd: string; today: string; t: ReturnType<typeof getChartTheme>; L: ReturnType<typeof getBaseLayout> }) {
+function WeekAtGlance({ events, earnings, auctions, thisWeekEnd, today, highImpactOnly, watchlist, t, L: _L }: { events: EconEvent[]; earnings: EarningsEntry[]; auctions: TreasuryAuction[]; thisWeekEnd: string; today: string; highImpactOnly: boolean; watchlist: string[]; t: ReturnType<typeof getChartTheme>; L: ReturnType<typeof getBaseLayout> }) {
   const rows: WeekRow[] = [];
   for (const e of events) {
     if (e.date < today || e.date > thisWeekEnd || !isWeekday(e.date)) continue;
+    const impact = (e.impact === "High" || e.impact === "Medium" || e.impact === "Low") ? e.impact : "Medium";
+    if (highImpactOnly && impact !== "High") continue;
     rows.push({
       date: e.date, day: formatDay(e.date), dateLabel: formatDate(e.date),
       event: e.event, type: "Macro",
-      impact: (e.impact === "High" || e.impact === "Medium" || e.impact === "Low") ? e.impact : "Medium",
+      impact,
       countdown: countdownLabel(daysBetween(e.date)),
     });
   }
-  const bigEarn = earnings.filter(e => BIG_CAP.has(e.symbol));
+  const watchSet = new Set(watchlist);
+  const bigEarn = watchSet.size > 0
+    ? earnings.filter(e => watchSet.has(e.symbol))
+    : earnings.filter(e => BIG_CAP.has(e.symbol));
   const earnList = bigEarn.length > 0 ? bigEarn : [...earnings].filter(e => (e.revenueEstimate ?? 0) > 0).sort((a, b) => (b.revenueEstimate ?? 0) - (a.revenueEstimate ?? 0)).slice(0, 10);
   for (const e of earnList) {
     if (e.date < today || e.date > thisWeekEnd || !isWeekday(e.date)) continue;
@@ -753,17 +810,23 @@ function MacroDashboard({ macro, isLoading, t, L }: { macro?: Record<string, Fre
 // ───────────────────────────────────────────────────────────────────
 // Tab 5: Earnings
 // ───────────────────────────────────────────────────────────────────
-function EarningsTab({ earnings, isLoading, t: _t }: { earnings: EarningsEntry[]; isLoading: boolean; t: ReturnType<typeof getChartTheme> }) {
+function EarningsTab({ earnings, watchlist, isLoading, t: _t }: { earnings: EarningsEntry[]; watchlist: string[]; isLoading: boolean; t: ReturnType<typeof getChartTheme> }) {
   const [showAll, setShowAll] = useState(false);
 
   const filtered = useMemo(() => {
     const weekdayOnly = earnings.filter(e => isWeekday(e.date));
+    const watchSet = new Set(watchlist);
+    // Watchlist takes priority when populated
+    if (watchSet.size > 0) {
+      const watched = weekdayOnly.filter(e => watchSet.has(e.symbol));
+      return [...watched].sort((a, b) => a.date.localeCompare(b.date) || a.symbol.localeCompare(b.symbol));
+    }
     if (showAll) return [...weekdayOnly].sort((a, b) => a.date.localeCompare(b.date) || a.symbol.localeCompare(b.symbol));
     const bigCap = weekdayOnly.filter(e => BIG_CAP.has(e.symbol));
     if (bigCap.length > 0) return [...bigCap].sort((a, b) => a.date.localeCompare(b.date) || a.symbol.localeCompare(b.symbol));
     // Fallback: top 30 by revenue estimate
     return [...weekdayOnly].filter(e => (e.revenueEstimate ?? 0) > 0).sort((a, b) => (b.revenueEstimate ?? 0) - (a.revenueEstimate ?? 0)).slice(0, 30);
-  }, [earnings, showAll]);
+  }, [earnings, showAll, watchlist]);
 
   if (isLoading) return <Spinner />;
   if (earnings.length === 0) {

@@ -11,9 +11,8 @@ import {
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout, get3dScene } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 /* ═══════════════════════════════════════════════════════════════
    TYPE DEFINITIONS

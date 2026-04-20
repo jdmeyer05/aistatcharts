@@ -50,10 +50,11 @@ except Exception:
     pass
 
 
-async def _warm_cftc_caches() -> None:
-    """Fire the slow CFTC dashboards in background so the first user hits
-    warm caches instead of a 2-minute cold wait. Non-fatal if any fail."""
-    def _warm_sync() -> None:
+async def _warm_caches() -> None:
+    """Fire the slow cacheable dashboards in background so the first user hits
+    warm Supabase caches instead of a cold 30-120s wait. Non-fatal if any fail.
+    Each warm task runs in its own thread so one slow fetcher doesn't block the others."""
+    def _warm_cftc() -> None:
         try:
             from src.cftc import positioning_dashboard
             from src.cta_model import cta_bias_scan, reconstructed_cta_pnl, historical_analog, all_vol_percentiles
@@ -66,8 +67,20 @@ async def _warm_cftc_caches() -> None:
         except Exception as e:
             logger.warning(f"CFTC pre-warm failed: {e}")
 
-    # Run the sync work off the event loop so FastAPI isn't blocked.
-    await asyncio.get_event_loop().run_in_executor(None, _warm_sync)
+    def _warm_vol_landscape() -> None:
+        try:
+            from api.routes.options import _compute_vol_landscape
+            _compute_vol_landscape()
+            logger.info("Vol landscape cache pre-warmed")
+        except Exception as e:
+            logger.warning(f"Vol landscape pre-warm failed: {e}")
+
+    loop = asyncio.get_event_loop()
+    # Kick off both in parallel so total warmup time ≈ slowest task, not the sum.
+    await asyncio.gather(
+        loop.run_in_executor(None, _warm_cftc),
+        loop.run_in_executor(None, _warm_vol_landscape),
+    )
 
 
 @asynccontextmanager
@@ -77,7 +90,7 @@ async def lifespan(app: FastAPI):
     from src.db import get_client
     get_client()  # warm the connection
     # Fire-and-forget background warmup. Don't await — server starts now.
-    asyncio.create_task(_warm_cftc_caches())
+    asyncio.create_task(_warm_caches())
     yield
 
 
@@ -136,10 +149,10 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 # (CFTC, vol-landscape) can safely sit in the browser cache for a few
 # minutes — saves a full round-trip when users jump tabs quickly.
 _PATH_CACHE_HINTS = (
-    ("/api/cftc/",              "private, max-age=300, stale-while-revalidate=3600"),
-    ("/api/options/vol-landscape", "private, max-age=300, stale-while-revalidate=3600"),
-    ("/api/fed-macro/",         "private, max-age=300, stale-while-revalidate=3600"),
-    ("/api/sectors/",           "private, max-age=600, stale-while-revalidate=3600"),
+    ("/api/cftc/",              "public, max-age=300, stale-while-revalidate=3600"),
+    ("/api/options/vol-landscape", "public, max-age=300, stale-while-revalidate=3600"),
+    ("/api/fed-macro/",         "public, max-age=300, stale-while-revalidate=3600"),
+    ("/api/sectors/",           "public, max-age=600, stale-while-revalidate=3600"),
 )
 
 

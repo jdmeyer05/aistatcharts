@@ -7,9 +7,8 @@ import { fetchFamaFrench, fetchPriceHistory, type FFRecord } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Factor Returns", "Factor Exposure", "Alpha Attribution", "Factor Timing", "Risk Decomposition"];
 

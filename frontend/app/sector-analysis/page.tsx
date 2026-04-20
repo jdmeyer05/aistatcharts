@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetchSectorConfigs,
   fetchSectorOverview,
@@ -41,7 +41,6 @@ import {
 } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = [
   "Overview & Revenue",
@@ -185,7 +184,8 @@ export default function SectorAnalysisPage() {
   const configsQ = useQuery({
     queryKey: ["sector-configs"],
     queryFn: fetchSectorConfigs,
-    staleTime: Infinity,
+    staleTime: 24 * 60 * 60_000,
+    retry: 2,
   });
 
   const sectors = configsQ.data?.sectors ?? {};

@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetchQuantLabAnalyze,
   fetchQuantLabHrp,
@@ -13,7 +13,6 @@ import {
 import { getChartTheme, getBaseLayout, heatmapTrace, heatmapHeight } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = [
   "Frac. Diff.",
@@ -304,6 +303,7 @@ export default function QuantLabPage() {
         <div className="card text-center py-12">
           <div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
           <div className="text-xs text-text-muted mt-2">Running ADF scan, SADF, Chow, feature importance…</div>
+          <ElapsedCounter />
         </div>
       )}
 
@@ -347,6 +347,23 @@ export default function QuantLabPage() {
       )}
     </div>
   );
+}
+
+function ElapsedCounter() {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const id = window.setInterval(() => setSeconds(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const label = seconds < 10
+    ? "starting…"
+    : seconds < 30
+      ? `${seconds}s elapsed — ADF and SADF are the slow steps`
+      : seconds < 60
+        ? `${seconds}s elapsed — still working (long lookbacks can take 30–60s)`
+        : `${seconds}s elapsed — if this runs past 2 minutes, try a shorter lookback`;
+  return <div className="text-[10px] text-text-muted mt-1 font-data">{label}</div>;
 }
 
 function SummaryBar({ data, t }: { data: QuantLabAnalyzeResponse; t: ReturnType<typeof getChartTheme> }) {

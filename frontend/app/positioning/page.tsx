@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetchCftcDashboard, fetchCftcHistory, fetchCftcContracts,
   fetchCtaModel, fetchCtaBiasScan, fetchCtaPnl, fetchHistoricalAnalog,
@@ -15,7 +15,6 @@ import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Pulse", "Heatmap", "Divergence", "CTA Watch", "CTA Model", "Historical", "Drill-Down"] as const;
 type Tab = (typeof TABS)[number];
@@ -1165,6 +1164,21 @@ export default function PositioningPage() {
           with percentiles, COT Index, divergence Z, and synthesized regime composites.
         </p>
       </div>
+
+      {tab !== "Drill-Down" && (
+        <div className="card card-compact border-l-2 border-l-accent flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-text-secondary">
+            <strong className="text-text">Turn signals into alerts.</strong> Subscribe to crowded-long, crowded-short,
+            sign-flip, or new-extreme thresholds for any contract — delivered when the next CFTC release lands.
+          </div>
+          <button
+            onClick={() => setTab("Drill-Down")}
+            className="px-3 py-1.5 text-xs font-semibold rounded bg-accent text-white hover:bg-accent-hover whitespace-nowrap"
+          >
+            Set up alerts →
+          </button>
+        </div>
+      )}
 
       <div className="flex gap-1 border-b border-border pb-1 overflow-x-auto">
         {TABS.map((t) => (

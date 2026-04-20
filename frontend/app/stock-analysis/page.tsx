@@ -9,9 +9,8 @@ import {
 } from "@/lib/api";
 import { getChartTheme } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const REC_COLORS: Record<string, string> = {
   "Strong Buy": "#00ff96", "Buy": "#00cc66", "Hold": "#ffaa00", "Sell": "#ff6644", "Strong Sell": "#ff4444",

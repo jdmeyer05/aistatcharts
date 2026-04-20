@@ -826,8 +826,8 @@ function PsychTab() {
   const profile = useQuery({
     queryKey: ["trump-psych"],
     queryFn: fetchTrumpPsychProfile,
-    staleTime: 10 * 60_000,
-    retry: 0,
+    staleTime: 24 * 60 * 60_000,
+    retry: 2,
   });
 
   const d = profile.data;

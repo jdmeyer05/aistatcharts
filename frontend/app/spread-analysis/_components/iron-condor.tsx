@@ -10,9 +10,8 @@ import {
 import { getChartTheme } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { FreshnessBar } from "@/components/ui/freshness-dot";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const DEFAULT_TICKERS = [
   "SPY", "QQQ", "IWM", "DIA", "AAPL", "TSLA", "NVDA", "AMD", "AMZN", "META",

@@ -6,9 +6,8 @@ import { fetchErcotBundle } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { useState, useMemo } from "react";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Generation Mix (Live)", "Supply vs. Demand", "Duck Curve", "Generation Stack", "Load Forecast vs. Actual", "Reserve & Capacity Forecast", "Ancillary Services", "Grid Frequency"];
 

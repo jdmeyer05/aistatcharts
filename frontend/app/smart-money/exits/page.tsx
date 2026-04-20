@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetchCongressionalTrades,
   fetchRecent13D,
@@ -16,7 +16,6 @@ import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn, shortDate } from "../_shared/utils";
 import { ErrorBanner } from "../_shared/error-banner";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 function netCongressionalByTicker(trades: CongressionalTrade[]) {
   const m = new Map<string, { buys: number; sells: number; members: Set<string> }>();

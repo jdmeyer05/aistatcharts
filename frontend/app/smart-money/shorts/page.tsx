@@ -3,14 +3,13 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import { fetchShortInterest, fetchShortsWatchlist } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn } from "../_shared/utils";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 /**
  * Composite squeeze score 0-100 from short-side structural factors.

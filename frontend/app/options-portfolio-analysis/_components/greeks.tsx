@@ -4,9 +4,8 @@ import { useState, useMemo } from "react";
 import { useTheme } from "next-themes";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Portfolio Summary", "Risk Scenarios", "Delta Hedging", "Greeks by Expiration", "Greeks Over Time"];
 

@@ -2,7 +2,7 @@ declare module "react-plotly.js" {
   import { Component } from "react";
   import Plotly from "plotly.js";
 
-  interface PlotParams {
+  export interface PlotParams {
     data: Plotly.Data[];
     layout?: Partial<Plotly.Layout>;
     config?: Partial<Plotly.Config>;
@@ -18,4 +18,11 @@ declare module "react-plotly.js" {
   }
 
   export default class Plot extends Component<PlotParams> {}
+}
+
+declare module "react-plotly.js/factory" {
+  import { ComponentType } from "react";
+  import { PlotParams } from "react-plotly.js";
+
+  export default function createPlotlyComponent(plotly: unknown): ComponentType<PlotParams>;
 }

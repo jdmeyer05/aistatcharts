@@ -6,9 +6,8 @@ import { useTheme } from "next-themes";
 import { fetchOptionsChain, fetchSnapshot, fetchAITradeIdeas } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Overview", "Vanna Profile", "Charm & Time", "Gamma Risk", "Vega Convexity", "VV Pricing", "Portfolio Greeks", "AI Greek Analyst"];
 

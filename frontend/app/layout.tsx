@@ -100,12 +100,23 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const preconnectApi = apiUrl && !apiUrl.startsWith("http://localhost");
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
+      <head>
+        {preconnectApi && (
+          <link rel="preconnect" href={apiUrl} crossOrigin="anonymous" />
+        )}
+        {supabaseUrl && (
+          <link rel="preconnect" href={supabaseUrl} crossOrigin="anonymous" />
+        )}
+      </head>
       <body className="min-h-full flex flex-col bg-bg text-text">
         <Providers>
           <AuthGate>

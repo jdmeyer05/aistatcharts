@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetch8KEvents,
   fetchGuidanceHistory,
@@ -18,7 +18,6 @@ import { Metric } from "@/components/ui/metric";
 import { fmtBn, shortDate, EIGHT_K_ITEM_NAMES } from "../_shared/utils";
 import { ErrorBanner } from "../_shared/error-banner";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 export default function MaterialEventsPage() {
   const { resolvedTheme } = useTheme();

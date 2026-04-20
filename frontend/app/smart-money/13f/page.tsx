@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import { fetchTrackedFunds, fetch13FHoldings } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
@@ -11,7 +11,6 @@ import { AIInterpretation } from "@/components/ai-interpretation";
 import { fmtBn } from "../_shared/utils";
 import { ErrorBanner } from "../_shared/error-banner";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 export default function Institutional13FPage() {
   const { resolvedTheme } = useTheme();
@@ -189,10 +188,6 @@ export default function Institutional13FPage() {
         </>
       )}
 
-      <div className="card card-compact text-xs text-text-muted">
-        <strong>Next:</strong> per-fund follow-the-leader portfolios, quarter-over-quarter position deltas, and
-        cross-fund consensus picks coming soon.
-      </div>
     </div>
   );
 }

@@ -1,14 +1,13 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { fetchOptionsChain, fetchSnapshot, fetchOIHistory } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["IV & Skew", "Positioning & Max Pain", "Order Flow", "Dealer Greeks", "OI Changes", "Chain"];
 
@@ -39,6 +38,12 @@ export default function OptionsIntelligence() {
   const [chain, setChain] = useState<ChainRow[]>([]);
   const [spot, setSpot] = useState(0);
   const [selectedExp, setSelectedExp] = useState("");
+  // `allExpirations` is the authoritative list from the backend's reference
+  // endpoint; the chain snapshot can be truncated by Polygon pagination for
+  // very liquid underlyings, so we show the full set in the dropdown and
+  // lazy-load any expiration the user picks that we don't yet have data for.
+  const [allExpirations, setAllExpirations] = useState<string[]>([]);
+  const [lazyLoading, setLazyLoading] = useState<string | null>(null);
   // Flow tab filters
   const [minVol, setMinVol] = useState(100);
   const [minRatio, setMinRatio] = useState(2.0);
@@ -48,18 +53,62 @@ export default function OptionsIntelligence() {
   const load = useMutation({
     mutationFn: async (tk: string) => {
       const [ch, snap] = await Promise.all([fetchOptionsChain(tk), fetchSnapshot([tk])]);
-      return { chain: ch.data as unknown as ChainRow[], spot: snap[tk]?.price ?? 0, tk };
+      return {
+        chain: ch.data as unknown as ChainRow[],
+        expirations: ch.expirations ?? [],
+        spot: snap[tk]?.price ?? 0,
+        tk,
+      };
     },
     onSuccess: (d) => {
       setChain(d.chain);
       setSpot(d.spot);
       setLoadedTicker(d.tk);
-      const exps = [...new Set(d.chain.map(c => c.expiration_date))].sort();
-      if (exps.length > 0) setSelectedExp(exps[0]);
+      // Clear any pending lazy-load spinner from a prior ticker — the in-flight
+      // fetch's .finally() skips itself via the `cancelled` flag, so we have to
+      // reset the UI state here.
+      setLazyLoading(null);
+      const loaded = [...new Set(d.chain.map(c => c.expiration_date))].sort();
+      const authoritative = d.expirations.length > 0 ? d.expirations : loaded;
+      setAllExpirations(authoritative);
+      if (authoritative.length > 0) setSelectedExp(authoritative[0]);
     },
   });
 
   const expirations = useMemo(() => [...new Set(chain.map(c => c.expiration_date))].sort(), [chain]);
+
+  // Lazy-load any expiration the user selects that isn't in the loaded chain.
+  // Merges new rows into existing chain so aggregates across expirations keep
+  // working as the user explores deeper-dated contracts.
+  useEffect(() => {
+    if (!loadedTicker || !selectedExp) return;
+    if (expirations.includes(selectedExp)) return;
+    if (lazyLoading === selectedExp) return;
+    let cancelled = false;
+    setLazyLoading(selectedExp);
+    fetchOptionsChain(loadedTicker, selectedExp)
+      .then(res => {
+        if (cancelled) return;
+        const rows = res.data as unknown as ChainRow[];
+        setChain(prev => {
+          const seen = new Set(prev.map(c => `${c.contract_type}:${c.strike_price}:${c.expiration_date}`));
+          const merged = [...prev];
+          for (const r of rows) {
+            const k = `${r.contract_type}:${r.strike_price}:${r.expiration_date}`;
+            if (!seen.has(k)) merged.push(r);
+          }
+          return merged;
+        });
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error(`Failed to lazy-load ${selectedExp} for ${loadedTicker}:`, err);
+      })
+      .finally(() => {
+        if (!cancelled) setLazyLoading(null);
+      });
+    return () => { cancelled = true; };
+  }, [loadedTicker, selectedExp, expirations, lazyLoading]);
   const expChain = useMemo(() => chain.filter(c => c.expiration_date === selectedExp), [chain, selectedExp]);
   const calls = useMemo(() => expChain.filter(c => c.contract_type === "call").sort((a, b) => a.strike_price - b.strike_price), [expChain]);
   const puts = useMemo(() => expChain.filter(c => c.contract_type === "put").sort((a, b) => a.strike_price - b.strike_price), [expChain]);
@@ -157,13 +206,23 @@ export default function OptionsIntelligence() {
             className="px-6 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm">
             {load.isPending ? "Loading..." : "Load Chain"}
           </button>
-          {expirations.length > 0 && (
+          {allExpirations.length > 0 && (
             <>
               <label className="metric-label">Expiration</label>
               <select value={selectedExp} onChange={e => setSelectedExp(e.target.value)}
                 className="px-2 py-2 border border-border rounded-lg text-sm bg-surface">
-                {expirations.map(e => <option key={e} value={e}>{e} ({calcDTE(e)}d)</option>)}
+                {allExpirations.map(e => (
+                  <option key={e} value={e}>
+                    {e} ({calcDTE(e)}d){expirations.includes(e) ? "" : " •"}
+                  </option>
+                ))}
               </select>
+              {lazyLoading && (
+                <span className="text-xs text-text-muted inline-flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                  Loading {lazyLoading}…
+                </span>
+              )}
             </>
           )}
         </div>
@@ -182,7 +241,12 @@ export default function OptionsIntelligence() {
             <div className="flex flex-wrap gap-6">
               <Metric label="Spot" value={`$${spot.toFixed(2)}`} />
               <Metric label="Contracts" value={String(expChain.length)} />
-              <Metric label="Expirations" value={String(expirations.length)} />
+              <Metric
+                label="Expirations"
+                value={String(allExpirations.length)}
+                delta={expirations.length < allExpirations.length ? `${expirations.length} loaded` : undefined}
+              />
+              <Metric label="Total Contracts" value={String(chain.length)} />
               {maxPain && <Metric label="Max Pain" value={`$${maxPain.strike.toFixed(0)}`} />}
               <Metric label="P/C Vol (≤45d)" value={pcStats.pcVol.toFixed(2)} deltaType={pcStats.pcVol > pcStats.histMean ? "loss" : "gain"} />
               <Metric label="Sentiment" value={pcStats.regime} />

@@ -7,9 +7,8 @@ import { fetchPriceHistoryBatch } from "@/lib/api";
 import { getChartTheme, getBaseLayout, CHART_HEIGHT, heatmapTrace, heatmapHeight, type ChartTheme } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { ChartCard } from "@/components/ui/chart-card";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const ASSET_CLASSES: Record<string, Record<string, string>> = {
   "US Equities": { SPY: "S&P 500", QQQ: "Nasdaq 100", IWM: "Russell 2000", DIA: "Dow 30", MDY: "S&P 400 Mid" },
@@ -578,6 +577,14 @@ export default function CorrelationPage() {
         <div className="card text-center py-12">
           <div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
           <p className="text-sm text-text-muted mt-3">Fetching {ALL_TICKERS.length} tickers...</p>
+        </div>
+      )}
+
+      {load.isSuccess && n < 3 && !load.isPending && (
+        <div className="card text-center py-10 text-sm text-text-muted">
+          <div className="font-semibold text-text mb-1">Not enough data for correlation analysis</div>
+          Only {n} of {ALL_TICKERS.length} ticker{n === 1 ? "" : "s"} returned usable history for the selected {period}-day period.
+          Correlation analysis needs at least 3 assets — try a longer period (126d or 252d) or click Compute again if this looks like a transient data issue.
         </div>
       )}
 

@@ -6,9 +6,8 @@ import { fetchAccuracySummary, fetchPredictions, fetchClosedPositions, fetchSign
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { useState } from "react";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = ["Platform Scorecard", "Tool Breakdown", "Signal Engine", "Position Performance", "Prediction Log"];
 

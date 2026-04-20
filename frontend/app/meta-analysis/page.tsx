@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import dynamic from "next/dynamic";
+import { Plot } from "@/components/plot";
 import {
   fetchMetaPresets,
   fetchMetaForecasts,
@@ -15,7 +15,6 @@ import {
 import { getChartTheme, getBaseLayout, heatmapTrace, heatmapHeight } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
 const TABS = [
   "Equity Curves",
@@ -77,7 +76,8 @@ export default function MetaAnalysisPage() {
   const presetsQ = useQuery({
     queryKey: ["meta-presets"],
     queryFn: fetchMetaPresets,
-    staleTime: Infinity,
+    staleTime: 24 * 60 * 60_000,
+    retry: 2,
   });
   const PRESET_GROUPS = presetsQ.data?.presets ?? {};
 
