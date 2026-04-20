@@ -644,13 +644,108 @@ ACCURACY: Only report confirmed developments. Do not speculate or fabricate. If 
         logger.error(f"Market news scan failed: {e}")
 
 
+# ─── TASK 8: TRUMP DECODER VALIDATION ──────────────────────────
+
+def validate_trump_decodes(db):
+    """Grade past Trump decodes by measuring actual SPY movement 72h after
+    the decode was submitted, then writing was_accurate back to Supabase.
+
+    Scoring rule (matches /api/trump/track-record):
+      - bluff_score ≥ 70 (bluff call) → correct if |SPY 72h move| < 1%
+      - bluff_score < 40 (genuine call) → correct if |SPY 72h move| ≥ 1%
+      - 40-69 (uncertain band) → skipped, left ungraded
+
+    Only grades decodes 72h < age < 14d — older ones are unreliable to
+    score retroactively (market drifted for reasons unrelated to the call).
+    """
+    import requests
+
+    api_key = os.environ.get("MASSIVE_API_KEY")
+    if not api_key:
+        logger.warning("MASSIVE_API_KEY not set, skipping trump validation")
+        return
+
+    now = datetime.utcnow()
+    cutoff = (now - timedelta(hours=72)).isoformat()
+    floor = (now - timedelta(days=14)).isoformat()
+
+    try:
+        rows = db.table("trump_decoded_statements") \
+            .select("id,created_at,bluff_score") \
+            .is_("was_accurate", "null") \
+            .lte("created_at", cutoff) \
+            .gte("created_at", floor) \
+            .limit(50).execute().data or []
+    except Exception as e:
+        logger.warning(f"trump_validate: fetch ungraded failed: {e}")
+        return
+
+    if not rows:
+        logger.info("trump_validate: no pending decodes to grade")
+        return
+
+    graded = 0
+    skipped = 0
+    for row in rows:
+        bluff = row.get("bluff_score")
+        if bluff is None:
+            continue
+        if 40 <= bluff < 70:
+            skipped += 1
+            continue
+
+        try:
+            created_str = row["created_at"]
+            # Supabase returns ISO-8601; normalize "Z" suffix for fromisoformat.
+            start_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+        except Exception:
+            continue
+
+        # Pad 5 days so weekends/holidays don't leave us short on bars.
+        start_str = start_dt.strftime("%Y-%m-%d")
+        end_str = (start_dt + timedelta(days=5)).strftime("%Y-%m-%d")
+
+        try:
+            url = f"https://api.polygon.io/v2/aggs/ticker/SPY/range/1/day/{start_str}/{end_str}"
+            r = requests.get(url, params={"apiKey": api_key, "sort": "asc"}, timeout=30)
+            bars = r.json().get("results") or []
+            if len(bars) < 2:
+                continue
+            start_close = bars[0]["c"]
+            # Pick the bar ~3 trading days after start — falls back to last
+            # bar if we have fewer (e.g. decode near a holiday stretch).
+            end_close = bars[min(3, len(bars) - 1)]["c"]
+            move_pct = (end_close / start_close - 1) * 100
+        except Exception as e:
+            logger.warning(f"trump_validate: SPY fetch failed for id={row['id']}: {e}")
+            continue
+
+        if bluff >= 70:
+            was_accurate = abs(move_pct) < 1.0
+        else:  # bluff < 40
+            was_accurate = abs(move_pct) >= 1.0
+
+        try:
+            db.table("trump_decoded_statements").update({
+                "outcome_date": now.isoformat(),
+                "outcome_market_move": round(move_pct, 2),
+                "was_accurate": was_accurate,
+                "actual_outcome": f"SPY {move_pct:+.2f}% over 72h (auto-validated)",
+            }).eq("id", row["id"]).execute()
+            graded += 1
+        except Exception as e:
+            logger.warning(f"trump_validate: DB update failed for id={row['id']}: {e}")
+
+    logger.info(f"trump_validate: graded {graded}, skipped {skipped} (uncertain band), checked {len(rows)}")
+
+
 # ─── MAIN ─────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="AI Statcharts hourly worker")
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
                                             "metrics", "cleanup", "prewarm", "options",
-                                            "market_news"],
+                                            "market_news", "trump_validate"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -675,6 +770,9 @@ def main():
 
     if args.task in ("all", "market_news"):
         update_market_news_scan(db)
+
+    if args.task in ("all", "trump_validate"):
+        validate_trump_decodes(db)
 
     if args.task in ("all", "cleanup"):
         cleanup_caches(db)

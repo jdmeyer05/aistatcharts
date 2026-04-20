@@ -1131,7 +1131,78 @@ async def decode_history(limit: int = 20, user: str = Depends(get_current_user))
 
 
 # ═══════════════════════════════════════════════════════════════
-# Endpoint 7: PATCH /history/{id}/outcome (mark actual outcome)
+# Endpoint 7: GET /track-record (aggregate decoder accuracy)
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/track-record")
+async def track_record(user: str = Depends(get_current_user)):
+    """Aggregate decoder hit rate + recent call stats across the user's
+    graded decodes. Reads trump_decoded_statements; rows get a verdict from
+    the hourly worker (worker.py trump_validate) 72h after creation.
+
+    Scoring (see worker.py):
+      - bluff_score ≥ 70 → correct if |SPY 72h move| < 1%
+      - bluff_score < 40 → correct if |SPY 72h move| ≥ 1%
+      - 40-69 (uncertain) → not graded
+    """
+    db = _db()
+    if not db:
+        return {"success": False, "error": "Database unavailable"}
+
+    try:
+        # Pull everything for this user; aggregation on a few hundred rows
+        # is cheap compared to the RPC round-trip overhead.
+        result = db.table("trump_decoded_statements") \
+            .select("id,created_at,statement,bluff_score,market_impact,outcome_market_move,was_accurate") \
+            .eq("user_id", user) \
+            .order("created_at", desc=True) \
+            .limit(500).execute()
+        rows = result.data or []
+
+        total = len(rows)
+        graded = [r for r in rows if r.get("was_accurate") is not None]
+        n_graded = len(graded)
+        n_correct = sum(1 for r in graded if r.get("was_accurate"))
+        accuracy_pct = (n_correct / n_graded * 100) if n_graded else None
+
+        # Split by call type so user can see which prediction mode is working.
+        bluff_calls = [r for r in graded if (r.get("bluff_score") or 50) >= 70]
+        genuine_calls = [r for r in graded if (r.get("bluff_score") or 50) < 40]
+        bluff_acc = (sum(1 for r in bluff_calls if r.get("was_accurate")) / len(bluff_calls) * 100) if bluff_calls else None
+        genuine_acc = (sum(1 for r in genuine_calls if r.get("was_accurate")) / len(genuine_calls) * 100) if genuine_calls else None
+
+        # Pending = awaiting 72h grading
+        pending = sum(1 for r in rows if r.get("was_accurate") is None)
+
+        # Most recent graded decode as illustrative example
+        recent = graded[0] if graded else None
+
+        return {
+            "success": True,
+            "total_decodes": total,
+            "graded_count": n_graded,
+            "pending_count": pending,
+            "accuracy_pct": round(accuracy_pct, 1) if accuracy_pct is not None else None,
+            "bluff_call_count": len(bluff_calls),
+            "bluff_accuracy_pct": round(bluff_acc, 1) if bluff_acc is not None else None,
+            "genuine_call_count": len(genuine_calls),
+            "genuine_accuracy_pct": round(genuine_acc, 1) if genuine_acc is not None else None,
+            "most_recent_graded": recent and {
+                "id": recent.get("id"),
+                "created_at": recent.get("created_at"),
+                "statement_preview": (recent.get("statement") or "")[:140],
+                "bluff_score": recent.get("bluff_score"),
+                "actual_spy_move_pct": recent.get("outcome_market_move"),
+                "was_accurate": recent.get("was_accurate"),
+            },
+        }
+    except Exception as e:
+        _log.warning(f"track-record query failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# Endpoint 8: PATCH /history/{id}/outcome (mark actual outcome)
 # ═══════════════════════════════════════════════════════════════
 
 @router.patch("/history/{statement_id}/outcome")

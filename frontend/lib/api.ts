@@ -1871,6 +1871,31 @@ export async function fetchTrumpHistory(limit: number = 20): Promise<{ success: 
   return apiFetch(`/api/trump/history?limit=${limit}`, { timeoutMs: 30_000 });
 }
 
+export interface TrumpTrackRecord {
+  success: boolean;
+  total_decodes: number;
+  graded_count: number;
+  pending_count: number;
+  accuracy_pct: number | null;
+  bluff_call_count: number;
+  bluff_accuracy_pct: number | null;
+  genuine_call_count: number;
+  genuine_accuracy_pct: number | null;
+  most_recent_graded: {
+    id: number;
+    created_at: string;
+    statement_preview: string;
+    bluff_score: number;
+    actual_spy_move_pct: number | null;
+    was_accurate: boolean;
+  } | null;
+  error?: string;
+}
+
+export async function fetchTrumpTrackRecord(): Promise<TrumpTrackRecord> {
+  return apiFetch("/api/trump/track-record", { timeoutMs: 30_000 });
+}
+
 // ── Meta Analysis ─────────────────────────────────────────────────────
 
 export interface MetaMetric {

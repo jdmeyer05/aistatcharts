@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   fetchTrumpPsychProfile, decodeTrumpStatement, predictTrumpResponse,
-  fetchTrumpMonitor, fetchTrumpPatterns, fetchTrumpHistory,
+  fetchTrumpMonitor, fetchTrumpPatterns, fetchTrumpHistory, fetchTrumpTrackRecord,
   fetchRobinhoodPositions,
   type TrumpPost, type TrumpPattern, type TrumpDecodedStatement,
 } from "@/lib/api";
@@ -124,6 +124,9 @@ export default function TrumpDecoderPage() {
         )}
       </div>
 
+      {/* ── Track Record (calibration panel) ── */}
+      <TrackRecordPanel />
+
       {/* ── Tab bar ── */}
       <div className="flex gap-1 border-b border-border pb-px">
         {TABS.map(t => (
@@ -142,6 +145,97 @@ export default function TrumpDecoderPage() {
       {tab === "Live Monitor" && <MonitorTab />}
       {tab === "Pattern Database" && <PatternTab />}
       {tab === "Psych Profile" && <PsychTab />}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// Track Record — aggregate decoder calibration stats
+// ═══════════════════════════════════════════════════════════
+function TrackRecordPanel() {
+  const q = useQuery({
+    queryKey: ["trump-track-record"],
+    queryFn: fetchTrumpTrackRecord,
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
+
+  // Before any decodes are graded there's nothing honest to show — stay silent
+  // rather than fill space with zeros that look like "0% accurate".
+  if (!q.data?.success) return null;
+  const d = q.data;
+  if (d.total_decodes === 0) {
+    return (
+      <div className="border border-border rounded-md p-2 bg-surface text-[11px] text-text-muted">
+        <strong className="text-text">Track record:</strong> no decodes yet. First decode you submit starts the calibration dataset — scoring runs 72h after each decode.
+      </div>
+    );
+  }
+
+  const acc = d.accuracy_pct;
+  const accColor =
+    acc === null ? "text-text-muted"
+    : acc >= 65 ? "text-gain"
+    : acc >= 50 ? "text-warning"
+    : "text-loss";
+
+  return (
+    <div className="border border-border rounded-md p-3 bg-surface">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div>
+            <div className="text-[10px] font-bold text-text-muted tracking-wider">TRACK RECORD</div>
+            <div className="flex items-baseline gap-2">
+              <span className={`text-xl font-bold ${accColor}`}>
+                {acc === null ? "—" : `${acc.toFixed(0)}%`}
+              </span>
+              <span className="text-[10px] text-text-muted">overall accuracy</span>
+            </div>
+          </div>
+          <div className="h-8 w-px bg-border" />
+          <div className="text-xs">
+            <div className="text-text-muted">Graded</div>
+            <div className="text-text font-semibold">
+              {d.graded_count}/{d.total_decodes}
+              {d.pending_count > 0 && <span className="text-text-muted font-normal"> ({d.pending_count} pending 72h)</span>}
+            </div>
+          </div>
+          <div className="text-xs">
+            <div className="text-text-muted">Bluff calls</div>
+            <div className="text-text font-semibold">
+              {d.bluff_accuracy_pct === null ? "—" : `${d.bluff_accuracy_pct.toFixed(0)}%`}
+              <span className="text-text-muted font-normal"> (n={d.bluff_call_count})</span>
+            </div>
+          </div>
+          <div className="text-xs">
+            <div className="text-text-muted">Genuine calls</div>
+            <div className="text-text font-semibold">
+              {d.genuine_accuracy_pct === null ? "—" : `${d.genuine_accuracy_pct.toFixed(0)}%`}
+              <span className="text-text-muted font-normal"> (n={d.genuine_call_count})</span>
+            </div>
+          </div>
+        </div>
+        <div className="text-[10px] text-text-muted max-w-xs leading-relaxed">
+          Grading rule: bluff call correct if |SPY 72h move| &lt; 1%; genuine call correct if ≥ 1%. 40-69 bluff scores left ungraded.
+        </div>
+      </div>
+      {d.most_recent_graded && (
+        <div className="mt-2 pt-2 border-t border-border text-[11px]">
+          <span className="text-text-muted">Most recent graded: </span>
+          <span className="text-text">
+            &ldquo;{d.most_recent_graded.statement_preview}{d.most_recent_graded.statement_preview.length >= 140 ? "…" : ""}&rdquo;
+          </span>
+          <span className="ml-2 text-text-muted">
+            bluff {d.most_recent_graded.bluff_score}
+            {d.most_recent_graded.actual_spy_move_pct !== null && (
+              <>, SPY {d.most_recent_graded.actual_spy_move_pct! >= 0 ? "+" : ""}{d.most_recent_graded.actual_spy_move_pct!.toFixed(2)}%</>
+            )}
+          </span>
+          <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold ${d.most_recent_graded.was_accurate ? "bg-gain/20 text-gain" : "bg-loss/20 text-loss"}`}>
+            {d.most_recent_graded.was_accurate ? "CORRECT" : "MISSED"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

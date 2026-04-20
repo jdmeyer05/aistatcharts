@@ -23,6 +23,7 @@ on:
           - metrics
           - cleanup
           - market_news
+          - trump_validate
 
 jobs:
   run-worker:
