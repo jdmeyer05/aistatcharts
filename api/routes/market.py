@@ -201,12 +201,33 @@ async def options_chain(
     expiration: str = Query(None, description="Specific expiration date (YYYY-MM-DD)"),
     user: str = Depends(get_current_user),
 ):
-    """Get full options chain with Greeks."""
-    from src.data_engine import fetch_options_chain
-    df = fetch_options_chain(ticker.upper(), expiration)
+    """Get options chain with Greeks plus the authoritative list of all
+    available expirations.
+
+    The chain fetch uses Polygon's snapshot endpoint which is paginated; for
+    very liquid underlyings (SPY, QQQ) the snapshot is truncated before all
+    expirations are reached. We fetch the expiration list separately from
+    the cheaper reference endpoint so the UI dropdown stays complete even
+    when the returned chain only covers near-dated expirations.
+
+    Both fetches run concurrently in a threadpool so the expirations lookup
+    doesn't add serialized latency to the chain request.
+    """
+    import asyncio
+    from src.data_engine import fetch_options_chain, get_expiration_dates
+    tk = ticker.upper()
+    df, expirations = await asyncio.gather(
+        asyncio.to_thread(fetch_options_chain, tk, expiration),
+        asyncio.to_thread(get_expiration_dates, tk),
+    )
     if df is None or df.empty:
-        return {"ticker": ticker, "data": []}
-    return {"ticker": ticker, "count": len(df), "data": df.to_dict(orient="records")}
+        return {"ticker": ticker, "data": [], "expirations": expirations}
+    return {
+        "ticker": ticker,
+        "count": len(df),
+        "data": df.to_dict(orient="records"),
+        "expirations": expirations,
+    }
 
 
 # ─────────────────── Open Interest history ───────────────────

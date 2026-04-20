@@ -673,7 +673,12 @@ export async function fetchPriceHistoryBatch(
 export async function fetchOptionsChain(
   ticker: string,
   expiration?: string
-): Promise<{ ticker: string; count: number; data: Record<string, unknown>[] }> {
+): Promise<{
+  ticker: string;
+  count: number;
+  data: Record<string, unknown>[];
+  expirations: string[];
+}> {
   const params = expiration ? `?expiration=${expiration}` : "";
   return apiFetch(`/api/market/chain/${ticker}${params}`);
 }
