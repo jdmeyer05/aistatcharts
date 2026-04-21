@@ -3540,10 +3540,29 @@ function CompareTab({
     const avgMom6M = meanNumbers(pickFinite(mom, m => m["6M"]));
     const avgMom12M = meanNumbers(pickFinite(mom, m => m["12M"]));
 
-    // Time-dim derivations from the multi-quarter history already in overview.
-    // Rev growth YoY: for each ticker, compare latest revenue to revenue ~4
-    // quarters back (closest match by date). Margin change YoY: same structure,
-    // measured in percentage points on net_income / revenue.
+    // Time-dim derivations from the multi-quarter/annual history in overview.
+    // Find the entry ~365 days before the latest and diff against it. Date-
+    // based (not index-based) so a series mixing 10-Q and 10-K rows doesn't
+    // silently compare "latest vs 4 years ago" when the spacing isn't
+    // quarterly. Reject matches outside 300-450 days — those aren't YoY.
+    const DAY_MS = 86_400_000;
+    const DAYS_LO = 300, DAYS_HI = 450;
+    const findYearAgo = <T extends { date: string }>(sorted: T[]): T | null => {
+      if (sorted.length < 2) return null;
+      const latestTs = new Date(sorted[sorted.length - 1].date).getTime();
+      const target = latestTs - 365 * DAY_MS;
+      let best: T | null = null;
+      let bestDiff = Infinity;
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const ts = new Date(sorted[i].date).getTime();
+        const diff = Math.abs(ts - target);
+        if (diff < bestDiff) { bestDiff = diff; best = sorted[i]; }
+      }
+      if (!best) return null;
+      const days = (latestTs - new Date(best.date).getTime()) / DAY_MS;
+      return days >= DAYS_LO && days <= DAYS_HI ? best : null;
+    };
+
     const revHist = ov?.revenue_history ?? [];
     const marHist = ov?.margin_history ?? [];
     const revByTicker = new Map<string, { date: string; revenue: number }[]>();
@@ -3553,10 +3572,10 @@ function CompareTab({
     }
     const revGrowths: number[] = [];
     for (const series of revByTicker.values()) {
-      if (series.length < 5) continue;
+      if (series.length < 2) continue;
       const sorted = series.slice().sort((a, b) => a.date.localeCompare(b.date));
       const latest = sorted[sorted.length - 1];
-      const yearAgo = sorted[sorted.length - 5]; // ~4 quarters back
+      const yearAgo = findYearAgo(sorted);
       if (!latest || !yearAgo || !yearAgo.revenue || yearAgo.revenue <= 0) continue;
       const g = (latest.revenue / yearAgo.revenue - 1) * 100;
       if (Number.isFinite(g)) revGrowths.push(g);
@@ -3574,10 +3593,13 @@ function CompareTab({
         ? (row.net_income / row.revenue) * 100
         : null;
     for (const series of marByTicker.values()) {
-      if (series.length < 5) continue;
+      if (series.length < 2) continue;
       const sorted = series.slice().sort((a, b) => a.date.localeCompare(b.date));
-      const latestM = asMargin(sorted[sorted.length - 1]);
-      const yearAgoM = asMargin(sorted[sorted.length - 5]);
+      const latestRow = sorted[sorted.length - 1];
+      const yearAgoRow = findYearAgo(sorted);
+      if (!latestRow || !yearAgoRow) continue;
+      const latestM = asMargin(latestRow);
+      const yearAgoM = asMargin(yearAgoRow);
       if (latestM == null || yearAgoM == null) continue;
       marginChanges.push(latestM - yearAgoM);
     }
@@ -3940,7 +3962,7 @@ function CompareTab({
             {/* Redundancy warning — flag dim pairs that carry the same info */}
             {redundantPairs.length > 0 && (
               <div className="flex items-start gap-2 text-[11px]">
-                <span className="text-spot font-semibold" style={{ color: t.spot }}>⚠</span>
+                <span className="font-semibold" style={{ color: t.spot }}>⚠</span>
                 <span className="text-text-muted">
                   Redundant dims:{" "}
                   {redundantPairs.map((p, i) => (
