@@ -367,6 +367,42 @@ export default function PoliticalPage() {
 
       {trades.length > 0 && (
         <>
+          <AIInterpretation
+            page="political"
+            subject={`Congressional trades ${year}`}
+            data={{
+              year,
+              total_trades: trades.length,
+              unique_tickers: new Set(trades.map((tr) => tr.ticker).filter(Boolean)).size,
+              purchases: buys.length,
+              sales: sells.length,
+              top_bought: topBought.slice(0, 8).map(([tk, n]) => ({ ticker: tk, count: n })),
+              top_sold: topSold.slice(0, 8).map(([tk, n]) => ({ ticker: tk, count: n })),
+              top_politicians_by_volume: leaderboard.slice(0, 8).map((r) => ({
+                member: r.member,
+                state: r.state,
+                buys: r.buys,
+                sells: r.sells,
+                estimated_volume_usd: r.volume,
+              })),
+              performance_vs_spy: performance ? {
+                scored_trades: performance.totalScored,
+                total_purchases: performance.totalPurchases,
+                top_alpha: performance.rows.slice(0, 8).map((r) => ({
+                  member: r.member,
+                  scored_trades: r.scored,
+                  win_rate: r.winRate,
+                  avg_return: r.avgReturn,
+                  avg_alpha: r.avgAlpha,
+                })),
+                bottom_alpha: performance.rows.slice(-5).map((r) => ({
+                  member: r.member,
+                  avg_alpha: r.avgAlpha,
+                  win_rate: r.winRate,
+                })),
+              } : null,
+            }}
+          />
           <div className="card card-compact">
             <div className="flex flex-wrap gap-6">
               <Metric label="Total Trades" value={trades.length.toLocaleString()} />
@@ -810,44 +846,6 @@ export default function PoliticalPage() {
             </div>
           </div>
 
-          {(trades.length > 0) && (
-            <AIInterpretation
-              page="political"
-              subject={`Congressional trades ${year}`}
-              data={{
-                year,
-                total_trades: trades.length,
-                unique_tickers: new Set(trades.map((tr) => tr.ticker).filter(Boolean)).size,
-                purchases: buys.length,
-                sales: sells.length,
-                top_bought: topBought.slice(0, 8).map(([tk, n]) => ({ ticker: tk, count: n })),
-                top_sold: topSold.slice(0, 8).map(([tk, n]) => ({ ticker: tk, count: n })),
-                top_politicians_by_volume: leaderboard.slice(0, 8).map((r) => ({
-                  member: r.member,
-                  state: r.state,
-                  buys: r.buys,
-                  sells: r.sells,
-                  estimated_volume_usd: r.volume,
-                })),
-                performance_vs_spy: performance ? {
-                  scored_trades: performance.totalScored,
-                  total_purchases: performance.totalPurchases,
-                  top_alpha: performance.rows.slice(0, 8).map((r) => ({
-                    member: r.member,
-                    scored_trades: r.scored,
-                    win_rate: r.winRate,
-                    avg_return: r.avgReturn,
-                    avg_alpha: r.avgAlpha,
-                  })),
-                  bottom_alpha: performance.rows.slice(-5).map((r) => ({
-                    member: r.member,
-                    avg_alpha: r.avgAlpha,
-                    win_rate: r.winRate,
-                  })),
-                } : null,
-              }}
-            />
-          )}
         </>
       )}
 

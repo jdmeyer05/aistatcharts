@@ -161,6 +161,34 @@ export default function ExitsPage() {
         </div>
       </div>
 
+      {(congressionalExits.length > 0 || activistExitCandidates.length > 0 || insiderLoad.isSuccess) && (
+        <AIInterpretation
+          page="exits"
+          data={{
+            congressional_exits: congressionalExits.slice(0, 15).map((r) => ({
+              ticker: r.ticker,
+              buys: r.buys,
+              sells: r.sells,
+              net: r.net,
+              distinct_members: r.distinctMembers,
+            })),
+            recent_13d_amendments: activistExitCandidates.slice(0, 12).map((row) => ({
+              filed: row.filed,
+              ticker: row.ticker,
+              target: row.target,
+              activist: row.activist,
+            })),
+            per_ticker_insider: insiderLoad.isSuccess && insiderTicker ? {
+              ticker: insiderTicker.toUpperCase(),
+              buys: insiderExits.buyCount,
+              sells: insiderExits.sellCount,
+              net_value: insiderExits.netValue,
+              recent_sells: insiderExits.sells.slice(0, 6),
+            } : null,
+          }}
+        />
+      )}
+
       {congressLoad.isError && (
         <ErrorBanner title="Congressional load failed" error={congressLoad.error} onRetry={() => congressLoad.mutate()} />
       )}
@@ -358,33 +386,6 @@ export default function ExitsPage() {
         </div>
       )}
 
-      {(congressionalExits.length > 0 || activistExitCandidates.length > 0 || insiderLoad.isSuccess) && (
-        <AIInterpretation
-          page="exits"
-          data={{
-            congressional_exits: congressionalExits.slice(0, 15).map((r) => ({
-              ticker: r.ticker,
-              buys: r.buys,
-              sells: r.sells,
-              net: r.net,
-              distinct_members: r.distinctMembers,
-            })),
-            recent_13d_amendments: activistExitCandidates.slice(0, 12).map((row) => ({
-              filed: row.filed,
-              ticker: row.ticker,
-              target: row.target,
-              activist: row.activist,
-            })),
-            per_ticker_insider: insiderLoad.isSuccess && insiderTicker ? {
-              ticker: insiderTicker.toUpperCase(),
-              buys: insiderExits.buyCount,
-              sells: insiderExits.sellCount,
-              net_value: insiderExits.netValue,
-              recent_sells: insiderExits.sells.slice(0, 6),
-            } : null,
-          }}
-        />
-      )}
 
       <div className="card card-compact text-xs text-text-muted">
         <strong>Coming next:</strong> 13F removals (fund liquidations q/q), retail-sentiment overlay (dumb money

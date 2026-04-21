@@ -92,6 +92,27 @@ export default function Institutional13FPage() {
 
       {load.data && load.data.count > 0 && (
         <>
+          <AIInterpretation
+            page="13f"
+            subject={fundName || fund}
+            data={{
+              fund: fundName,
+              filing_date: load.data.filing_date,
+              total_positions: load.data.count,
+              top_15_by_value: top15.map((h) => ({
+                company: h.company,
+                value: h.value,
+                shares: h.shares,
+                type: h.put_call ?? "Equity",
+              })),
+              total_portfolio_value: load.data.holdings.reduce((s, h) => s + (h.value ?? 0), 0),
+              top_15_concentration: (() => {
+                const top = top15.reduce((s, h) => s + (h.value ?? 0), 0);
+                const all = load.data.holdings.reduce((s, h) => s + (h.value ?? 0), 0);
+                return all > 0 ? top / all : 0;
+              })(),
+            }}
+          />
           <div className="card card-compact">
             <div className="flex flex-wrap gap-6">
               <Metric label="Positions" value={String(load.data.count)} />
@@ -162,29 +183,6 @@ export default function Institutional13FPage() {
             </div>
           </div>
 
-          {load.data.count > 0 && (
-            <AIInterpretation
-              page="13f"
-              subject={fundName || fund}
-              data={{
-                fund: fundName,
-                filing_date: load.data.filing_date,
-                total_positions: load.data.count,
-                top_15_by_value: top15.map((h) => ({
-                  company: h.company,
-                  value: h.value,
-                  shares: h.shares,
-                  type: h.put_call ?? "Equity",
-                })),
-                total_portfolio_value: load.data.holdings.reduce((s, h) => s + (h.value ?? 0), 0),
-                top_15_concentration: (() => {
-                  const top = top15.reduce((s, h) => s + (h.value ?? 0), 0);
-                  const all = load.data.holdings.reduce((s, h) => s + (h.value ?? 0), 0);
-                  return all > 0 ? top / all : 0;
-                })(),
-              }}
-            />
-          )}
         </>
       )}
 

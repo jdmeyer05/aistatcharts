@@ -225,6 +225,40 @@ export default function InsidersPage() {
 
       {rows.length > 0 && (
         <>
+          <AIInterpretation
+            page="insiders"
+            subject={ticker.toUpperCase()}
+            data={{
+              ticker: ticker.toUpperCase(),
+              window_days: 180,
+              totals: {
+                transactions: rows.length,
+                buys: buys.length,
+                sells: sells.length,
+                buy_value: buyValue,
+                sell_value: sellValue,
+                net_value: net,
+              },
+              clusters: {
+                buy_cluster_detected: clusters.some((c) => c.direction === "BUY"),
+                sell_cluster_detected: clusters.some((c) => c.direction === "SELL"),
+                clusters: clusters.map((c) => ({
+                  direction: c.direction,
+                  start: c.start,
+                  end: c.end,
+                  distinct_insiders: c.insiders.length,
+                  total_value: c.value,
+                })),
+              },
+              top_insiders_by_net: topInsiders.slice(0, 6).map(([name, v]) => ({
+                name,
+                position: v.position,
+                net_value: v.netValue,
+                buys: v.buys,
+                sells: v.sells,
+              })),
+            }}
+          />
           <div className="card card-compact">
             <div className="flex flex-wrap gap-6">
               <Metric label="Total Transactions" value={String(rows.length)} />
@@ -402,40 +436,6 @@ export default function InsidersPage() {
               </table>
             </div>
           </div>
-          <AIInterpretation
-            page="insiders"
-            subject={ticker.toUpperCase()}
-            data={{
-              ticker: ticker.toUpperCase(),
-              window_days: 180,
-              totals: {
-                transactions: rows.length,
-                buys: buys.length,
-                sells: sells.length,
-                buy_value: buyValue,
-                sell_value: sellValue,
-                net_value: net,
-              },
-              clusters: {
-                buy_cluster_detected: clusters.some((c) => c.direction === "BUY"),
-                sell_cluster_detected: clusters.some((c) => c.direction === "SELL"),
-                clusters: clusters.map((c) => ({
-                  direction: c.direction,
-                  start: c.start,
-                  end: c.end,
-                  distinct_insiders: c.insiders.length,
-                  total_value: c.value,
-                })),
-              },
-              top_insiders_by_net: topInsiders.slice(0, 6).map(([name, v]) => ({
-                name,
-                position: v.position,
-                net_value: v.netValue,
-                buys: v.buys,
-                sells: v.sells,
-              })),
-            }}
-          />
         </>
       )}
 

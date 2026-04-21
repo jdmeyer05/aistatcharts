@@ -347,6 +347,45 @@ export default function SmartMoneyOverviewPage() {
           </div>
         )}
 
+        {conviction && (
+          <div className="mt-4">
+            <AIInterpretation
+              page="overview"
+              subject={conviction.ticker}
+              data={{
+                ticker: conviction.ticker,
+                score: conviction.score,
+                direction: conviction.direction,
+                families_firing: conviction.families,
+                insider: {
+                  buys: conviction.insiderBuys,
+                  sells: conviction.insiderSells,
+                  net_value: conviction.insiderNet,
+                  buy_cluster: conviction.insiderClusterBuy,
+                  sell_cluster: conviction.insiderClusterSell,
+                },
+                activist: {
+                  new_13d: conviction.activistNew,
+                  total_filings: conviction.activistFilings.length,
+                  filings: conviction.activistFilings.slice(0, 5).map((f) => ({
+                    filed: f.filed,
+                    activist: f.activist,
+                    is_new: f.is_new,
+                  })),
+                },
+                events: {
+                  eight_k_count_90d: conviction.recentEightK,
+                },
+                price_context_90d: {
+                  stock_return: conviction.stockReturn90d,
+                  spy_return: conviction.spyReturn90d,
+                  alpha: conviction.alpha90d,
+                },
+              }}
+            />
+          </div>
+        )}
+
         {conviction && (() => {
           // "No data" means none of our signal sources returned anything actionable.
           // A default score of 50 + neutral is misleading when it just reflects absence.
@@ -503,44 +542,6 @@ export default function SmartMoneyOverviewPage() {
           );
         })()}
 
-        {conviction && (
-          <div className="mt-4">
-            <AIInterpretation
-              page="overview"
-              subject={conviction.ticker}
-              data={{
-                ticker: conviction.ticker,
-                score: conviction.score,
-                direction: conviction.direction,
-                families_firing: conviction.families,
-                insider: {
-                  buys: conviction.insiderBuys,
-                  sells: conviction.insiderSells,
-                  net_value: conviction.insiderNet,
-                  buy_cluster: conviction.insiderClusterBuy,
-                  sell_cluster: conviction.insiderClusterSell,
-                },
-                activist: {
-                  new_13d: conviction.activistNew,
-                  total_filings: conviction.activistFilings.length,
-                  filings: conviction.activistFilings.slice(0, 5).map((f) => ({
-                    filed: f.filed,
-                    activist: f.activist,
-                    is_new: f.is_new,
-                  })),
-                },
-                events: {
-                  eight_k_count_90d: conviction.recentEightK,
-                },
-                price_context_90d: {
-                  stock_return: conviction.stockReturn90d,
-                  spy_return: conviction.spyReturn90d,
-                  alpha: conviction.alpha90d,
-                },
-              }}
-            />
-          </div>
-        )}
       </div>
 
       {/* This week feeds */}

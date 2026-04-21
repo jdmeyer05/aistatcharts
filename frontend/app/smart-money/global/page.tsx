@@ -248,6 +248,32 @@ export default function GlobalSmartMoneyPage() {
 
       {batchLoad.data && (
         <>
+          {consensus && (
+            <AIInterpretation
+              page="global"
+              data={{
+                funds_loaded: fundSummaries.length,
+                total_fund_value: fundSummaries.reduce((s, f) => s + f.totalValue, 0),
+                by_category: byCategoryStats,
+                largest_funds: fundSummaries.slice(0, 6).map((f) => ({
+                  name: f.fund.name,
+                  category: f.fund.category,
+                  country: f.fund.country,
+                  positions: f.count,
+                  total_value: f.totalValue,
+                })),
+                top_consensus_3_plus_funds: consensus
+                  .filter((c) => c.fundCount >= 3)
+                  .slice(0, 15)
+                  .map((c) => ({
+                    company: c.company,
+                    fund_count: c.fundCount,
+                    total_value: c.totalValue,
+                    holders: c.funds,
+                  })),
+              }}
+            />
+          )}
           {/* Category rollup */}
           {byCategoryStats && (
             <div className="card">
@@ -451,32 +477,6 @@ export default function GlobalSmartMoneyPage() {
             </div>
           )}
 
-          {consensus && (
-            <AIInterpretation
-              page="global"
-              data={{
-                funds_loaded: fundSummaries.length,
-                total_fund_value: fundSummaries.reduce((s, f) => s + f.totalValue, 0),
-                by_category: byCategoryStats,
-                largest_funds: fundSummaries.slice(0, 6).map((f) => ({
-                  name: f.fund.name,
-                  category: f.fund.category,
-                  country: f.fund.country,
-                  positions: f.count,
-                  total_value: f.totalValue,
-                })),
-                top_consensus_3_plus_funds: consensus
-                  .filter((c) => c.fundCount >= 3)
-                  .slice(0, 15)
-                  .map((c) => ({
-                    company: c.company,
-                    fund_count: c.fundCount,
-                    total_value: c.totalValue,
-                    holders: c.funds,
-                  })),
-              }}
-            />
-          )}
         </>
       )}
 

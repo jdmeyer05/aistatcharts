@@ -150,6 +150,23 @@ export default function ActivistPage() {
 
       {filings.length > 0 && (
         <>
+          <AIInterpretation
+            page="activist"
+            data={{
+              lookback_days: days,
+              total_filings: filings.length,
+              new_13d: newFilings.length,
+              amendments: amendments.length,
+              unique_targets: new Set(filings.map((f) => f.target)).size,
+              top_activists: topActivists.map(([name, count]) => ({ activist: name, filings: count })),
+              new_campaigns: newFilings.slice(0, 12).map((f) => ({
+                filed: f.filed,
+                ticker: f.ticker,
+                target: f.target,
+                activist: f.activist,
+              })),
+            }}
+          />
           <div className="card card-compact">
             <div className="flex flex-wrap gap-6">
               <Metric label="Total Filings" value={String(filings.length)} />
@@ -359,24 +376,6 @@ export default function ActivistPage() {
               </table>
             </div>
           </div>
-
-          <AIInterpretation
-            page="activist"
-            data={{
-              lookback_days: days,
-              total_filings: filings.length,
-              new_13d: newFilings.length,
-              amendments: amendments.length,
-              unique_targets: new Set(filings.map((f) => f.target)).size,
-              top_activists: topActivists.map(([name, count]) => ({ activist: name, filings: count })),
-              new_campaigns: newFilings.slice(0, 12).map((f) => ({
-                filed: f.filed,
-                ticker: f.ticker,
-                target: f.target,
-                activist: f.activist,
-              })),
-            }}
-          />
         </>
       )}
 

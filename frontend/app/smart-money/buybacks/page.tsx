@@ -68,6 +68,22 @@ export default function BuybacksPage() {
 
       {d && d.ok && (
         <>
+          <AIInterpretation
+            page="buybacks"
+            subject={d.ticker}
+            data={{
+              ticker: d.ticker,
+              name: d.name,
+              market_cap: d.market_cap,
+              ttm_buyback: d.ttm_repurchase,
+              ttm_dividend: d.ttm_dividend,
+              buyback_yield: d.buyback_yield,
+              dividend_yield: d.dividend_yield,
+              total_shareholder_yield: d.total_shareholder_yield,
+              quarterly: (d.quarterly ?? []).slice(0, 8),
+              annual: (d.annual ?? []).slice(0, 5),
+            }}
+          />
           <div className="card card-compact">
             <div className="flex flex-wrap gap-6 items-center">
               <div>
@@ -224,23 +240,6 @@ export default function BuybacksPage() {
               </table>
             </div>
           </div>
-
-          <AIInterpretation
-            page="buybacks"
-            subject={d.ticker}
-            data={{
-              ticker: d.ticker,
-              name: d.name,
-              market_cap: d.market_cap,
-              ttm_buyback: d.ttm_repurchase,
-              ttm_dividend: d.ttm_dividend,
-              buyback_yield: d.buyback_yield,
-              dividend_yield: d.dividend_yield,
-              total_shareholder_yield: d.total_shareholder_yield,
-              quarterly: (d.quarterly ?? []).slice(0, 8),
-              annual: (d.annual ?? []).slice(0, 5),
-            }}
-          />
         </>
       )}
 

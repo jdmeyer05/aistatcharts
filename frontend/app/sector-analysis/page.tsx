@@ -712,6 +712,17 @@ function OverviewTab({
 
   return (
     <div className="space-y-4">
+      <AIInterpretation
+        page="sector-overview"
+        subject={cfg.etf}
+        data={{
+          etf: cfg.etf,
+          label: cfg.label,
+          financials: overview.financials.slice(0, 10),
+          forecasts: overview.forecasts?.slice(0, 10) ?? [],
+        }}
+        buttonLabel={`Interpret ${cfg.etf} fundamentals`}
+      />
       {/* Revenue ranking */}
       {revBars.length > 0 && (
         <div className="card">
@@ -1137,18 +1148,6 @@ function OverviewTab({
           </div>
         </div>
       )}
-
-      <AIInterpretation
-        page="sector-overview"
-        subject={cfg.etf}
-        data={{
-          etf: cfg.etf,
-          label: cfg.label,
-          financials: overview.financials.slice(0, 10),
-          forecasts: overview.forecasts?.slice(0, 10) ?? [],
-        }}
-        buttonLabel={`Interpret ${cfg.etf} fundamentals`}
-      />
     </div>
   );
 }
@@ -1547,6 +1546,16 @@ function ValuationTab({
 
   return (
     <div className="space-y-4">
+      <AIInterpretation
+        page="sector-valuation"
+        subject={valuation.etf}
+        data={{
+          etf: valuation.etf,
+          valuation: valuation.valuation.slice(0, 12),
+          momentum: valuation.momentum.slice(0, 12),
+        }}
+        buttonLabel={`Interpret ${valuation.etf} valuation`}
+      />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {barChart("Forward P/E", pe, "forward_pe", v => `${v.toFixed(1)}x`,
           v => v < 15 ? t.accent : v < 20 ? t.spot : t.loss, "P/E")}
@@ -1597,17 +1606,6 @@ function ValuationTab({
           </table>
         </div>
       </div>
-
-      <AIInterpretation
-        page="sector-valuation"
-        subject={valuation.etf}
-        data={{
-          etf: valuation.etf,
-          valuation: valuation.valuation.slice(0, 12),
-          momentum: valuation.momentum.slice(0, 12),
-        }}
-        buttonLabel={`Interpret ${valuation.etf} valuation`}
-      />
     </div>
   );
 }
@@ -1679,6 +1677,17 @@ function AlphaTab({
 
   return (
     <div className="space-y-4">
+      <AIInterpretation
+        page="sector-alpha"
+        subject={cfg.etf}
+        data={{
+          etf: cfg.etf,
+          eps_revisions: alpha.eps_revisions.slice(0, 10),
+          insider: alpha.insider.slice(0, 10),
+          momentum: valuation.momentum.slice(0, 10),
+        }}
+        buttonLabel={`Interpret ${cfg.etf} signals`}
+      />
       <div className="card">
         <div className="font-semibold text-sm">Relative Value Map</div>
         <div className="text-xs text-text-muted mb-2">
@@ -1883,18 +1892,6 @@ function AlphaTab({
           </div>
         </div>
       )}
-
-      <AIInterpretation
-        page="sector-alpha"
-        subject={cfg.etf}
-        data={{
-          etf: cfg.etf,
-          eps_revisions: alpha.eps_revisions.slice(0, 10),
-          insider: alpha.insider.slice(0, 10),
-          momentum: valuation.momentum.slice(0, 10),
-        }}
-        buttonLabel={`Interpret ${cfg.etf} signals`}
-      />
     </div>
   );
 }
@@ -3436,8 +3433,8 @@ const BUBBLE_PRESETS: Array<{
     x: "avgMom3M",    y: "avgMom12M",  color: "medianFwdPe",    size: "totalRevenue" },
   { id: "income",         name: "Income + Stability", desc: "Yield vs beta; color flags payout sustainability.",
     x: "avgDivYield", y: "avgBeta",    color: "avgPayoutRatio", size: "avgFcfYield" },
-  { id: "quality-price",  name: "Quality at Price",   desc: "P/E vs ROE — classic quality-value scatter.",
-    x: "medianFwdPe", y: "avgRoe",     color: "avgMargin",      size: "totalRevenue" },
+  { id: "cheap-improving", name: "Cheap & Improving",  desc: "Value + growth together. Cheap sectors whose fundamentals are actually getting better, upper-left.",
+    x: "medianFwdPe", y: "avgRevGrowthYoY", color: "avgMarginChangeYoY", size: "totalRevenue" },
   { id: "rotation",       name: "Rotation Check",     desc: "Are fundamentals improving? YoY revenue growth vs margin Δ.",
     x: "avgRevGrowthYoY", y: "avgMarginChangeYoY",  color: "avgMom3M",       size: "totalRevenue" },
 ];
@@ -3855,6 +3852,14 @@ function CompareTab({
 
   return (
     <div className="space-y-4">
+      {pendingCount === 0 && errorCount < etfs.length && (
+        <AIInterpretation
+          page="sector-compare"
+          subject="SPDR Sectors"
+          data={aiData}
+          buttonLabel="Interpret rotation across sectors"
+        />
+      )}
       <div className="card card-compact">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
@@ -4051,15 +4056,6 @@ function CompareTab({
           </div>
         );
       })()}
-
-      {pendingCount === 0 && errorCount < etfs.length && (
-        <AIInterpretation
-          page="sector-compare"
-          subject="SPDR Sectors"
-          data={aiData}
-          buttonLabel="Interpret rotation across sectors"
-        />
-      )}
     </div>
   );
 }
