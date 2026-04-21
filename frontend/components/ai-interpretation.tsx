@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import ReactMarkdown from "react-markdown";
+import { AIMarkdown } from "@/components/ai-markdown";
 import { fetchInterpretation } from "@/lib/api";
 
 interface Props {
@@ -79,9 +79,7 @@ export function AIInterpretation({ page, data, subject, disabled, buttonLabel }:
 
       {m.data?.interpretation && (
         <div className="mt-2">
-          <div className="text-sm leading-relaxed markdown-body">
-            <ReactMarkdown>{m.data.interpretation}</ReactMarkdown>
-          </div>
+          <AIMarkdown text={m.data.interpretation} className="text-sm leading-relaxed markdown-body" />
           <div className="mt-3 pt-2 border-t border-border/50 text-[10px] text-text-muted flex flex-wrap gap-x-4 gap-y-1 items-center">
             <span>Model: {m.data.model}</span>
             {m.data.grounding && (() => {

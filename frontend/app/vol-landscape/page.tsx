@@ -7,6 +7,7 @@ import { fetchVolLandscape, fetchAITradeIdeas, type VolLandscapeScan } from "@/l
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
+import { AIMarkdown } from "@/components/ai-markdown";
 
 
 const TABS = ["Vol Landscape", "Market Environment", "Metrics Table", "Signals & Alerts", "AI Analysis"];
@@ -646,18 +647,7 @@ export default function VolLandscapePage() {
                 <p className="text-sm text-text-muted mt-3">Gemini analyzing cross-asset landscape...</p>
               </div>
             )}
-            {aiContent && (
-              <div className="prose prose-sm max-w-none text-sm dark:prose-invert" dangerouslySetInnerHTML={{
-                __html: (() => {
-                  const escaped = aiContent.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                  return escaped
-                    .replace(/^## (.*?)$/gm, '<h3 class="text-base font-bold mt-4 mb-2">$1</h3>')
-                    .replace(/^#### (.*?)$/gm, '<h4 class="text-sm font-semibold mt-3 mb-1">$1</h4>')
-                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                    .replace(/\n/g, "<br/>");
-                })(),
-              }} />
-            )}
+            {aiContent && <AIMarkdown text={aiContent} />}
           </div>
         )}
       </>)}

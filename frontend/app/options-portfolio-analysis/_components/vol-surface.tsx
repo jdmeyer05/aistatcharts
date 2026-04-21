@@ -12,6 +12,7 @@ import {
 import { getChartTheme, getBaseLayout, get3dScene } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
+import { AIMarkdown } from "@/components/ai-markdown";
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2102,29 +2103,7 @@ export function VolSurfaceContent() {
 
               {aiContent && (
                 <>
-                  {/* Rendered markdown — escape first to prevent XSS, then apply formatting */}
-                  <div className="prose prose-sm max-w-none text-sm" dangerouslySetInnerHTML={{
-                    __html: (() => {
-                      // Escape HTML entities first
-                      const escaped = aiContent
-                        .replace(/&/g, "&amp;")
-                        .replace(/</g, "&lt;")
-                        .replace(/>/g, "&gt;");
-                      // Then apply safe markdown-like formatting
-                      return escaped
-                        .replace(/^## (.*?)$/gm, '<h3 class="text-base font-bold mt-4 mb-2 text-text">$1</h3>')
-                        .replace(/^#### (.*?)$/gm, '<h4 class="text-sm font-semibold mt-3 mb-1 text-text">$1</h4>')
-                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                        .replace(/\n\|(.+)\|/g, (match) => {
-                          const cells = match.trim().split("|").filter(c => c.trim());
-                          if (cells.some(c => c.includes("---"))) return "";
-                          const tag = cells.every(c => c.trim().match(/^[A-Z\s\/]+$/)) ? "th" : "td";
-                          return `<tr>${cells.map(c => `<${tag} class="px-2 py-1 border border-border text-xs">${c.trim()}</${tag}>`).join("")}</tr>`;
-                        })
-                        .replace(/(<tr>.*<\/tr>\n?)+/g, (m) => `<table class="data-table text-xs my-2 w-full">${m}</table>`)
-                        .replace(/\n/g, "<br/>");
-                    })(),
-                  }} />
+                  <AIMarkdown text={aiContent} />
 
                   {/* P&L Payoff Diagram — parse legs from AI markdown */}
                   {(() => {

@@ -7,6 +7,7 @@ import { fetchOptionsChain, fetchSnapshot, fetchAITradeIdeas } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
+import { AIMarkdown } from "@/components/ai-markdown";
 
 
 const TABS = ["Overview", "Vanna Profile", "Charm & Time", "Gamma Risk", "Vega Convexity", "VV Pricing", "Portfolio Greeks", "AI Greek Analyst"];
@@ -396,15 +397,7 @@ export function HigherGreeksContent() {
                   {aiLoading ? "Analyzing..." : aiGreekContent ? "Re-analyze" : "Analyze Greeks (Gemini)"}
                 </button>
                 {aiLoading && <div className="flex items-center gap-2"><div className="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin" /><span className="text-xs text-text-muted">Gemini analyzing higher-order Greeks...</span></div>}
-                {aiGreekContent && (
-                  <div className="prose prose-sm max-w-none text-sm" dangerouslySetInnerHTML={{
-                    __html: aiGreekContent.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                      .replace(/^## (.*?)$/gm, '<h3 class="text-base font-bold mt-4 mb-2">$1</h3>')
-                      .replace(/^#### (.*?)$/gm, '<h4 class="text-sm font-semibold mt-3 mb-1">$1</h4>')
-                      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                      .replace(/\n/g, "<br/>"),
-                  }} />
-                )}
+                {aiGreekContent && <AIMarkdown text={aiGreekContent} />}
               </div>
             );
           })()}

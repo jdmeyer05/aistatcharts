@@ -7,6 +7,7 @@ import { fetchOptionsChain, fetchSnapshot, fetchPriceHistory, fetchAITradeIdeas 
 import { getChartTheme, getBaseLayout, heatmapTrace } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
+import { AIMarkdown } from "@/components/ai-markdown";
 
 
 const TABS = ["Spread Builder", "Term Structure", "P&L Simulator", "Risk Analysis", "Scanner", "Roll Optimizer", "Backtest", "AI Assessment"];
@@ -818,15 +819,7 @@ export function CalendarSpreadContent() {
                     className="px-6 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm">
                     {aiContent ? "Re-run" : "Run"} Gemini Assessment
                   </button>
-                  {aiContent && (
-                    <div className="prose prose-sm max-w-none text-sm" dangerouslySetInnerHTML={{
-                      __html: aiContent.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                        .replace(/^## (.*?)$/gm, '<h3 class="text-base font-bold mt-4 mb-2">$1</h3>')
-                        .replace(/^#### (.*?)$/gm, '<h4 class="text-sm font-semibold mt-3 mb-1">$1</h4>')
-                        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                        .replace(/\n/g, "<br/>"),
-                    }} />
-                  )}
+                  {aiContent && <AIMarkdown text={aiContent} />}
                 </>
               );
             })()}

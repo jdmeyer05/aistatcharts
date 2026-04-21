@@ -10,7 +10,7 @@ import {
   type PolymarketEvent, type PolymarketHistoryPoint,
 } from "@/lib/api";
 import { FreshnessBar } from "@/components/ui/freshness-dot";
-import ReactMarkdown from "react-markdown";
+import { AIMarkdown } from "@/components/ai-markdown";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
@@ -369,9 +369,7 @@ function MarketNews() {
         {data?.age_hours === 0 && <span className="text-[0.55rem] font-data dot-fresh">Live</span>}
       </div>
       {data?.content ? (
-        <div className="text-[0.78rem] leading-relaxed text-text-secondary markdown-body">
-          <ReactMarkdown>{data.content}</ReactMarkdown>
-        </div>
+        <AIMarkdown text={data.content} className="text-[0.78rem] leading-relaxed text-text-secondary markdown-body" />
       ) : <p className="text-xs text-text-muted">Updates hourly during market hours.</p>}
     </div>
   );
