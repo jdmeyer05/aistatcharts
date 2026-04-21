@@ -488,14 +488,27 @@ function FracDiffTab({ data, t, L }: { data: QuantLabAnalyzeResponse; t: ReturnT
 
 function StructuralBreaksTab({ data, t, L }: { data: QuantLabAnalyzeResponse; t: ReturnType<typeof getChartTheme>; L: ReturnType<typeof getBaseLayout> }) {
   const [hMult, setHMult] = useState(2.0);
-  const returns = data.ohlcv.log_returns.slice(1);
-  const dates = data.ohlcv.dates.slice(1);
-  const sigma = stddev(returns);
-  const h = hMult * sigma;
-  const cusumResult = cusumFilter(returns, h);
-  const events = cusumResult;
-  const sPos = cusumResult.length > 0 ? cusumResult[0].sPos : [];
-  const sNeg = cusumResult.length > 0 ? cusumResult[0].sNeg : [];
+
+  // Memoize the CUSUM derivation — `cusumFilter` embeds the full sPos/sNeg
+  // arrays into every returned event (for plot access), so each call allocates
+  // events.length × returns.length numbers. Recomputing that on every render
+  // (hMult slider drag, parent re-render) was the main cost on this tab.
+  const { returns, dates, sigma, h, events, sPos, sNeg } = useMemo(() => {
+    const returns = data.ohlcv.log_returns.slice(1);
+    const dates = data.ohlcv.dates.slice(1);
+    const sigma = stddev(returns);
+    const h = hMult * sigma;
+    const cusumResult = cusumFilter(returns, h);
+    return {
+      returns,
+      dates,
+      sigma,
+      h,
+      events: cusumResult,
+      sPos: cusumResult.length > 0 ? cusumResult[0].sPos : [],
+      sNeg: cusumResult.length > 0 ? cusumResult[0].sNeg : [],
+    };
+  }, [data.ohlcv.log_returns, data.ohlcv.dates, hMult]);
   const compression = returns.length > 0 ? (events.length / returns.length) * 100 : 0;
 
   const isBubble = data.sadf.max > data.sadf.cv_95;
