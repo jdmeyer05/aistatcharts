@@ -762,14 +762,11 @@ def refresh_sectors(db):
             _compute_sector_market,
             SECTOR_CONFIGS,
         )
-        from src._cache_util import _RESULT_CACHE, _stable_key
+        from src._cache_util import _RESULT_CACHE
     except Exception as e:
         logger.warning(f"refresh_sectors: import failed: {e}")
         return
 
-    # Each entry is (cache_key_prefix, decorated_fn). The prefix matches the
-    # string passed to @_result_cached in sectors.py. We reconstruct the full
-    # cache key via _stable_key so any future signature change stays in sync.
     computes = [
         ("sector_overview",  _compute_sector_overview),
         ("sector_capex",     _compute_sector_capex),
@@ -781,17 +778,25 @@ def refresh_sectors(db):
     ]
     etfs = list(SECTOR_CONFIGS.keys())
 
+    # Cache-key format tracks src._cache_util._stable_key's output for a
+    # single-str-arg compute fn. We can't call _stable_key(fn, ...) directly
+    # here because the @_result_cached wrapper's externally-visible signature
+    # is (*args, **kwargs), so inspect.signature().bind() produces an empty
+    # items list. Going straight to the final string keeps the bust aligned.
+    def _bust_key(prefix: str, etf: str) -> str:
+        return f"{prefix}:[('etf', {etf!r})]"
+
     ok = 0
     fail = 0
     for etf in etfs:
         for key, fn in computes:
-            # Build the exact cache key the decorator uses so the pre-compute
-            # bust clears both tiers (in-memory + Supabase).
-            cache_key = _stable_key(key, fn, (etf,), {})
+            cache_key = _bust_key(key, etf)
             _RESULT_CACHE.pop(cache_key, None)
             try:
                 db.table("cftc_cache").delete().eq("key", cache_key).execute()
             except Exception:
+                # Supabase transient failure — proceed; recompute still wins at
+                # the in-memory tier and will re-write both tiers on success.
                 pass
             try:
                 fn(etf)
