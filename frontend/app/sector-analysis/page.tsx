@@ -3212,9 +3212,11 @@ function BubbleChart({
   const droppedCount = points.filter(p => !p.benchmark).length - normal.length - partial.length;
 
   // Outlier detection — |z-score| ≥ 1.5 on any of the 4 dims flags a point.
-  // Computed across the NON-benchmark points only, since benchmark is by
-  // construction an average.
+  // Tracks per-metric z-scores so hover can explain WHY a point is ringed
+  // ("XLE outlier: ΔMargin ↑2.4σ, Fwd P/E ↓1.8σ"). Benchmark excluded since
+  // its values are by construction an average.
   const outlierIds = new Set<string>();
+  const outlierReasons = new Map<string, Array<{ metric: CompareMetric; z: number }>>();
   for (const metric of [xMetric, yMetric, colorMetric, sizeMetric]) {
     const vals = normal.map(p => p.metrics[metric] as number);
     if (vals.length < 3) continue;
@@ -3222,7 +3224,12 @@ function BubbleChart({
     const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / (vals.length - 1));
     if (std === 0) continue;
     normal.forEach((p, i) => {
-      if (Math.abs((vals[i] - mean) / std) >= 1.5) outlierIds.add(p.id);
+      const z = (vals[i] - mean) / std;
+      if (Math.abs(z) >= 1.5) {
+        outlierIds.add(p.id);
+        if (!outlierReasons.has(p.id)) outlierReasons.set(p.id, []);
+        outlierReasons.get(p.id)!.push({ metric, z });
+      }
     });
   }
 
@@ -3237,7 +3244,7 @@ function BubbleChart({
   const higherBetter = METRICS[colorMetric].higherBetter;
 
   // Custom hover text uses all 4 dims with their formatted values so users
-  // don't have to decode the axes.
+  // don't have to decode the axes. Outliers include WHY they're ringed.
   const hoverText = (p: BubblePoint) => {
     const lines = [`<b>${p.label}</b>`];
     if (p.sublabel) lines.push(`<span style="color:#888">${p.sublabel}</span>`);
@@ -3248,6 +3255,14 @@ function BubbleChart({
     for (const [role, m] of dims) {
       const v = p.metrics[m];
       lines.push(`${role} · ${METRICS[m].short}: ${v == null ? "—" : METRICS[m].fmt(v)}`);
+    }
+    const reasons = outlierReasons.get(p.id);
+    if (reasons && reasons.length > 0) {
+      lines.push("");
+      const formatted = reasons
+        .map(r => `${METRICS[r.metric].short} ${r.z > 0 ? "↑" : "↓"}${Math.abs(r.z).toFixed(1)}σ`)
+        .join(", ");
+      lines.push(`<span style="color:#f59e0b">⚠ outlier: ${formatted}</span>`);
     }
     return lines.join("<br>");
   };
@@ -3367,14 +3382,15 @@ type CompareMetric =
   | "medianFwdPe" | "medianTrailingPe" | "medianPB" | "medianEvEbitda"
   | "avgDivYield" | "avgFcfYield" | "avgPayoutRatio"
   | "avgBeta" | "avgDebtEbitda"
-  | "avgMom1M" | "avgMom3M" | "avgMom6M" | "avgMom12M";
+  | "avgMom1M" | "avgMom3M" | "avgMom6M" | "avgMom12M"
+  | "avgRevGrowthYoY" | "avgMarginChangeYoY";
 
 interface MetricDef {
   label: string;
   short: string;       // compact label for table headers
   fmt: (v: number) => string;
   higherBetter: boolean;
-  group: "Scale" | "Quality" | "Valuation" | "Income" | "Risk" | "Momentum";
+  group: "Scale" | "Quality" | "Valuation" | "Income" | "Risk" | "Momentum" | "Growth";
 }
 
 const METRICS: Record<CompareMetric, MetricDef> = {
@@ -3395,6 +3411,12 @@ const METRICS: Record<CompareMetric, MetricDef> = {
   avgMom3M: { label: "3M Momentum", short: "3M", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Momentum" },
   avgMom6M: { label: "6M Momentum", short: "6M", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Momentum" },
   avgMom12M: { label: "12M Momentum", short: "12M", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Momentum" },
+  // Time-dimension metrics derived from overview's multi-quarter history.
+  // These answer "is the sector getting better or worse on this dim?" rather
+  // than just "what's the current level?" — answering the rotation question
+  // better than any static snapshot.
+  avgRevGrowthYoY:    { label: "Revenue Growth YoY",     short: "Rev YoY",   fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Growth" },
+  avgMarginChangeYoY: { label: "Net Margin Δ YoY (pp)",  short: "ΔMargin",   fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}pp`, higherBetter: true, group: "Growth" },
 };
 
 // Metrics shown in the table view — kept compact; bubble view offers all 17.
@@ -3416,6 +3438,8 @@ const BUBBLE_PRESETS: Array<{
     x: "avgDivYield", y: "avgBeta",    color: "avgPayoutRatio", size: "avgFcfYield" },
   { id: "quality-price",  name: "Quality at Price",   desc: "P/E vs ROE — classic quality-value scatter.",
     x: "medianFwdPe", y: "avgRoe",     color: "avgMargin",      size: "totalRevenue" },
+  { id: "rotation",       name: "Rotation Check",     desc: "Are fundamentals improving? YoY revenue growth vs margin Δ.",
+    x: "avgRevGrowthYoY", y: "avgMarginChangeYoY",  color: "avgMom3M",       size: "totalRevenue" },
 ];
 
 // One row per sector for the compare table + bubble chart. Includes every
@@ -3516,6 +3540,49 @@ function CompareTab({
     const avgMom6M = meanNumbers(pickFinite(mom, m => m["6M"]));
     const avgMom12M = meanNumbers(pickFinite(mom, m => m["12M"]));
 
+    // Time-dim derivations from the multi-quarter history already in overview.
+    // Rev growth YoY: for each ticker, compare latest revenue to revenue ~4
+    // quarters back (closest match by date). Margin change YoY: same structure,
+    // measured in percentage points on net_income / revenue.
+    const revHist = ov?.revenue_history ?? [];
+    const marHist = ov?.margin_history ?? [];
+    const revByTicker = new Map<string, { date: string; revenue: number }[]>();
+    for (const r of revHist) {
+      if (!revByTicker.has(r.ticker)) revByTicker.set(r.ticker, []);
+      revByTicker.get(r.ticker)!.push({ date: r.date, revenue: r.revenue });
+    }
+    const revGrowths: number[] = [];
+    for (const series of revByTicker.values()) {
+      if (series.length < 5) continue;
+      const sorted = series.slice().sort((a, b) => a.date.localeCompare(b.date));
+      const latest = sorted[sorted.length - 1];
+      const yearAgo = sorted[sorted.length - 5]; // ~4 quarters back
+      if (!latest || !yearAgo || !yearAgo.revenue || yearAgo.revenue <= 0) continue;
+      const g = (latest.revenue / yearAgo.revenue - 1) * 100;
+      if (Number.isFinite(g)) revGrowths.push(g);
+    }
+    const avgRevGrowthYoY = meanNumbers(revGrowths);
+
+    const marByTicker = new Map<string, typeof marHist>();
+    for (const r of marHist) {
+      if (!marByTicker.has(r.ticker)) marByTicker.set(r.ticker, []);
+      marByTicker.get(r.ticker)!.push(r);
+    }
+    const marginChanges: number[] = [];
+    const asMargin = (row: { revenue: number | null; net_income: number | null }) =>
+      row.revenue && row.revenue > 0 && row.net_income != null
+        ? (row.net_income / row.revenue) * 100
+        : null;
+    for (const series of marByTicker.values()) {
+      if (series.length < 5) continue;
+      const sorted = series.slice().sort((a, b) => a.date.localeCompare(b.date));
+      const latestM = asMargin(sorted[sorted.length - 1]);
+      const yearAgoM = asMargin(sorted[sorted.length - 5]);
+      if (latestM == null || yearAgoM == null) continue;
+      marginChanges.push(latestM - yearAgoM);
+    }
+    const avgMarginChangeYoY = meanNumbers(marginChanges);
+
     return {
       etf,
       label: configs[etf]?.label ?? etf,
@@ -3536,6 +3603,8 @@ function CompareTab({
       avgMom3M,
       avgMom6M,
       avgMom12M,
+      avgRevGrowthYoY,
+      avgMarginChangeYoY,
       loading: !!overviewResults[i]?.isPending || !!valuationResults[i]?.isPending,
       error: !!overviewResults[i]?.isError || !!valuationResults[i]?.isError,
     } satisfies SectorCompareRow;
@@ -3587,6 +3656,43 @@ function CompareTab({
   function applyPreset(p: typeof BUBBLE_PRESETS[number]) {
     setXMetric(p.x); setYMetric(p.y); setColorMetric(p.color); setSizeMetric(p.size);
   }
+
+  // Redundancy check: if two of the 4 chosen dims are >= 0.85 correlated
+  // across the 11 sectors, the chart encodes the same information twice.
+  // Warn so users can pick a non-redundant combination.
+  const redundantPairs = useMemo(() => {
+    const dims: Array<[string, CompareMetric]> = [
+      ["X", xMetric], ["Y", yMetric], ["Color", colorMetric], ["Size", sizeMetric],
+    ];
+    const out: Array<{ a: string; b: string; corr: number }> = [];
+    for (let i = 0; i < dims.length; i++) {
+      for (let j = i + 1; j < dims.length; j++) {
+        if (dims[i][1] === dims[j][1]) continue; // same metric picked twice
+        const aligned: Array<{ a: number; b: number }> = [];
+        for (const r of rows) {
+          const av = r[dims[i][1]];
+          const bv = r[dims[j][1]];
+          if (av != null && bv != null && Number.isFinite(av) && Number.isFinite(bv)) {
+            aligned.push({ a: av, b: bv });
+          }
+        }
+        if (aligned.length < 5) continue;
+        const n = aligned.length;
+        const ma = aligned.reduce((s, p) => s + p.a, 0) / n;
+        const mb = aligned.reduce((s, p) => s + p.b, 0) / n;
+        let num = 0, da = 0, db = 0;
+        for (const p of aligned) {
+          const xa = p.a - ma, xb = p.b - mb;
+          num += xa * xb; da += xa * xa; db += xb * xb;
+        }
+        const denom = Math.sqrt(da * db);
+        if (denom <= 0) continue;
+        const corr = num / denom;
+        if (Math.abs(corr) >= 0.85) out.push({ a: dims[i][0], b: dims[j][0], corr });
+      }
+    }
+    return out;
+  }, [rows, xMetric, yMetric, colorMetric, sizeMetric]);
 
   // Build sector-level bubble points. Keep every metric on the object so
   // users can swap dims in the dropdowns without refetching.
@@ -3830,6 +3936,24 @@ function CompareTab({
               <BubbleDimSelect label="Color"   value={colorMetric} onChange={setColorMetric} />
               <BubbleDimSelect label="Size"    value={sizeMetric}  onChange={setSizeMetric} />
             </div>
+
+            {/* Redundancy warning — flag dim pairs that carry the same info */}
+            {redundantPairs.length > 0 && (
+              <div className="flex items-start gap-2 text-[11px]">
+                <span className="text-spot font-semibold" style={{ color: t.spot }}>⚠</span>
+                <span className="text-text-muted">
+                  Redundant dims:{" "}
+                  {redundantPairs.map((p, i) => (
+                    <span key={`${p.a}-${p.b}`}>
+                      {i > 0 && "; "}
+                      <span className="text-text font-semibold">{p.a} × {p.b}</span>{" "}
+                      correlate {p.corr >= 0 ? "+" : ""}{p.corr.toFixed(2)}
+                    </span>
+                  ))}
+                  . Consider picking metrics from different groups for more info per pixel.
+                </span>
+              </div>
+            )}
 
             {/* Benchmark toggle + outlier legend */}
             <div className="flex items-center justify-between flex-wrap text-[11px] text-text-muted gap-3">
