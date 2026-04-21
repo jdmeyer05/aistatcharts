@@ -92,10 +92,10 @@ export default function GlobalSmartMoneyPage() {
 
   const funds: GlobalFund[] = useMemo(() => fundsQ.data?.funds ?? [], [fundsQ.data]);
 
-  // Batch load all funds' 13Fs. Parallel — ~1s per fund, ~1-2s total.
-  // One slow fund used to pin the whole batch at the SEC EDGAR slowest-case
-  // latency (~30s+); per-fund timeout caps that so the median case ships fast
-  // and only the offenders fall off.
+  // Batch load all funds' 13Fs in parallel. One slow fund used to pin the
+  // whole batch at the SEC EDGAR worst-case latency (~30s+); per-fund timeout
+  // caps that at 12s so the median case still ships fast (~1-2s) and only
+  // the offenders fall off as "timeout after 12000ms".
   const FUND_TIMEOUT_MS = 12_000;
   const batchLoad = useMutation({
     mutationFn: async (): Promise<FundLoadResult[]> => {
