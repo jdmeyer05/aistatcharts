@@ -739,13 +739,76 @@ def validate_trump_decodes(db):
     logger.info(f"trump_validate: graded {graded}, skipped {skipped} (uncertain band), checked {len(rows)}")
 
 
+# ─── TASK 9: DAILY SECTOR REFRESH ──────────────────────────────
+
+def refresh_sectors(db):
+    """Force-refresh every SPDR sector's 7 cached endpoints by busting cache
+    keys and re-running the compute functions. Targets ~5pm ET daily so the
+    sector analysis page opens with <24h-old fundamentals regardless of
+    whether any user has triggered a cold fetch.
+
+    Bypasses the 12h natural TTL of the @result_cached decorator by deleting
+    the Supabase row (and in-process memo) before each call — so every run
+    pulls fresh upstream data rather than returning a recent cached value.
+    """
+    try:
+        from api.routes.sectors import (
+            _compute_sector_overview,
+            _compute_sector_capex,
+            _compute_sector_valuation,
+            _compute_sector_alpha,
+            _compute_sector_prices,
+            _compute_sector_guidance,
+            _compute_sector_market,
+            SECTOR_CONFIGS,
+        )
+        from src._cache_util import _RESULT_CACHE, _stable_key
+    except Exception as e:
+        logger.warning(f"refresh_sectors: import failed: {e}")
+        return
+
+    # Each entry is (cache_key_prefix, decorated_fn). The prefix matches the
+    # string passed to @_result_cached in sectors.py. We reconstruct the full
+    # cache key via _stable_key so any future signature change stays in sync.
+    computes = [
+        ("sector_overview",  _compute_sector_overview),
+        ("sector_capex",     _compute_sector_capex),
+        ("sector_valuation", _compute_sector_valuation),
+        ("sector_alpha",     _compute_sector_alpha),
+        ("sector_prices",    _compute_sector_prices),
+        ("sector_guidance",  _compute_sector_guidance),
+        ("sector_market",    _compute_sector_market),
+    ]
+    etfs = list(SECTOR_CONFIGS.keys())
+
+    ok = 0
+    fail = 0
+    for etf in etfs:
+        for key, fn in computes:
+            # Build the exact cache key the decorator uses so the pre-compute
+            # bust clears both tiers (in-memory + Supabase).
+            cache_key = _stable_key(key, fn, (etf,), {})
+            _RESULT_CACHE.pop(cache_key, None)
+            try:
+                db.table("cftc_cache").delete().eq("key", cache_key).execute()
+            except Exception:
+                pass
+            try:
+                fn(etf)
+                ok += 1
+            except Exception as e:
+                logger.warning(f"refresh_sectors: {key} {etf} failed: {e}")
+                fail += 1
+    logger.info(f"refresh_sectors: {ok} ok, {fail} failed across {len(etfs)} sectors × {len(computes)} endpoints")
+
+
 # ─── MAIN ─────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="AI Statcharts hourly worker")
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
                                             "metrics", "cleanup", "prewarm", "options",
-                                            "market_news", "trump_validate"],
+                                            "market_news", "trump_validate", "sector_refresh"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -773,6 +836,12 @@ def main():
 
     if args.task in ("all", "trump_validate"):
         validate_trump_decodes(db)
+
+    # sector_refresh is NOT in "all" — runs on its own daily cron (5pm ET)
+    # rather than hourly to avoid hammering Polygon/yfinance with 77 calls
+    # every hour.
+    if args.task == "sector_refresh":
+        refresh_sectors(db)
 
     if args.task in ("all", "cleanup"):
         cleanup_caches(db)

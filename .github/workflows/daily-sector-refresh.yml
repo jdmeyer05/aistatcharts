@@ -1,0 +1,36 @@
+name: Daily Sector Refresh
+
+# Refresh all 11 SPDR sector fundamentals once per day, targeting ~5pm ET.
+# Runs on 21:00 UTC (= 5pm EDT / 4pm EST — close enough for quarterly-cadence
+# fundamentals data). Separate from the hourly-worker so it doesn't hammer
+# Polygon/yfinance with 77 calls every hour.
+on:
+  schedule:
+    - cron: '0 21 * * *'   # 21:00 UTC daily — ~5pm ET during DST
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh sector caches
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          python worker.py --task sector_refresh

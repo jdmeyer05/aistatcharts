@@ -3194,17 +3194,22 @@ function BubbleChart({
   t: ChartTheme;
   L: ReturnType<typeof getBaseLayout>;
 }) {
-  // A point is renderable only when all 4 dims are present. Points missing
-  // any dim drop out rather than silently sit at 0 and confuse the reader.
-  const renderable = points.filter(p =>
-    p.metrics[xMetric] != null &&
-    p.metrics[yMetric] != null &&
-    p.metrics[colorMetric] != null &&
-    p.metrics[sizeMetric] != null,
+  // Positioning only needs x + y. Points missing color/size still render, just
+  // muted with default diameter, so a preset targeting sparsely-reported dims
+  // (dividend yield, payout ratio) doesn't blank the whole chart.
+  const positionable = points.filter(p =>
+    p.metrics[xMetric] != null && p.metrics[yMetric] != null && !p.benchmark,
   );
-
-  const normal = renderable.filter(p => !p.benchmark);
-  const benchmarks = renderable.filter(p => p.benchmark);
+  const normal = positionable.filter(p =>
+    p.metrics[colorMetric] != null && p.metrics[sizeMetric] != null,
+  );
+  const partial = positionable.filter(p =>
+    p.metrics[colorMetric] == null || p.metrics[sizeMetric] == null,
+  );
+  const benchmarks = points.filter(p =>
+    p.benchmark && p.metrics[xMetric] != null && p.metrics[yMetric] != null,
+  );
+  const droppedCount = points.filter(p => !p.benchmark).length - normal.length - partial.length;
 
   // Outlier detection — |z-score| ≥ 1.5 on any of the 4 dims flags a point.
   // Computed across the NON-benchmark points only, since benchmark is by
@@ -3267,6 +3272,27 @@ function BubbleChart({
     name: "Benchmark",
   }] : [];
 
+  // Partial-data trace — positions render, but missing color/size means we
+  // can't color-map or size-scale meaningfully, so use a muted default.
+  const partialTrace = partial.length > 0 ? [{
+    x: partial.map(p => p.metrics[xMetric] as number),
+    y: partial.map(p => p.metrics[yMetric] as number),
+    text: partial.map(p => p.label),
+    textposition: "middle center" as const,
+    textfont: { size: 10, color: t.muted },
+    customdata: partial.map(p => [hoverText(p), p.id]),
+    hovertemplate: "%{customdata[0]}<extra></extra>",
+    mode: "markers+text" as const,
+    type: "scatter" as const,
+    marker: {
+      size: 32,
+      color: t.muted,
+      opacity: 0.45,
+      line: { color: t.muted, width: 0.5 },
+    },
+    name: "Partial data",
+  }] : [];
+
   const data: Record<string, unknown>[] = [
     {
       x: normal.map(p => p.metrics[xMetric] as number),
@@ -3295,30 +3321,39 @@ function BubbleChart({
       },
       name: "Sectors",
     },
+    ...partialTrace,
     ...benchmarkTrace,
   ];
 
   return (
-    <Plot
-      data={data}
-      layout={{
-        ...L,
-        height,
-        showlegend: false,
-        xaxis: { title: { text: METRICS[xMetric].label }, gridcolor: t.grid, zeroline: false },
-        yaxis: { title: { text: METRICS[yMetric].label }, gridcolor: t.grid, zeroline: false },
-        margin: { l: 60, r: 20, t: 20, b: 50 },
-        hovermode: "closest",
-      }}
-      config={{ displayModeBar: false, responsive: true }}
-      style={{ width: "100%" }}
-      onClick={onPointClick ? (e: { points?: Array<{ customdata?: unknown }> }) => {
-        const pt = e?.points?.[0];
-        const cd = pt?.customdata as unknown[] | undefined;
-        const id = cd?.[1];
-        if (typeof id === "string") onPointClick(id);
-      } : undefined}
-    />
+    <div>
+      <Plot
+        data={data}
+        layout={{
+          ...L,
+          height,
+          showlegend: false,
+          xaxis: { title: { text: METRICS[xMetric].label }, gridcolor: t.grid, zeroline: false },
+          yaxis: { title: { text: METRICS[yMetric].label }, gridcolor: t.grid, zeroline: false },
+          margin: { l: 60, r: 20, t: 20, b: 50 },
+          hovermode: "closest",
+        }}
+        config={{ displayModeBar: false, responsive: true }}
+        style={{ width: "100%" }}
+        onClick={onPointClick ? (e: { points?: Array<{ customdata?: unknown }> }) => {
+          const pt = e?.points?.[0];
+          const cd = pt?.customdata as unknown[] | undefined;
+          const id = cd?.[1];
+          if (typeof id === "string") onPointClick(id);
+        } : undefined}
+      />
+      {(partial.length > 0 || droppedCount > 0) && (
+        <div className="text-[10px] text-text-muted mt-1">
+          {partial.length > 0 && <><span className="text-text">{partial.length}</span> rendered as gray (missing color or size dim). </>}
+          {droppedCount > 0 && <><span className="text-text">{droppedCount}</span> dropped (missing X or Y dim).</>}
+        </div>
+      )}
+    </div>
   );
 }
 
