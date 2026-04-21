@@ -76,19 +76,36 @@ async def _warm_caches() -> None:
             logger.warning(f"Vol landscape pre-warm failed: {e}")
 
     def _warm_sectors() -> None:
-        """Warm the 3 sectors most likely to load first + the Compare tab's
-        overview/valuation pair. Other sectors populate on first user hit and
-        sit in Supabase for 12h thereafter."""
+        """Pre-warm overview + valuation for all 11 SPDR sectors so the
+        Compare All tab's 22-call fan-out hits a fully-warm Supabase cache
+        regardless of which sector was viewed first. Runs in parallel
+        threads to keep total warmup time ≈ slowest endpoint, not sum."""
         try:
-            from api.routes.sectors import _compute_sector_overview, _compute_sector_valuation
-            hot = ["XLE", "XLF", "XLK"]
-            for etf in hot:
+            from api.routes.sectors import (
+                _compute_sector_overview,
+                _compute_sector_valuation,
+                SECTOR_CONFIGS,
+            )
+            from concurrent.futures import ThreadPoolExecutor
+            etfs = list(SECTOR_CONFIGS.keys())
+
+            def _warm_one(etf: str) -> tuple[str, bool]:
                 try:
                     _compute_sector_overview(etf)
                     _compute_sector_valuation(etf)
+                    return etf, True
                 except Exception as e:
                     logger.warning(f"Sector pre-warm failed for {etf}: {e}")
-            logger.info(f"Sector caches pre-warmed for {', '.join(hot)}")
+                    return etf, False
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(_warm_one, etfs))
+            ok = [e for e, ok in results if ok]
+            fail = [e for e, ok in results if not ok]
+            logger.info(
+                f"Sector caches pre-warmed: {len(ok)}/{len(etfs)} sectors"
+                + (f" (failed: {', '.join(fail)})" if fail else "")
+            )
         except Exception as e:
             logger.warning(f"Sector pre-warm failed: {e}")
 
