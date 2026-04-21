@@ -251,6 +251,45 @@ PAGE_CONTEXT: dict[str, str] = {
         "- Direction-based flow vs positioning conflicts (spec net short AND net buying aggressively) often signal a capitulation-in-progress.\n"
         "What to produce: the single setup most likely to unwind this month, any cross-contract thread between the two lists, and the vol or price trigger that would confirm. Skip repeating what unwind_score means."
     ),
+    "sector-overview": (
+        "SPDR sector deep-dive — top-10 companies by weight in the ETF. Payload: "
+        "`financials` (revenue, net_margin, roe, roa, debt_to_equity, current_ratio, eps per company) "
+        "and `forecasts` (analyst revenue + EPS estimates for the next 4 quarters where available).\n"
+        "Interpretation rules:\n"
+        "- Dispersion matters more than average: a sector with 1-2 margin outliers plus a pack of weak-margin names tells a different story than a uniformly strong sector.\n"
+        "- ROE > 20% with D/E < 1.5 is structurally healthy; ROE > 20% with D/E > 3 is leveraged capital return that can reverse on a rate move.\n"
+        "- Forecast revisions embedded in the payload (if present as `up_pct_rev`) matter more than absolute level — name which companies have strengthening vs weakening estimate trends.\n"
+        "Output: single best thesis on the sector in 2-3 sentences, then the one name with the cleanest long setup and the one with the cleanest short/avoid setup based on these rows. No preamble."
+    ),
+    "sector-valuation": (
+        "SPDR sector valuation snapshot — per-company forward/trailing P/E, P/B, EV/EBITDA, FCF yield, "
+        "dividend yield, payout ratio, net debt/EBITDA, beta, plus a `momentum` table (1M/3M/6M/12M total returns).\n"
+        "Interpretation rules:\n"
+        "- Cheap + outperforming = quality value; cheap + underperforming = value trap.\n"
+        "- FCF yield > 6% with net_debt_ebitda < 2 is a structurally attractive cash-return profile.\n"
+        "- Divergence between trailing_pe and forward_pe flags big earnings trajectory changes — call it out when the gap is >30%.\n"
+        "- Beta > 1.3 means the sector amplifies SPY moves; frame momentum-vs-valuation reads in that context.\n"
+        "Output: which valuation regime this sector sits in (cheap/expensive, momentum/mean-reversion setup), the 1-2 names with the best forward-P/E × momentum setup, and any value-trap candidates to avoid."
+    ),
+    "sector-alpha": (
+        "SPDR sector alpha signals — `eps_revisions` (up_7d / up_30d / down_7d / down_30d / net_30d per company) "
+        "and `insider` (Form 4 buy_count / sell_count / net_value over trailing 90 days). Momentum also included.\n"
+        "Interpretation rules:\n"
+        "- Cluster of ≥3 insider buys in 30d on the same name = meaningful; sells are noisier (10b5-1, option exercises, diversification).\n"
+        "- Positive net_30d EPS revisions (analyst upgrades minus downgrades) > +3 on a name is a real signal.\n"
+        "- Look for CONFLUENCE: insider buying + positive EPS revisions + positive 3M momentum = highest-conviction long candidate.\n"
+        "- Inverse pattern (cluster sells + negative revisions + weak momentum) is the short/avoid setup.\n"
+        "Output: the top 1-2 confluence-long names, the top 1-2 confluence-avoid names, and a one-line note on broad sector tilt of the signals (net bullish/bearish/mixed)."
+    ),
+    "sector-compare": (
+        "Cross-sector comparison table — one row per SPDR sector (XLE, XLF, XLK, XLV, XLI, XLP, XLY, XLB, XLU, XLC, XLRE). "
+        "Per-sector fields: median_forward_pe, avg_net_margin, avg_roe, companies_count, total_revenue_usd.\n"
+        "Interpretation rules:\n"
+        "- Lead with rotation reads: which sector is cheapest on forward P/E vs its margin quality (the classic value screen).\n"
+        "- Flag divergences: a sector with high margin + low fwd P/E relative to peers is the asymmetric setup.\n"
+        "- Do NOT recite all 11 rows — pick the 2-3 most actionable cross-sector reads.\n"
+        "Output: the single strongest long sector call and short/avoid sector call with one-line justification each, then one non-obvious tilt (e.g., 'XLRE and XLU both yield 4%+ but XLRE's roe is half XLU's — prefer XLU for equal income + better quality')."
+    ),
     "positioning_cta_model": (
         "CTA model for ONE contract — replicates Nomura / GS CTA desk readouts. Payload fields: `exposure` (signed, -100..+100; -100 = max short, +100 = max long), `bias_1w` and `bias_1m` (values: all_buying, all_selling, mixed, neutral), `triggers` (nearest prices where the ensemble's component signals flip, with type + distance_pct), `scenarios_1w` and `scenarios_1m` (grid of ±1σ/±2σ terminal-price moves with projected exposure).\n"
         "Interpretation rules:\n"

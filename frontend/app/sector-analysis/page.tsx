@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Plot } from "@/components/plot";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import {
   fetchSectorConfigs,
   fetchSectorOverview,
@@ -51,7 +53,20 @@ const TABS = [
   "Guidance",
   "Market & Positioning",
   "Pairs & Correlation",
+  "Compare All",
 ];
+
+// URL-friendly slugs — stable even if tab labels change
+const TAB_SLUGS = [
+  "overview", "capex", "valuation", "alpha", "risk",
+  "guidance", "market", "pairs", "compare",
+] as const;
+
+const ENDPOINT_LABELS = [
+  "Overview", "CapEx", "Valuation", "Alpha", "Prices", "Guidance", "Market",
+] as const;
+
+const STORAGE_KEY = "sector-analysis:last-sector";
 
 const COLOR_CYCLE = [
   "#00d1ff", "#ffaa00", "#ff6b6b", "#00ff88", "#ff00ff",
@@ -176,7 +191,10 @@ function alignedReturns(
 
 // ─── Main Page ─────────────────────────────────────────────
 
-export default function SectorAnalysisPage() {
+function SectorAnalysisInner() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const qc = useQueryClient();
   const { resolvedTheme } = useTheme();
   const t = getChartTheme(resolvedTheme === "dark");
   const L = getBaseLayout(t);
@@ -189,63 +207,83 @@ export default function SectorAnalysisPage() {
   });
 
   const sectors = configsQ.data?.sectors ?? {};
-  const etfs = Object.keys(sectors);
-  const [etf, setEtf] = useState<string>("XLE");
-  const [activeTab, setActiveTab] = useState(0);
-  const [loaded, setLoaded] = useState(false);
+  const etfs = useMemo(() => Object.keys(sectors), [sectors]);
+
+  // Initial state precedence: URL param → localStorage → XLE default.
+  // All reads are guarded for SSR; localStorage only touched after mount so
+  // initial client render matches server render and avoids hydration warnings.
+  const [etf, setEtf] = useState<string>(() => {
+    const urlSector = params.get("sector")?.toUpperCase();
+    return urlSector || "XLE";
+  });
+  const [activeTab, setActiveTab] = useState<number>(() => {
+    const slug = params.get("tab");
+    const idx = slug ? (TAB_SLUGS as readonly string[]).indexOf(slug) : -1;
+    return idx >= 0 ? idx : 0;
+  });
+
+  // One-shot localStorage hydration: if URL didn't specify a sector, fall back
+  // to whatever the user last viewed. Runs once on mount only.
+  useEffect(() => {
+    if (params.get("sector")) return;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) setEtf(stored);
+    } catch {
+      // localStorage may be unavailable (privacy modes) — ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // URL → state sync (reverse direction). Keeps browser back/forward working:
+  // when the URL changes externally (nav, shared link), mirror that into
+  // state. Guards prevent cycling against the state → URL effect below.
+  useEffect(() => {
+    const urlSector = params.get("sector")?.toUpperCase();
+    const urlTab = params.get("tab");
+    const urlTabIdx = urlTab ? (TAB_SLUGS as readonly string[]).indexOf(urlTab) : -1;
+    if (urlSector && urlSector !== etf) setEtf(urlSector);
+    if (urlTabIdx >= 0 && urlTabIdx !== activeTab) setActiveTab(urlTabIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
+
+  // State → URL sync. Persist selection + keep URL in sync so the view is
+  // shareable. Only rewrites when the canonical URL actually differs;
+  // combined with the reverse-sync effect this reaches a fixed point.
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, etf); } catch {}
+    const urlSector = params.get("sector")?.toUpperCase();
+    const urlTab = params.get("tab");
+    if (urlSector === etf && urlTab === TAB_SLUGS[activeTab]) return;
+    const search = new URLSearchParams();
+    search.set("sector", etf);
+    search.set("tab", TAB_SLUGS[activeTab]);
+    router.replace(`/sector-analysis?${search.toString()}`, { scroll: false });
+  }, [etf, activeTab, params, router]);
 
   const cfg: SectorConfig | undefined = sectors[etf];
 
-  // Parallel queries for all 6 endpoints, gated by `loaded`
+  // Parallel queries — auto-enabled now (no Load-button gate). Fundamentals
+  // endpoints (overview/capex/valuation/guidance) track quarterly reports so
+  // 24h staleTime is appropriate; prices/alpha/market follow weekly-to-daily
+  // flows and stay at 10 min.
   const results = useQueries({
     queries: [
-      {
-        queryKey: ["sector-overview", etf],
-        queryFn: () => fetchSectorOverview(etf),
-        enabled: loaded && !!cfg,
-        staleTime: 1000 * 60 * 10,
-      },
-      {
-        queryKey: ["sector-capex", etf],
-        queryFn: () => fetchSectorCapex(etf),
-        enabled: loaded && !!cfg,
-        staleTime: 1000 * 60 * 10,
-      },
-      {
-        queryKey: ["sector-valuation", etf],
-        queryFn: () => fetchSectorValuation(etf),
-        enabled: loaded && !!cfg,
-        staleTime: 1000 * 60 * 10,
-      },
-      {
-        queryKey: ["sector-alpha", etf],
-        queryFn: () => fetchSectorAlpha(etf),
-        enabled: loaded && !!cfg,
-        staleTime: 1000 * 60 * 10,
-      },
-      {
-        queryKey: ["sector-prices", etf],
-        queryFn: () => fetchSectorPrices(etf),
-        enabled: loaded && !!cfg,
-        staleTime: 1000 * 60 * 10,
-      },
-      {
-        queryKey: ["sector-guidance", etf],
-        queryFn: () => fetchSectorGuidance(etf),
-        enabled: loaded && !!cfg,
-        staleTime: 1000 * 60 * 10,
-      },
-      {
-        queryKey: ["sector-market", etf],
-        queryFn: () => fetchSectorMarket(etf),
-        enabled: loaded && !!cfg,
-        staleTime: 1000 * 60 * 10,
-      },
+      { queryKey: ["sector-overview", etf], queryFn: () => fetchSectorOverview(etf), enabled: !!cfg, staleTime: 24 * 60 * 60_000 },
+      { queryKey: ["sector-capex", etf], queryFn: () => fetchSectorCapex(etf), enabled: !!cfg, staleTime: 24 * 60 * 60_000 },
+      { queryKey: ["sector-valuation", etf], queryFn: () => fetchSectorValuation(etf), enabled: !!cfg, staleTime: 24 * 60 * 60_000 },
+      { queryKey: ["sector-alpha", etf], queryFn: () => fetchSectorAlpha(etf), enabled: !!cfg, staleTime: 1000 * 60 * 10 },
+      { queryKey: ["sector-prices", etf], queryFn: () => fetchSectorPrices(etf), enabled: !!cfg, staleTime: 1000 * 60 * 10 },
+      { queryKey: ["sector-guidance", etf], queryFn: () => fetchSectorGuidance(etf), enabled: !!cfg, staleTime: 24 * 60 * 60_000 },
+      { queryKey: ["sector-market", etf], queryFn: () => fetchSectorMarket(etf), enabled: !!cfg, staleTime: 1000 * 60 * 10 },
     ],
   });
   const [overviewQ, capexQ, valuationQ, alphaQ, pricesQ, guidanceQ, marketQ] = results;
 
-  const allLoading = loaded && results.some(r => r.isPending);
+  // `isFetching` covers both the initial fetch and Refresh-button refetches —
+  // use that so the progress banner stays honest during a manual refresh.
+  const anyFetching = results.some(r => r.isFetching);
+  const failed = results.map((r, i) => r.isError ? ENDPOINT_LABELS[i] : null).filter(Boolean) as string[];
   const overview = overviewQ.data;
   const valuation = valuationQ.data;
   const alpha = alphaQ.data;
@@ -254,22 +292,60 @@ export default function SectorAnalysisPage() {
   const guidance = guidanceQ.data;
   const market = marketQ.data;
 
-  // Derived for header metrics
   const hdr = useMemo(() => {
     if (!overview) return null;
     const fin = overview.financials;
     const totRev = fin.reduce((s, r) => s + (r.revenue ?? 0), 0);
-    const avgMargin = fin.filter(r => r.net_margin != null).reduce((s, r) => s + (r.net_margin as number), 0)
-      / Math.max(1, fin.filter(r => r.net_margin != null).length);
-    const avgRoe = fin.filter(r => r.roe != null).reduce((s, r) => s + (r.roe as number), 0)
-      / Math.max(1, fin.filter(r => r.roe != null).length);
-    return {
-      companies: fin.length,
-      totalRevenue: totRev,
-      avgMargin: Number.isFinite(avgMargin) ? avgMargin : null,
-      avgRoe: Number.isFinite(avgRoe) ? avgRoe : null,
-    };
+    const marginRows = fin.filter(r => r.net_margin != null);
+    const roeRows = fin.filter(r => r.roe != null);
+    const avgMargin = marginRows.length > 0 ? marginRows.reduce((s, r) => s + (r.net_margin as number), 0) / marginRows.length : null;
+    const avgRoe = roeRows.length > 0 ? roeRows.reduce((s, r) => s + (r.roe as number), 0) / roeRows.length : null;
+    return { companies: fin.length, totalRevenue: totRev, avgMargin, avgRoe };
   }, [overview]);
+
+  // Snapshot one-liner — what's notable about this sector right now.
+  // Reveals itself progressively as each endpoint resolves; computed inline
+  // from raw rows since the backend response doesn't ship aggregates.
+  const snapshot = useMemo(() => {
+    const bits: string[] = [];
+    if (hdr?.avgMargin != null) bits.push(`avg net margin ${hdr.avgMargin.toFixed(1)}%`);
+    if (hdr?.avgRoe != null) bits.push(`avg ROE ${hdr.avgRoe.toFixed(1)}%`);
+    if (valuation?.valuation?.length) {
+      const fwdPes = valuation.valuation
+        .map(v => v.forward_pe)
+        .filter((x): x is number => x != null && Number.isFinite(x) && x > 0 && x < 200);
+      if (fwdPes.length > 0) {
+        const sorted = [...fwdPes].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        bits.push(`median fwd P/E ${median.toFixed(1)}x`);
+      }
+    }
+    return bits.length ? bits.join(" · ") : null;
+  }, [hdr, valuation]);
+
+  // Prefetch overview on hover — warms the cache so the median case is
+  // already sub-ms by the time the user actually selects the new sector.
+  const prefetchSector = useCallback((nextEtf: string) => {
+    if (!nextEtf || nextEtf === etf) return;
+    qc.prefetchQuery({
+      queryKey: ["sector-overview", nextEtf],
+      queryFn: () => fetchSectorOverview(nextEtf),
+      staleTime: 24 * 60 * 60_000,
+    });
+  }, [qc, etf]);
+
+  const retryAll = useCallback(() => {
+    results.forEach(r => { if (r.isError) r.refetch(); });
+  }, [results]);
+
+  // Unknown-sector fallback — if the URL / localStorage referenced a sector
+  // that isn't in the configs response, silently snap to the first available.
+  // Effect (not inline setState) so React doesn't complain about updating
+  // state during a render.
+  useEffect(() => {
+    if (!configsQ.data) return;
+    if (etfs.length > 0 && !sectors[etf]) setEtf(etfs[0]);
+  }, [configsQ.data, etfs, sectors, etf]);
 
   if (configsQ.isPending) {
     return (
@@ -278,12 +354,12 @@ export default function SectorAnalysisPage() {
       </div>
     );
   }
-  if (configsQ.isError || !cfg) {
-    return (
-      <div className="card text-center py-12 text-loss">
-        Failed to load sector configs.
-      </div>
-    );
+  if (configsQ.isError) {
+    return <div className="card text-center py-12 text-loss">Failed to load sector configs.</div>;
+  }
+  if (!cfg) {
+    // Either no configs yet or the fallback effect hasn't fired yet.
+    return <div className="card text-center py-8 text-text-muted text-sm">Loading sectors…</div>;
   }
 
   return (
@@ -293,52 +369,58 @@ export default function SectorAnalysisPage() {
         <p className="text-text-secondary text-sm mt-1">{cfg.subtitle}</p>
       </div>
 
-      {/* Sector selector + Load button */}
+      {/* Sector selector + refresh */}
       <div className="card card-compact">
         <div className="flex flex-wrap items-center gap-3">
           <select
             value={etf}
-            onChange={e => {
-              setEtf(e.target.value);
-              setLoaded(false);
-              setActiveTab(0);
-            }}
+            onChange={e => { setEtf(e.target.value); setActiveTab(0); }}
             className="px-3 py-2 border border-border rounded-lg text-sm bg-surface min-w-[220px] font-data"
           >
             {etfs.map(k => (
-              <option key={k} value={k}>{sectors[k].label}</option>
+              <option key={k} value={k} onMouseEnter={() => prefetchSector(k)}>{sectors[k].label}</option>
             ))}
           </select>
           <button
-            onClick={() => setLoaded(true)}
-            disabled={allLoading}
-            className="px-6 py-2 bg-accent text-white font-semibold rounded-lg hover:bg-accent-hover disabled:opacity-50 text-sm"
+            onClick={() => results.forEach(r => r.refetch())}
+            disabled={anyFetching}
+            className="px-3 py-2 text-xs border border-border rounded-lg hover:bg-surface-alt disabled:opacity-50"
+            title="Force refresh all data"
           >
-            {allLoading ? "Loading..." : `Load ${cfg.etf} Data`}
+            {anyFetching ? "Loading…" : "Refresh"}
           </button>
           <div className="text-xs text-text-muted">
             {Object.keys(cfg.companies).length} companies
+            {snapshot && <> · <span className="text-text-secondary">{snapshot}</span></>}
           </div>
         </div>
       </div>
 
-      {allLoading && (
-        <div className="card text-center py-12">
-          <div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          <div className="text-xs text-text-muted mt-3">
-            Fetching financials, estimates, market data, and macro series in parallel…
+      {/* Per-endpoint progress + error surfacing */}
+      {(anyFetching || failed.length > 0) && (
+        <div className={`card card-compact ${failed.length > 0 ? "border-l-2 border-l-loss" : ""}`}>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+            <span className="font-semibold text-text-muted uppercase tracking-wider">Loading</span>
+            {results.map((r, i) => (
+              <span key={i} className={
+                r.isError ? "text-loss" :
+                r.isFetching ? "text-accent" :
+                r.isSuccess ? "text-gain" :
+                "text-text-muted"
+              }>
+                {r.isError ? "✗" : r.isFetching ? "⋯" : r.isSuccess ? "✓" : "·"} {ENDPOINT_LABELS[i]}
+              </span>
+            ))}
+            {failed.length > 0 && (
+              <button onClick={retryAll} className="ml-auto px-2 py-0.5 text-[10px] rounded border border-loss/40 text-loss hover:bg-loss/10">
+                Retry {failed.length}
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {!loaded && (
-        <div className="card text-center py-12 text-text-muted text-sm">
-          Click <span className="font-semibold text-text">Load {cfg.etf} Data</span> to fetch financials,
-          estimates, and market data for all {Object.keys(cfg.companies).length} companies.
-        </div>
-      )}
-
-      {loaded && hdr && (
+      {hdr && (
         <div className="card card-compact">
           <div className="flex flex-wrap gap-6">
             <Metric label="Companies" value={String(hdr.companies)} />
@@ -352,54 +434,79 @@ export default function SectorAnalysisPage() {
         </div>
       )}
 
-      {loaded && !allLoading && (
-        <>
-          <div className="flex gap-1 border-b border-border pb-1 overflow-x-auto">
-            {TABS.map((tab, i) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(i)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors whitespace-nowrap ${
-                  activeTab === i ? "bg-accent text-white" : "text-text-muted hover:text-text hover:bg-surface-alt"
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
+      <div className="flex gap-1 border-b border-border pb-1 overflow-x-auto">
+        {TABS.map((tab, i) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(i)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors whitespace-nowrap ${
+              activeTab === i ? "bg-accent text-white" : "text-text-muted hover:text-text hover:bg-surface-alt"
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
 
-          {activeTab === 0 && overview && (
-            <OverviewTab
-              cfg={cfg}
-              overview={overview}
-              t={t}
-              L={L}
-            />
-          )}
-          {activeTab === 1 && capex && (
-            <CapexTab cfg={cfg} capex={capex} overview={overview} t={t} L={L} />
-          )}
-          {activeTab === 2 && valuation && (
-            <ValuationTab valuation={valuation} t={t} L={L} />
-          )}
-          {activeTab === 3 && valuation && alpha && (
-            <AlphaTab cfg={cfg} valuation={valuation} alpha={alpha} t={t} L={L} />
-          )}
-          {activeTab === 4 && prices && (
-            <RiskTab cfg={cfg} prices={prices} t={t} L={L} />
-          )}
-          {activeTab === 5 && guidance && (
-            <GuidanceTab cfg={cfg} guidance={guidance} t={t} L={L} />
-          )}
-          {activeTab === 6 && market && overview && (
-            <MarketTab cfg={cfg} market={market} overview={overview} t={t} L={L} />
-          )}
-          {activeTab === 7 && prices && (
-            <PairsTab cfg={cfg} prices={prices} t={t} L={L} />
-          )}
-        </>
-      )}
+      {activeTab === 0 && (overview ? <OverviewTab cfg={cfg} overview={overview} t={t} L={L} />
+        : overviewQ.isError ? <TabError label="Overview" onRetry={() => overviewQ.refetch()} />
+        : <TabLoading label="Overview" />)}
+      {activeTab === 1 && (capex ? <CapexTab cfg={cfg} capex={capex} overview={overview} t={t} L={L} />
+        : capexQ.isError ? <TabError label="CapEx" onRetry={() => capexQ.refetch()} />
+        : <TabLoading label="CapEx" />)}
+      {activeTab === 2 && (valuation ? <ValuationTab valuation={valuation} t={t} L={L} />
+        : valuationQ.isError ? <TabError label="Valuation" onRetry={() => valuationQ.refetch()} />
+        : <TabLoading label="Valuation" />)}
+      {activeTab === 3 && (valuation && alpha ? <AlphaTab cfg={cfg} valuation={valuation} alpha={alpha} t={t} L={L} />
+        : (valuationQ.isError || alphaQ.isError) ? <TabError label="Alpha" onRetry={() => { valuationQ.refetch(); alphaQ.refetch(); }} />
+        : <TabLoading label="Alpha" />)}
+      {activeTab === 4 && (prices ? <RiskTab cfg={cfg} prices={prices} t={t} L={L} />
+        : pricesQ.isError ? <TabError label="Risk" onRetry={() => pricesQ.refetch()} />
+        : <TabLoading label="Risk" />)}
+      {activeTab === 5 && (guidance ? <GuidanceTab cfg={cfg} guidance={guidance} t={t} L={L} />
+        : guidanceQ.isError ? <TabError label="Guidance" onRetry={() => guidanceQ.refetch()} />
+        : <TabLoading label="Guidance" />)}
+      {activeTab === 6 && (market && overview ? <MarketTab cfg={cfg} market={market} overview={overview} t={t} L={L} />
+        : (marketQ.isError || overviewQ.isError) ? <TabError label="Market" onRetry={() => { marketQ.refetch(); overviewQ.refetch(); }} />
+        : <TabLoading label="Market" />)}
+      {activeTab === 7 && (prices ? <PairsTab cfg={cfg} prices={prices} t={t} L={L} />
+        : pricesQ.isError ? <TabError label="Pairs" onRetry={() => pricesQ.refetch()} />
+        : <TabLoading label="Pairs" />)}
+      {activeTab === 8 && <CompareTab etfs={etfs} configs={sectors} />}
     </div>
+  );
+}
+
+function TabLoading({ label }: { label: string }) {
+  return (
+    <div className="card text-center py-10 text-xs text-text-muted">
+      <div className="inline-block w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin mr-2 align-middle" />
+      Loading {label}…
+    </div>
+  );
+}
+
+function TabError({ label, onRetry }: { label: string; onRetry: () => void }) {
+  return (
+    <div className="card card-compact border-l-2 border-l-loss">
+      <div className="flex items-center gap-3 text-xs">
+        <span className="text-loss font-semibold">{label} failed to load.</span>
+        <button onClick={onRetry} className="px-2 py-1 rounded border border-loss/40 text-loss hover:bg-loss/10">Retry</button>
+      </div>
+    </div>
+  );
+}
+
+export default function SectorAnalysisPage() {
+  // useSearchParams requires a Suspense boundary in Next App Router.
+  return (
+    <Suspense fallback={
+      <div className="card text-center py-12">
+        <div className="inline-block w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <SectorAnalysisInner />
+    </Suspense>
   );
 }
 
@@ -1030,6 +1137,18 @@ function OverviewTab({
           </div>
         </div>
       )}
+
+      <AIInterpretation
+        page="sector-overview"
+        subject={cfg.etf}
+        data={{
+          etf: cfg.etf,
+          label: cfg.label,
+          financials: overview.financials.slice(0, 10),
+          forecasts: overview.forecasts?.slice(0, 10) ?? [],
+        }}
+        buttonLabel={`Interpret ${cfg.etf} fundamentals`}
+      />
     </div>
   );
 }
@@ -1478,6 +1597,17 @@ function ValuationTab({
           </table>
         </div>
       </div>
+
+      <AIInterpretation
+        page="sector-valuation"
+        subject={valuation.etf}
+        data={{
+          etf: valuation.etf,
+          valuation: valuation.valuation.slice(0, 12),
+          momentum: valuation.momentum.slice(0, 12),
+        }}
+        buttonLabel={`Interpret ${valuation.etf} valuation`}
+      />
     </div>
   );
 }
@@ -1753,6 +1883,18 @@ function AlphaTab({
           </div>
         </div>
       )}
+
+      <AIInterpretation
+        page="sector-alpha"
+        subject={cfg.etf}
+        data={{
+          etf: cfg.etf,
+          eps_revisions: alpha.eps_revisions.slice(0, 10),
+          insider: alpha.insider.slice(0, 10),
+          momentum: valuation.momentum.slice(0, 10),
+        }}
+        buttonLabel={`Interpret ${cfg.etf} signals`}
+      />
     </div>
   );
 }
@@ -2984,6 +3126,236 @@ function PairsTab({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 9 — COMPARE ALL SECTORS
+// ══════════════════════════════════════════════════════════════
+
+type CompareMetric = "totalRevenue" | "avgMargin" | "avgRoe" | "medianFwdPe" | "avgMom3" | "companies";
+
+const METRIC_LABELS: Record<CompareMetric, string> = {
+  totalRevenue: "Combined Revenue",
+  avgMargin: "Avg Net Margin",
+  avgRoe: "Avg ROE",
+  medianFwdPe: "Median Fwd P/E",
+  avgMom3: "Avg 3M Momentum",
+  companies: "Companies",
+};
+
+// For each metric, whether "higher is better" — drives the green/red heat.
+// P/E is inverted (cheaper is higher ranked).
+const METRIC_HIGHER_BETTER: Record<CompareMetric, boolean> = {
+  totalRevenue: true,
+  avgMargin: true,
+  avgRoe: true,
+  medianFwdPe: false,
+  avgMom3: true,
+  companies: true,
+};
+
+function CompareTab({
+  etfs,
+  configs,
+}: {
+  etfs: string[];
+  configs: Record<string, SectorConfig>;
+}) {
+  const overviewResults = useQueries({
+    queries: etfs.map(etf => ({
+      queryKey: ["sector-overview", etf],
+      queryFn: () => fetchSectorOverview(etf),
+      staleTime: 24 * 60 * 60_000,
+    })),
+  });
+  const valuationResults = useQueries({
+    queries: etfs.map(etf => ({
+      queryKey: ["sector-valuation", etf],
+      queryFn: () => fetchSectorValuation(etf),
+      staleTime: 24 * 60 * 60_000,
+    })),
+  });
+
+  const rows = useMemo(() => etfs.map((etf, i) => {
+    const ov = overviewResults[i]?.data;
+    const va = valuationResults[i]?.data;
+    const fin = ov?.financials ?? [];
+    const totRev = fin.reduce((s, r) => s + (r.revenue ?? 0), 0);
+    const mRows = fin.filter(r => r.net_margin != null);
+    const rRows = fin.filter(r => r.roe != null);
+    const avgMargin = mRows.length > 0 ? mRows.reduce((s, r) => s + (r.net_margin as number), 0) / mRows.length : null;
+    const avgRoe = rRows.length > 0 ? rRows.reduce((s, r) => s + (r.roe as number), 0) / rRows.length : null;
+    const pes = (va?.valuation ?? [])
+      .map(v => v.forward_pe)
+      .filter((x): x is number => x != null && Number.isFinite(x) && x > 0 && x < 200);
+    const sortedPes = [...pes].sort((a, b) => a - b);
+    const medianPe = sortedPes.length > 0 ? sortedPes[Math.floor(sortedPes.length / 2)] : null;
+    const m3s = (va?.momentum ?? [])
+      .map(m => m["3M"])
+      .filter((x): x is number => x != null && Number.isFinite(x));
+    const avgMom3 = m3s.length > 0 ? m3s.reduce((s, x) => s + x, 0) / m3s.length : null;
+    return {
+      etf,
+      label: configs[etf]?.label ?? etf,
+      companies: fin.length,
+      totalRevenue: totRev > 0 ? totRev : null,
+      avgMargin,
+      avgRoe,
+      medianFwdPe: medianPe,
+      avgMom3,
+      loading: !!overviewResults[i]?.isPending || !!valuationResults[i]?.isPending,
+      error: !!overviewResults[i]?.isError || !!valuationResults[i]?.isError,
+    };
+  }), [etfs, overviewResults, valuationResults, configs]);
+
+  const [sortKey, setSortKey] = useState<CompareMetric>("totalRevenue");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const sortedRows = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      // Push nulls to the bottom regardless of sort direction.
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return sortDir === "desc" ? bv - av : av - bv;
+    });
+    return copy;
+  }, [rows, sortKey, sortDir]);
+
+  // Ranks per metric for heat-coloring. Rank 0 = best (for that metric),
+  // rank N-1 = worst; we'll lerp color from gain → muted → loss.
+  const ranks = useMemo(() => {
+    const out: Record<string, Record<CompareMetric, number | null>> = {};
+    for (const etf of etfs) out[etf] = {
+      totalRevenue: null, avgMargin: null, avgRoe: null,
+      medianFwdPe: null, avgMom3: null, companies: null,
+    };
+    (Object.keys(METRIC_LABELS) as CompareMetric[]).forEach(metric => {
+      const valid = rows
+        .map(r => ({ etf: r.etf, v: r[metric] as number | null }))
+        .filter(r => r.v != null) as { etf: string; v: number }[];
+      if (valid.length === 0) return;
+      valid.sort((a, b) => METRIC_HIGHER_BETTER[metric] ? b.v - a.v : a.v - b.v);
+      valid.forEach((x, i) => { out[x.etf][metric] = i; });
+    });
+    return out;
+  }, [rows, etfs]);
+
+  function cellColor(etf: string, metric: CompareMetric): string {
+    const r = ranks[etf]?.[metric];
+    const total = etfs.length;
+    if (r == null || total < 2) return "text-text";
+    const pct = r / (total - 1); // 0=best, 1=worst
+    if (pct < 0.2) return "text-gain font-semibold";
+    if (pct < 0.4) return "text-gain";
+    if (pct < 0.6) return "text-text";
+    if (pct < 0.8) return "text-loss";
+    return "text-loss font-semibold";
+  }
+
+  function fmtCell(metric: CompareMetric, v: number | null): string {
+    if (v == null) return "—";
+    if (metric === "totalRevenue") return `$${(v / 1e12).toFixed(2)}T`;
+    if (metric === "avgMargin" || metric === "avgRoe" || metric === "avgMom3") return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+    if (metric === "medianFwdPe") return `${v.toFixed(1)}x`;
+    return String(v);
+  }
+
+  function toggleSort(metric: CompareMetric) {
+    if (metric === sortKey) {
+      setSortDir(d => d === "desc" ? "asc" : "desc");
+    } else {
+      setSortKey(metric);
+      setSortDir(METRIC_HIGHER_BETTER[metric] ? "desc" : "asc");
+    }
+  }
+
+  const pendingCount = rows.filter(r => r.loading).length;
+  const errorCount = rows.filter(r => r.error).length;
+
+  // Compact AI payload — one row per sector with the cross-sector metrics
+  const aiData = useMemo(() => ({
+    sectors: rows.map(r => ({
+      etf: r.etf,
+      label: r.label,
+      median_forward_pe: r.medianFwdPe,
+      avg_net_margin: r.avgMargin,
+      avg_roe: r.avgRoe,
+      companies_count: r.companies,
+      total_revenue_usd: r.totalRevenue,
+      avg_3m_momentum_pct: r.avgMom3,
+    })),
+  }), [rows]);
+
+  return (
+    <div className="space-y-4">
+      <div className="card card-compact">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="text-sm font-semibold text-text">Cross-sector comparison</div>
+            <div className="text-xs text-text-muted">All 11 SPDR sectors × 6 fundamentals metrics. Click a column header to sort.</div>
+          </div>
+          {pendingCount > 0 && (
+            <div className="text-xs text-text-muted flex items-center gap-2">
+              <div className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+              {pendingCount} / {etfs.length} loading
+            </div>
+          )}
+          {errorCount > 0 && (
+            <div className="text-xs text-loss">{errorCount} sector{errorCount === 1 ? "" : "s"} failed</div>
+          )}
+        </div>
+
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left border-b border-border">
+                <th className="py-2 px-2 font-semibold">Sector</th>
+                {(Object.keys(METRIC_LABELS) as CompareMetric[]).map(metric => (
+                  <th key={metric} className="py-2 px-2 font-semibold cursor-pointer hover:bg-surface-alt select-none" onClick={() => toggleSort(metric)}>
+                    <span className={sortKey === metric ? "text-accent" : ""}>{METRIC_LABELS[metric]}</span>
+                    {sortKey === metric && <span className="ml-1 text-accent">{sortDir === "desc" ? "↓" : "↑"}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map(r => (
+                <tr key={r.etf} className="border-b border-border/60 hover:bg-surface-alt">
+                  <td className="py-1.5 px-2">
+                    <div className="font-semibold">{r.etf}</div>
+                    <div className="text-[10px] text-text-muted">{r.label}</div>
+                  </td>
+                  {(Object.keys(METRIC_LABELS) as CompareMetric[]).map(metric => (
+                    <td key={metric} className={`py-1.5 px-2 font-data ${cellColor(r.etf, metric)}`}>
+                      {r.loading && (r[metric] as number | null) == null
+                        ? <span className="text-text-muted">…</span>
+                        : fmtCell(metric, r[metric] as number | null)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-2 text-[10px] text-text-muted">
+          Color: <span className="text-gain">green</span> = best two ranks · <span className="text-loss">red</span> = worst two ranks · P/E inverted (cheaper ranks better).
+        </div>
+      </div>
+
+      {pendingCount === 0 && errorCount < etfs.length && (
+        <AIInterpretation
+          page="sector-compare"
+          subject="SPDR Sectors"
+          data={aiData}
+          buttonLabel="Interpret rotation across sectors"
+        />
+      )}
     </div>
   );
 }
