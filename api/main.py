@@ -75,11 +75,29 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Vol landscape pre-warm failed: {e}")
 
+    def _warm_sectors() -> None:
+        """Warm the 3 sectors most likely to load first + the Compare tab's
+        overview/valuation pair. Other sectors populate on first user hit and
+        sit in Supabase for 12h thereafter."""
+        try:
+            from api.routes.sectors import _compute_sector_overview, _compute_sector_valuation
+            hot = ["XLE", "XLF", "XLK"]
+            for etf in hot:
+                try:
+                    _compute_sector_overview(etf)
+                    _compute_sector_valuation(etf)
+                except Exception as e:
+                    logger.warning(f"Sector pre-warm failed for {etf}: {e}")
+            logger.info(f"Sector caches pre-warmed for {', '.join(hot)}")
+        except Exception as e:
+            logger.warning(f"Sector pre-warm failed: {e}")
+
     loop = asyncio.get_event_loop()
-    # Kick off both in parallel so total warmup time ≈ slowest task, not the sum.
+    # Kick off in parallel so total warmup time ≈ slowest task, not the sum.
     await asyncio.gather(
         loop.run_in_executor(None, _warm_cftc),
         loop.run_in_executor(None, _warm_vol_landscape),
+        loop.run_in_executor(None, _warm_sectors),
     )
 
 
@@ -152,7 +170,7 @@ _PATH_CACHE_HINTS = (
     ("/api/cftc/",              "public, max-age=300, stale-while-revalidate=3600"),
     ("/api/options/vol-landscape", "public, max-age=300, stale-while-revalidate=3600"),
     ("/api/fed-macro/",         "public, max-age=300, stale-while-revalidate=3600"),
-    ("/api/sectors/",           "public, max-age=600, stale-while-revalidate=3600"),
+    ("/api/sectors/",           "public, max-age=3600, stale-while-revalidate=21600"),
 )
 
 

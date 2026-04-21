@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.deps import get_current_user
+from src._cache_util import result_cached as _result_cached
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -482,9 +483,10 @@ async def get_configs(user: str = Depends(get_current_user)):
 # POST /api/sectors/overview
 # ═══════════════════════════════════════════════
 
-@router.post("/overview")
-async def sector_overview(body: EtfBody, user: str = Depends(get_current_user)):
-    """Financials + revenue history + analyst estimates + margin history + cashflow — Tab 1."""
+@_result_cached("sector_overview")
+def _compute_sector_overview(etf: str) -> dict:
+    """Supabase-cached (12h) compute for the Overview tab. Fundamentals update
+    quarterly so this is conservative."""
     from src.edgar import (
         fetch_sector_financials,
         fetch_sector_analyst_estimates,
@@ -492,11 +494,9 @@ async def sector_overview(body: EtfBody, user: str = Depends(get_current_user)):
         fetch_sector_margin_history,
         fetch_sector_cashflow,
     )
-
-    cfg = _get_config(body.etf)
+    cfg = _get_config(etf)
     companies = cfg["companies"]
     tickers = list(companies.keys())
-
     with ThreadPoolExecutor(max_workers=5) as pool:
         futs = {
             "financials": pool.submit(fetch_sector_financials, companies),
@@ -506,7 +506,6 @@ async def sector_overview(body: EtfBody, user: str = Depends(get_current_user)):
             "cashflow": pool.submit(fetch_sector_cashflow, tickers),
         }
         results = {k: f.result() for k, f in futs.items()}
-
     return {
         "etf": cfg["etf"],
         "financials": _records(results["financials"]),
@@ -515,6 +514,12 @@ async def sector_overview(body: EtfBody, user: str = Depends(get_current_user)):
         "margin_history": _records(results["margin_history"]),
         "cashflow": _records(results["cashflow"]),
     }
+
+
+@router.post("/overview")
+async def sector_overview(body: EtfBody, user: str = Depends(get_current_user)):
+    """Financials + revenue history + analyst estimates + margin history + cashflow — Tab 1."""
+    return _compute_sector_overview(body.etf)
 
 
 # ═══════════════════════════════════════════════
@@ -586,20 +591,16 @@ def _quarterize_capex(capex_hist: pd.DataFrame) -> list[dict]:
     return out
 
 
-@router.post("/capex")
-async def sector_capex(body: EtfBody, user: str = Depends(get_current_user)):
-    """Latest CapEx + quarterly CapEx history — Tab 2."""
+@_result_cached("sector_capex")
+def _compute_sector_capex(etf: str) -> dict:
     from src.edgar import fetch_sector_capex, fetch_sector_capex_history
-
-    cfg = _get_config(body.etf)
+    cfg = _get_config(etf)
     companies = cfg["companies"]
-
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_latest = pool.submit(fetch_sector_capex, companies)
         f_hist = pool.submit(fetch_sector_capex_history, companies)
         latest = f_latest.result()
         hist = f_hist.result()
-
     return {
         "etf": cfg["etf"],
         "capex_latest": _records(latest),
@@ -607,24 +608,26 @@ async def sector_capex(body: EtfBody, user: str = Depends(get_current_user)):
     }
 
 
+@router.post("/capex")
+async def sector_capex(body: EtfBody, user: str = Depends(get_current_user)):
+    """Latest CapEx + quarterly CapEx history — Tab 2."""
+    return _compute_sector_capex(body.etf)
+
+
 # ═══════════════════════════════════════════════
 # POST /api/sectors/valuation
 # ═══════════════════════════════════════════════
 
-@router.post("/valuation")
-async def sector_valuation(body: EtfBody, user: str = Depends(get_current_user)):
-    """Valuation ratios + momentum — Tabs 3 & 4."""
+@_result_cached("sector_valuation")
+def _compute_sector_valuation(etf: str) -> dict:
     from src.market_data import fetch_energy_valuation_data, fetch_momentum_data
-
-    cfg = _get_config(body.etf)
+    cfg = _get_config(etf)
     tickers = list(cfg["companies"].keys())
-
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_val = pool.submit(fetch_energy_valuation_data, tickers)
         f_mom = pool.submit(fetch_momentum_data, tickers)
         val = f_val.result()
         mom = f_mom.result()
-
     return {
         "etf": cfg["etf"],
         "valuation": _records(val),
@@ -632,29 +635,37 @@ async def sector_valuation(body: EtfBody, user: str = Depends(get_current_user))
     }
 
 
+@router.post("/valuation")
+async def sector_valuation(body: EtfBody, user: str = Depends(get_current_user)):
+    """Valuation ratios + momentum — Tabs 3 & 4."""
+    return _compute_sector_valuation(body.etf)
+
+
 # ═══════════════════════════════════════════════
 # POST /api/sectors/alpha
 # ═══════════════════════════════════════════════
 
-@router.post("/alpha")
-async def sector_alpha(body: EtfBody, user: str = Depends(get_current_user)):
-    """EPS revisions + insider activity — Tab 4 (combined with valuation)."""
+@_result_cached("sector_alpha")
+def _compute_sector_alpha(etf: str) -> dict:
     from src.market_data import fetch_eps_revisions, fetch_insider_summary
-
-    cfg = _get_config(body.etf)
+    cfg = _get_config(etf)
     tickers = list(cfg["companies"].keys())
-
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_rev = pool.submit(fetch_eps_revisions, tickers)
         f_ins = pool.submit(fetch_insider_summary, tickers)
         rev = f_rev.result()
         ins = f_ins.result()
-
     return {
         "etf": cfg["etf"],
         "eps_revisions": _records(rev),
         "insider": _records(ins),
     }
+
+
+@router.post("/alpha")
+async def sector_alpha(body: EtfBody, user: str = Depends(get_current_user)):
+    """EPS revisions + insider activity — Tab 4 (combined with valuation)."""
+    return _compute_sector_alpha(body.etf)
 
 
 # ═══════════════════════════════════════════════
@@ -684,10 +695,9 @@ def _price_history_batch(tickers: list[str], period: str = "2y") -> dict[str, li
     return results
 
 
-@router.post("/prices")
-async def sector_prices(body: EtfBody, user: str = Depends(get_current_user)):
-    """Price history for sector + SPY + factor proxies — Tabs 5 & 8."""
-    cfg = _get_config(body.etf)
+@_result_cached("sector_prices")
+def _compute_sector_prices(etf: str) -> dict:
+    cfg = _get_config(etf)
     tickers = list(cfg["companies"].keys())
     extra = ["SPY"] + cfg["factor_proxies"]
     all_tickers = list(dict.fromkeys(tickers + extra))
@@ -696,6 +706,12 @@ async def sector_prices(body: EtfBody, user: str = Depends(get_current_user)):
         "etf": cfg["etf"],
         "prices": prices,
     }
+
+
+@router.post("/prices")
+async def sector_prices(body: EtfBody, user: str = Depends(get_current_user)):
+    """Price history for sector + SPY + factor proxies — Tabs 5 & 8."""
+    return _compute_sector_prices(body.etf)
 
 
 # ═══════════════════════════════════════════════
@@ -732,20 +748,16 @@ def _live_estimates_batch(tickers: list[str]) -> dict[str, dict]:
     return {tk: {k: _clean(v) for k, v in d.items()} for tk, d in pairs}
 
 
-@router.post("/guidance")
-async def sector_guidance(body: EtfBody, user: str = Depends(get_current_user)):
-    """Live analyst estimates + earnings surprise history — Tab 6."""
+@_result_cached("sector_guidance")
+def _compute_sector_guidance(etf: str) -> dict:
     from src.market_data import fetch_energy_earnings_surprises
-
-    cfg = _get_config(body.etf)
+    cfg = _get_config(etf)
     tickers = list(cfg["companies"].keys())
-
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_live = pool.submit(_live_estimates_batch, tickers)
         f_surp = pool.submit(fetch_energy_earnings_surprises, tickers)
         live = f_live.result()
         surp = f_surp.result()
-
     return {
         "etf": cfg["etf"],
         "live_estimates": live,
@@ -753,16 +765,20 @@ async def sector_guidance(body: EtfBody, user: str = Depends(get_current_user)):
     }
 
 
+@router.post("/guidance")
+async def sector_guidance(body: EtfBody, user: str = Depends(get_current_user)):
+    """Live analyst estimates + earnings surprise history — Tab 6."""
+    return _compute_sector_guidance(body.etf)
+
+
 # ═══════════════════════════════════════════════
 # POST /api/sectors/market
 # ═══════════════════════════════════════════════
 
-@router.post("/market")
-async def sector_market(body: EtfBody, user: str = Depends(get_current_user)):
-    """Macro overlay (FRED) + CFTC COT positioning (if applicable) — Tab 7."""
+@_result_cached("sector_market")
+def _compute_sector_market(etf: str) -> dict:
     from src.market_data import fetch_fred_series, fetch_cftc_cot
-
-    cfg = _get_config(body.etf)
+    cfg = _get_config(etf)
     overlay = cfg["macro_overlay"]
     cot_commodities = cfg.get("cot_commodities") or []
 
@@ -828,3 +844,9 @@ async def sector_market(body: EtfBody, user: str = Depends(get_current_user)):
         "macro_series": macro_records,
         "cot": cot_data,
     }
+
+
+@router.post("/market")
+async def sector_market(body: EtfBody, user: str = Depends(get_current_user)):
+    """Macro overlay (FRED) + CFTC COT positioning (if applicable) — Tab 7."""
+    return _compute_sector_market(body.etf)
