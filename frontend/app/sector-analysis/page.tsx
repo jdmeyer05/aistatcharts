@@ -248,14 +248,14 @@ function SectorAnalysisInner() {
   }, [params]);
 
   // State → URL sync. Persist selection + keep URL in sync so the view is
-  // shareable. Only rewrites when the canonical URL actually differs;
-  // combined with the reverse-sync effect this reaches a fixed point.
+  // shareable. Only rewrites when sector/tab actually differ, and preserves
+  // any extra params that sub-views (e.g., CompareTab bubble dims) wrote.
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, etf); } catch {}
     const urlSector = params.get("sector")?.toUpperCase();
     const urlTab = params.get("tab");
     if (urlSector === etf && urlTab === TAB_SLUGS[activeTab]) return;
-    const search = new URLSearchParams();
+    const search = new URLSearchParams(params.toString());
     search.set("sector", etf);
     search.set("tab", TAB_SLUGS[activeTab]);
     router.replace(`/sector-analysis?${search.toString()}`, { scroll: false });
@@ -472,7 +472,7 @@ function SectorAnalysisInner() {
       {activeTab === 7 && (prices ? <PairsTab cfg={cfg} prices={prices} t={t} L={L} />
         : pricesQ.isError ? <TabError label="Pairs" onRetry={() => pricesQ.refetch()} />
         : <TabLoading label="Pairs" />)}
-      {activeTab === 8 && <CompareTab etfs={etfs} configs={sectors} />}
+      {activeTab === 8 && <CompareTab etfs={etfs} configs={sectors} t={t} L={L} />}
     </div>
   );
 }
@@ -3130,39 +3130,304 @@ function PairsTab({
   );
 }
 
+// Dim-picker dropdown grouped by metric family, used by CompareTab bubble view.
+function BubbleDimSelect({
+  label, value, onChange,
+}: {
+  label: string;
+  value: CompareMetric;
+  onChange: (m: CompareMetric) => void;
+}) {
+  const groups = useMemo(() => {
+    const out: Record<string, CompareMetric[]> = {};
+    (Object.keys(METRICS) as CompareMetric[]).forEach(k => {
+      const g = METRICS[k].group;
+      (out[g] ||= []).push(k);
+    });
+    return out;
+  }, []);
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">{label}</span>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value as CompareMetric)}
+        className="px-2 py-1.5 border border-border rounded text-xs bg-surface font-data"
+      >
+        {Object.entries(groups).map(([group, keys]) => (
+          <optgroup key={group} label={group}>
+            {keys.map(k => <option key={k} value={k}>{METRICS[k].label}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Bubble Chart — 4D scatter used by Compare tab (sector + drill level)
+// ══════════════════════════════════════════════════════════════
+
+interface BubblePoint {
+  id: string;
+  label: string;     // shown on the bubble
+  sublabel?: string; // shown in tooltip
+  metrics: Partial<Record<CompareMetric, number | null>>;
+  benchmark?: boolean; // renders muted with a different marker
+}
+
+function BubbleChart({
+  points,
+  xMetric, yMetric, colorMetric, sizeMetric,
+  height = CHART_HEIGHT.tall,
+  onPointClick,
+  t,
+  L,
+}: {
+  points: BubblePoint[];
+  xMetric: CompareMetric;
+  yMetric: CompareMetric;
+  colorMetric: CompareMetric;
+  sizeMetric: CompareMetric;
+  height?: number;
+  onPointClick?: (id: string) => void;
+  t: ChartTheme;
+  L: ReturnType<typeof getBaseLayout>;
+}) {
+  // A point is renderable only when all 4 dims are present. Points missing
+  // any dim drop out rather than silently sit at 0 and confuse the reader.
+  const renderable = points.filter(p =>
+    p.metrics[xMetric] != null &&
+    p.metrics[yMetric] != null &&
+    p.metrics[colorMetric] != null &&
+    p.metrics[sizeMetric] != null,
+  );
+
+  const normal = renderable.filter(p => !p.benchmark);
+  const benchmarks = renderable.filter(p => p.benchmark);
+
+  // Outlier detection — |z-score| ≥ 1.5 on any of the 4 dims flags a point.
+  // Computed across the NON-benchmark points only, since benchmark is by
+  // construction an average.
+  const outlierIds = new Set<string>();
+  for (const metric of [xMetric, yMetric, colorMetric, sizeMetric]) {
+    const vals = normal.map(p => p.metrics[metric] as number);
+    if (vals.length < 3) continue;
+    const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+    const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / (vals.length - 1));
+    if (std === 0) continue;
+    normal.forEach((p, i) => {
+      if (Math.abs((vals[i] - mean) / std) >= 1.5) outlierIds.add(p.id);
+    });
+  }
+
+  // Size scaling — map to 14..64 px so both ends are readable without
+  // letting the largest bubble dominate the plot.
+  const sizeVals = normal.map(p => p.metrics[sizeMetric] as number);
+  const sMin = sizeVals.length ? Math.min(...sizeVals) : 0;
+  const sMax = sizeVals.length ? Math.max(...sizeVals) : 1;
+  const toPx = (v: number) => sMin === sMax ? 32 : 14 + ((v - sMin) / (sMax - sMin)) * 50;
+
+  const colorVals = normal.map(p => p.metrics[colorMetric] as number);
+  const higherBetter = METRICS[colorMetric].higherBetter;
+
+  // Custom hover text uses all 4 dims with their formatted values so users
+  // don't have to decode the axes.
+  const hoverText = (p: BubblePoint) => {
+    const lines = [`<b>${p.label}</b>`];
+    if (p.sublabel) lines.push(`<span style="color:#888">${p.sublabel}</span>`);
+    lines.push("");
+    const dims: Array<[string, CompareMetric]> = [
+      ["X", xMetric], ["Y", yMetric], ["Color", colorMetric], ["Size", sizeMetric],
+    ];
+    for (const [role, m] of dims) {
+      const v = p.metrics[m];
+      lines.push(`${role} · ${METRICS[m].short}: ${v == null ? "—" : METRICS[m].fmt(v)}`);
+    }
+    return lines.join("<br>");
+  };
+
+  // Benchmark rendered as a diamond with muted color so it reads as context,
+  // not a ranked point.
+  const benchmarkTrace = benchmarks.length > 0 ? [{
+    x: benchmarks.map(p => p.metrics[xMetric] as number),
+    y: benchmarks.map(p => p.metrics[yMetric] as number),
+    text: benchmarks.map(p => p.label),
+    textposition: "top center" as const,
+    customdata: benchmarks.map(p => [hoverText(p)]),
+    hovertemplate: "%{customdata[0]}<extra></extra>",
+    mode: "markers+text" as const,
+    type: "scatter" as const,
+    marker: {
+      symbol: "diamond",
+      size: 20,
+      color: t.muted,
+      line: { color: t.text, width: 1 },
+    },
+    name: "Benchmark",
+  }] : [];
+
+  const data: Record<string, unknown>[] = [
+    {
+      x: normal.map(p => p.metrics[xMetric] as number),
+      y: normal.map(p => p.metrics[yMetric] as number),
+      text: normal.map(p => p.label),
+      textposition: "middle center" as const,
+      textfont: { size: 10, color: t.text },
+      customdata: normal.map(p => [hoverText(p), p.id]),
+      hovertemplate: "%{customdata[0]}<extra></extra>",
+      mode: "markers+text" as const,
+      type: "scatter" as const,
+      marker: {
+        size: sizeVals.map(toPx),
+        sizemode: "diameter" as const,
+        color: colorVals,
+        colorscale: higherBetter ? "Viridis" : "Viridis",
+        reversescale: !higherBetter,
+        showscale: true,
+        colorbar: { title: { text: METRICS[colorMetric].short }, thickness: 10, len: 0.7 },
+        line: {
+          color: normal.map(p => outlierIds.has(p.id) ? t.spot : t.muted),
+          width: normal.map(p => outlierIds.has(p.id) ? 2 : 0.5),
+        },
+      },
+      name: "Sectors",
+    },
+    ...benchmarkTrace,
+  ];
+
+  return (
+    <Plot
+      data={data}
+      layout={{
+        ...L,
+        height,
+        showlegend: false,
+        xaxis: { title: { text: METRICS[xMetric].label }, gridcolor: t.grid, zeroline: false },
+        yaxis: { title: { text: METRICS[yMetric].label }, gridcolor: t.grid, zeroline: false },
+        margin: { l: 60, r: 20, t: 20, b: 50 },
+        hovermode: "closest",
+      }}
+      config={{ displayModeBar: false, responsive: true }}
+      style={{ width: "100%" }}
+      onClick={onPointClick ? (e: { points?: Array<{ customdata?: unknown }> }) => {
+        const pt = e?.points?.[0];
+        const cd = pt?.customdata as unknown[] | undefined;
+        const id = cd?.[1];
+        if (typeof id === "string") onPointClick(id);
+      } : undefined}
+    />
+  );
+}
+
 // ══════════════════════════════════════════════════════════════
 // TAB 9 — COMPARE ALL SECTORS
 // ══════════════════════════════════════════════════════════════
 
-type CompareMetric = "totalRevenue" | "avgMargin" | "avgRoe" | "medianFwdPe" | "avgMom3" | "companies";
+type CompareMetric =
+  | "totalRevenue" | "companies"
+  | "avgMargin" | "avgRoe"
+  | "medianFwdPe" | "medianTrailingPe" | "medianPB" | "medianEvEbitda"
+  | "avgDivYield" | "avgFcfYield" | "avgPayoutRatio"
+  | "avgBeta" | "avgDebtEbitda"
+  | "avgMom1M" | "avgMom3M" | "avgMom6M" | "avgMom12M";
 
-const METRIC_LABELS: Record<CompareMetric, string> = {
-  totalRevenue: "Combined Revenue",
-  avgMargin: "Avg Net Margin",
-  avgRoe: "Avg ROE",
-  medianFwdPe: "Median Fwd P/E",
-  avgMom3: "Avg 3M Momentum",
-  companies: "Companies",
+interface MetricDef {
+  label: string;
+  short: string;       // compact label for table headers
+  fmt: (v: number) => string;
+  higherBetter: boolean;
+  group: "Scale" | "Quality" | "Valuation" | "Income" | "Risk" | "Momentum";
+}
+
+const METRICS: Record<CompareMetric, MetricDef> = {
+  totalRevenue: { label: "Combined Revenue", short: "Revenue", fmt: v => `$${(v / 1e12).toFixed(2)}T`, higherBetter: true, group: "Scale" },
+  companies: { label: "Companies", short: "Cos.", fmt: v => String(v), higherBetter: true, group: "Scale" },
+  avgMargin: { label: "Avg Net Margin", short: "Margin", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Quality" },
+  avgRoe: { label: "Avg ROE", short: "ROE", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Quality" },
+  medianFwdPe: { label: "Median Fwd P/E", short: "Fwd P/E", fmt: v => `${v.toFixed(1)}x`, higherBetter: false, group: "Valuation" },
+  medianTrailingPe: { label: "Median Trailing P/E", short: "TTM P/E", fmt: v => `${v.toFixed(1)}x`, higherBetter: false, group: "Valuation" },
+  medianPB: { label: "Median P/B", short: "P/B", fmt: v => `${v.toFixed(1)}x`, higherBetter: false, group: "Valuation" },
+  medianEvEbitda: { label: "Median EV/EBITDA", short: "EV/EBITDA", fmt: v => `${v.toFixed(1)}x`, higherBetter: false, group: "Valuation" },
+  avgDivYield: { label: "Avg Div Yield", short: "Div Yld", fmt: v => `${(v * 100).toFixed(2)}%`, higherBetter: true, group: "Income" },
+  avgFcfYield: { label: "Avg FCF Yield", short: "FCF Yld", fmt: v => `${(v * 100).toFixed(2)}%`, higherBetter: true, group: "Income" },
+  avgPayoutRatio: { label: "Avg Payout Ratio", short: "Payout", fmt: v => `${(v * 100).toFixed(0)}%`, higherBetter: false, group: "Income" },
+  avgBeta: { label: "Avg Beta", short: "Beta", fmt: v => v.toFixed(2), higherBetter: false, group: "Risk" },
+  avgDebtEbitda: { label: "Avg Debt/EBITDA", short: "Debt/EB", fmt: v => `${v.toFixed(2)}x`, higherBetter: false, group: "Risk" },
+  avgMom1M: { label: "1M Momentum", short: "1M", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Momentum" },
+  avgMom3M: { label: "3M Momentum", short: "3M", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Momentum" },
+  avgMom6M: { label: "6M Momentum", short: "6M", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Momentum" },
+  avgMom12M: { label: "12M Momentum", short: "12M", fmt: v => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`, higherBetter: true, group: "Momentum" },
 };
 
-// For each metric, whether "higher is better" — drives the green/red heat.
-// P/E is inverted (cheaper is higher ranked).
-const METRIC_HIGHER_BETTER: Record<CompareMetric, boolean> = {
-  totalRevenue: true,
-  avgMargin: true,
-  avgRoe: true,
-  medianFwdPe: false,
-  avgMom3: true,
-  companies: true,
-};
+// Metrics shown in the table view — kept compact; bubble view offers all 17.
+const TABLE_METRICS: CompareMetric[] = [
+  "totalRevenue", "avgMargin", "avgRoe", "medianFwdPe", "avgMom3M", "companies",
+];
+
+// Curated 4D bubble presets — picks metric combinations that tell a story
+// together rather than leaving users to guess good combinations.
+const BUBBLE_PRESETS: Array<{
+  id: string; name: string; desc: string;
+  x: CompareMetric; y: CompareMetric; color: CompareMetric; size: CompareMetric;
+}> = [
+  { id: "value-quality",  name: "Value × Quality",    desc: "Cheap + profitable in upper-left; color confirms momentum.",
+    x: "medianFwdPe", y: "avgMargin",  color: "avgMom3M",       size: "totalRevenue" },
+  { id: "momentum",       name: "Momentum Regime",    desc: "Short vs long-term trend alignment; color = cheapness.",
+    x: "avgMom3M",    y: "avgMom12M",  color: "medianFwdPe",    size: "totalRevenue" },
+  { id: "income",         name: "Income + Stability", desc: "Yield vs beta; color flags payout sustainability.",
+    x: "avgDivYield", y: "avgBeta",    color: "avgPayoutRatio", size: "avgFcfYield" },
+  { id: "quality-price",  name: "Quality at Price",   desc: "P/E vs ROE — classic quality-value scatter.",
+    x: "medianFwdPe", y: "avgRoe",     color: "avgMargin",      size: "totalRevenue" },
+];
+
+// One row per sector for the compare table + bubble chart. Includes every
+// metric in the METRICS catalog (all nullable since endpoints may partially fail).
+type SectorCompareRow = {
+  etf: string;
+  label: string;
+  loading: boolean;
+  error: boolean;
+} & Record<CompareMetric, number | null>;
+
+// Helpers — null-safe median / mean on number[].
+function mediaNumbers(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+function meanNumbers(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+function pickFinite<T>(xs: T[], get: (t: T) => number | null | undefined): number[] {
+  const out: number[] = [];
+  for (const x of xs) {
+    const v = get(x);
+    if (v != null && Number.isFinite(v)) out.push(v);
+  }
+  return out;
+}
+
+// Valid CompareMetric keys — used to reject garbage URL params.
+const METRIC_KEYS = Object.keys(METRICS) as CompareMetric[];
+const isCompareMetric = (v: string | null): v is CompareMetric =>
+  v != null && (METRIC_KEYS as string[]).includes(v);
 
 function CompareTab({
   etfs,
   configs,
+  t,
+  L,
 }: {
   etfs: string[];
   configs: Record<string, SectorConfig>;
+  t: ChartTheme;
+  L: ReturnType<typeof getBaseLayout>;
 }) {
+  const params = useSearchParams();
+  const router = useRouter();
+
   const overviewResults = useQueries({
     queries: etfs.map(etf => ({
       queryKey: ["sector-overview", etf],
@@ -3182,20 +3447,38 @@ function CompareTab({
     const ov = overviewResults[i]?.data;
     const va = valuationResults[i]?.data;
     const fin = ov?.financials ?? [];
+    const val = va?.valuation ?? [];
+    const mom = va?.momentum ?? [];
+
+    // Scale + quality from overview financials
     const totRev = fin.reduce((s, r) => s + (r.revenue ?? 0), 0);
-    const mRows = fin.filter(r => r.net_margin != null);
-    const rRows = fin.filter(r => r.roe != null);
-    const avgMargin = mRows.length > 0 ? mRows.reduce((s, r) => s + (r.net_margin as number), 0) / mRows.length : null;
-    const avgRoe = rRows.length > 0 ? rRows.reduce((s, r) => s + (r.roe as number), 0) / rRows.length : null;
-    const pes = (va?.valuation ?? [])
-      .map(v => v.forward_pe)
-      .filter((x): x is number => x != null && Number.isFinite(x) && x > 0 && x < 200);
-    const sortedPes = [...pes].sort((a, b) => a - b);
-    const medianPe = sortedPes.length > 0 ? sortedPes[Math.floor(sortedPes.length / 2)] : null;
-    const m3s = (va?.momentum ?? [])
-      .map(m => m["3M"])
-      .filter((x): x is number => x != null && Number.isFinite(x));
-    const avgMom3 = m3s.length > 0 ? m3s.reduce((s, x) => s + x, 0) / m3s.length : null;
+    const avgMargin = meanNumbers(pickFinite(fin, r => r.net_margin));
+    const avgRoe = meanNumbers(pickFinite(fin, r => r.roe));
+
+    // Valuation multiples — use medians (robust to the one crazy multiple
+    // that poisons an average). Filter nonsense: must be positive & finite,
+    // under a sanity cap since stale-negative-earnings names throw P/E to
+    // 500x+ and pollute the sector view.
+    const sane = (v: number | null | undefined, cap = 200) =>
+      v != null && Number.isFinite(v) && v > 0 && v < cap;
+    const medianFwdPe = mediaNumbers(pickFinite(val, v => sane(v.forward_pe) ? v.forward_pe : null));
+    const medianTrailingPe = mediaNumbers(pickFinite(val, v => sane(v.trailing_pe) ? v.trailing_pe : null));
+    const medianPB = mediaNumbers(pickFinite(val, v => sane(v.price_to_book, 50) ? v.price_to_book : null));
+    const medianEvEbitda = mediaNumbers(pickFinite(val, v => sane(v.ev_ebitda, 100) ? v.ev_ebitda : null));
+
+    // Income + risk
+    const avgDivYield = meanNumbers(pickFinite(val, v => v.dividend_yield));
+    const avgFcfYield = meanNumbers(pickFinite(val, v => v.fcf_yield));
+    const avgPayoutRatio = meanNumbers(pickFinite(val, v => (v.payout_ratio != null && v.payout_ratio > 0 && v.payout_ratio < 2) ? v.payout_ratio : null));
+    const avgBeta = meanNumbers(pickFinite(val, v => v.beta));
+    const avgDebtEbitda = meanNumbers(pickFinite(val, v => (v.net_debt_ebitda != null && v.net_debt_ebitda > -10 && v.net_debt_ebitda < 20) ? v.net_debt_ebitda : null));
+
+    // Momentum windows
+    const avgMom1M = meanNumbers(pickFinite(mom, m => m["1M"]));
+    const avgMom3M = meanNumbers(pickFinite(mom, m => m["3M"]));
+    const avgMom6M = meanNumbers(pickFinite(mom, m => m["6M"]));
+    const avgMom12M = meanNumbers(pickFinite(mom, m => m["12M"]));
+
     return {
       etf,
       label: configs[etf]?.label ?? etf,
@@ -3203,22 +3486,139 @@ function CompareTab({
       totalRevenue: totRev > 0 ? totRev : null,
       avgMargin,
       avgRoe,
-      medianFwdPe: medianPe,
-      avgMom3,
+      medianFwdPe,
+      medianTrailingPe,
+      medianPB,
+      medianEvEbitda,
+      avgDivYield,
+      avgFcfYield,
+      avgPayoutRatio,
+      avgBeta,
+      avgDebtEbitda,
+      avgMom1M,
+      avgMom3M,
+      avgMom6M,
+      avgMom12M,
       loading: !!overviewResults[i]?.isPending || !!valuationResults[i]?.isPending,
       error: !!overviewResults[i]?.isError || !!valuationResults[i]?.isError,
-    };
+    } satisfies SectorCompareRow;
   }), [etfs, overviewResults, valuationResults, configs]);
 
   const [sortKey, setSortKey] = useState<CompareMetric>("totalRevenue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  // Compare tab supports two renderings: table (dense rankings) and bubble
+  // (4D visual). Initial values pulled from URL ?view=bubble&bx=...&by=...
+  // &bc=...&bs=... so shared links reproduce the exact chart.
+  const [compareView, setCompareView] = useState<"table" | "bubble">(() =>
+    params.get("view") === "table" ? "table" : "bubble"
+  );
+  const [xMetric, setXMetric] = useState<CompareMetric>(() => {
+    const p = params.get("bx"); return isCompareMetric(p) ? p : "medianFwdPe";
+  });
+  const [yMetric, setYMetric] = useState<CompareMetric>(() => {
+    const p = params.get("by"); return isCompareMetric(p) ? p : "avgMargin";
+  });
+  const [colorMetric, setColorMetric] = useState<CompareMetric>(() => {
+    const p = params.get("bc"); return isCompareMetric(p) ? p : "avgMom3M";
+  });
+  const [sizeMetric, setSizeMetric] = useState<CompareMetric>(() => {
+    const p = params.get("bs"); return isCompareMetric(p) ? p : "totalRevenue";
+  });
+  const [showBenchmark, setShowBenchmark] = useState(true);
+  const [drillSector, setDrillSector] = useState<string | null>(null);
+
+  // Sync bubble config to URL whenever it changes. Guards against the
+  // parent's state→URL effect by only writing params we own (view/bx/by/bc/bs).
+  useEffect(() => {
+    const next = new URLSearchParams(params.toString());
+    const upd = (k: string, v: string | null, skipIf: string) => {
+      if (v == null || v === skipIf) next.delete(k);
+      else next.set(k, v);
+    };
+    upd("view", compareView, "bubble"); // default "bubble" stays out of URL
+    upd("bx", xMetric, "medianFwdPe");
+    upd("by", yMetric, "avgMargin");
+    upd("bc", colorMetric, "avgMom3M");
+    upd("bs", sizeMetric, "totalRevenue");
+    const nextStr = next.toString();
+    if (nextStr !== params.toString()) {
+      router.replace(`/sector-analysis?${nextStr}`, { scroll: false });
+    }
+  }, [compareView, xMetric, yMetric, colorMetric, sizeMetric, params, router]);
+
+  function applyPreset(p: typeof BUBBLE_PRESETS[number]) {
+    setXMetric(p.x); setYMetric(p.y); setColorMetric(p.color); setSizeMetric(p.size);
+  }
+
+  // Build sector-level bubble points. Keep every metric on the object so
+  // users can swap dims in the dropdowns without refetching.
+  const sectorPoints: BubblePoint[] = useMemo(() => rows.map(r => {
+    const m: Partial<Record<CompareMetric, number | null>> = {};
+    (Object.keys(METRICS) as CompareMetric[]).forEach(k => { m[k] = r[k]; });
+    return { id: r.etf, label: r.etf, sublabel: r.label, metrics: m };
+  }), [rows]);
+
+  // Benchmark = equal-weight average of all sectors on every metric.
+  // Rendered as a gray diamond so users see "above/below benchmark" at a glance.
+  const benchmarkPoint: BubblePoint | null = useMemo(() => {
+    if (!showBenchmark || rows.length === 0) return null;
+    const metrics: Partial<Record<CompareMetric, number | null>> = {};
+    (Object.keys(METRICS) as CompareMetric[]).forEach(k => {
+      const vals = rows.map(r => r[k]).filter((v): v is number => v != null && Number.isFinite(v));
+      metrics[k] = vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+    });
+    return { id: "__benchmark__", label: "avg", sublabel: "Equal-weight sector benchmark", benchmark: true, metrics };
+  }, [rows, showBenchmark]);
+
+  // Per-company drill-down for the clicked sector — uses overview financials,
+  // valuation multiples, and momentum rows joined on ticker. Reuses the
+  // aggregate metric keys (avgMargin, medianFwdPe, …) as stand-ins for the
+  // single-company values so the dropdowns + chart component need no fork.
+  const drillPoints: BubblePoint[] = useMemo(() => {
+    if (!drillSector) return [];
+    const i = etfs.indexOf(drillSector);
+    if (i < 0) return [];
+    const ov = overviewResults[i]?.data;
+    const va = valuationResults[i]?.data;
+    if (!ov || !va) return [];
+    const valMap = new Map(va.valuation.map(v => [v.ticker, v]));
+    const momMap = new Map(va.momentum.map(m => [m.ticker, m]));
+    return ov.financials.map(f => {
+      const v = valMap.get(f.ticker);
+      const m = momMap.get(f.ticker);
+      return {
+        id: f.ticker,
+        label: f.ticker,
+        sublabel: f.company,
+        metrics: {
+          totalRevenue: f.revenue ?? null,
+          companies: 1,
+          avgMargin: f.net_margin ?? null,
+          avgRoe: f.roe ?? null,
+          medianFwdPe: v?.forward_pe ?? null,
+          medianTrailingPe: v?.trailing_pe ?? null,
+          medianPB: v?.price_to_book ?? null,
+          medianEvEbitda: v?.ev_ebitda ?? null,
+          avgDivYield: v?.dividend_yield ?? null,
+          avgFcfYield: v?.fcf_yield ?? null,
+          avgPayoutRatio: v?.payout_ratio ?? null,
+          avgBeta: v?.beta ?? null,
+          avgDebtEbitda: v?.net_debt_ebitda ?? null,
+          avgMom1M: m?.["1M"] ?? null,
+          avgMom3M: m?.["3M"] ?? null,
+          avgMom6M: m?.["6M"] ?? null,
+          avgMom12M: m?.["12M"] ?? null,
+        },
+      };
+    });
+  }, [drillSector, etfs, overviewResults, valuationResults]);
 
   const sortedRows = useMemo(() => {
     const copy = [...rows];
     copy.sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
-      // Push nulls to the bottom regardless of sort direction.
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
@@ -3227,20 +3627,21 @@ function CompareTab({
     return copy;
   }, [rows, sortKey, sortDir]);
 
-  // Ranks per metric for heat-coloring. Rank 0 = best (for that metric),
-  // rank N-1 = worst; we'll lerp color from gain → muted → loss.
+  // Ranks per metric for heat-coloring + outlier detection. Rank 0 = best.
   const ranks = useMemo(() => {
     const out: Record<string, Record<CompareMetric, number | null>> = {};
-    for (const etf of etfs) out[etf] = {
-      totalRevenue: null, avgMargin: null, avgRoe: null,
-      medianFwdPe: null, avgMom3: null, companies: null,
-    };
-    (Object.keys(METRIC_LABELS) as CompareMetric[]).forEach(metric => {
+    for (const etf of etfs) {
+      out[etf] = Object.fromEntries(
+        (Object.keys(METRICS) as CompareMetric[]).map(m => [m, null]),
+      ) as Record<CompareMetric, number | null>;
+    }
+    (Object.keys(METRICS) as CompareMetric[]).forEach(metric => {
+      const higherBetter = METRICS[metric].higherBetter;
       const valid = rows
         .map(r => ({ etf: r.etf, v: r[metric] as number | null }))
         .filter(r => r.v != null) as { etf: string; v: number }[];
       if (valid.length === 0) return;
-      valid.sort((a, b) => METRIC_HIGHER_BETTER[metric] ? b.v - a.v : a.v - b.v);
+      valid.sort((a, b) => higherBetter ? b.v - a.v : a.v - b.v);
       valid.forEach((x, i) => { out[x.etf][metric] = i; });
     });
     return out;
@@ -3250,7 +3651,7 @@ function CompareTab({
     const r = ranks[etf]?.[metric];
     const total = etfs.length;
     if (r == null || total < 2) return "text-text";
-    const pct = r / (total - 1); // 0=best, 1=worst
+    const pct = r / (total - 1);
     if (pct < 0.2) return "text-gain font-semibold";
     if (pct < 0.4) return "text-gain";
     if (pct < 0.6) return "text-text";
@@ -3260,10 +3661,7 @@ function CompareTab({
 
   function fmtCell(metric: CompareMetric, v: number | null): string {
     if (v == null) return "—";
-    if (metric === "totalRevenue") return `$${(v / 1e12).toFixed(2)}T`;
-    if (metric === "avgMargin" || metric === "avgRoe" || metric === "avgMom3") return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
-    if (metric === "medianFwdPe") return `${v.toFixed(1)}x`;
-    return String(v);
+    return METRICS[metric].fmt(v);
   }
 
   function toggleSort(metric: CompareMetric) {
@@ -3271,25 +3669,23 @@ function CompareTab({
       setSortDir(d => d === "desc" ? "asc" : "desc");
     } else {
       setSortKey(metric);
-      setSortDir(METRIC_HIGHER_BETTER[metric] ? "desc" : "asc");
+      setSortDir(METRICS[metric].higherBetter ? "desc" : "asc");
     }
   }
 
   const pendingCount = rows.filter(r => r.loading).length;
   const errorCount = rows.filter(r => r.error).length;
 
-  // Compact AI payload — one row per sector with the cross-sector metrics
+  // Compact AI payload — spans all metrics so the interpreter has the full
+  // picture, not just the ones in the table.
   const aiData = useMemo(() => ({
-    sectors: rows.map(r => ({
-      etf: r.etf,
-      label: r.label,
-      median_forward_pe: r.medianFwdPe,
-      avg_net_margin: r.avgMargin,
-      avg_roe: r.avgRoe,
-      companies_count: r.companies,
-      total_revenue_usd: r.totalRevenue,
-      avg_3m_momentum_pct: r.avgMom3,
-    })),
+    sectors: rows.map(r => {
+      const obj: Record<string, unknown> = { etf: r.etf, label: r.label };
+      (Object.keys(METRICS) as CompareMetric[]).forEach(m => {
+        obj[m] = r[m];
+      });
+      return obj;
+    }),
   }), [rows]);
 
   return (
@@ -3298,55 +3694,178 @@ function CompareTab({
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <div className="text-sm font-semibold text-text">Cross-sector comparison</div>
-            <div className="text-xs text-text-muted">All 11 SPDR sectors × 6 fundamentals metrics. Click a column header to sort.</div>
-          </div>
-          {pendingCount > 0 && (
-            <div className="text-xs text-text-muted flex items-center gap-2">
-              <div className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-              {pendingCount} / {etfs.length} loading
+            <div className="text-xs text-text-muted">
+              {compareView === "bubble"
+                ? "All 11 SPDR sectors plotted on 4 dimensions. Click any bubble to drill into its companies."
+                : "All 11 SPDR sectors × 6 fundamentals metrics. Click a column header to sort."}
             </div>
-          )}
-          {errorCount > 0 && (
-            <div className="text-xs text-loss">{errorCount} sector{errorCount === 1 ? "" : "s"} failed</div>
-          )}
+          </div>
+          <div className="flex items-center gap-3">
+            {pendingCount > 0 && (
+              <div className="text-xs text-text-muted flex items-center gap-1.5">
+                <div className="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                {pendingCount} / {etfs.length} loading
+              </div>
+            )}
+            {errorCount > 0 && (
+              <div className="text-xs text-loss">{errorCount} sector{errorCount === 1 ? "" : "s"} failed</div>
+            )}
+            {/* View toggle — Bubble is the default because 4D scatter is the headline */}
+            <div className="inline-flex rounded border border-border text-xs overflow-hidden">
+              <button
+                onClick={() => setCompareView("bubble")}
+                className={`px-3 py-1 font-semibold ${compareView === "bubble" ? "bg-accent text-white" : "text-text-muted hover:bg-surface-alt"}`}
+              >Bubble</button>
+              <button
+                onClick={() => setCompareView("table")}
+                className={`px-3 py-1 font-semibold ${compareView === "table" ? "bg-accent text-white" : "text-text-muted hover:bg-surface-alt"}`}
+              >Table</button>
+            </div>
+          </div>
         </div>
 
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left border-b border-border">
-                <th className="py-2 px-2 font-semibold">Sector</th>
-                {(Object.keys(METRIC_LABELS) as CompareMetric[]).map(metric => (
-                  <th key={metric} className="py-2 px-2 font-semibold cursor-pointer hover:bg-surface-alt select-none" onClick={() => toggleSort(metric)}>
-                    <span className={sortKey === metric ? "text-accent" : ""}>{METRIC_LABELS[metric]}</span>
-                    {sortKey === metric && <span className="ml-1 text-accent">{sortDir === "desc" ? "↓" : "↑"}</span>}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRows.map(r => (
-                <tr key={r.etf} className="border-b border-border/60 hover:bg-surface-alt">
-                  <td className="py-1.5 px-2">
-                    <div className="font-semibold">{r.etf}</div>
-                    <div className="text-[10px] text-text-muted">{r.label}</div>
-                  </td>
-                  {(Object.keys(METRIC_LABELS) as CompareMetric[]).map(metric => (
-                    <td key={metric} className={`py-1.5 px-2 font-data ${cellColor(r.etf, metric)}`}>
-                      {r.loading && (r[metric] as number | null) == null
-                        ? <span className="text-text-muted">…</span>
-                        : fmtCell(metric, r[metric] as number | null)}
-                    </td>
+        {compareView === "table" && (
+          <>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left border-b border-border">
+                    <th className="py-2 px-2 font-semibold">Sector</th>
+                    {TABLE_METRICS.map(metric => (
+                      <th key={metric} className="py-2 px-2 font-semibold cursor-pointer hover:bg-surface-alt select-none" onClick={() => toggleSort(metric)}>
+                        <span className={sortKey === metric ? "text-accent" : ""}>{METRICS[metric].label}</span>
+                        {sortKey === metric && <span className="ml-1 text-accent">{sortDir === "desc" ? "↓" : "↑"}</span>}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedRows.map(r => (
+                    <tr key={r.etf} className="border-b border-border/60 hover:bg-surface-alt">
+                      <td className="py-1.5 px-2">
+                        <div className="font-semibold">{r.etf}</div>
+                        <div className="text-[10px] text-text-muted">{r.label}</div>
+                      </td>
+                      {TABLE_METRICS.map(metric => (
+                        <td key={metric} className={`py-1.5 px-2 font-data ${cellColor(r.etf, metric)}`}>
+                          {r.loading && (r[metric] as number | null) == null
+                            ? <span className="text-text-muted">…</span>
+                            : fmtCell(metric, r[metric] as number | null)}
+                        </td>
+                      ))}
+                    </tr>
                   ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-2 text-[10px] text-text-muted">
-          Color: <span className="text-gain">green</span> = best two ranks · <span className="text-loss">red</span> = worst two ranks · P/E inverted (cheaper ranks better).
-        </div>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-2 text-[10px] text-text-muted">
+              Color: <span className="text-gain">green</span> = best two ranks · <span className="text-loss">red</span> = worst two ranks · P/E inverted (cheaper ranks better).
+            </div>
+          </>
+        )}
+
+        {compareView === "bubble" && (
+          <div className="mt-3 space-y-3">
+            {/* Presets — preferred entry point; swap in a curated 4D setup with one click */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">Preset</span>
+              {BUBBLE_PRESETS.map(p => {
+                const active = xMetric === p.x && yMetric === p.y && colorMetric === p.color && sizeMetric === p.size;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => applyPreset(p)}
+                    title={p.desc}
+                    className={`px-2 py-1 text-xs rounded border transition-colors ${
+                      active ? "bg-accent text-white border-accent" : "text-text-secondary border-border hover:bg-surface-alt"
+                    }`}
+                  >
+                    {p.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 4 dim dropdowns — for custom exploration beyond the presets */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <BubbleDimSelect label="X axis"  value={xMetric}     onChange={setXMetric} />
+              <BubbleDimSelect label="Y axis"  value={yMetric}     onChange={setYMetric} />
+              <BubbleDimSelect label="Color"   value={colorMetric} onChange={setColorMetric} />
+              <BubbleDimSelect label="Size"    value={sizeMetric}  onChange={setSizeMetric} />
+            </div>
+
+            {/* Benchmark toggle + outlier legend */}
+            <div className="flex items-center justify-between flex-wrap text-[11px] text-text-muted gap-3">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={showBenchmark} onChange={e => setShowBenchmark(e.target.checked)} className="accent-accent" />
+                Show equal-weight benchmark (gray diamond)
+              </label>
+              <div>
+                <span className="inline-block w-3 h-3 rounded-full border-2 align-middle mr-1" style={{ borderColor: "var(--color-spot, #f59e0b)" }} />
+                Orange ring = outlier (&gt;1.5σ on any selected dim)
+              </div>
+            </div>
+
+            <BubbleChart
+              points={benchmarkPoint ? [...sectorPoints, benchmarkPoint] : sectorPoints}
+              xMetric={xMetric}
+              yMetric={yMetric}
+              colorMetric={colorMetric}
+              sizeMetric={sizeMetric}
+              onPointClick={id => setDrillSector(id === "__benchmark__" ? null : id)}
+              t={t}
+              L={L}
+            />
+          </div>
+        )}
       </div>
+
+      {/* Drill-down — per-company scatter using the same 4 dims */}
+      {compareView === "bubble" && drillSector && (() => {
+        const idx = etfs.indexOf(drillSector);
+        const ov = overviewResults[idx]?.data;
+        const isLoading = !!overviewResults[idx]?.isPending || !!valuationResults[idx]?.isPending;
+        return (
+          <div className="card card-compact border-l-2 border-l-accent">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+              <div>
+                <div className="text-sm font-semibold text-text">
+                  {drillSector} drill-down — {configs[drillSector]?.label ?? drillSector}
+                </div>
+                <div className="text-[11px] text-text-muted">
+                  Same 4 dims, applied per company. Click a bubble in the main chart to switch sector.
+                </div>
+              </div>
+              <button
+                onClick={() => setDrillSector(null)}
+                className="px-2 py-1 text-[10px] rounded border border-border hover:bg-surface-alt"
+              >Close</button>
+            </div>
+            {isLoading && drillPoints.length === 0 ? (
+              <div className="text-center py-8 text-xs text-text-muted">
+                <div className="inline-block w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin mr-2 align-middle" />
+                Loading {drillSector} companies…
+              </div>
+            ) : drillPoints.length === 0 ? (
+              <div className="text-center py-6 text-xs text-text-muted">No company data available.</div>
+            ) : (
+              <>
+                <div className="text-[11px] text-text-muted mb-1">{ov?.financials.length ?? 0} companies · same dims as above</div>
+                <BubbleChart
+                  points={drillPoints}
+                  xMetric={xMetric}
+                  yMetric={yMetric}
+                  colorMetric={colorMetric}
+                  sizeMetric={sizeMetric}
+                  height={CHART_HEIGHT.normal}
+                  t={t}
+                  L={L}
+                />
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {pendingCount === 0 && errorCount < etfs.length && (
         <AIInterpretation
