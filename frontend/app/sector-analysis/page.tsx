@@ -3282,7 +3282,9 @@ function BubbleChart({
         size: sizeVals.map(toPx),
         sizemode: "diameter" as const,
         color: colorVals,
-        colorscale: higherBetter ? "Viridis" : "Viridis",
+        // Viridis is perceptually uniform; reverse when the metric is
+        // "lower is better" (e.g. P/E) so cheap = bright/yellow end.
+        colorscale: "Viridis",
         reversescale: !higherBetter,
         showscale: true,
         colorbar: { title: { text: METRICS[colorMetric].short }, thickness: 10, len: 0.7 },
@@ -3812,7 +3814,9 @@ function CompareTab({
               yMetric={yMetric}
               colorMetric={colorMetric}
               sizeMetric={sizeMetric}
-              onPointClick={id => setDrillSector(id === "__benchmark__" ? null : id)}
+              // Benchmark trace omits id in customdata, so its clicks never
+              // fire here — sector bubble clicks are the only source.
+              onPointClick={id => setDrillSector(id)}
               t={t}
               L={L}
             />
