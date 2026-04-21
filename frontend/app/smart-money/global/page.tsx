@@ -93,10 +93,20 @@ export default function GlobalSmartMoneyPage() {
   const funds: GlobalFund[] = useMemo(() => fundsQ.data?.funds ?? [], [fundsQ.data]);
 
   // Batch load all funds' 13Fs. Parallel — ~1s per fund, ~1-2s total.
+  // One slow fund used to pin the whole batch at the SEC EDGAR slowest-case
+  // latency (~30s+); per-fund timeout caps that so the median case ships fast
+  // and only the offenders fall off.
+  const FUND_TIMEOUT_MS = 12_000;
   const batchLoad = useMutation({
     mutationFn: async (): Promise<FundLoadResult[]> => {
+      const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+          p.then(v => { clearTimeout(timer); resolve(v); })
+           .catch(e => { clearTimeout(timer); reject(e); });
+        });
       const settled = await Promise.allSettled(
-        funds.map((f) => fetch13FHoldings(f.cik)),
+        funds.map((f) => withTimeout(fetch13FHoldings(f.cik), FUND_TIMEOUT_MS)),
       );
       return funds.map((f, i) => {
         const s = settled[i];
