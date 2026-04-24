@@ -818,6 +818,26 @@ export async function fetchMarketNews(): Promise<MarketNews> {
   return apiFetch("/api/market/news");
 }
 
+// ─── Market Driver (home-page regime synthesis) ───────────────
+export interface MarketDriverQuote { label: string; price: number; change_pct_1d: number; }
+export interface MarketDriverCitation { label: string; source: string; detail?: string; }
+export interface MarketDriverResponse {
+  regime_label: string;
+  paragraphs: { what_happened: string; whats_driving: string; what_to_watch: string };
+  citations: MarketDriverCitation[];
+  confidence: number;
+  model?: string;
+  escalated?: boolean;
+  as_of_utc: string;
+  quotes: Record<string, MarketDriverQuote>;
+  cache_hit?: boolean;
+  error?: string;
+}
+
+export async function fetchMarketDriver(): Promise<MarketDriverResponse> {
+  return apiFetch("/api/market/market-driver", { timeoutMs: 45_000 });
+}
+
 // ─── Signals ─────────────────────────────────────────────────
 
 export interface SignalSummary {
