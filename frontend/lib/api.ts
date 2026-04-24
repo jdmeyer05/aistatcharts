@@ -680,7 +680,10 @@ export async function fetchOptionsChain(
   expirations: string[];
 }> {
   const params = expiration ? `?expiration=${expiration}` : "";
-  return apiFetch(`/api/market/chain/${ticker}${params}`);
+  // 90s: SPY / QQQ chains paginate across dozens of Polygon snapshot pages
+  // (250 contracts each × 20+ expirations). Default 25-30s wasn't enough on
+  // cold cache. Single-expiration queries are much faster; keep same budget.
+  return apiFetch(`/api/market/chain/${ticker}${params}`, { timeoutMs: 90_000 });
 }
 
 export interface MarketNews {
