@@ -24,10 +24,10 @@ supabase_rls_migration.sql
 # invalidating the Docker build cache.
 frontend/
 
-# Streamlit entry points — not used by FastAPI. Builds the separate root
-# Dockerfile if you want the Streamlit image.
-pages/
-app.py
+# NOTE: app.py + pages/ intentionally NOT excluded — the combined
+# Streamlit+FastAPI image (main Dockerfile) needs them at runtime. Their
+# cost in the FastAPI-only image is under 1 MB, which is not worth the
+# fragility of maintaining two separate ignore lists per Dockerfile.
 
 # Local caches, dev artifacts
 data/gdelt_events/*.json

@@ -36,10 +36,10 @@ supabase_rls_migration.sql
 # This is the big one: frontend/node_modules alone is hundreds of MB.
 frontend/
 
-# Streamlit entrypoints — unused by FastAPI. (Builds the separate Dockerfile
-# if you want the Streamlit image.)
-pages/
-app.py
+# NOTE: app.py + pages/ intentionally NOT excluded — the combined
+# Streamlit+FastAPI image needs them at runtime. Prior exclusion broke
+# the Streamlit service (crashed with "File does not exist: app.py") while
+# saving < 1 MB from the FastAPI image.
 
 # Local data caches — can be gigabytes
 data/
