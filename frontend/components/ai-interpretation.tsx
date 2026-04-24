@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AIMarkdown } from "@/components/ai-markdown";
 import { fetchInterpretation } from "@/lib/api";
@@ -27,6 +28,15 @@ export function AIInterpretation({ page, data, subject, disabled, buttonLabel }:
   const m = useMutation({
     mutationFn: () => fetchInterpretation({ page, data, subject }),
   });
+
+  // Clear stale output when `page` changes — React can reuse this component
+  // instance across e.g. options-analysis tabs (same JSX tree position,
+  // different `page` prop). Without this reset, Tab 0's interpretation
+  // lingers when the user lands on Tab 1.
+  useEffect(() => {
+    m.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   const isDisabled = disabled || m.isPending || !data;
 
