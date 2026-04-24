@@ -319,7 +319,7 @@ export async function fetchNewsVerify(items: NewsItem[]): Promise<NewsIntelRespo
 }
 
 export interface PolymarketOutcome { label: string; yes_pct: number; token_id?: string; days_out?: number; actionability?: number; }
-export interface PolymarketEvent { title: string; slug: string; volume_24h: number; liquidity: number; outcomes: PolymarketOutcome[]; url: string; }
+export interface PolymarketEvent { title: string; slug: string; category?: string; volume_24h: number; liquidity: number; outcomes: PolymarketOutcome[]; url: string; }
 export interface PolymarketResponse { success: boolean; markets: PolymarketEvent[]; }
 export interface PolymarketHistoryPoint { t: number; p: number; }
 
