@@ -69,7 +69,9 @@ function MarketPulse() {
     refetchInterval: 30_000,
     staleTime: 20_000,
   });
-  const data = q.data?.data ?? {};
+  // fetchSnapshot returns the Snapshot shape directly (ticker → {price, change, prev_close?}).
+  // Early code wrote `q.data?.data` — wrong; Snapshot has no `data` field.
+  const data: Record<string, { price: number; change: number; prev_close?: number }> = q.data ?? {};
 
   return (
     <div className="card card-compact">

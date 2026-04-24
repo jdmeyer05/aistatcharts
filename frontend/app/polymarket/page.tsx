@@ -199,8 +199,8 @@ function EventCard({ event }: { event: PolymarketEvent }) {
                 ...L,
                 height: 90,
                 margin: { t: 2, b: 18, l: 30, r: 4 },
-                xaxis: { ...L.xaxis, showgrid: false, tickfont: { size: 9 } },
-                yaxis: { ...L.yaxis, ticksuffix: "%", tickfont: { size: 9 }, range: [0, 100] },
+                xaxis: { showgrid: false, tickfont: { size: 9 }, gridcolor: t.grid },
+                yaxis: { ticksuffix: "%", tickfont: { size: 9 }, range: [0, 100], gridcolor: t.grid },
                 showlegend: false,
               }}
               config={{ displayModeBar: false, responsive: true }}
