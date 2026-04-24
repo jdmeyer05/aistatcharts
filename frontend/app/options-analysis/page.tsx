@@ -279,12 +279,26 @@ export default function OptionsIntelligence() {
             }).filter(Boolean);
             const termShape = ts.length >= 2 ? ((ts[ts.length - 1]!.atm_iv_pct > ts[0]!.atm_iv_pct * 1.02) ? "Contango" : (ts[ts.length - 1]!.atm_iv_pct < ts[0]!.atm_iv_pct * 0.98) ? "Backwardation" : "Flat") : "N/A";
             const selAtm = atmCall(selectedExp);
+            // IV curves centered on spot (nearest 30 strikes to spot) —
+            // slice(0, 30) would give the LOWEST 30 strikes, which for any
+            // liquid ticker are deep-ITM calls (zero-quote noise) and deep-
+            // OTM put tails (unstable IV). The near-ATM strikes are the only
+            // ones with tradeable skew signal. Also drop IV <= 0 or > 300%
+            // — stale / untraded quotes that pollute the read.
+            const nearATMStrikes = (rows: ChainRow[]) => rows
+              .filter(c => c.implied_volatility > 0 && c.implied_volatility < 3.0)
+              .slice()
+              .sort((a, b) => Math.abs(a.strike_price - spot) - Math.abs(b.strike_price - spot))
+              .slice(0, 30)
+              .sort((a, b) => a.strike_price - b.strike_price);
+            const nearCalls = nearATMStrikes(visCalls);
+            const nearPuts = nearATMStrikes(visPuts);
             const aiPayload = {
               ticker: loadedTicker, spot,
               selected_expiration: selectedExp, selected_dte: calcDTE(selectedExp),
               selected_atm_iv_pct: selAtm ? +(selAtm.implied_volatility * 100).toFixed(2) : null,
-              call_iv_curve: visCalls.slice(0, 30).map(c => [c.strike_price, +(c.implied_volatility * 100).toFixed(2)]),
-              put_iv_curve: visPuts.slice(0, 30).map(c => [c.strike_price, +(c.implied_volatility * 100).toFixed(2)]),
+              call_iv_curve: nearCalls.map(c => [c.strike_price, +(c.implied_volatility * 100).toFixed(2)]),
+              put_iv_curve: nearPuts.map(c => [c.strike_price, +(c.implied_volatility * 100).toFixed(2)]),
               term_structure: ts, term_shape: termShape,
             };
             return (
