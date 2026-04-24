@@ -304,6 +304,66 @@ PAGE_CONTEXT: dict[str, str] = {
         "- Distance_pct < 3% on a nearby trigger means it's within normal-week price noise — high probability of firing.\n"
         "What to produce: crisp bias call for the contract (buying / selling / mixed with the key scenario), the nearest trigger that would flip the model (cite level + distance_pct), and whether the scenario grid implies favorable risk/reward from the current exposure. Skip explanations of what CTAs are."
     ),
+    "options-iv-skew": (
+        "Options Intelligence → IV & Skew tab payload. The UI shows: (1) a skew chart of Call IV vs Put IV across strikes for the SELECTED expiration, (2) a term-structure chart of ATM IV across all loaded expirations, (3) an expected-move table per expiration. Payload mirrors those: spot, selected_expiration, selected_dte, selected_atm_iv_pct, call_iv_curve (list of [strike, iv_pct]), put_iv_curve (same), term_structure list of {exp, dte, atm_iv_pct, expected_move_dollars, expected_move_pct}, term_shape ('Contango'|'Backwardation'|'Flat').\n"
+        "Interpretation rules:\n"
+        "- Start with the FRONT-MONTH expected move from term_structure[0]: 'Market is pricing ±X% into expiry'. Cite the dollar figure and DTE.\n"
+        "- Describe the put/call skew AT the selected expiration by comparing IV at delta-equivalent strikes (e.g., 0.25-delta put IV vs 0.25-delta call IV in your data). Call out whether it's steeper/flatter than the equity-default (put skew of 3-8 vol points is normal).\n"
+        "- Term-structure call: contango = normal; backwardation = event risk priced. If an expiration in the payload falls on a KNOWN scheduled event (earnings, FOMC, CPI) that you're certain of, name it; otherwise say 'markets are pricing near-term risk into {date}' without inventing a specific catalyst. If flat, say markets see no near-term catalyst.\n"
+        "- Right-side skew (call IV > put IV at equivalent deltas) in a single name = flag hard; acquisition/squeeze/blow-off setup.\n"
+        "- Cheap vs rich: front-month ATM IV well below typical realized = vol buying opportunity (long straddle / calendar); well above = premium-selling opportunity (iron condor / credit spread) — name the structure.\n"
+        "What to produce: (a) one-line front-month expected move, (b) skew + term-structure regime in one sentence each, (c) ONE specific tradeable — exact structure + legs, not a generic 'buy calls'."
+    ),
+    "options-positioning": (
+        "Options Intelligence → Positioning & Max Pain tab payload. The UI shows: (1) P/C volume + OI ratio cards, (2) a bell-curve gauge of current P/C vs ticker-specific historical mean ± 1σ bands, (3) open interest by strike bars for the selected expiration, (4) a max-pain curve with current spot and max-pain strikes marked, (5) P/C ratio by expiration bars. Payload: ticker, is_index (bool), spot, selected_expiration, pc_vol, pc_oi, pc_vol_z (vs historical mean), pc_hist_mean, pc_hist_std, regime_label, call_volume_45d, put_volume_45d, call_oi_45d, put_oi_45d, max_pain_strike, max_pain_pct_from_spot, heaviest_oi_strikes (list of {strike, call_oi, put_oi}), pc_by_expiration (list of {exp, pc_ratio}).\n"
+        "Interpretation rules:\n"
+        "- Lead with the P/C z-score vs the TICKER-SPECIFIC baseline (payload provides pc_hist_mean — don't apply index thresholds to single names). |z| ≥ 1.5 is contrarian territory, |z| ≥ 2 is extreme.\n"
+        "- Max Pain: within 1% of spot = pinning expected into expiry. > 2% from spot = directional pin; state which way dealers will hedge.\n"
+        "- Cross-check P/C OI vs P/C Volume. OI >> Volume ratio = stale hedges still open; fresh flow may differ. Volume leading OI = new positioning.\n"
+        "- Look at pc_by_expiration — one bulging put-heavy expiration stands out = event pricing into that date. Name the date from the payload (don't guess an event name unless you're certain of a known catalyst on that date).\n"
+        "- heaviest_oi_strikes reveal dealer hedging targets: heavy call OI above spot = resistance, heavy put OI below = support. Name the specific strike levels.\n"
+        "What to produce: (a) regime call in one sentence referencing the z-score AND its historical baseline, (b) pin expectation into the selected expiration (max pain direction + magnitude), (c) the single most glaring OI concentration that suggests a dealer-hedge level."
+    ),
+    "options-flow": (
+        "Options Intelligence → Order Flow tab payload. The UI shows: (1) an 'Unusual Activity' table ranked by Vol/OI with metrics for call/put split and total volume, (2) a Vol-vs-OI scatter with bubble size = Vol/OI ratio, (3) a 'Volume by Strike' (±10% of spot) bar chart across all expirations, (4) a Block Trades table filtered by notional with a computed call-vs-put bias flag. Payload mirrors those: ticker, spot, unusual{count, call_count, put_count, total_vol}, top_unusual list (strike, type, exp, volume, oi, vol_oi_ratio, iv_pct, delta, last_price), blocks{count, call_count, put_count, call_notional, put_notional, total_notional, bias_label}, top_blocks list (same fields as top_unusual plus notional).\n"
+        "Interpretation rules:\n"
+        "- Separate the signals: Vol/OI spikes reveal NEW retail+institutional positioning; Blocks reveal institutional-sized single prints. Address both.\n"
+        "- For unusual activity: clusters across adjacent strikes / same-date expirations = campaign (scale-in). Isolated single-strike vol spikes = event speculation or a whale lottery ticket. Name the pattern you see.\n"
+        "- For blocks: the bias_label is computed from call vs put notional. Validate it by checking delta of each top_block — high-|δ| puts are often HEDGES protecting long stock, not bearish bets; that reverses a naive 'puts = bearish' read.\n"
+        "- If bias_label is 'N/A' (no blocks surfaced), say so plainly and move to unusual-activity signals.\n"
+        "- Flag the ONE most-interesting specific print: name exact strike + type + expiration + size.\n"
+        "What to produce: (a) the flow story — accumulation / distribution / hedging / speculation — with one piece of evidence, (b) the single most actionable specific trade visible (exact leg), (c) whether flow confirms or contradicts what Positioning tab's P/C said (if payload includes pc_regime_label)."
+    ),
+    "options-greeks": (
+        "Options Intelligence → Dealer Greeks tab payload. The UI shows: (1) net GEX metric cards (total GEX, max pin strike, min acceleration strike), (2) a Net GEX by Strike bar chart with the zero-line and spot marker, (3) a Call vs Put GEX split chart showing where each side concentrates, (4) a Delta heatmap across strike × expiration. Payload: ticker, spot, total_gex, gex_regime_label, max_gex_strike, min_gex_strike, gex_by_strike (list of {strike, call_gex, put_gex, net}), strikes_in_window (bounds). Delta-heatmap details are visually rendered, not in the payload.\n"
+        "Interpretation rules:\n"
+        "- Lead with the gamma regime: positive net = dealers LONG gamma → they SELL rallies / BUY dips → vol-suppressing, mean-reverting tape. Negative = SHORT gamma → BUY rallies / SELL dips → trending, vol-amplifying.\n"
+        "- Magnitude: for SPY/QQQ-scale indices, |total_gex| > 1e9 is meaningful. For single names, ≥ 1e7 is notable. Below that = noise; say so.\n"
+        "- Max GEX = gravitational pin. Price tends to be pulled there into expiration; cite the strike + distance from spot.\n"
+        "- Min GEX = acceleration zone. A break below/above min_gex_strike triggers dealer chasing in the direction of the break — name the specific level as the 'breakout trigger'.\n"
+        "- Check gex_by_strike: where does CALL-side concentrate vs PUT-side? Call-heavy above spot = dealers long upside calls (they sell stock on rallies to hedge); put-heavy below = dealers short puts (they buy stock on dips). These are the tradeable intraday reversal levels.\n"
+        "What to produce: (a) regime call + magnitude read, (b) the two key strikes — pin (max_gex) and acceleration trigger (min_gex) — with their implications, (c) what today's tape looks like under this regime (quiet chop vs directional continuation)."
+    ),
+    "options-oi-changes": (
+        "Options Intelligence → OI Changes tab payload. The UI shows: (1) a daily call vs put aggregate OI line chart over the lookback window, (2) a 'Biggest OI Builds' table sorted by delta_abs, (3) a 'Biggest OI Unwinds' table sorted by delta_abs (most negative). Payload: ticker, lookback_days, n_days_captured, dates{first, last}, daily_net (list of {date, call_oi, put_oi}), biggest_builds (list of {strike, type, exp, first_oi, last_oi, delta_abs, delta_pct}), biggest_unwinds (same fields, deltas negative).\n"
+        "Interpretation rules:\n"
+        "- Read the daily_net series: is aggregate call OI trending UP while put OI trends DOWN (net bullish accumulation) or reverse (net bearish hedging)? Cite the actual % change in each.\n"
+        "- Cover the top build and the top unwind by delta_abs — that's the table order. Don't cherry-pick to fit a thematic narrative.\n"
+        "- Cluster check: multiple builds at adjacent strikes = campaign/scale-in; cite the cluster range. Multiple builds concentrated at one expiration date = event positioning — cite the DATE from the payload; only name a specific event if you're certain of a known catalyst on that date.\n"
+        "- OTM call builds = directional bullish bets; OTM put builds = hedges OR bearish bets (check whether spot has been rising or falling over the window to distinguish).\n"
+        "- Big unwinds on a rising tape = profit-taking (still bullish-consistent); big unwinds on a falling tape = capitulation/stop-outs (bearish-consistent).\n"
+        "What to produce: (a) the dominant flow theme over the window (accumulation / distribution / rotation), (b) the single most-informative build (name strike + type + exp + delta_pct) AND the single most-informative unwind, (c) what price action would confirm or invalidate the read."
+    ),
+    "options-chain": (
+        "Options Intelligence → Chain tab payload. The UI shows the full chain table for the selected expiration (strike × type with bid/ask/IV/delta/gamma/theta/vega/OI/volume), highlighting the ATM row. Payload is a summary — the chain itself is too big to pass: ticker, spot, expiration, dte, atm_row (the closest-to-money strike: bid, ask, iv_pct, delta, gamma, theta, vega, oi, volume), heaviest_call_oi (top 5 strikes by call OI with their OI + volume), heaviest_put_oi (same for puts), heaviest_volume (top 5 strikes across both types by volume with their vol_oi_ratio), bid_ask_spread_pct_atm.\n"
+        "Interpretation rules:\n"
+        "- Start with the support/resistance structure implied by heavy OI. Heavy call OI ABOVE spot = resistance (dealers long calls, they short stock on rallies); heavy put OI BELOW spot = support (dealers short puts, they buy stock on dips). Name the SPECIFIC strike levels.\n"
+        "- Identify today's FRESH positioning via heaviest_volume with vol_oi_ratio ≥ 1: strikes trading MORE than they already have open are where new money is. Name 1-2.\n"
+        "- ATM bid/ask spread as a liquidity tell: tight (<2% of mid) = institutional liquidity, actionable. Wide (>5%) = retail-only, skip.\n"
+        "- Gamma/delta at the ATM row tells you how the chain REACTS to moves: high gamma = dealers hedge aggressively near spot; low gamma = stale expiry.\n"
+        "- If heavy call AND heavy put OI both near spot = pin-risk (trapped between walls). If OI is all far OTM = clear-sky (trendier tape).\n"
+        "What to produce: (a) the concrete support + resistance levels from OI walls (name strikes), (b) where new money is positioning today (heaviest_volume entries with vol_oi ≥ 1), (c) whether spot is trapped or has room to run."
+    ),
     "wsb": (
         "r/wallstreetbets ticker-mention scan (plus r/options and r/stocks for signal quality). Payload has top_tickers list, each with: mentions (raw post+comment count), sentiment (-1..1, based on bull/bear keyword weights), options_lean ('calls'|'puts'|'mixed'|'neutral'), calls/puts mention counts, dd_posts (number of Due Diligence posts).\n"
         "Interpretation rules:\n"

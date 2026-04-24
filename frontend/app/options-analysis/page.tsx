@@ -7,6 +7,7 @@ import { fetchOptionsChain, fetchSnapshot, fetchOIHistory } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
+import { AIInterpretation } from "@/components/ai-interpretation";
 
 
 const TABS = ["IV & Skew", "Positioning & Max Pain", "Order Flow", "Dealer Greeks", "OI Changes", "Chain"];
@@ -264,8 +265,31 @@ export default function OptionsIntelligence() {
           </div>
 
           {/* ═══ Tab 0: Volatility ═══ */}
-          {activeTab === 0 && (
+          {activeTab === 0 && (() => {
+            // Compact AI payload mirroring what the two charts + table below show.
+            const atmCall = (exp: string) => chain.filter(c => c.expiration_date === exp && c.contract_type === "call" && c.implied_volatility > 0)
+              .sort((a, b) => Math.abs(a.strike_price - spot) - Math.abs(b.strike_price - spot))[0];
+            const ts = expirations.map(exp => {
+              const atm = atmCall(exp);
+              if (!atm) return null;
+              const dte = calcDTE(exp);
+              const iv = atm.implied_volatility * 100;
+              const move = spot * atm.implied_volatility * Math.sqrt(dte / 365);
+              return { exp, dte, atm_iv_pct: +iv.toFixed(2), expected_move_dollars: +move.toFixed(2), expected_move_pct: +((move / spot) * 100).toFixed(2) };
+            }).filter(Boolean);
+            const termShape = ts.length >= 2 ? ((ts[ts.length - 1]!.atm_iv_pct > ts[0]!.atm_iv_pct * 1.02) ? "Contango" : (ts[ts.length - 1]!.atm_iv_pct < ts[0]!.atm_iv_pct * 0.98) ? "Backwardation" : "Flat") : "N/A";
+            const selAtm = atmCall(selectedExp);
+            const aiPayload = {
+              ticker: loadedTicker, spot,
+              selected_expiration: selectedExp, selected_dte: calcDTE(selectedExp),
+              selected_atm_iv_pct: selAtm ? +(selAtm.implied_volatility * 100).toFixed(2) : null,
+              call_iv_curve: visCalls.slice(0, 30).map(c => [c.strike_price, +(c.implied_volatility * 100).toFixed(2)]),
+              put_iv_curve: visPuts.slice(0, 30).map(c => [c.strike_price, +(c.implied_volatility * 100).toFixed(2)]),
+              term_structure: ts, term_shape: termShape,
+            };
+            return (
             <div className="card space-y-6">
+              <AIInterpretation page="options-iv-skew" subject={loadedTicker} data={aiPayload} />
               <div>
                 <h3 className="text-xs font-semibold uppercase tracking-wide">IV skew — {selectedExp} ({calcDTE(selectedExp)}d)</h3>
                 <p className="text-xs text-text-muted mt-0.5">Call vs put IV across strikes. Right-skew = call demand; left-skew = put demand.</p>
@@ -319,11 +343,38 @@ export default function OptionsIntelligence() {
                 );
               })()}
             </div>
-          )}
+            );
+          })()}
 
           {/* ═══ Tab 1: Positioning ═══ */}
-          {activeTab === 1 && (
+          {activeTab === 1 && (() => {
+            const pcByExp = (() => {
+              const m = new Map<string, { cv: number; pv: number }>();
+              chain.forEach(c => { const e = m.get(c.expiration_date) ?? { cv: 0, pv: 0 }; if (c.contract_type === "call") e.cv += c.volume; else e.pv += c.volume; m.set(c.expiration_date, e); });
+              return [...m.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([exp, v]) => ({ exp, pc_ratio: +(v.cv > 0 ? v.pv / v.cv : 0).toFixed(2) }));
+            })();
+            const heaviestOi = (() => {
+              const m = new Map<number, { call_oi: number; put_oi: number }>();
+              expChain.forEach(c => { const e = m.get(c.strike_price) ?? { call_oi: 0, put_oi: 0 }; if (c.contract_type === "call") e.call_oi += c.open_interest; else e.put_oi += c.open_interest; m.set(c.strike_price, e); });
+              return [...m.entries()].map(([strike, v]) => ({ strike, ...v }))
+                .sort((a, b) => (b.call_oi + b.put_oi) - (a.call_oi + a.put_oi)).slice(0, 8);
+            })();
+            const aiPayload = {
+              ticker: loadedTicker, is_index: pcStats.isIndex, spot,
+              selected_expiration: selectedExp,
+              pc_vol: +pcStats.pcVol.toFixed(2), pc_oi: +pcStats.pcOI.toFixed(2),
+              pc_vol_z: +pcStats.z.toFixed(2), pc_hist_mean: pcStats.histMean, pc_hist_std: pcStats.histStd,
+              regime_label: pcStats.regime,
+              call_volume_45d: pcStats.cv, put_volume_45d: pcStats.pv,
+              call_oi_45d: pcStats.co, put_oi_45d: pcStats.po,
+              max_pain_strike: maxPain?.strike ?? null,
+              max_pain_pct_from_spot: maxPain ? +(((maxPain.strike - spot) / spot) * 100).toFixed(2) : null,
+              heaviest_oi_strikes: heaviestOi,
+              pc_by_expiration: pcByExp.slice(0, 10),
+            };
+            return (
             <div className="card space-y-6">
+              <AIInterpretation page="options-positioning" subject={loadedTicker} data={aiPayload} />
               <div className="flex flex-wrap gap-6">
                 <Metric label="P/C Volume Ratio" value={pcStats.pcVol.toFixed(2)} deltaType={pcStats.pcVol > pcStats.histMean ? "loss" : "gain"} />
                 <Metric label="P/C OI Ratio" value={pcStats.pcOI.toFixed(2)} deltaType={pcStats.pcOI > 1 ? "loss" : "gain"} />
@@ -418,11 +469,53 @@ export default function OptionsIntelligence() {
                 </>);
               })()}
             </div>
-          )}
+            );
+          })()}
 
           {/* ═══ Tab 2: Flow ═══ */}
-          {activeTab === 2 && (
+          {activeTab === 2 && (() => {
+            const topUnusual = unusual.slice(0, 10).map(c => ({
+              strike: c.strike_price, type: c.contract_type, exp: c.expiration_date,
+              volume: c.volume, oi: c.open_interest, vol_oi_ratio: +c.vol_oi.toFixed(2),
+              iv_pct: +(c.implied_volatility * 100).toFixed(1), delta: c.delta, last_price: c.last_price,
+            }));
+            const callNotional = blocks.filter(b => b.contract_type === "call").reduce((s, b) => s + b.notional, 0);
+            const putNotional = blocks.filter(b => b.contract_type === "put").reduce((s, b) => s + b.notional, 0);
+            const totalNotional = callNotional + putNotional;
+            const callNotionalPct = totalNotional > 0 ? (callNotional / totalNotional) * 100 : 0;
+            // Guard against the zero-blocks case — otherwise 0% call notional
+            // would falsely trigger "Bearish". No blocks = no bias signal.
+            const biasLabel = totalNotional === 0
+              ? "N/A"
+              : callNotionalPct > 60 ? "Bullish" : callNotionalPct < 40 ? "Bearish" : "Neutral";
+            const topBlocks = blocks.slice(0, 8).map(b => ({
+              strike: b.strike_price, type: b.contract_type, exp: b.expiration_date,
+              volume: b.volume, oi: b.open_interest, last_price: b.last_price,
+              notional: b.notional, iv_pct: +(b.implied_volatility * 100).toFixed(1), delta: b.delta,
+            }));
+            const aiPayload = {
+              ticker: loadedTicker, spot,
+              unusual: {
+                count: unusual.length,
+                call_count: unusual.filter(c => c.contract_type === "call").length,
+                put_count: unusual.filter(c => c.contract_type === "put").length,
+                total_vol: unusual.reduce((s, c) => s + c.volume, 0),
+                min_vol_filter: minVol, min_ratio_filter: minRatio,
+              },
+              top_unusual: topUnusual,
+              blocks: {
+                count: blocks.length,
+                call_count: blocks.filter(b => b.contract_type === "call").length,
+                put_count: blocks.filter(b => b.contract_type === "put").length,
+                call_notional: callNotional, put_notional: putNotional, total_notional: totalNotional,
+                bias_label: biasLabel,
+              },
+              top_blocks: topBlocks,
+              pc_regime_label: pcStats.regime,
+            };
+            return (
             <div className="card space-y-6">
+              <AIInterpretation page="options-flow" subject={loadedTicker} data={aiPayload} />
               <div className="flex gap-4 flex-wrap">
                 <div><label className="metric-label">Unusual Min Vol</label>
                   <input type="number" value={minVol} onChange={e => setMinVol(Number(e.target.value))} className="w-24 px-2 py-1 border border-border rounded text-xs font-data bg-surface" /></div>
@@ -554,11 +647,27 @@ export default function OptionsIntelligence() {
                 </div>
               </>) : <p className="text-sm text-text-muted">No block trades — lower thresholds or try a more liquid ticker.</p>}
             </div>
-          )}
+            );
+          })()}
 
           {/* ═══ Tab 3: Greeks ═══ */}
-          {activeTab === 3 && (
+          {activeTab === 3 && (() => {
+            const aiPayload = gexAgg ? {
+              ticker: loadedTicker, spot,
+              total_gex: +gexAgg.totalGex.toFixed(1),
+              gex_regime_label: gexAgg.totalGex > 0 ? "Long Gamma (mean-reverting tape)" : "Short Gamma (trending, vol-amplifying)",
+              max_gex_strike: gexAgg.maxGexStrike, min_gex_strike: gexAgg.minGexStrike,
+              strikes_in_window: { lo: +(spot * 0.85).toFixed(2), hi: +(spot * 1.15).toFixed(2) },
+              gex_by_strike: gexAgg.net.map(n => ({
+                strike: n.strike,
+                call_gex: +n.call.toFixed(1),
+                put_gex: +n.put.toFixed(1),
+                net: +n.net.toFixed(1),
+              })),
+            } : { ticker: loadedTicker, spot, note: "No gamma data within ±15% of spot." };
+            return (
             <div className="card space-y-6">
+              <AIInterpretation page="options-greeks" subject={loadedTicker} data={aiPayload} disabled={!gexAgg} />
               {gexAgg ? (<>
                 <div className="flex flex-wrap gap-6">
                   <Metric label="Net GEX (full chain)" value={gexAgg.totalGex.toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -625,14 +734,43 @@ export default function OptionsIntelligence() {
                 );
               })()}
             </div>
-          )}
+            );
+          })()}
 
           {/* ═══ Tab 4: OI Changes (historical) ═══ */}
           {activeTab === 4 && <OIChangesPanel ticker={loadedTicker} theme={t} baseLayout={L} />}
 
           {/* ═══ Tab 5: Chain ═══ */}
-          {activeTab === 5 && (
-            <div className="card">
+          {activeTab === 5 && (() => {
+            const rows = expChain.filter(c => c.strike_price >= strikeLo && c.strike_price <= strikeHi);
+            // Find ATM row
+            const atm = rows.slice().sort((a, b) => Math.abs(a.strike_price - spot) - Math.abs(b.strike_price - spot))[0];
+            const callsInWin = rows.filter(c => c.contract_type === "call");
+            const putsInWin = rows.filter(c => c.contract_type === "put");
+            const heaviestCallOi = callsInWin.slice().sort((a, b) => b.open_interest - a.open_interest).slice(0, 5)
+              .map(c => ({ strike: c.strike_price, oi: c.open_interest, volume: c.volume }));
+            const heaviestPutOi = putsInWin.slice().sort((a, b) => b.open_interest - a.open_interest).slice(0, 5)
+              .map(c => ({ strike: c.strike_price, oi: c.open_interest, volume: c.volume }));
+            const heaviestVolume = rows.slice().sort((a, b) => b.volume - a.volume).slice(0, 5)
+              .map(c => ({ strike: c.strike_price, type: c.contract_type, volume: c.volume, oi: c.open_interest, vol_oi_ratio: c.open_interest > 0 ? +(c.volume / c.open_interest).toFixed(2) : null }));
+            const spreadPctAtm = atm && atm.ask > 0 && atm.bid > 0 ? +(((atm.ask - atm.bid) / ((atm.ask + atm.bid) / 2)) * 100).toFixed(2) : null;
+            const aiPayload = {
+              ticker: loadedTicker, spot, expiration: selectedExp, dte: calcDTE(selectedExp),
+              atm_row: atm ? {
+                strike: atm.strike_price, type: atm.contract_type,
+                bid: atm.bid, ask: atm.ask, last: atm.last_price,
+                iv_pct: +(atm.implied_volatility * 100).toFixed(2),
+                delta: atm.delta, gamma: atm.gamma, theta: atm.theta, vega: atm.vega,
+                oi: atm.open_interest, volume: atm.volume,
+              } : null,
+              bid_ask_spread_pct_atm: spreadPctAtm,
+              heaviest_call_oi: heaviestCallOi,
+              heaviest_put_oi: heaviestPutOi,
+              heaviest_volume: heaviestVolume,
+            };
+            return (
+            <div className="card space-y-4">
+              <AIInterpretation page="options-chain" subject={loadedTicker} data={aiPayload} />
               <p className="text-xs text-text-muted mb-3">Full chain for {selectedExp}. ATM row highlighted. Strikes filtered to ±15% of spot.</p>
               <div className="overflow-x-auto">
                 <table className="data-table text-xs">
@@ -660,7 +798,8 @@ export default function OptionsIntelligence() {
                 </table>
               </div>
             </div>
-          )}
+            );
+          })()}
         </>
       )}
 
@@ -724,8 +863,18 @@ function OIChangesPanel({ ticker, theme: t, baseLayout: L }: { ticker: string; t
   }
 
   const summary = data.summary!;
+  const aiPayload = {
+    ticker,
+    lookback_days: lookback,
+    n_days_captured: data.n_days_captured,
+    dates: { first: data.dates[0], last: data.dates[data.dates.length - 1] },
+    daily_net: summary.daily_net,
+    biggest_builds: summary.biggest_builds.slice(0, 10),
+    biggest_unwinds: summary.biggest_unwinds.slice(0, 10),
+  };
   return (
     <div className="card space-y-6">
+      <AIInterpretation page="options-oi-changes" subject={ticker} data={aiPayload} />
       <div className="flex items-center gap-3 flex-wrap">
         <label className="metric-label">Lookback (days)</label>
         <select value={lookback} onChange={e => setLookback(Number(e.target.value))}
