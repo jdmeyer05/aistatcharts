@@ -16,12 +16,32 @@ _override_user_id = None
 
 
 def get_client():
-    """Get the shared Supabase client. Returns None if not configured."""
+    """Get the shared Supabase client. Returns None if not configured.
+
+    Prefers `SUPABASE_SERVICE_ROLE_KEY` over `SUPABASE_KEY` for backend/worker
+    contexts — service_role bypasses Row-Level Security, which is required
+    once public tables stop granting access to the anon role. The anon key
+    remains a functional fallback so a missing service-role secret degrades
+    to the pre-migration behavior rather than hard-failing.
+    """
     global _client
     if _client is not None:
         return _client
 
-    # Try auth.py first (Streamlit context)
+    # Direct initialization from env (FastAPI/worker/webhook). Checked first
+    # so server-context callers reliably land on service_role when it's set —
+    # auth.py's Streamlit path only ever returned the anon key.
+    try:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+        if url and key:
+            from supabase import create_client
+            _client = create_client(url, key)
+            return _client
+    except Exception as e:
+        logger.debug(f"Supabase direct init failed: {e}")
+
+    # Streamlit fallback
     try:
         from src.auth import init_supabase
         _client = init_supabase()
@@ -29,17 +49,6 @@ def get_client():
             return _client
     except Exception:
         pass
-
-    # Direct initialization (FastAPI/worker context)
-    try:
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_KEY")
-        if url and key:
-            from supabase import create_client
-            _client = create_client(url, key)
-            return _client
-    except Exception as e:
-        logger.debug(f"Supabase not available: {e}")
 
     return None
 

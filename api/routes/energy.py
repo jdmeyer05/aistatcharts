@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
+from api._json_safe import df_records
 from api.deps import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -67,11 +68,9 @@ async def eia_series(
     df = fetch_eia_data(series_id, tail_rows=rows)
     if df is None or df.empty:
         return {"series_id": series_id, "data": []}
-    df = df.copy()
-    df["period"] = df["period"].dt.strftime("%Y-%m-%d")
     return {
         "series_id": series_id,
-        "data": df[["period", "value", "wow_change"]].to_dict(orient="records"),
+        "data": df_records(df[["period", "value", "wow_change"]]),
     }
 
 
@@ -109,9 +108,7 @@ async def natgas_bundle(user: str = Depends(get_current_user)):
     def to_records(df):
         if df is None or df.empty:
             return []
-        df = df.copy()
-        df["period"] = df["period"].dt.strftime("%Y-%m-%d")
-        return df[["period", "value", "wow_change"]].to_dict(orient="records")
+        return df_records(df[["period", "value", "wow_change"]])
 
     bundle = {
         "storage": to_records(results[0]),
@@ -163,9 +160,7 @@ async def oil_bundle(user: str = Depends(get_current_user)):
     def to_records(df):
         if df is None or df.empty:
             return []
-        df = df.copy()
-        df["period"] = df["period"].dt.strftime("%Y-%m-%d")
-        return df[["period", "value", "wow_change"]].to_dict(orient="records")
+        return df_records(df[["period", "value", "wow_change"]])
 
     bundle = {
         "inventories": to_records(results[0]),

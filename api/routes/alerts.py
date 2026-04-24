@@ -13,7 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from api.deps import get_current_user, get_db, require_admin
+from api.deps import get_current_user, get_db, log_user, require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -58,7 +58,7 @@ async def list_alerts(
         )
         return {"count": len(res.data or []), "data": res.data or []}
     except Exception as e:
-        logger.warning(f"list_alerts failed for {user}: {e}")
+        logger.warning(f"list_alerts failed for {log_user(user)}: {e}")
         # Table-missing is the most common cause before the schema is applied;
         # return empty so the UI can render its empty state instead of erroring.
         msg = str(e).lower()

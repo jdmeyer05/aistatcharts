@@ -36,6 +36,8 @@ SECRETS: list[dict] = [
      "hint": "Supabase dashboard → Project Settings → API → Reveal JWT Secret"},
     {"gcp_name": "supabase-key",         "source_key": "SUPABASE_KEY",         "required": True,
      "hint": "Prefer new sb_secret_... key (Supabase dashboard → Project Settings → API Keys → Create new secret key). Legacy service_role JWT still works during transition."},
+    {"gcp_name": "supabase-service-role-key", "source_key": "SUPABASE_SERVICE_ROLE_KEY", "required": False,
+     "hint": "Supabase dashboard → Project Settings → API Keys → Legacy tab → Reveal service_role. Required once RLS is tightened (public.* tables drop anon policies); without it the backend can't read user data."},
     {"gcp_name": "massive-api-key",      "source_key": "MASSIVE_API_KEY",      "required": True,
      "hint": "Polygon.io API key (stored as MASSIVE_API_KEY locally for legacy reasons)"},
     {"gcp_name": "fred-api-key",         "source_key": "FRED_API_KEY",         "required": True},

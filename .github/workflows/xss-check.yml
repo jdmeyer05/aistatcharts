@@ -1,0 +1,34 @@
+name: XSS Check
+
+# Tripwire for dangerouslySetInnerHTML call sites that don't escape their input.
+# Runs on any PR touching frontend files, plus pushes to main as a safety net.
+# Script lives at scripts/check_xss.py — keep ALLOWED_HELPERS in sync when
+# adding a new known-safe escape helper.
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**/*.tsx"
+      - "frontend/**/*.ts"
+      - "scripts/check_xss.py"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**/*.tsx"
+      - "frontend/**/*.ts"
+      - "scripts/check_xss.py"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run XSS lint
+        run: python scripts/check_xss.py

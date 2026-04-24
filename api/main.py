@@ -196,12 +196,16 @@ app.add_middleware(
 
 # Rate limiting — protects AI vendor spend. See api/rate_limit.py for the
 # key function; routes opt in with `@limiter.limit("20/minute;500/day")`.
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
+# Wrapped in try/except so legacy images without slowapi still boot (the
+# limiter module returns a no-op decorator in that case).
 from api.rate_limit import limiter
-
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+try:
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+except ImportError:
+    logger.warning("slowapi not installed — rate limiting disabled (legacy image or dev env)")
 
 # Compress responses ≥ 1 KB. Dashboards are 5-25 KB JSON; compression ratio
 # is typically 6-10× for pretty-printed JSON. Material win on mobile networks.

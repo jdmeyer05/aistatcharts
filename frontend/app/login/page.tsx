@@ -3,7 +3,9 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
+import Link from "next/link";
 import { supabaseBrowser, hasSupabaseConfig, safeRedirectPath } from "@/lib/supabase";
+import { tosAcceptancePayload } from "@/lib/tos";
 
 type Mode = "signin" | "signup" | "reset";
 
@@ -32,11 +34,15 @@ function AuthForm() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [tosAccepted, setTosAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  const canSubmit = email.length > 3 && (mode === "reset" ? true : password.length >= 6) && (mode !== "signup" || password === confirm);
+  const canSubmit =
+    email.length > 3 &&
+    (mode === "reset" ? true : password.length >= 6) &&
+    (mode !== "signup" || (password === confirm && tosAccepted));
 
   function resetState() {
     setError(null);
@@ -47,6 +53,7 @@ function AuthForm() {
     setMode(m);
     setPassword("");
     setConfirm("");
+    setTosAccepted(false);
   }
 
   async function handleSignIn() {
@@ -73,7 +80,13 @@ function AuthForm() {
       const { data, error: err } = await supabase.auth.signUp({
         email,
         password,
-        options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}` },
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(nextPath)}`,
+          // Stamp ToS acceptance into user_metadata at creation time so it
+          // sticks even if email confirmation delays first sign-in (the user
+          // isn't yet a logged-in session we could updateUser() against).
+          data: tosAcceptancePayload(),
+        },
       });
       if (err) {
         setError(friendlyError(err.message));
@@ -255,6 +268,27 @@ function AuthForm() {
         {error && <p className="text-xs text-loss">{error}</p>}
         {info && <p className="text-xs text-gain">{info}</p>}
 
+        {/* ToS acceptance — signup only. Placed above submit so the checkbox
+            is visible when the button appears disabled. */}
+        {mode === "signup" && (
+          <label className="flex items-start gap-2 text-[0.7rem] text-text leading-relaxed cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={tosAccepted}
+              onChange={(e) => setTosAccepted(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-accent cursor-pointer shrink-0"
+              aria-describedby="tos-notice"
+            />
+            <span id="tos-notice">
+              I have read and agree to the{" "}
+              <Link href="/disclaimer" target="_blank" rel="noopener" className="text-accent hover:underline">
+                Disclaimer &amp; Terms
+              </Link>
+              . I understand AI Statcharts is a research tool, not investment advice.
+            </span>
+          </label>
+        )}
+
         {/* Submit */}
         <button
           type="submit"
@@ -301,12 +335,6 @@ function AuthForm() {
           </div>
         )}
 
-        {mode === "signup" && (
-          <p className="text-[0.65rem] text-text-muted text-center leading-relaxed">
-            By creating an account you consent to server-side logging of requests
-            and any admin-controlled data policies. No personal data is sold.
-          </p>
-        )}
       </form>
     </div>
   );

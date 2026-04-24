@@ -16,11 +16,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 
 from api.deps import get_current_user
+from api.rate_limit import limiter
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
@@ -286,6 +287,9 @@ ACCURACY CHECK:
 - Bluff score must be calibrated: 0 = certain to follow through, 100 = certain bluff
 - Market impact: -5 (crash) to +5 (euphoric rally), 0 = no impact
 - Position risks must reference SPECIFIC positions the user holds, not generic advice
+
+SELF-CHECK — before returning JSON:
+Draft your decode first. Then re-read once and verify: probability_distribution sums to 1.0, bluff_score is consistent with bluff_reasoning, every historical analog has a date and outcome, position_risks name positions the user actually holds. Make small corrections if needed — this is a verification pass, not a rewrite. Return only the final revised JSON.
 """
 
 DECODE_PROMPT_TEMPLATE = """## STATEMENT TO DECODE
@@ -418,6 +422,9 @@ behavioral patterns and psychological traits.
 
 Be specific. Give probabilities. Reference historical precedent for each prediction.
 This is for traders positioning ahead of potential events.
+
+SELF-CHECK — before returning JSON:
+Draft your predictions first. Then re-read once and verify: every predicted_action has a historical_precedent that matches the trait cited, probabilities across the predicted_actions are calibrated (don't concentrate >0.8 unless evidence is strong), market_impact numbers are consistent with the action described. Make small corrections if needed — this is a verification pass, not a rewrite. Return only the final revised JSON.
 """
 
 PREDICT_PROMPT_TEMPLATE = """## SCENARIO
@@ -527,7 +534,8 @@ class PredictRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/psych-profile")
-async def get_psych_profile(user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def get_psych_profile(request: Request, user: str = Depends(get_current_user)):
     """Get or generate Trump's psychological profile. Cached 30 days in Supabase."""
     db = _db()
 
@@ -695,7 +703,8 @@ def _get_psych_profile_text() -> str:
 
 
 @router.post("/decode-statement")
-async def decode_statement(req: DecodeRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def decode_statement(request: Request, req: DecodeRequest, user: str = Depends(get_current_user)):
     """Decode a Trump statement using 3-model AI orchestration + position risk analysis."""
     statement = req.statement.strip()
     context = req.context.strip() or "No additional context provided."
@@ -873,7 +882,8 @@ async def decode_statement(req: DecodeRequest, user: str = Depends(get_current_u
 # ═══════════════════════════════════════════════════════════════
 
 @router.post("/predict-response")
-async def predict_response(req: PredictRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def predict_response(request: Request, req: PredictRequest, user: str = Depends(get_current_user)):
     """Predict Trump's likely response to a hypothetical scenario."""
     scenario = req.scenario.strip()
     timeframe = req.timeframe.strip() or "48h"
@@ -945,7 +955,8 @@ the market reaction. Return JSON:
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/monitor")
-async def monitor_posts(user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def monitor_posts(request: Request, user: str = Depends(get_current_user)):
     """Fetch latest Trump posts with AI interpretation. Manual refresh only."""
     try:
         today = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p ET")

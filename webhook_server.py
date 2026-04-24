@@ -17,11 +17,24 @@ Stripe webhook setup:
 4. Copy the webhook signing secret → add as STRIPE_WEBHOOK_SECRET in secrets
 """
 
+import hashlib
 import os
 import json
 import logging
 from datetime import datetime
 from flask import Flask, request, jsonify
+
+
+def _log_user(email):
+    """Hash customer email for logs — avoids plaintext PII in webhook audit trail.
+
+    Stable across the process so a single customer's events still correlate.
+    Duplicated from `api/deps.py::log_user` to keep webhook_server.py a
+    stand-alone Flask app with no cross-service imports.
+    """
+    if not email:
+        return "none"
+    return "u_" + hashlib.sha256(email.encode()).hexdigest()[:10]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("webhook")
@@ -52,9 +65,10 @@ import stripe
 stripe.api_key = _get_secret("STRIPE_SECRET_KEY")
 WEBHOOK_SECRET = _get_secret("STRIPE_WEBHOOK_SECRET")
 
-# Initialize Supabase
+# Initialize Supabase — prefer service_role for webhook writes (subscriptions,
+# user_tokens, payment_failures all enforce RLS that only allows service_role).
 SUPABASE_URL = _get_secret("SUPABASE_URL")
-SUPABASE_KEY = _get_secret("SUPABASE_KEY")
+SUPABASE_KEY = _get_secret("SUPABASE_SERVICE_ROLE_KEY") or _get_secret("SUPABASE_KEY")
 _supabase = None
 
 def get_supabase():
@@ -143,9 +157,9 @@ def _update_user_tier(email, tier, stripe_customer_id=None, price_id=None):
             data["stripe_price_id"] = price_id
 
         supabase.table("subscriptions").upsert(data, on_conflict="email").execute()
-        logger.info(f"Updated tier for {email} → {tier}")
+        logger.info(f"Updated tier for {_log_user(email)} → {tier}")
     except Exception as e:
-        logger.error(f"Failed to update tier for {email}: {e}")
+        logger.error(f"Failed to update tier for {_log_user(email)}: {e}")
 
 
 def _add_user_tokens(email, amount):
@@ -159,7 +173,7 @@ def _add_user_tokens(email, amount):
         # Try atomic RPC first (requires: create function increment_tokens(p_email text, p_amount int))
         try:
             supabase.rpc("increment_tokens", {"p_email": email, "p_amount": amount}).execute()
-            logger.info(f"Added {amount} tokens for {email} (atomic)")
+            logger.info(f"Added {amount} tokens for {_log_user(email)} (atomic)")
             return
         except Exception:
             pass
@@ -172,9 +186,9 @@ def _add_user_tokens(email, amount):
             "balance": current + amount,
             "updated_at": datetime.utcnow().isoformat(),
         }, on_conflict="email").execute()
-        logger.info(f"Added {amount} tokens for {email} (new balance: {current + amount})")
+        logger.info(f"Added {amount} tokens for {_log_user(email)} (new balance: {current + amount})")
     except Exception as e:
-        logger.error(f"Failed to add tokens for {email}: {e}")
+        logger.error(f"Failed to add tokens for {_log_user(email)}: {e}")
 
 
 def _flag_payment_failed(email, invoice_id):
@@ -190,7 +204,7 @@ def _flag_payment_failed(email, invoice_id):
             "failed_at": datetime.utcnow().isoformat(),
             "resolved": False,
         }).execute()
-        logger.warning(f"Payment failed for {email} (invoice: {invoice_id})")
+        logger.warning(f"Payment failed for {_log_user(email)} (invoice: {invoice_id})")
     except Exception as e:
         logger.error(f"Failed to record payment failure: {e}")
 

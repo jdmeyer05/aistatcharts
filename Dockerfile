@@ -44,4 +44,4 @@ CMD bash -c "streamlit run app.py \
     --server.address=0.0.0.0 \
     --server.enableXsrfProtection=true \
     --server.enableCORS=false &\
-    uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1"

@@ -463,8 +463,8 @@ or env. If neither is set, endpoints return **503** to everyone (fail closed).
   on every backend call. Works with `api/deps.py::get_current_user` which
   already decodes the HS256 JWT.
 - `.env.local` / `.env.production` — `NEXT_PUBLIC_SUPABASE_URL` +
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY` added. The `NEXT_PUBLIC_SITE_PASSWORD`
-  legacy env is still present but unused; safe to delete after verification.
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` added. Legacy `NEXT_PUBLIC_SITE_PASSWORD`
+  removed 2026-04-23.
 
 **Required on the Supabase side**: user account for `jdmeyer05@gmail.com` must
 exist in the Supabase Auth dashboard (create via Supabase UI or CLI), and the

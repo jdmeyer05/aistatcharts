@@ -40,30 +40,74 @@ SUBREDDIT_CONFIGS = [
 # gets 429'd. Use a descriptive identifier per their API etiquette.
 _UA = "aistatcharts.com/1.0 (financial research platform)"
 
-# Filter uppercase tokens against these — otherwise "I", "THE", "YOLO", emoji
-# shorthand, and subreddit abbreviations get picked up as "tickers".
+# Filter uppercase tokens against these — otherwise common English words,
+# abbreviations, and subreddit shorthand get counted as "tickers".
+# This list is intentionally aggressive — false positives hurt signal quality
+# more than false negatives hurt coverage, since missing a real ticker just
+# means it needs a `$` prefix to register (see _TICKER_RE below).
 _TICKER_BLACKLIST = {
+    # Articles, prepositions, common short words
     "A", "I", "THE", "AND", "FOR", "BUT", "YOU", "ARE", "ALL", "NOT", "WAS",
-    "YOUR", "CAN", "WILL", "THIS", "WITH", "HAVE", "BEEN", "FROM", "THEY",
-    "WHEN", "WHAT", "LIKE", "JUST", "OUT", "NOW", "HERE", "GOT", "GET",
-    "MY", "SO", "NO", "OR", "IF", "BE", "TO", "US", "AM", "PM", "AN", "ON", "AT", "IN", "IS", "IT", "OF", "BY",
-    "YOLO", "HODL", "DD", "FOMO", "YTD", "MOM", "QOQ", "FUD", "TLDR", "OP", "WSB", "ETF", "IPO", "EPS", "PE",
-    "CEO", "CFO", "COO", "SEC", "FTC", "FDA", "DOJ", "IRS", "USD", "USA", "EST", "ET", "PT", "GMT", "UTC",
-    "Q1", "Q2", "Q3", "Q4", "H1", "H2", "K", "M", "B", "T",
-    "CALL", "CALLS", "PUT", "PUTS", "LONG", "SHORT", "BUY", "SELL", "HOLD",
-    "ATH", "ATL", "ITM", "OTM", "ATM", "IV", "HV", "RH", "RI",
-    "NEW", "OLD", "BIG", "TOP", "LOW", "HIGH", "UP", "DOWN",
-    "NYSE", "NASDAQ", "DOW", "SP", "SPX", "VIX",   # index tickers are noise in the WSB context
-    "USA", "CHINA", "FED", "CPI", "GDP", "PPI",
-    "YES", "NO", "OK", "WTF", "LOL", "LMAO",
-    "TLDR", "IMO", "IMHO", "AFAIK", "IIRC",
+    "YOUR", "OUR", "CAN", "WILL", "THIS", "WITH", "HAVE", "HAD", "HAS",
+    "BEEN", "FROM", "THEY", "THEM", "THEIR", "BOTH", "EACH", "THESE", "THOSE",
+    "WHEN", "WHAT", "LIKE", "JUST", "OUT", "NOW", "HERE", "GOT", "GET", "GIVE",
+    "MY", "SO", "NO", "OR", "IF", "BE", "TO", "US", "AM", "PM", "AN", "ON",
+    "AT", "IN", "IS", "IT", "OF", "BY", "AS", "DO", "GO", "UP", "HE", "SHE",
+    "WE", "ME", "HI", "OH", "AH", "UM",
+    # Common English nouns/verbs that get capitalized in titles
+    "THANK", "THANKS", "SHARE", "SHARES", "PRICE", "PRICES", "TODAY", "YESTERDAY",
+    "TOMORROW", "WEEK", "WEEKS", "MONTH", "MONTHS", "YEAR", "YEARS", "HOUR", "HOURS",
+    "DAY", "DAYS", "TIME", "TIMES", "ONCE", "TWICE", "MONEY", "BACK", "MADE", "MAKE",
+    "TAKE", "TOOK", "TAKEN", "KEEP", "HOLD", "HELD", "GIVE", "GAVE", "GIVEN",
+    "SAY", "SAID", "SAYS", "NAME", "GAME", "GAMES", "LOTS", "LOT", "TEXT",
+    "SIDE", "SIZE", "RIGHT", "LEFT", "HUGE", "BIG", "SMALL", "TINY",
+    "EVEN", "ODD", "ALSO", "AGAIN", "AGO", "EVER", "NEVER", "ALWAYS",
+    "SOMETIMES", "OFTEN", "RARELY", "SELDOM",
+    "GOOD", "BAD", "HARD", "EASY", "LAST", "FIRST", "BEST", "WORST", "FREE",
+    "FULL", "HALF", "REAL", "FAKE", "TRUE", "FALSE", "SURE", "WELL", "ONLY",
+    "VERY", "QUITE", "LESS", "MORE", "MOST", "LEAST", "MANY", "FEW", "TOO",
+    "NEW", "OLD", "HIGH", "LOWER", "HIGHER", "UPPER", "LOWER",
+    "OVER", "UNDER", "AFTER", "BEFORE", "SINCE", "DURING", "WHILE", "WHERE",
+    "HOW", "WHY", "WHO", "WHOM", "WHICH",
+    "BEING", "DONE", "WENT", "COME", "CAME", "SEEN", "SEEM", "SEEMS", "SEEMED",
+    "SAME", "SUCH", "ANY", "SOME", "EVERY", "MUCH", "EACH",
+    "NEWS", "POST", "POSTS", "LOGO", "LINK", "LINKS", "HERE", "THERE",
+    "SUPER", "UPPER", "REALLY", "PRETTY", "STILL", "EVER",
+    # Finance-specific abbreviations + index tickers (usually noise in WSB context)
+    "YOLO", "HODL", "DD", "FOMO", "YTD", "MOM", "QOQ", "FUD", "TLDR", "OP", "WSB",
+    "ETF", "ETFS", "IPO", "EPS", "PE", "PEG", "ROE", "ROA", "ROI", "COGS",
+    "CEO", "CFO", "COO", "CTO", "SEC", "FTC", "FDA", "DOJ", "IRS", "USD",
+    "USA", "EST", "PT", "GMT", "UTC",
+    "Q1", "Q2", "Q3", "Q4", "H1", "H2",
+    "CALL", "CALLS", "PUT", "PUTS", "LONG", "SHORT", "BUY", "SELL",
+    "ATH", "ATL", "ITM", "OTM", "ATM",
+    "TOP", "FLOP", "DROP",
+    "NYSE", "NASDAQ", "DOW", "SP", "SPX", "VIX", "RUT",
+    "CHINA", "RUSSIA", "INDIA", "JAPAN", "GERMANY", "FRANCE", "UK",
+    "FED", "CPI", "GDP", "PPI", "PCE", "FOMC", "NFP",
+    "YES", "OK", "WTF", "LOL", "LMAO", "OMG", "OMFG", "FFS", "SMH",
+    "IMO", "IMHO", "AFAIK", "IIRC", "BTW", "FYI", "TIL",
+    # Common ambiguous 2-letter words or symbols that aren't tickers
+    "AI", "HR", "PR", "OK",   # AI especially — always the tech concept, never the ticker
+    "INTEL",  # the word "intelligence"; use "$INTC" or "INTC" (the actual ticker) to reference the company
+    "AMEX",
+    # News outlets, government acronyms, WSB slang, profanity
+    "CNBC", "CNN", "BBC", "WSJ", "FT", "BLOOMBERG",
+    "IEEPA", "NATO", "EU", "WTO", "IMF", "OPEC", "NAFTA", "USMCA",
+    "LFG", "LFGGG", "KEKW", "BRUH", "DUMB", "RETARDS", "APES", "JACKED",
+    "FUCK", "SHIT", "ASS", "DAMN", "HELL", "FUCKED", "FUCKING",
+    "ZERO", "ONE", "TWO", "TEN",  # numbers as words
+    "IRA", "ROTH", "HSA", "FSA",  # retirement accounts
+    "LLC", "INC", "CORP", "LTD", "CO",
+    "EOY", "EOD", "BOD", "YTD", "MTD", "WTD",
+    "API", "SDK", "UI", "UX",
 }
 
 # Ticker regex — 1-5 uppercase letters, optionally prefixed with "$".
-# 1-letter and 2-letter tickers often collide with short English words; we
-# rely on the blacklist to filter those. A standalone 5-letter all-caps
-# word in a financial forum post is overwhelmingly a ticker.
+# 2-letter tokens need a `$` prefix to count — too many English false positives
+# otherwise. 3+ letter tokens fall through to the blacklist filter.
 _TICKER_RE = re.compile(r"\$?\b([A-Z]{2,5})\b")
+_DOLLAR_PREFIXED_RE = re.compile(r"\$([A-Z]{1,5})\b")
 
 # Sentiment keywords — weighted by intensity.
 _BULL_WORDS = {
@@ -136,17 +180,35 @@ def _fetch_comments(subreddit: str, post_id: str, limit: int = 30) -> str:
 
 
 def _extract_tickers(text: str) -> set[str]:
-    """Return the set of plausible tickers in a chunk of text."""
-    found = set()
+    """Return the set of plausible tickers in a chunk of text.
+
+    Rules:
+      - `$TICKER` prefix always counts (explicit ticker marker on Reddit).
+      - 3-5 letter uppercase tokens count unless blacklisted.
+      - 2-letter uppercase tokens only count when `$`-prefixed — raw 2-letter
+        uppercase words are overwhelmingly English (AI, HR, OK, etc.) not
+        tickers. The tradeoff: miss F/T/GE mentions without `$`, avoid
+        hundreds of "AI" false positives.
+      - Guard against pathological input (>10KB of text per chunk) by
+        capping — one runaway copy-paste post shouldn't dominate the scan.
+    """
+    if not text:
+        return set()
+    if len(text) > 10_000:
+        text = text[:10_000]
+    found: set[str] = set()
+    # Pass 1: `$X...` explicit markers — always count (length 1-5)
+    for match in _DOLLAR_PREFIXED_RE.finditer(text):
+        tok = match.group(1).upper()
+        if tok not in _TICKER_BLACKLIST:
+            found.add(tok)
+    # Pass 2: bare ALL-CAPS 3-5 letter tokens — blacklist-filtered
     for match in _TICKER_RE.finditer(text):
         tok = match.group(1).upper()
+        if len(tok) < 3:
+            continue  # 2-letter bare tokens require $ prefix (handled above)
         if tok in _TICKER_BLACKLIST:
             continue
-        if len(tok) < 2:
-            continue
-        # Exclude common all-caps sequences that aren't real tickers
-        # (heuristic: 2-letter tokens that are obviously not tickers like
-        # "OK", "NO" should be in the blacklist already).
         found.add(tok)
     return found
 

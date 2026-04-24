@@ -491,13 +491,17 @@ export function TradeIdeasContent() {
                   const start = (matches[j].index ?? 0) + matches[j][0].length;
                   const end = j + 1 < matches.length ? matches[j + 1].index : body.length;
                   const text = body.slice(start, end).trim()
+                    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
                     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
                     .replace(/\*{2,}/g, "");
                   if (text) sections.push({ label: matches[j][1].toUpperCase(), text });
                 }
                 // Fallback if no sections parsed
                 if (sections.length === 0 && body) {
-                  sections.push({ label: "", text: body.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*{2,}/g, "") });
+                  sections.push({ label: "", text: body
+                    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*{2,}/g, "") });
                 }
 
                 return (
@@ -516,6 +520,7 @@ export function TradeIdeasContent() {
                               s.label === "ACTION" ? "text-gain" : "text-text-muted"
                             }`}>{s.label}</span>
                           )}
+                          {/* xss-safe: s.text had & < > escaped at construction above */}
                           <span className="text-text" dangerouslySetInnerHTML={{ __html: s.text }} />
                         </div>
                       ))}

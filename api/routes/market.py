@@ -1,9 +1,15 @@
 """Market data endpoints — prices, snapshots, options chains."""
 
-from fastapi import APIRouter, Depends, Query
+import logging
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
+from api._json_safe import df_records, json_safe
 from api.deps import get_current_user, require_admin, require_admin_or_scheduler
+from api.rate_limit import limiter
+from api.routes.energy import _get_bundle_cache, _set_bundle_cache
+from src.api_keys import get_secret
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -31,7 +37,10 @@ async def price_history(
         return {"ticker": ticker, "data": []}
     df = df.reset_index()
     df.columns = [str(c) for c in df.columns]
-    return {"ticker": ticker, "data": df.to_dict(orient="records")}
+    # df_records round-trips numpy scalars and normalizes Date to YYYY-MM-DD
+    # so frontends can string-match against other series (Fama-French,
+    # CFTC) without timezone-suffix drift.
+    return {"ticker": ticker, "data": df_records(df)}
 
 
 @router.get("/ohlcv/{ticker}")
@@ -225,7 +234,7 @@ async def options_chain(
     return {
         "ticker": ticker,
         "count": len(df),
-        "data": df.to_dict(orient="records"),
+        "data": df_records(df),
         "expirations": expirations,
     }
 
@@ -514,7 +523,7 @@ async def fred_series(
         df["date"] = df["date"].astype(str)
     elif "period" in df.columns:
         df["period"] = df["period"].astype(str)
-    return {"series_id": series_id, "data": df.to_dict(orient="records")}
+    return {"series_id": series_id, "data": df_records(df)}
 
 
 @router.get("/peers/{ticker}")
@@ -672,21 +681,13 @@ async def stock_data_bundle(
     if hist is not None and not hist.empty:
         hist = hist.reset_index()
         hist.columns = [str(c) for c in hist.columns]
-        hist_records = hist.to_dict(orient="records")
+        hist_records = df_records(hist)
 
-    rec_records = []
-    if recs is not None and not recs.empty:
-        rec_records = recs.head(20).to_dict(orient="records")
+    rec_records = df_records(recs.head(20)) if recs is not None and not recs.empty else []
 
-    ins_records = []
-    if insiders is not None and not insiders.empty:
-        insiders = insiders.head(20)
-        for col in insiders.columns:
-            if insiders[col].dtype == "datetime64[ns]":
-                insiders[col] = insiders[col].astype(str)
-        ins_records = insiders.to_dict(orient="records")
+    ins_records = df_records(insiders.head(20)) if insiders is not None and not insiders.empty else []
 
-    return {
+    return json_safe({
         "ticker": ticker,
         "price": price,
         "prev_close": prev,
@@ -696,7 +697,7 @@ async def stock_data_bundle(
         "history": hist_records,
         "recommendations": rec_records,
         "insiders": ins_records,
-    }
+    })
 
 
 @router.get("/stock-data-full/{ticker}")
@@ -886,19 +887,13 @@ async def stock_data_full(
 
         df = df.reset_index()
         df.columns = [str(c) for c in df.columns]
-        # Replace NaN with None for JSON serialization
-        df = df.where(df.notna(), None)
-        hist_records = df.to_dict(orient="records")
+        hist_records = df_records(df)
 
     # ── Analyst data ──
     rec_records = []
     analyst_summary = {}
     if recs is not None and not recs.empty:
-        recs_out = recs.head(20).copy()
-        for col in recs_out.columns:
-            if recs_out[col].dtype == "datetime64[ns]":
-                recs_out[col] = recs_out[col].astype(str)
-        rec_records = recs_out.to_dict(orient="records")
+        rec_records = df_records(recs.head(20))
         # Compute consensus summary
         if "rating" in recs.columns or "action" in recs.columns:
             col = "rating" if "rating" in recs.columns else "action"
@@ -925,10 +920,7 @@ async def stock_data_full(
     ins_records = []
     insider_score = {"score": 50, "signal": "Neutral", "breakdown": {}}
     if insiders is not None and not insiders.empty:
-        for col in insiders.columns:
-            if insiders[col].dtype == "datetime64[ns]":
-                insiders[col] = insiders[col].astype(str)
-        ins_records = insiders.head(20).to_dict(orient="records")
+        ins_records = df_records(insiders.head(20))
         try:
             # Normalize column names for score_insider_transactions
             # Polygon returns: transaction_type, title, filing_date, value
@@ -947,7 +939,10 @@ async def stock_data_full(
         except Exception:
             pass
 
-    return {
+    # json_safe on the whole payload catches numpy scalars anywhere — in
+    # insider_score (from src.edgar), xbrl_ratios, yf_fundamentals, or
+    # anything we might add later. Cheap; one recursion over the dict.
+    return json_safe({
         "ticker": ticker,
         "price": price,
         "prev_close": prev,
@@ -964,7 +959,7 @@ async def stock_data_full(
         "insider_score": insider_score,
         "events_8k": events_8k[:8],
         "stocktwits": stocktwits,
-    }
+    })
 
 
 class StockAIRequest(BaseModel):
@@ -997,6 +992,9 @@ Your job is to produce a COMPLETE analysis with the following structure:
 7. CONFIDENCE: 1-10 how confident you are
 8. SUMMARY: 3-4 sentence executive summary referencing: fundamental driver, technical setup, StockTwits sentiment, macro risk
 9. SENTIMENT_PULSE: 1-2 sentences on social/StockTwits sentiment
+
+SELF-CHECK — before returning JSON:
+Draft your scores, targets, and rationales first. Then re-read once and verify: scores align with their rationales, bull/base/bear probabilities sum to 100, every metric cited appears in the context, risks and catalysts trace to real data points. Make small corrections if needed — this is a verification pass, not a rewrite. Return only the final revised JSON.
 
 Respond with ONLY valid JSON:
 {
@@ -1204,7 +1202,8 @@ def _blend_stock_results(results: dict) -> dict:
 
 
 @router.post("/stock-ai-analysis")
-async def stock_ai_analysis(req: StockAIRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def stock_ai_analysis(request: Request, req: StockAIRequest, user: str = Depends(get_current_user)):
     """Run 3-model parallel stock analysis (Grok + Gemini + Claude).
 
     Returns blended consensus + per-model results.
@@ -1386,7 +1385,8 @@ class DailyBriefingRequest(BaseModel):
 
 
 @router.post("/daily-briefing")
-async def daily_briefing(req: DailyBriefingRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def daily_briefing(request: Request, req: DailyBriefingRequest, user: str = Depends(get_current_user)):
     """Full morning scan: market context, opportunities, positions, earnings, risk budget."""
     import numpy as np
     import pandas as pd
@@ -1910,7 +1910,8 @@ Return ONLY a JSON array. Return 20-40 items. More is better — duplicates will
 
 
 @router.post("/news-intel-search")
-async def news_intel_search(req: NewsIntelRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def news_intel_search(request: Request, req: NewsIntelRequest, user: str = Depends(get_current_user)):
     """Pass 1: Fast search via grok-4-1-fast-reasoning. Cached 30 min in Supabase."""
     import json, re, logging
     from src.api_keys import get_secret
@@ -1980,7 +1981,8 @@ class NewsVerifyRequest(BaseModel):
 
 
 @router.post("/news-intel-verify")
-async def news_intel_verify(req: NewsVerifyRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def news_intel_verify(request: Request, req: NewsVerifyRequest, user: str = Depends(get_current_user)):
     """Pass 2: Fact-check items via grok-4.20-reasoning. Returns verified items."""
     import json, re, logging
     from src.api_keys import get_secret
@@ -2035,7 +2037,8 @@ Return ONLY a JSON array.""",
 
 
 @router.post("/news-intel")
-async def news_intel(req: NewsIntelRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def news_intel(request: Request, req: NewsIntelRequest, user: str = Depends(get_current_user)):
     """Legacy: runs both passes sequentially. Use /news-intel-search + /news-intel-verify for streaming UX."""
     search_result = await news_intel_search(req, user)
     if not search_result.get("success") or not search_result.get("items"):
@@ -2053,7 +2056,8 @@ class MarketNoteRequest(BaseModel):
 
 
 @router.post("/morning-note")
-async def morning_note(req: MarketNoteRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def morning_note(request: Request, req: MarketNoteRequest, user: str = Depends(get_current_user)):
     """Generate AI market note from scan data + news intelligence + prediction markets."""
     from src.api_keys import get_secret
 
@@ -2205,7 +2209,10 @@ RULES:
 - Every claim must reference specific data from below — a number, a ticker, a Polymarket odd.
 - If you can't support a statement with data provided, don't make it.
 - Do NOT repeat the news feed. The news is already on screen. Your job is to interpret it for trading.
-- Be wrong confidently rather than right vaguely. A trader needs a clear signal, not a balanced essay."""
+- Be wrong confidently rather than right vaguely. A trader needs a clear signal, not a balanced essay.
+
+SELF-CHECK — before finalizing:
+Draft the 4 sections first. Then re-read once and verify: every number/ticker/polymarket odd cited appears in the data above, TOP TRADE is consistent with STANCE, RISKS reference actual positions or scan candidates (not generic), SIZING figures are internally consistent. Make small corrections if needed — this is a verification pass, not a rewrite. Output only the final revised note."""
 
     try:
         api_key = get_secret("GEMINI_API_KEY")
@@ -2235,6 +2242,392 @@ RULES:
         return {"content": text.strip(), "success": True}
     except Exception as e:
         return {"content": f"AI generation failed: {str(e)}", "success": False}
+
+
+# ═══════════════════════════════════════════════════════════════
+# /market-driver — home-page "what's driving markets" synthesis
+# ═══════════════════════════════════════════════════════════════
+#
+# Called by the home page every page-load. Heavy lifting happens behind a
+# 15-minute Supabase cache; cold compute assembles ~8 signals in parallel
+# and calls Gemini 3.1 Pro (or Claude Opus 4.7 on ≥1σ days) to produce a
+# 3-paragraph regime read plus citation chips.
+#
+# Designed for ISR (Next.js revalidate=900) — one AI call globally per 15min,
+# not per visitor.
+
+_MARKET_DRIVER_PULSE = [
+    ("SPY", "S&P 500"),
+    ("QQQ", "Nasdaq 100"),
+    ("IWM", "Russell 2000"),
+    ("TLT", "20Y Treasury"),
+    ("DXY", "US Dollar"),
+    ("^VIX", "VIX"),
+    ("GLD", "Gold"),
+    ("USO", "WTI Crude"),
+]
+
+
+def _assemble_market_driver_context() -> dict:
+    """Gather every signal the synthesis prompt needs, in parallel.
+
+    Returns a dict with:
+      quotes:   ticker → {price, change_pct_1d, change_pct_5d}
+      news:     list of recent headlines (≤ 5)
+      events:   next 24h macro releases
+      vol:      one-line vol regime read
+      cftc:     one-line positioning regime read
+      as_of:    ISO timestamp
+      market_open: bool
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from src.data_engine import polygon_batch_snapshot
+
+    ctx: dict = {"as_of": datetime.now(timezone.utc).isoformat(), "quotes": {}, "news": [], "events": [], "vol": "", "cftc": ""}
+
+    def _pulse() -> None:
+        try:
+            tickers = [t for t, _ in _MARKET_DRIVER_PULSE]
+            snaps = polygon_batch_snapshot(tickers) or {}
+            out = {}
+            for tk, label in _MARKET_DRIVER_PULSE:
+                s = snaps.get(tk) or {}
+                price = s.get("price")
+                # polygon_batch_snapshot returns {price, change} — change is
+                # already percent. Use it directly; fall back to 0 if absent.
+                if price is None:
+                    continue
+                out[tk] = {
+                    "label": label,
+                    "price": round(float(price), 3),
+                    "change_pct_1d": round(float(s.get("change") or 0), 2),
+                }
+            # Fallback for indices Polygon's stock-snapshot doesn't cover
+            # (e.g. ^VIX, DXY) — use a 2-bar history pull to compute last
+            # close + 1D change.
+            missing = [tk for tk, _ in _MARKET_DRIVER_PULSE if tk not in out]
+            if missing:
+                try:
+                    from src.data_engine import polygon_history
+                    for tk in missing:
+                        try:
+                            hist = polygon_history(tk, 3)
+                            if hist is not None and not hist.empty and "Close" in hist.columns and len(hist) >= 2:
+                                last = float(hist["Close"].iloc[-1])
+                                prev = float(hist["Close"].iloc[-2])
+                                label = next((lbl for t, lbl in _MARKET_DRIVER_PULSE if t == tk), tk)
+                                out[tk] = {
+                                    "label": label,
+                                    "price": round(last, 3),
+                                    "change_pct_1d": round((last - prev) / prev * 100, 2) if prev else 0,
+                                }
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logger.debug(f"market-driver pulse fallback failed: {e}")
+            ctx["quotes"] = out
+        except Exception as e:
+            logger.debug(f"market-driver pulse failed: {e}")
+
+    def _news() -> None:
+        # First try the cached market-news bundle written by the scheduled
+        # news worker. Falls back to a live Polygon news pull so the home
+        # page still populates headlines when the worker hasn't run yet.
+        try:
+            from src.ai_cache import get_cached_ai
+            now = datetime.now()
+            from datetime import timedelta
+            for offset in (0, 1, 2, 3):
+                t = now - timedelta(hours=offset)
+                content = get_cached_ai(f"market_news_{t.strftime('%Y%m%d_%H')}")
+                if content:
+                    lines = [ln.strip() for ln in str(content).split("\n") if ln.strip()][:8]
+                    if lines:
+                        ctx["news"] = lines
+                        return
+        except Exception as e:
+            logger.debug(f"market-driver news cache failed: {e}")
+        # Live fallback — Polygon's news endpoint gives timestamped headlines
+        # for macro-relevant tickers without needing a cron to have fired.
+        try:
+            import requests
+            key = get_secret("MASSIVE_API_KEY")
+            if not key:
+                return
+            heads: list[str] = []
+            r = requests.get(
+                "https://api.polygon.io/v2/reference/news",
+                params={"limit": 10, "order": "desc", "sort": "published_utc", "apiKey": key},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                for item in (r.json().get("results") or [])[:8]:
+                    title = (item.get("title") or "").strip()
+                    publisher = (item.get("publisher") or {}).get("name", "")
+                    when = item.get("published_utc", "")[:16]  # YYYY-MM-DDTHH:MM
+                    if title:
+                        heads.append(f"[{when}] {publisher}: {title}"[:220])
+            if heads:
+                ctx["news"] = heads
+        except Exception as e:
+            logger.debug(f"market-driver news live failed: {e}")
+
+    def _events() -> None:
+        try:
+            from src.economic_calendar import find_events_near_date
+            from datetime import date
+            evs = find_events_near_date(date.today().strftime("%Y-%m-%d"), window_days=3) or []
+            ctx["events"] = [
+                {"name": e.get("name"), "date": e.get("date"), "days_away": e.get("days_away", 0)}
+                for e in evs[:5] if e.get("days_away", -1) >= 0
+            ]
+        except Exception as e:
+            logger.debug(f"market-driver events failed: {e}")
+
+    def _vol() -> None:
+        try:
+            from api.routes.options import _compute_vol_landscape
+            vl = _compute_vol_landscape() or {}
+            # Derive a one-line summary from whatever structure vol-landscape returns.
+            regime = vl.get("regime") or vl.get("summary") or ""
+            top = vl.get("top_dislocations") or vl.get("dislocations") or []
+            if top:
+                top_str = "; ".join(
+                    f"{d.get('ticker','?')} {d.get('label','')}".strip()
+                    for d in top[:3]
+                )
+                ctx["vol"] = f"{regime} | top dislocations: {top_str}" if regime else top_str
+            else:
+                ctx["vol"] = regime
+        except Exception as e:
+            logger.debug(f"market-driver vol failed: {e}")
+
+    def _cftc() -> None:
+        try:
+            from src.cta_model import cta_bias_scan
+            bias = cta_bias_scan() or {}
+            net = bias.get("net_bias") or bias.get("summary") or ""
+            ctx["cftc"] = str(net)[:200]
+        except Exception as e:
+            logger.debug(f"market-driver cftc failed: {e}")
+
+    # US equity market hours (naive NYSE): 09:30–16:00 ET, Mon–Fri, ignoring holidays.
+    # Good enough for prompt switching; it's OK to be "after-hours" on a holiday.
+    try:
+        from datetime import datetime as _dt
+        import zoneinfo
+        et = _dt.now(zoneinfo.ZoneInfo("America/New_York"))
+        ctx["market_open"] = (
+            et.weekday() < 5
+            and (et.hour, et.minute) >= (9, 30)
+            and et.hour < 16
+        )
+    except Exception:
+        ctx["market_open"] = False
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(fn) for fn in (_pulse, _news, _events, _vol, _cftc)]
+        for f in futures:
+            try:
+                f.result(timeout=15)
+            except Exception as e:
+                logger.debug(f"market-driver subtask failed: {e}")
+
+    return ctx
+
+
+def _should_escalate_to_claude(ctx: dict) -> bool:
+    """Escalate from Gemini → Claude Opus on high-signal sessions.
+
+    Triggers on |SPY 1D| ≥ 1.0% (roughly 1σ daily for SPY) or |VIX 1D| ≥ 10%.
+    Synthesis quality matters more on those days; cost tolerance is higher.
+    """
+    q = ctx.get("quotes", {})
+    spy = q.get("SPY", {}).get("change_pct_1d", 0)
+    vix = q.get("^VIX", {}).get("change_pct_1d", 0)
+    return abs(spy) >= 1.0 or abs(vix) >= 10.0
+
+
+_MARKET_DRIVER_SYSTEM = """You are the market-driver desk at an institutional trading shop. Every 15 minutes you publish a short regime read to the rest of the firm — traders open the internal homepage and read your note first.
+
+Produce three tight paragraphs with specific numbers and explicit linkage between catalysts and moves. No generic hedging, no "it depends." If the signal is genuinely mixed, say so with specifics.
+
+PARAGRAPH 1 — WHAT HAPPENED (past tense, last session + today):
+- Lead with the biggest quotable move in the data (SPY, sector, vol, yield).
+- Name the catalyst linking the move — cite a specific news headline or release from the payload.
+- Include at least 3 specific numbers (prices, %, bps, odds).
+
+PARAGRAPH 2 — WHAT'S DRIVING IT NOW (present tense, regime read):
+- State the regime label plainly: risk-on / risk-off / duration-favored / short-vol / long-vol / defensive / cyclical-rotation / dollar-up / dollar-down / etc.
+- Explain WHY this regime, referencing the cross-asset pattern (e.g., "bonds bid alongside equities = duration trade").
+- Flag the most interesting divergence if one exists.
+
+PARAGRAPH 3 — WHAT TO WATCH (near future, next 4–24h):
+- Name 2–3 specific events/levels with explicit thresholds. Ex: "NFP 08:30 Fri — below 150K hardens cut narrative. SPY support at 4820."
+- If an event in the payload would shift the regime, say which direction.
+
+OUTPUT FORMAT — return ONLY valid JSON, no prose wrapper:
+{
+  "regime_label": "short phrase, e.g. 'risk-on / duration-favored'",
+  "paragraphs": {
+    "what_happened": "...",
+    "whats_driving": "...",
+    "what_to_watch": "..."
+  },
+  "citations": [
+    {"label": "CPI 0.2% MoM", "source": "news | release | polymarket | cftc | vol", "detail": "optional short context"}
+  ],
+  "confidence": 1-10
+}
+
+ACCURACY RULES — non-negotiable:
+- Only cite numbers that appear in the context below. Derivations (e.g., "XLF +1.2% vs SPY +0.3% = +0.9% relative") are fine if shown.
+- Never invent tickers, news items, or events not in the payload.
+- If the context is thin (market closed, no news, no events), say so in one short paragraph and emit minimal filler for the other two. Do not pad.
+
+LENGTH — HARD LIMITS:
+- Each paragraph: 60 words MAX. 3 paragraphs total.
+- Confidence + regime_label: ≤ 20 words combined.
+- Citations: ≤ 5 items. Each label ≤ 10 words.
+- Going over truncates your JSON and breaks the page — do not exceed.
+
+SELF-CHECK — before returning JSON:
+Draft your three paragraphs first. Then re-read once and verify: every number traces to the payload, every cited catalyst appears in the news/events list, regime_label is consistent with the cross-asset story in paragraph 2, "what to watch" references events/levels actually in the payload. Make small corrections if needed — this is a verification pass, not a rewrite. Return only the final revised JSON.
+"""
+
+
+@router.get("/market-driver")
+@limiter.limit("30/minute;1000/day")
+async def market_driver(
+    request: Request,
+    force_refresh: bool = Query(False, description="Admin bypass of the 15-min cache"),
+    user: str = Depends(get_current_user),
+):
+    """Home-page synthesis: a structured JSON read of the current market regime.
+
+    Cached 15 minutes in Supabase. Escalates to Claude Opus 4.7 on ≥1σ days;
+    otherwise runs on Gemini 3.1 Pro. Token cost globally bounded by ISR —
+    only one call per 15 minutes no matter how much traffic the page sees.
+    """
+    import json
+
+    cache_key = "market_driver_synthesis"
+    if not force_refresh:
+        try:
+            cached = _get_bundle_cache(cache_key, ttl_minutes=15)
+            if cached:
+                return {**cached, "cache_hit": True}
+        except Exception:
+            pass
+
+    ctx = _assemble_market_driver_context()
+    escalate = _should_escalate_to_claude(ctx)
+
+    # Payload passed to the model — compact JSON the prompt tells it to cite from.
+    payload = {
+        "as_of_utc": ctx["as_of"],
+        "market_open": ctx.get("market_open", False),
+        "quotes": ctx.get("quotes", {}),
+        "news_headlines": ctx.get("news", []),
+        "upcoming_events_next_3d": ctx.get("events", []),
+        "vol_regime": ctx.get("vol", ""),
+        "cftc_positioning": ctx.get("cftc", ""),
+    }
+    user_message = (
+        "Context (cite from here only):\n"
+        "```json\n" + json.dumps(payload, indent=2, default=str)[:12000] + "\n```\n"
+        + ("Markets are CLOSED — frame paragraph 2 as the current after-hours / weekend stance and paragraph 3 as the forward view for the next session." if not ctx.get("market_open") else "Markets are OPEN — frame paragraph 2 as the live regime and paragraph 3 as intraday levels + overnight catalysts.")
+    )
+
+    model_used = "claude-opus-4-7" if escalate else "gemini-3.1-pro-preview"
+    raw_output = ""
+
+    try:
+        if escalate:
+            import anthropic
+            key = get_secret("ANTHROPIC_API_KEY")
+            if not key:
+                raise RuntimeError("ANTHROPIC_API_KEY not configured")
+            client = anthropic.Anthropic(api_key=key)
+            msg = client.messages.create(
+                model="claude-opus-4-7",
+                max_tokens=2000,
+                system=[{"type": "text", "text": _MARKET_DRIVER_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": user_message}],
+            )
+            raw_output = "".join(b.text for b in msg.content if hasattr(b, "text"))
+        else:
+            from google import genai
+            from google.genai import types
+            key = get_secret("GEMINI_API_KEY")
+            if not key:
+                raise RuntimeError("GEMINI_API_KEY not configured")
+            client = genai.Client(api_key=key)
+            resp = client.models.generate_content(
+                model="gemini-3.1-pro-preview",
+                contents=f"{_MARKET_DRIVER_SYSTEM}\n\n{user_message}",
+                config=types.GenerateContentConfig(
+                    # 4000 is generous; the prompt caps output at ~180 words
+                    # total. Extra budget absorbs Gemini's internal chain-of-
+                    # thought tokens which are counted against the limit.
+                    max_output_tokens=4000,
+                    temperature=0.25,
+                    response_mime_type="application/json",
+                ),
+            )
+            raw_output = resp.text or ""
+    except Exception as e:
+        logger.warning(f"market-driver generation failed: {e} | raw_output_len={len(raw_output)}")
+        # Graceful fallback: surface the context itself so the UI isn't empty.
+        return {
+            "error": str(e),
+            "regime_label": "unavailable",
+            "paragraphs": {
+                "what_happened": "",
+                "whats_driving": "",
+                "what_to_watch": "",
+            },
+            "citations": [],
+            "confidence": 0,
+            "model": model_used,
+            "escalated": escalate,
+            "as_of_utc": ctx["as_of"],
+            "cache_hit": False,
+            "quotes": ctx.get("quotes", {}),
+        }
+
+    # Parse model output. Gemini returns JSON directly when response_mime_type is set;
+    # Claude may wrap in a code fence. Strip fence conservatively.
+    txt = raw_output.strip()
+    if txt.startswith("```"):
+        txt = txt.strip("`").lstrip("json").strip()
+    try:
+        parsed = json.loads(txt)
+    except Exception as e:
+        logger.warning(f"market-driver JSON parse failed: {e}; raw={raw_output[:400]}")
+        parsed = {
+            "regime_label": "parse-failure",
+            "paragraphs": {"what_happened": txt[:800], "whats_driving": "", "what_to_watch": ""},
+            "citations": [],
+            "confidence": 0,
+        }
+
+    result = {
+        **parsed,
+        "model": model_used,
+        "escalated": escalate,
+        "as_of_utc": ctx["as_of"],
+        "quotes": ctx.get("quotes", {}),
+        "cache_hit": False,
+    }
+
+    try:
+        _set_bundle_cache(cache_key, result, ttl_minutes=15)
+    except Exception:
+        pass
+
+    return result
 
 
 class StrategyScanRequest(BaseModel):
@@ -2962,7 +3355,8 @@ class BatchOptimizeRequest(BaseModel):
 
 
 @router.post("/batch-optimize")
-async def batch_optimize(req: BatchOptimizeRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def batch_optimize(request: Request, req: BatchOptimizeRequest, user: str = Depends(get_current_user)):
     """Run Optuna optimization for multiple ticker × strategy combos. Stores results in Supabase."""
     import logging
     _log = logging.getLogger(__name__)
@@ -3035,7 +3429,8 @@ class ConfluenceValidationRequest(BaseModel):
 
 
 @router.post("/confluence-validation")
-async def confluence_validation(req: ConfluenceValidationRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def confluence_validation(request: Request, req: ConfluenceValidationRequest, user: str = Depends(get_current_user)):
     """Backtest the multi-family confluence signal to validate it improves over individual strategies."""
     import numpy as np, yfinance as yf, talib, logging
     from scipy import stats as sp_stats
@@ -3648,7 +4043,8 @@ class ComboScanRequest(BaseModel):
 
 
 @router.post("/combo-scan")
-async def combo_scan(req: ComboScanRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def combo_scan(request: Request, req: ComboScanRequest, user: str = Depends(get_current_user)):
     """Test all pairs (and optionally triples) of strategies using AND logic.
 
     AND logic: enter long only when ALL strategies in the combo agree on long.
@@ -3941,7 +4337,8 @@ class DeepScanRequest(BaseModel):
 
 
 @router.post("/deep-scan")
-async def deep_scan(req: DeepScanRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def deep_scan(request: Request, req: DeepScanRequest, user: str = Depends(get_current_user)):
     """Run strategy scan across ALL timeframes, aggregate, and analyze.
 
     Returns per-combo results + meta-analysis: strategy rankings, ticker rankings,
@@ -4260,7 +4657,8 @@ class TradeIdeaAnalysisRequest(BaseModel):
 
 
 @router.post("/trade-idea-analysis")
-async def trade_idea_analysis(req: TradeIdeaAnalysisRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def trade_idea_analysis(request: Request, req: TradeIdeaAnalysisRequest, user: str = Depends(get_current_user)):
     """Generate AI analysis for trade ideas using Gemini."""
     from src.api_keys import get_secret
 
@@ -4384,7 +4782,8 @@ class TradeIdeaQuickRequest(BaseModel):
 
 
 @router.post("/trade-idea-quick")
-async def trade_idea_quick(req: TradeIdeaQuickRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def trade_idea_quick(request: Request, req: TradeIdeaQuickRequest, user: str = Depends(get_current_user)):
     """Fast per-idea AI verdict: ENTER / WAIT / SKIP with 2-3 sentence reasoning."""
     from src.api_keys import get_secret
     import anthropic
@@ -4443,7 +4842,8 @@ class VolAnalysisRequest(BaseModel):
 
 
 @router.post("/vol-analysis")
-async def vol_analysis(req: VolAnalysisRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def vol_analysis(request: Request, req: VolAnalysisRequest, user: str = Depends(get_current_user)):
     """Volatility cone, IVR, and historical earnings moves per ticker."""
     import numpy as np, yfinance as yf, logging
     from concurrent.futures import ThreadPoolExecutor
@@ -4601,6 +5001,26 @@ async def vol_analysis(req: VolAnalysisRequest, user: str = Depends(get_current_
     return {"success": True, "results": {r["ticker"]: r for r in results if r.get("ticker")}}
 
 
+def _polymarket_category(slug: str, title: str) -> str:
+    """Bucket an event into a broad category for the Polymarket page tabs.
+    Heuristic — checks slug + title text for keywords. Returns 'Other' if
+    nothing matches cleanly."""
+    s = (slug + " " + title).lower()
+    if any(k in s for k in ("fed ", "fomc", "rate cut", "rate hike", "fed chair", "powell", "jerome")):
+        return "Fed Rates"
+    if any(k in s for k in ("recession", "gdp", "cpi", "pce", "inflation", "unemployment", "jobless", "nfp", "payroll")):
+        return "Economy"
+    if any(k in s for k in ("iran", "ceasefire", "ukraine", "russia", "tariff", "trade war", "china", "sanctions", "israel", "gaza", "hamas", "nato", "taiwan")):
+        return "Geopolitics"
+    if any(k in s for k in ("bitcoin", "btc", "ethereum", "eth ", "crypto", "solana")):
+        return "Crypto"
+    if any(k in s for k in ("trump", "biden", "harris", "election", "senate", "house", "congress", "governor", "mayor", "supreme court", "scotus")):
+        return "Politics"
+    if any(k in s for k in ("super bowl", "world cup", "champion", "nba", "nfl", "mls", "playoff", "mvp", "finals")):
+        return "Sports"
+    return "Other"
+
+
 @router.get("/polymarket")
 async def polymarket_odds(user: str = Depends(get_current_user)):
     """Fetch market-relevant prediction odds from Polymarket. No auth required."""
@@ -4693,6 +5113,7 @@ async def polymarket_odds(user: str = Depends(get_current_user)):
                     results.append({
                         "title": title[:60],
                         "slug": slug,
+                        "category": _polymarket_category(slug, title),
                         "volume_24h": round(ev.get("volume24hr", 0)),
                         "liquidity": round(ev.get("liquidity", 0)),
                         "outcomes": outcomes[:4],
@@ -4917,7 +5338,8 @@ class NewsAnalyzeRequest(BaseModel):
     impact: str = ""
 
 @router.post("/news-analyze")
-async def news_analyze(req: NewsAnalyzeRequest, user: str = Depends(get_current_user)):
+@limiter.limit("20/minute;500/day")
+async def news_analyze(request: Request, req: NewsAnalyzeRequest, user: str = Depends(get_current_user)):
     """Quick 1-2 sentence AI analysis of a news headline. Cached by headline hash."""
     import hashlib
     cache_key = hashlib.md5(f"news_hover:{req.headline[:200]}".encode()).hexdigest()
@@ -5926,7 +6348,10 @@ RULES:
 - If vol is rich (VRP > 2%), favor selling premium. If cheap, favor buying.
 - Never risk more than 5% of account on one trade
 - Be SPECIFIC — exact strikes, exact prices, exact quantities
-- If scanner results are provided, reference them (they're pre-optimized)"""
+- If scanner results are provided, reference them (they're pre-optimized)
+
+SELF-CHECK — before finalizing:
+Draft the three trades first. Then re-read once and verify: every strike/price exists in the options chain data, max profit/risk arithmetic is correct, BEST TRADE is consistent with the data (not just a preference), KEY RISKS reference specific data points. Make small corrections if needed — this is a verification pass, not a rewrite. Output only the final revised structure."""
 
 
 # Server-side context cache: {ticker: (context_str, sources, timestamp)}

@@ -53,8 +53,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8080}/api/health || exit 1
 
 # Cloud Run sets $PORT dynamically; default to 8080 for local docker runs.
-# Two workers is a sensible default for a 1vCPU container running mostly
-# IO-bound work (Polygon, yfinance, FRED). Scale up with Cloud Run concurrency.
+# SINGLE worker per instance — Cloud Run's scale unit is the instance, not the
+# worker. Running `--workers 2` inside a 2Gi container caused OOM-driven
+# respawn loops (each worker holds its own warm-up state + Plotly / talib / RL
+# imports; 2× that regularly exceeds the memory ceiling under burst load).
+# Parallelism comes from FastAPI async + `--concurrency=40` + max-instances=10.
 # `python -m uvicorn` works even when the pip-installed `uvicorn` script
 # isn't on PATH.
-CMD ["sh", "-c", "python -m uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 2"]
+CMD ["sh", "-c", "python -m uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]

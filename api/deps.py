@@ -1,10 +1,23 @@
 """FastAPI dependency injection — auth, database, user context."""
 
+import hashlib
 import os
 from functools import lru_cache
 from fastapi import Depends, HTTPException, Header
 from src.api_keys import get_secret
 from src.db import get_client, set_user_id
+
+
+def log_user(email: str | None) -> str:
+    """Short stable identifier for log lines — keeps PII out of Cloud Run logs.
+
+    `"anonymous"` and `None` pass through unchanged (log clarity for
+    unauthenticated cases). Real emails become `u_<sha256[:10]>`, which is
+    stable across a process so you can still correlate events per user.
+    """
+    if not email or email == "anonymous":
+        return email or "none"
+    return "u_" + hashlib.sha256(email.encode()).hexdigest()[:10]
 
 
 def get_db():

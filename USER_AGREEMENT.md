@@ -1,6 +1,10 @@
 # AI Statcharts — User Agreement & Terms of Use
 
-**Last Updated:** March 18, 2026
+**Last Updated:** April 23, 2026
+
+> The live version of this document is rendered at
+> [aistatcharts.com/disclaimer](https://aistatcharts.com/disclaimer). Keep both
+> in sync when editing.
 
 By accessing or using AI Statcharts ("the Platform"), you acknowledge that you have read, understood, and agree to be bound by the following terms.
 
@@ -25,7 +29,7 @@ AI Statcharts is an **analytical and research tool** that provides quantitative 
 
 ## 3. AI Model Limitations
 
-The Platform uses multiple AI models (Grok 3, GPT-4o, Gemini 3 Pro, Claude Sonnet) to generate analysis. You acknowledge that:
+The Platform uses multiple AI models from Anthropic, OpenAI, Google, and xAI to generate analysis. You acknowledge that:
 
 - AI models can produce **inaccurate, incomplete, or misleading outputs**
 - Models may **hallucinate** facts, data points, or analyst opinions that do not exist

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from api._json_safe import df_records
 from api.deps import get_current_user
 
 router = APIRouter()
@@ -1411,15 +1412,13 @@ def signal_bundle(req: SignalScanRequest, user: str = Depends(get_current_user))
 
     def _load_eps():
         try:
-            df = fetch_eps_revisions(tickers)
-            return df.to_dict(orient="records") if not df.empty else []
+            return df_records(fetch_eps_revisions(tickers))
         except Exception:
             return []
 
     def _load_insider():
         try:
-            df = fetch_insider_summary(tickers)
-            return df.to_dict(orient="records") if not df.empty else []
+            return df_records(fetch_insider_summary(tickers))
         except Exception:
             return []
 

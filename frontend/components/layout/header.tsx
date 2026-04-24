@@ -294,6 +294,20 @@ function MobileNav({ open, onClose }: { open: boolean; onClose: () => void }) {
               })}
             </div>
           ))}
+          {/* Compliance — surface the disclaimer link for mobile users. */}
+          <div className="py-2 border-t border-white/10">
+            <Link
+              href="/disclaimer"
+              onClick={onClose}
+              className={`block px-4 py-3 min-h-[44px] text-[0.7rem] font-semibold uppercase tracking-wider ${
+                pathname === "/disclaimer"
+                  ? "bg-white/10 text-white"
+                  : "text-white/60 hover:bg-white/5 active:bg-white/10"
+              }`}
+            >
+              Disclaimer &amp; Terms
+            </Link>
+          </div>
         </nav>
       </div>
     </div>
@@ -339,6 +353,16 @@ export function Header() {
 
           {/* Theme toggle + user menu + mobile toggle */}
           <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            {/* Disclaimer — subtle compliance link, always in the top bar.
+                Hidden below md to preserve room on small desktops; still
+                reachable from the mobile drawer. */}
+            <Link
+              href="/disclaimer"
+              className="hidden md:inline-flex h-8 items-center px-2 rounded-md text-[0.6rem] font-semibold uppercase tracking-wider text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+              title="Disclaimer & Terms"
+            >
+              Disclaimer
+            </Link>
             <ThemeToggle />
             <UserMenu />
             <button

@@ -13,6 +13,8 @@ don't need to set them individually.
 import logging
 from typing import Literal
 
+from api._json_safe import df_records
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_current_user
@@ -88,10 +90,7 @@ async def get_history(
             "data": [],
         }
 
-    # Convert to serializable. NaN → None so JSON doesn't break.
-    df_out = df.copy()
-    df_out["date"] = df_out["date"].dt.strftime("%Y-%m-%d")
-    records = df_out.where(df_out.notna(), None).to_dict(orient="records")
+    records = df_records(df)
 
     return {
         "code": code,

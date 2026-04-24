@@ -969,6 +969,7 @@ function FomcDiffTab({ t, L }: { t: ReturnType<typeof getChartTheme>; L: ReturnT
             </select>
           </div>
         </div>
+        {/* xss-safe: diffHtml is produced by wordDiffHtml() which escapes inserts/deletes via escapeHtml(); inputs are trusted Fed-statement text */}
         <div className="border border-border rounded p-3 text-xs leading-relaxed" dangerouslySetInnerHTML={{ __html: diffHtml }} />
       </div>
     </div>

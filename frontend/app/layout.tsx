@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
 import { AuthGate } from "@/components/auth-gate";
+import { TosGate } from "@/components/tos-gate";
 import { AppChrome } from "@/components/layout/app-chrome";
 // import { MatrixBackground } from "@/components/matrix-background";
 
@@ -120,7 +121,9 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col bg-bg text-text">
         <Providers>
           <AuthGate>
-            <AppChrome>{children}</AppChrome>
+            <TosGate>
+              <AppChrome>{children}</AppChrome>
+            </TosGate>
           </AuthGate>
         </Providers>
       </body>

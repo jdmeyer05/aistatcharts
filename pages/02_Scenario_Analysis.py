@@ -1385,7 +1385,8 @@ if 'scenario_data' in st.session_state:
                         st.warning(f"**Change from Prior Assessment:** {change_summary}")
 
                     # Force refresh button — admin only
-                    is_admin = st.session_state.get("user_email", "") in ("jdmeyer05@gmail.com", "local-dev@preview")
+                    from src.auth import _admin_emails
+                    is_admin = st.session_state.get("user_email", "").lower() in _admin_emails()
                     if is_admin and st.button("Force Refresh Now", key="grok_force_refresh"):
                         try:
                             fred_summary = build_fred_summary(driver_data, FED_DRIVERS, fred_key_ref=fred_key)

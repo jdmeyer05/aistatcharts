@@ -359,7 +359,9 @@ export default function StockAnalysis() {
                   {ai.agreement && (
                     <div className="card card-compact text-sm">
                       <strong>Model Consensus:</strong>{" "}
-                      <span dangerouslySetInnerHTML={{ __html: ai.agreement.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
+                      <span dangerouslySetInnerHTML={{ __html: ai.agreement
+                        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>") }} />
                     </div>
                   )}
                   {ai.summary && (

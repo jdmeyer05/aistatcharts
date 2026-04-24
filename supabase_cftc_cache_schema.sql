@@ -16,8 +16,18 @@ CREATE TABLE IF NOT EXISTS public.cftc_cache (
 CREATE INDEX IF NOT EXISTS cftc_cache_updated_at_idx ON public.cftc_cache (updated_at DESC);
 
 -- Shared non-user-specific cache — no per-row access control needed.
--- RLS was enabled in the initial version but blocked even service-role
--- writes (likely a legacy-key / role-mapping quirk), so we disable it for
--- this table. Readers are still rate-limited by PostgREST.
-ALTER TABLE public.cftc_cache DISABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS cftc_cache_read_all ON public.cftc_cache;
+-- RLS is enabled with permissive per-role policies. Earlier attempt
+-- relied on auth.role() = 'service_role' inside USING (which is the
+-- source of the legacy-key quirk); granting TO service_role / anon
+-- explicitly is the supported Supabase pattern and works reliably.
+ALTER TABLE public.cftc_cache ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS cftc_cache_service_all ON public.cftc_cache;
+CREATE POLICY cftc_cache_service_all ON public.cftc_cache
+    FOR ALL TO service_role
+    USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS cftc_cache_anon_all ON public.cftc_cache;
+CREATE POLICY cftc_cache_anon_all ON public.cftc_cache
+    FOR ALL TO anon, authenticated
+    USING (true) WITH CHECK (true);

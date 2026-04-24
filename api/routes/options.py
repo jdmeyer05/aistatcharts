@@ -1,10 +1,11 @@
 """Options analytics endpoints — pricing, Greeks, IV, metrics, surface snapshots, AI trade ideas."""
 
 import logging
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, field_validator
 from typing import Optional
 from api.deps import get_current_user
+from api.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -217,7 +218,9 @@ class TradeIdeasInput(BaseModel):
 
 
 @router.post("/ai-trade-ideas")
+@limiter.limit("20/minute;500/day")
 async def ai_trade_ideas(
+    request: Request,
     inp: TradeIdeasInput,
     user: str = Depends(get_current_user),
 ):
@@ -294,6 +297,9 @@ Key risks and when to exit.
 
 ## Portfolio Note
 Net delta, gamma, theta, vega if running all trades together.
+
+## SELF-CHECK — before finalizing
+Draft the full output first. Then re-read once and verify: every strike appears in the surface data, P&L arithmetic ties (max profit + max loss = net credit/debit × multiplier × contracts where applicable), The Edge references a specific dislocation/skew/VRP number from the data, Conviction score matches the edge described. Make small corrections if needed — this is a verification pass, not a rewrite. Return only the final revised markdown (without this SELF-CHECK section).
 
 RULES:
 - Only suggest strikes with MEDIUM+ open interest

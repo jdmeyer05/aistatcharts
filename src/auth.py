@@ -77,8 +77,25 @@ STRIPE_LINKS = {
     "portal": "https://billing.stripe.com/p/login/dRm8wIcVmdGgbzcaWpasg00",
 }
 
-# Admin emails always get platinum access
-ADMIN_EMAILS = {"jdmeyer05@gmail.com", "local-dev@preview"}
+def _admin_emails() -> set[str]:
+    """Admins who always get platinum access + admin-gated features.
+
+    Read from `ADMIN_EMAILS` env / secrets (comma-separated, case-insensitive),
+    matching `api/deps.py`'s pattern so there's one source of truth across the
+    Streamlit and FastAPI surfaces. The `local-dev@preview` sentinel is added
+    only under `_is_local_dev()` — it's not a real email, just a tag used by
+    `setup_session()` to mark the bypassed session.
+    """
+    raw = os.environ.get("ADMIN_EMAILS") or ""
+    if not raw:
+        try:
+            raw = st.secrets.get("ADMIN_EMAILS", "")
+        except Exception:
+            pass
+    admins = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    if _is_local_dev():
+        admins.add("local-dev@preview")
+    return admins
 
 
 def _is_local_dev() -> bool:
@@ -99,13 +116,15 @@ def init_supabase() -> Client:
     if _supabase_client is not None:
         return _supabase_client
 
+    # Prefer service_role for any server-context — works against RLS-locked
+    # tables. Falls back to the publishable anon key for browser-safe flows.
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
 
     if not url or not key:
         try:
             url = st.secrets["SUPABASE_URL"]
-            key = st.secrets["SUPABASE_KEY"]
+            key = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY") or st.secrets["SUPABASE_KEY"]
         except Exception:
             logger.warning("Supabase credentials not found in env vars or secrets.toml")
             return None
@@ -315,7 +334,7 @@ def get_user_tier() -> str:
     email = st.session_state.get("user_email", "")
 
     # Admin override
-    if email in ADMIN_EMAILS:
+    if email.lower() in _admin_emails():
         return "platinum"
 
     # Check cached tier in session state

@@ -1,5 +1,14 @@
-# Deploy the FastAPI Cloud Run service with all env vars + secrets.
+# Build + deploy the FastAPI Cloud Run service with all env vars + secrets.
 # Safe to re-run.
+#
+# The build step is NOT skippable: deploying `:latest` without rebuilding
+# reuses whatever image was last pushed, so local code changes silently
+# never reach prod. Use -SkipBuild only when redeploying to swap env vars
+# or secrets without a code change (e.g., rotating an API key).
+
+param(
+  [switch]$SkipBuild
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -10,11 +19,24 @@ $IMAGE = "$REGION-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/aistatchart
 Write-Host "Project: $PROJECT_ID"
 Write-Host "Image:   $IMAGE"
 
+if (-not $SkipBuild) {
+  Write-Host ""
+  Write-Host "Building image via Cloud Build (3-5 min)..."
+  & gcloud builds submit --config=cloudbuild.api.yaml --substitutions=_IMAGE=$IMAGE .
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error "Build failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+  }
+} else {
+  Write-Host "Skipping build (-SkipBuild flag); deploying existing :latest image."
+}
+
 $envVars = "SUPABASE_URL=https://diyhmmpegkxlwwhmqkyo.supabase.co,ADMIN_EMAILS=jdmeyer05@gmail.com"
 
 $secretPairs = @(
   "SUPABASE_JWT_SECRET=supabase-jwt-secret:latest",
   "SUPABASE_KEY=supabase-key:latest",
+  "SUPABASE_SERVICE_ROLE_KEY=supabase-service-role-key:latest",
   "MASSIVE_API_KEY=massive-api-key:latest",
   "FRED_API_KEY=fred-api-key:latest",
   "EIA_API_KEY=eia-api-key:latest",

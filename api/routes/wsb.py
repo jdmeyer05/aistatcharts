@@ -44,7 +44,11 @@ async def wsb_mentions(
 
     try:
         from src.wsb_scraper import scan_wsb
-        result = scan_wsb(include_comments=True, comments_top_n=8, min_mentions=2)
+        # comments_top_n=5 keeps cold-start around 15s (vs ~25s for 8). Five
+        # top posts is enough comment signal for the top-ranked tickers;
+        # low-weighted tickers aren't hurt since their rank was never going
+        # to survive the top-20 filter anyway.
+        result = scan_wsb(include_comments=True, comments_top_n=5, min_mentions=2)
     except Exception as e:
         logger.warning(f"wsb scan failed: {e}")
         return {
