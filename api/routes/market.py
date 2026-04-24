@@ -204,33 +204,198 @@ async def price_history_batch(
     return result
 
 
+# Default set of "nearest expirations to fetch on full-chain initial load".
+# Deeper-dated expirations aren't lost — the frontend lazy-loads them when
+# the user selects one from the dropdown (see frontend/app/options-analysis).
+_CHAIN_NEAREST_EXPS = 8
+
+# Strike-range filter (±% of spot) for the fast-path fetch. Covers every
+# strike a trader would normally care about while dropping the long tail of
+# deep-ITM / deep-OTM contracts that make up the bulk of SPY's chain.
+_CHAIN_STRIKE_WINDOW_PCT = 0.25
+
+
+def _fetch_chain_single_exp_fast(symbol: str, expiration: str, lo: float, hi: float, api_key: str) -> "list[dict]":
+    """One Polygon snapshot page (or small set of pages) scoped to one
+    expiration AND a strike range. Returns raw rows; the caller concats
+    across expirations and converts to a DataFrame.
+
+    Filters at the source via `strike_price.gte` and `strike_price.lte`
+    cut SPY's per-expiration contract count from ~300-500 to ~80-150,
+    which usually fits in a single 250-row page.
+    """
+    import requests as _req
+    out: list[dict] = []
+    url = (
+        f"https://api.polygon.io/v3/snapshot/options/{symbol}"
+        f"?limit=250"
+        f"&expiration_date={expiration}"
+        f"&strike_price.gte={lo:.2f}"
+        f"&strike_price.lte={hi:.2f}"
+        f"&apiKey={api_key}"
+    )
+    pages = 0
+    while url and pages < 5:  # 5 pages × 250 = 1250 contracts/exp; plenty
+        try:
+            r = _req.get(url, timeout=15)
+            r.raise_for_status()
+            body = r.json()
+        except Exception:
+            break
+        out.extend(body.get("results") or [])
+        next_url = body.get("next_url")
+        url = f"{next_url}&apiKey={api_key}" if next_url else None
+        pages += 1
+    return out
+
+
+def _raw_rows_to_chain_df(results: list[dict]):
+    """Polygon snapshot rows → the same DataFrame shape fetch_options_chain
+    emits. Mirrors the row-extraction logic in src/data_engine.py so the
+    fast-path is a drop-in replacement."""
+    import pandas as pd
+    if not results:
+        return pd.DataFrame()
+    rows = []
+    for r in results:
+        d = r.get("details", {}) or {}
+        g = r.get("greeks", {}) or {}
+        day = r.get("day", {}) or {}
+        quote = r.get("last_quote", {}) or {}
+        bid = quote.get("bid") or 0
+        ask = quote.get("ask") or 0
+        day_close = day.get("close", 0) or 0
+        day_vwap = day.get("vwap", 0) or 0
+        quote_is_live = bid > 0 and ask > 0
+        if bid == 0 and day_close > 0:
+            bid = day_close * 0.95
+        if ask == 0 and day_close > 0:
+            ask = day_close * 1.05
+        last_price = day_close or day_vwap or 0
+        rows.append({
+            "strike_price": d.get("strike_price"),
+            "contract_type": d.get("contract_type"),
+            "expiration_date": d.get("expiration_date"),
+            "bid": bid, "ask": ask, "last_price": last_price,
+            "quote_live": quote_is_live,
+            "volume": day.get("volume", 0),
+            "open_interest": r.get("open_interest", 0),
+            "implied_volatility": r.get("implied_volatility", 0),
+            "delta": g.get("delta", 0), "gamma": g.get("gamma", 0),
+            "theta": g.get("theta", 0), "vega": g.get("vega", 0),
+            "rho": g.get("rho", 0),
+            "day_open": day.get("open", 0) or 0,
+            "day_high": day.get("high", 0) or 0,
+            "day_low": day.get("low", 0) or 0,
+            "day_vwap": day_vwap,
+            "trade_count": day.get("trade_count", 0) or 0,
+        })
+    return pd.DataFrame(rows)
+
+
 @router.get("/chain/{ticker}")
 async def options_chain(
     ticker: str,
-    expiration: str = Query(None, description="Specific expiration date (YYYY-MM-DD)"),
+    expiration: str = Query(None, description="Specific expiration date (YYYY-MM-DD). Omit to get the N nearest expirations in parallel."),
     user: str = Depends(get_current_user),
 ):
-    """Get options chain with Greeks plus the authoritative list of all
-    available expirations.
+    """Get options chain with Greeks plus the authoritative expirations list.
 
-    The chain fetch uses Polygon's snapshot endpoint which is paginated; for
-    very liquid underlyings (SPY, QQQ) the snapshot is truncated before all
-    expirations are reached. We fetch the expiration list separately from
-    the cheaper reference endpoint so the UI dropdown stays complete even
-    when the returned chain only covers near-dated expirations.
+    Two modes:
+      - `expiration=null` (default) — fast path: fetch spot + expirations,
+        filter strikes to ±25% of spot at the Polygon source, then fan out
+        a parallel fetch across the nearest 8 expirations. Completes in
+        3-6s on SPY (vs 25-40s for the legacy "all expirations serial
+        pagination" path).
+      - `expiration=YYYY-MM-DD` — specific-expiration mode: used by the
+        frontend's lazy-load when the user picks a deeper-dated expiration
+        not in the initial set.
 
-    Both fetches run concurrently in a threadpool so the expirations lookup
-    doesn't add serialized latency to the chain request.
+    Both paths fall back to the legacy `fetch_options_chain` if the
+    fast path returns nothing (e.g. after-hours with no snapshot, or
+    Polygon quota issues on the strike-filter endpoint).
     """
     import asyncio
-    from src.data_engine import fetch_options_chain, get_expiration_dates
-    tk = ticker.upper()
-    df, expirations = await asyncio.gather(
-        asyncio.to_thread(fetch_options_chain, tk, expiration),
-        asyncio.to_thread(get_expiration_dates, tk),
+    from concurrent.futures import ThreadPoolExecutor
+    import pandas as pd
+    from src.data_engine import (
+        fetch_options_chain, get_expiration_dates,
+        polygon_batch_snapshot, _get_massive_key,
     )
-    if df is None or df.empty:
-        return {"ticker": ticker, "data": [], "expirations": expirations}
+
+    tk = ticker.upper()
+
+    # Single-expiration path — just hit the legacy helper (cache-friendly)
+    if expiration:
+        df, expirations = await asyncio.gather(
+            asyncio.to_thread(fetch_options_chain, tk, expiration),
+            asyncio.to_thread(get_expiration_dates, tk),
+        )
+        if df is None or df.empty:
+            return {"ticker": ticker, "data": [], "expirations": expirations}
+        return {
+            "ticker": ticker,
+            "count": len(df),
+            "data": df_records(df),
+            "expirations": expirations,
+        }
+
+    # Full-chain fast path
+    def _get_spot() -> float:
+        try:
+            snap = polygon_batch_snapshot([tk]) or {}
+            return float(snap.get(tk, {}).get("price") or 0)
+        except Exception:
+            return 0.0
+
+    spot, expirations_list, api_key = await asyncio.gather(
+        asyncio.to_thread(_get_spot),
+        asyncio.to_thread(get_expiration_dates, tk),
+        asyncio.to_thread(_get_massive_key),
+    )
+    expirations = expirations_list or []
+
+    # If we don't have a spot (quotes endpoint failed) OR a Polygon key, fall
+    # back to the legacy full-chain fetch.
+    if not spot or not api_key:
+        df = await asyncio.to_thread(fetch_options_chain, tk, None)
+        if df is None or df.empty:
+            return {"ticker": ticker, "data": [], "expirations": expirations}
+        return {
+            "ticker": ticker,
+            "count": len(df),
+            "data": df_records(df),
+            "expirations": expirations,
+        }
+
+    # Fan out across the nearest N expirations, strike-filtered at the source.
+    nearest = expirations[:_CHAIN_NEAREST_EXPS]
+    lo = round(spot * (1 - _CHAIN_STRIKE_WINDOW_PCT), 2)
+    hi = round(spot * (1 + _CHAIN_STRIKE_WINDOW_PCT), 2)
+
+    def _fetch_all() -> "list[list[dict]]":
+        with ThreadPoolExecutor(max_workers=min(8, len(nearest) or 1)) as pool:
+            return list(pool.map(
+                lambda exp: _fetch_chain_single_exp_fast(tk, exp, lo, hi, api_key),
+                nearest,
+            ))
+
+    per_exp = await asyncio.to_thread(_fetch_all)
+    flat_results: list[dict] = [row for batch in per_exp for row in batch]
+
+    if not flat_results:
+        # Fast path returned nothing — fall back to legacy for safety.
+        df = await asyncio.to_thread(fetch_options_chain, tk, None)
+        if df is None or df.empty:
+            return {"ticker": ticker, "data": [], "expirations": expirations}
+        return {
+            "ticker": ticker,
+            "count": len(df),
+            "data": df_records(df),
+            "expirations": expirations,
+        }
+
+    df = _raw_rows_to_chain_df(flat_results)
     return {
         "ticker": ticker,
         "count": len(df),
