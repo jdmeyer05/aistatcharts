@@ -118,10 +118,25 @@ async def _warm_caches() -> None:
     )
 
 
+def _validate_critical_config() -> None:
+    """Fail fast on misconfiguration that would silently degrade a subsystem.
+
+    OI_CAPTURE_KEY set-but-empty makes `require_admin_or_scheduler` fall
+    through to the admin-JWT path, so Cloud Scheduler calls 403 with no
+    obvious cause. Better to refuse to start than to serve in that state.
+    """
+    val = os.environ.get("OI_CAPTURE_KEY")
+    if val is not None and not val.strip():
+        raise RuntimeError(
+            "OI_CAPTURE_KEY is set but empty — unset it or provide a value"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup: initialize Supabase client + pre-warm CFTC caches in the
     background. The app accepts requests immediately; caches fill asynchronously."""
+    _validate_critical_config()
     from src.db import get_client
     get_client()  # warm the connection
     # Fire-and-forget background warmup. Don't await — server starts now.
@@ -159,11 +174,13 @@ _default_origins = [
 _env_origins = [o.strip() for o in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
 _allow_origins = _env_origins or _default_origins
 
-# Default regex covers Vercel preview deployments for this project. Override
-# via env if the Vercel project slug changes. `or` (not the 2-arg form of
-# `get`) so a missing *or* empty-string env var both fall back to the default
-# — empty regex would silently disable Vercel preview matching.
-_default_origin_regex = r"^https://.*\.vercel\.app$"
+# Default regex covers this project's Vercel preview deployments only —
+# `aistatcharts[.vercel.app]` and `aistatcharts-<hash>-<team>.vercel.app`.
+# Matching every `*.vercel.app` would let any Vercel tenant's site (including
+# an attacker's) hit this API. Override via env if the Vercel slug changes.
+# `or` (not the 2-arg form of `get`) so a missing *or* empty-string env var
+# both fall back to the default — empty regex would silently disable matching.
+_default_origin_regex = r"^https://aistatcharts(-[a-z0-9-]+)?\.vercel\.app$"
 _allow_origin_regex = os.environ.get("CORS_ALLOWED_ORIGIN_REGEX") or _default_origin_regex
 
 app.add_middleware(
@@ -171,9 +188,20 @@ app.add_middleware(
     allow_origins=_allow_origins,
     allow_origin_regex=_allow_origin_regex,
     allow_credentials=True,
-    allow_methods=["*"],
+    # Explicit method list — routes use GET/POST/PATCH/DELETE; OPTIONS is for
+    # the preflight. `["*"]` would also accept e.g. TRACE which nothing serves.
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Rate limiting — protects AI vendor spend. See api/rate_limit.py for the
+# key function; routes opt in with `@limiter.limit("20/minute;500/day")`.
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from api.rate_limit import limiter
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Compress responses ≥ 1 KB. Dashboards are 5-25 KB JSON; compression ratio
 # is typically 6-10× for pretty-printed JSON. Material win on mobile networks.
@@ -205,7 +233,7 @@ async def _cache_control_middleware(request, call_next):
     return response
 
 # Register route modules
-from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts, ai, cftc
+from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts, ai, cftc, wsb
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -224,6 +252,7 @@ app.include_router(sectors.router, prefix="/api/sectors", tags=["Sector Analysis
 app.include_router(alerts.router, prefix="/api", tags=["Smart Money Alerts"])
 app.include_router(ai.router, prefix="/api/ai", tags=["AI Interpretation"])
 app.include_router(cftc.router, prefix="/api/cftc", tags=["CFTC Positioning"])
+app.include_router(wsb.router, prefix="/api/wsb", tags=["WallStreetBets"])
 
 
 @app.get("/api/health")

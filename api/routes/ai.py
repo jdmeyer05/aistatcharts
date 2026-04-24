@@ -16,10 +16,11 @@ import re
 from datetime import datetime, timedelta
 
 import anthropic
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from api.deps import get_current_user
+from api.rate_limit import limiter
 from src.api_keys import get_secret
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,10 @@ ACCURACY RULES — non-negotiable:
 - If you compute a derived number, either show the inputs (e.g., "177/129 = 1.37x buy/sell") or prefix with "roughly"/"approximately".
 - Prefer qualitative language ("modestly bullish", "heavy skew") over invented precise figures when precision isn't in the data.
 - Never cite a ticker, fund, or person not present in the payload.
-- If the data is too sparse for a specific claim, say so — don't pad with generalities."""
+- If the data is too sparse for a specific claim, say so — don't pad with generalities.
+
+SELF-CHECK — before finalizing:
+Draft your response first. Then re-read it once and verify: every number traces to the payload, every ticker/fund/person appears in the payload, and your Bottom line is consistent with the data cited. Make small corrections if anything fails — this is a verification pass, not a rewrite. Output only the final revised version."""
 
 
 # Extract numeric-looking tokens from Claude's interpretation so we can check
@@ -300,6 +304,26 @@ PAGE_CONTEXT: dict[str, str] = {
         "- Distance_pct < 3% on a nearby trigger means it's within normal-week price noise — high probability of firing.\n"
         "What to produce: crisp bias call for the contract (buying / selling / mixed with the key scenario), the nearest trigger that would flip the model (cite level + distance_pct), and whether the scenario grid implies favorable risk/reward from the current exposure. Skip explanations of what CTAs are."
     ),
+    "wsb": (
+        "r/wallstreetbets ticker-mention scan (plus r/options and r/stocks for signal quality). Payload has top_tickers list, each with: mentions (raw post+comment count), sentiment (-1..1, based on bull/bear keyword weights), options_lean ('calls'|'puts'|'mixed'|'neutral'), calls/puts mention counts, dd_posts (number of Due Diligence posts).\n"
+        "Interpretation rules:\n"
+        "- This is NOISE with occasional signal. Retail sentiment is noisy — the value is in the SHIFTS and EXTREMES, not the average.\n"
+        "- Heavily-mentioned tickers with strong directional lean (sentiment > 0.5 or < -0.5) AND matching options_lean are the confluence trade. Single-signal alone is usually wrong.\n"
+        "- 'Calls lean + bullish sentiment + a DD post' is the high-quality bull signal. The reverse for bearish.\n"
+        "- Meme-only tickers with zero options activity are usually wrong — retail piles in at the top.\n"
+        "- Contrarian read: if WSB is unanimously bullish on an already-run-up name, it's usually near the local top. If unanimously bearish and the stock has been dumped, often near a local bottom.\n"
+        "What to produce: 1-2 tickers the WSB crowd is most bullish on with supporting confluence; 1 ticker where WSB is bearish AND options flow agrees; optionally 1 contrarian read where the crowd is over-concentrated. Skip indices / ETFs in the main call-outs."
+    ),
+    "polymarket": (
+        "Polymarket prediction-market snapshot — curated trading-relevant events. Payload is a list of events, each with: title, category (Fed Rates / Economy / Geopolitics / Politics / Crypto / Sports / Other), volume_24h ($), liquidity ($), outcomes[] with yes_pct (0-100), days_out, actionability (0-50, higher = nearer-term + more uncertain).\n"
+        "Interpretation rules:\n"
+        "- Focus on NEAR-TERM + UNCERTAIN. A 50/50 market resolving in 7 days is far more tradeable than a 95/5 resolving in 180 days.\n"
+        "- Volume matters — liquidity < $10K means the odds are noisy. Only reference markets with volume_24h ≥ $5K as crowd signal.\n"
+        "- Cross-asset reading: when Fed-Rates markets say cuts are priced, ask whether bonds / duration / gold agree or diverge.\n"
+        "- Geopolitics often mispriced short-term — that's where the alpha lives; flag if a geopolitical event is priced differently than typical news coverage suggests.\n"
+        "- Economy markets (recession, GDP, CPI) tend to track consensus — flag only when they're meaningfully away from consensus.\n"
+        "What to produce: 1) The single biggest signal from the crowd right now (the 'story'). 2) The sharpest near-term tradeable (high actionability, decent volume). 3) Any divergence worth flagging between Polymarket and the typical narrative. Skip sports unless it's a top-volume market."
+    ),
 }
 
 
@@ -331,7 +355,9 @@ _AI_CACHE_TTL = timedelta(hours=24)
 
 
 @router.post("/interpret")
+@limiter.limit("20/minute;500/day")
 async def interpret(
+    request: Request,
     body: InterpretRequest,
     user: str = Depends(get_current_user),
 ):

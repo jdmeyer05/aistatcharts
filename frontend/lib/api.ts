@@ -838,6 +838,41 @@ export async function fetchMarketDriver(): Promise<MarketDriverResponse> {
   return apiFetch("/api/market/market-driver", { timeoutMs: 45_000 });
 }
 
+// ─── WallStreetBets mentions ──────────────────────────────────
+export interface WsbTopPost {
+  title: string;
+  url: string;
+  ups: number;
+  subreddit: string;
+  flair: string;
+}
+export interface WsbTicker {
+  ticker: string;
+  mentions: number;
+  upvote_weighted: number;
+  bull_score: number;
+  bear_score: number;
+  sentiment: number;         // -1..1
+  calls_mentions: number;
+  puts_mentions: number;
+  options_lean: "calls" | "puts" | "mixed" | "neutral";
+  dd_posts: number;
+  top_post: WsbTopPost | null;
+}
+export interface WsbResponse {
+  as_of_utc: string;
+  subreddits_scanned: string[];
+  post_count: number;
+  tickers: WsbTicker[];
+  cache_hit?: boolean;
+  error?: string;
+}
+
+export async function fetchWsb(forceRefresh = false): Promise<WsbResponse> {
+  const qs = forceRefresh ? "?force_refresh=true" : "";
+  return apiFetch(`/api/wsb/mentions${qs}`, { timeoutMs: 45_000 });
+}
+
 // ─── Signals ─────────────────────────────────────────────────
 
 export interface SignalSummary {
