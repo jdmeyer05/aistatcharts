@@ -2657,6 +2657,20 @@ ACCURACY RULES — non-negotiable:
 - Never invent tickers, news items, or events not in the payload.
 - If the context is thin (market closed, no news, no events), say so in one short paragraph and emit minimal filler for the other two. Do not pad.
 
+VIX REGIME CALIBRATION — use the `vix_level_band` field, not the 1D % change:
+- `complacent` (VIX < 15): "muted vol", "complacent", "carry-friendly". NEVER call this elevated.
+- `muted` (15 ≤ VIX < 20): "below-average vol", "muted", "benign". NEVER call this elevated.
+- `elevated` (20 ≤ VIX < 25): the only band that warrants "elevated".
+- `stressed` (25 ≤ VIX < 35): "stressed", "risk-off bid".
+- `panic` (VIX ≥ 35): "panic", "crisis-pricing".
+A VIX 1D move (e.g. +0.5%, +10%) describes the *direction*, not the *level*. A VIX up 0.5% but still printing 17 is a *muted* regime that is *firming*, not "elevated volatility". Get this right — the rest of the firm reads this and trades off the regime label.
+
+CITATION LABEL RULES — disambiguate every percentage:
+- Stock price moves: use ticker + signed %. "QQQ +0.96%". "USO -2.92%". Always include the +/- sign.
+- Single-name catalyst with non-price % (earnings, revenue, guidance, odds): suffix the metric. "VRT EPS +83% YoY". "LTRE -22% on guide cut". Never write a bare "Vertiv up 83%" — readers will misread it as a stock move.
+- News/release citations: short label of the catalyst itself ("Vertiv Q1 beat", "NFP miss"). Don't put a % in the label unless the % is part of the announced figure.
+- Polymarket / CFTC / odds-based: include the source verb. "Polymarket recession-2026 38% (-2pp)".
+
 LENGTH — HARD LIMITS:
 - Each paragraph: 60 words MAX. 3 paragraphs total.
 - Confidence + regime_label: ≤ 20 words combined.
@@ -2695,11 +2709,31 @@ async def market_driver(
     ctx = _assemble_market_driver_context()
     escalate = _should_escalate_to_claude(ctx)
 
+    # Derive an authoritative vol-regime label from the VIX print so the model
+    # can't call a sub-18 VIX "elevated" because of unrelated cross-asset noise.
+    # Bands match `vix_regime` further up in the file (line ~1626) so the home
+    # narrative agrees with the rest of the platform.
+    vix_q = ctx.get("quotes", {}).get("^VIX", {})
+    vix_price = float(vix_q.get("price") or 0)
+    if vix_price <= 0:
+        vix_band = "unknown"
+    elif vix_price < 15:
+        vix_band = "complacent"
+    elif vix_price < 20:
+        vix_band = "muted"
+    elif vix_price < 25:
+        vix_band = "elevated"
+    elif vix_price < 35:
+        vix_band = "stressed"
+    else:
+        vix_band = "panic"
+
     # Payload passed to the model — compact JSON the prompt tells it to cite from.
     payload = {
         "as_of_utc": ctx["as_of"],
         "market_open": ctx.get("market_open", False),
         "quotes": ctx.get("quotes", {}),
+        "vix_level_band": vix_band,
         "news_headlines": ctx.get("news", []),
         "upcoming_events_next_3d": ctx.get("events", []),
         "vol_regime": ctx.get("vol", ""),
