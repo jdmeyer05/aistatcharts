@@ -639,11 +639,14 @@ async def heatmap_data(
 @router.get("/events")
 async def upcoming_events(user: str = Depends(get_current_user)):
     """Get upcoming macro events and FOMC dates."""
-    from datetime import date
     import pandas as pd
     try:
         from src.economic_calendar import find_events_near_date, get_upcoming_fomc, FOMC_SEP_DATES
-        today = date.today()
+        # Anchor "today" to the US trading day (NY local), not server-local UTC.
+        # Cloud Run runs UTC, so a user viewing the home page in the evening ET
+        # would otherwise get every `days_away` shifted +1 because UTC has
+        # already rolled to tomorrow.
+        today = pd.Timestamp.now(tz="America/New_York").date()
         events = find_events_near_date(today.strftime("%Y-%m-%d"), window_days=14) or []
         fomc_dates = get_upcoming_fomc(3) or []
 
@@ -1622,11 +1625,14 @@ async def daily_briefing(request: Request, req: DailyBriefingRequest, user: str 
             pass
     vix_regime = "Low" if vix_price < 15 else "Normal" if vix_price < 20 else "Elevated" if vix_price < 30 else "High" if vix_price < 40 else "Extreme"
 
-    # FOMC + events
+    # FOMC + events. Anchor `today` to NY local so days_away matches the
+    # trading-day view a US-markets user expects (server runs UTC).
     fomc_dates = get_upcoming_fomc(3)
     fomc_events = []
+    today_ny = pd.Timestamp.now(tz="America/New_York").date()
     for fd in fomc_dates:
-        days_away = (pd.to_datetime(fd) - pd.Timestamp.now()).days
+        fd_date = pd.to_datetime(fd).date()
+        days_away = (fd_date - today_ny).days
         if 0 <= days_away <= 30:
             is_sep = fd in FOMC_SEP_DATES
             fomc_events.append({"date": fd, "days_away": days_away, "type": "FOMC + SEP/Dot Plot" if is_sep else "FOMC"})
