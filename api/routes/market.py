@@ -325,22 +325,10 @@ async def options_chain(
 
     tk = ticker.upper()
 
-    # Single-expiration path — just hit the legacy helper (cache-friendly)
-    if expiration:
-        df, expirations = await asyncio.gather(
-            asyncio.to_thread(fetch_options_chain, tk, expiration),
-            asyncio.to_thread(get_expiration_dates, tk),
-        )
-        if df is None or df.empty:
-            return {"ticker": ticker, "data": [], "expirations": expirations}
-        return {
-            "ticker": ticker,
-            "count": len(df),
-            "data": df_records(df),
-            "expirations": expirations,
-        }
-
-    # Full-chain fast path
+    # Helper used by both single-expiration and full-chain paths. Returning
+    # `spot` in the chain response lets the frontend skip a separate
+    # /api/market/snapshot call — which removes a Promise.all coupling that
+    # made a slow snapshot fetch tank the whole "Load Chain" interaction.
     def _get_spot() -> float:
         try:
             snap = polygon_batch_snapshot([tk]) or {}
@@ -348,6 +336,24 @@ async def options_chain(
         except Exception:
             return 0.0
 
+    # Single-expiration path — just hit the legacy helper (cache-friendly)
+    if expiration:
+        df, expirations, spot = await asyncio.gather(
+            asyncio.to_thread(fetch_options_chain, tk, expiration),
+            asyncio.to_thread(get_expiration_dates, tk),
+            asyncio.to_thread(_get_spot),
+        )
+        if df is None or df.empty:
+            return {"ticker": ticker, "data": [], "expirations": expirations, "spot": spot}
+        return {
+            "ticker": ticker,
+            "count": len(df),
+            "data": df_records(df),
+            "expirations": expirations,
+            "spot": spot,
+        }
+
+    # Full-chain fast path
     spot, expirations_list, api_key = await asyncio.gather(
         asyncio.to_thread(_get_spot),
         asyncio.to_thread(get_expiration_dates, tk),
@@ -360,12 +366,13 @@ async def options_chain(
     if not spot or not api_key:
         df = await asyncio.to_thread(fetch_options_chain, tk, None)
         if df is None or df.empty:
-            return {"ticker": ticker, "data": [], "expirations": expirations}
+            return {"ticker": ticker, "data": [], "expirations": expirations, "spot": spot}
         return {
             "ticker": ticker,
             "count": len(df),
             "data": df_records(df),
             "expirations": expirations,
+            "spot": spot,
         }
 
     # Fan out across the nearest N expirations, strike-filtered at the source.
@@ -387,12 +394,13 @@ async def options_chain(
         # Fast path returned nothing — fall back to legacy for safety.
         df = await asyncio.to_thread(fetch_options_chain, tk, None)
         if df is None or df.empty:
-            return {"ticker": ticker, "data": [], "expirations": expirations}
+            return {"ticker": ticker, "data": [], "expirations": expirations, "spot": spot}
         return {
             "ticker": ticker,
             "count": len(df),
             "data": df_records(df),
             "expirations": expirations,
+            "spot": spot,
         }
 
     df = _raw_rows_to_chain_df(flat_results)
@@ -401,6 +409,7 @@ async def options_chain(
         "count": len(df),
         "data": df_records(df),
         "expirations": expirations,
+        "spot": spot,
     }
 
 

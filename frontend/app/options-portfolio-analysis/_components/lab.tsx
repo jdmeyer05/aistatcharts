@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import { fetchOptionsChain, fetchSnapshot, fetchPriceHistory } from "@/lib/api";
+import { fetchOptionsChainWithSpot, fetchPriceHistory } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
@@ -58,8 +58,16 @@ export function OptionsLabContent() {
 
   const loadChain = useMutation({
     mutationFn: async (tk: string) => {
-      const [ch, snap, hist] = await Promise.all([fetchOptionsChain(tk), fetchSnapshot([tk]), fetchPriceHistory(tk, 252)]);
-      return { chain: ch.data as unknown as ChainRow[], spot: snap[tk]?.price ?? 0, hist: hist.data };
+      // Chain (with spot) and price-history are independent; allSettled keeps
+      // a hist failure from blocking the chain UI.
+      const [chRes, histRes] = await Promise.allSettled([
+        fetchOptionsChainWithSpot(tk),
+        fetchPriceHistory(tk, 252),
+      ]);
+      if (chRes.status !== "fulfilled") throw chRes.reason;
+      const { chain, spot } = chRes.value;
+      const hist = histRes.status === "fulfilled" ? histRes.value.data : [];
+      return { chain: chain.data as unknown as ChainRow[], spot, hist };
     },
     onSuccess: (d) => { setLabChain(d.chain); setLabSpot(d.spot); setLabHist(d.hist); },
   });

@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import { fetchOptionsChain, fetchSnapshot, fetchOIHistory } from "@/lib/api";
+import { fetchOptionsChain, fetchOptionsChainWithSpot, fetchOIHistory } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
@@ -53,11 +53,11 @@ export default function OptionsIntelligence() {
 
   const load = useMutation({
     mutationFn: async (tk: string) => {
-      const [ch, snap] = await Promise.all([fetchOptionsChain(tk), fetchSnapshot([tk])]);
+      const { chain, spot } = await fetchOptionsChainWithSpot(tk);
       return {
-        chain: ch.data as unknown as ChainRow[],
-        expirations: ch.expirations ?? [],
-        spot: snap[tk]?.price ?? 0,
+        chain: chain.data as unknown as ChainRow[],
+        expirations: chain.expirations ?? [],
+        spot,
         tk,
       };
     },

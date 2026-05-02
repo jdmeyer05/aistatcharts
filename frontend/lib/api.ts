@@ -678,12 +678,41 @@ export async function fetchOptionsChain(
   count: number;
   data: Record<string, unknown>[];
   expirations: string[];
+  spot?: number;
 }> {
   const params = expiration ? `?expiration=${expiration}` : "";
   // 90s: SPY / QQQ chains paginate across dozens of Polygon snapshot pages
   // (250 contracts each × 20+ expirations). Default 25-30s wasn't enough on
   // cold cache. Single-expiration queries are much faster; keep same budget.
   return apiFetch(`/api/market/chain/${ticker}${params}`, { timeoutMs: 90_000 });
+}
+
+/**
+ * Chain + spot in a single resilient call.
+ *
+ * The chain endpoint now returns `spot` itself, so this avoids the
+ * Promise.all([chain, snapshot]) pattern that used to surface a slow/failed
+ * snapshot fetch as a chain failure (the snapshot's 30s default timeout was
+ * tanking "Load Chain" for users on cold Cloud Run). If the chain response
+ * lacks a spot (legacy fallback path, or a ticker the snapshot endpoint
+ * couldn't resolve), this performs a best-effort snapshot fetch as a
+ * fallback — failures are swallowed so the chain still renders.
+ */
+export async function fetchOptionsChainWithSpot(ticker: string): Promise<{
+  chain: Awaited<ReturnType<typeof fetchOptionsChain>>;
+  spot: number;
+}> {
+  const chain = await fetchOptionsChain(ticker);
+  let spot = chain.spot ?? 0;
+  if (!spot) {
+    try {
+      const snap = await fetchSnapshot([ticker]);
+      spot = snap[ticker]?.price ?? 0;
+    } catch {
+      // Best-effort fallback only — chain renders without spot.
+    }
+  }
+  return { chain, spot };
 }
 
 export interface MarketNews {
