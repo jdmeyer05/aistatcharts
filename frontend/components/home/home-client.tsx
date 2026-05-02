@@ -201,8 +201,12 @@ function SectorRelative() {
     refetchInterval: 60_000,
     staleTime: 45_000,
   });
-  const items = q.data?.items ?? [];
-  const sorted = useMemo(() => [...items].sort((a, b) => b.change - a.change), [items]);
+  // Fall back inside useMemo so an undefined `q.data` doesn't churn the
+  // `[]` reference every render and re-trigger the sort.
+  const sorted = useMemo(
+    () => [...(q.data?.items ?? [])].sort((a, b) => b.change - a.change),
+    [q.data?.items]
+  );
   const maxAbs = Math.max(0.5, ...sorted.map((s) => Math.abs(s.change || 0)));
 
   return (
