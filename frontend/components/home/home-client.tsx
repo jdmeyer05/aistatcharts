@@ -30,20 +30,7 @@ import {
   type MarketDriverResponse,
   type TrumpPost,
 } from "@/lib/api";
-
-const PULSE_TICKERS = ["SPY", "QQQ", "^VIX", "TLT", "GLD", "USO", "BTC-USD", "DX-Y.NYB"];
-export const HOME_PULSE_TICKERS = PULSE_TICKERS;
-
-const PULSE_LABELS: Record<string, string> = {
-  SPY: "S&P",
-  QQQ: "Nasdaq",
-  "^VIX": "VIX",
-  TLT: "20Y",
-  GLD: "Gold",
-  USO: "Crude",
-  "BTC-USD": "BTC",
-  "DX-Y.NYB": "DXY",
-};
+import { PULSE_TICKERS, PULSE_LABELS } from "@/lib/home-constants";
 
 function fmtAgo(iso: string): string {
   try {
@@ -69,7 +56,7 @@ function pctClass(n: number | undefined | null): string {
 function MarketPulse() {
   const q = useQuery({
     queryKey: ["pulse", PULSE_TICKERS.join(",")],
-    queryFn: () => fetchSnapshot(PULSE_TICKERS),
+    queryFn: () => fetchSnapshot([...PULSE_TICKERS]),
     refetchInterval: 30_000,
     staleTime: 20_000,
   });
