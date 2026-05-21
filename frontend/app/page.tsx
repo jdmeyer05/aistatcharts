@@ -19,7 +19,8 @@
  * cadence — cold visits in the same 30s window land on edge cache.
  */
 import { dehydrate, HydrationBoundary, QueryClient } from "@tanstack/react-query";
-import HomeClient, { HOME_PULSE_TICKERS } from "@/components/home/home-client";
+import HomeClient from "@/components/home/home-client";
+import { PULSE_TICKERS } from "@/lib/home-constants";
 import {
   fetchSnapshotServer,
   fetchMarketDriverServer,
@@ -35,8 +36,9 @@ export const preferredRegion = "iad1";
 export default async function HomePage() {
   const queryClient = new QueryClient();
 
+  const tickers = [...PULSE_TICKERS];
   const [pulse, driver, heatmap, volLandscape, trumpMonitor, events] = await Promise.all([
-    fetchSnapshotServer(HOME_PULSE_TICKERS),
+    fetchSnapshotServer(tickers),
     fetchMarketDriverServer(),
     fetchHeatmapServer("sectors"),
     fetchVolLandscapeServer(),
@@ -48,7 +50,7 @@ export default async function HomePage() {
   // a null result means the client should perform its own fetch and
   // render its loading state, not lock in a bad payload.
   if (pulse) {
-    queryClient.setQueryData(["pulse", HOME_PULSE_TICKERS.join(",")], pulse);
+    queryClient.setQueryData(["pulse", tickers.join(",")], pulse);
   }
   if (driver) {
     queryClient.setQueryData(["market-driver"], driver);
