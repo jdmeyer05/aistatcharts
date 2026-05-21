@@ -3,7 +3,10 @@ import logging
 import pandas as pd
 import numpy as np
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from threading import Lock
+from cachetools import TTLCache
 from supabase import create_client, Client
 import streamlit as st
 
@@ -147,11 +150,25 @@ def _save_snapshot_cache(results: dict) -> None:
         pass
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+# Per-instance batch cache. Streamlit's @st.cache_data was a no-op in the FastAPI
+# context (no ScriptRunner) so every prior call was hitting Supabase + Polygon
+# unconditionally. TTL is short (30s) so prices stay live; Supabase api_cache
+# (3-min TTL) is the cross-instance backstop. Key is frozenset(symbols) so the
+# same logical request from different argument orderings hits the same entry.
+_BATCH_SNAPSHOT_CACHE: TTLCache = TTLCache(maxsize=64, ttl=30)
+_BATCH_SNAPSHOT_LOCK = Lock()
+
+
 def polygon_batch_snapshot(symbols: list) -> dict:
     """Get price snapshots for multiple symbols via Polygon all-tickers snapshot.
     Returns {original_symbol: {price, prev_close, change}}.
-    Uses Supabase snapshot cache to avoid redundant API calls."""
+    Two-tier cache: 30s in-memory TTL + 3-min Supabase api_cache."""
+    cache_key = frozenset(symbols)
+    with _BATCH_SNAPSHOT_LOCK:
+        memo = _BATCH_SNAPSHOT_CACHE.get(cache_key)
+    if memo is not None:
+        return dict(memo)
+
     api_key = _get_polygon_key()
     results = {}
     if not api_key:
@@ -161,12 +178,16 @@ def polygon_batch_snapshot(symbols: list) -> dict:
     cached = _load_snapshot_cache(symbols)
     if cached and len(cached) >= len(symbols) * 0.8:
         # Most symbols found in cache — return directly
+        with _BATCH_SNAPSHOT_LOCK:
+            _BATCH_SNAPSHOT_CACHE[cache_key] = dict(cached)
         return cached
     # Merge any cached results we do have
     results.update(cached)
     # Only fetch symbols not in cache
     symbols_to_fetch = [s for s in symbols if s not in cached]
     if not symbols_to_fetch:
+        with _BATCH_SNAPSHOT_LOCK:
+            _BATCH_SNAPSHOT_CACHE[cache_key] = dict(results)
         return results
 
     # Try the bulk snapshot endpoint (one API call for remaining tickers)
@@ -212,20 +233,25 @@ def polygon_batch_snapshot(symbols: list) -> dict:
             logger.info(f"Polygon batch {sym}={price} has 0% change — likely stale, will re-fetch.")
             del results[sym]
 
-    # Fill any missing or rejected symbols with individual calls + yfinance/FRED fallback
-    for sym in symbols:
-        if sym not in results:
-            snap = polygon_snapshot_with_fallback(sym)
-            if snap and snap.get("price"):
-                prev = snap.get("prev_close") or snap["price"]
-                chg = ((snap["price"] / prev) - 1) * 100 if prev > 0 else 0
-                results[sym] = {"price": snap["price"], "change": round(chg, 2)}
+    # Fill any missing or rejected symbols via the per-symbol fallback path.
+    # Parallel pool (8 workers) — each call makes 1-3 sequential HTTP requests
+    # (Polygon → yfinance → FRED), so a 10-symbol miss serially was ~15-30s.
+    missing = [s for s in symbols if s not in results]
+    if missing:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for sym, snap in zip(missing, pool.map(polygon_snapshot_with_fallback, missing)):
+                if snap and snap.get("price"):
+                    prev = snap.get("prev_close") or snap["price"]
+                    chg = ((snap["price"] / prev) - 1) * 100 if prev > 0 else 0
+                    results[sym] = {"price": snap["price"], "change": round(chg, 2)}
 
     # Save all fetched results to Supabase cache
     new_results = {k: v for k, v in results.items() if k not in cached}
     if new_results:
         _save_snapshot_cache(new_results)
 
+    with _BATCH_SNAPSHOT_LOCK:
+        _BATCH_SNAPSHOT_CACHE[cache_key] = dict(results)
     return results
 
 
