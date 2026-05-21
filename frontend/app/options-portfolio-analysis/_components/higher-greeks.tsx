@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import { fetchOptionsChain, fetchSnapshot, fetchAITradeIdeas } from "@/lib/api";
+import { fetchOptionsChainWithSpot, fetchAITradeIdeas } from "@/lib/api";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
@@ -69,8 +69,8 @@ export function HigherGreeksContent() {
 
   const load = useMutation({
     mutationFn: async (tk: string) => {
-      const [ch, snap] = await Promise.all([fetchOptionsChain(tk), fetchSnapshot([tk])]);
-      return { chain: ch.data as unknown as ChainRow[], spot: snap[tk]?.price ?? 0 };
+      const { chain, spot } = await fetchOptionsChainWithSpot(tk);
+      return { chain: chain.data as unknown as ChainRow[], spot };
     },
     onSuccess: (d) => {
       setSpot(d.spot);

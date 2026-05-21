@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
-import { fetchOptionsChain, fetchSnapshot, fetchPriceHistory, fetchAITradeIdeas } from "@/lib/api";
+import { fetchOptionsChain, fetchOptionsChainWithSpot, fetchSnapshot, fetchPriceHistory, fetchAITradeIdeas } from "@/lib/api";
 import { getChartTheme, getBaseLayout, heatmapTrace } from "@/lib/chart-theme";
 import { Metric } from "@/components/ui/metric";
 import { Plot } from "@/components/plot";
@@ -92,8 +92,8 @@ export function CalendarSpreadContent() {
 
   const load = useMutation({
     mutationFn: async (tk: string) => {
-      const [ch, snap] = await Promise.all([fetchOptionsChain(tk), fetchSnapshot([tk])]);
-      return { chain: ch.data as unknown as ChainRow[], spot: snap[tk]?.price ?? 0 };
+      const { chain, spot } = await fetchOptionsChainWithSpot(tk);
+      return { chain: chain.data as unknown as ChainRow[], spot };
     },
     onSuccess: (d) => {
       setChain(d.chain); setSpot(d.spot);
@@ -583,9 +583,8 @@ export function CalendarSpreadContent() {
                   const results: Record<string, unknown>[] = [];
                   for (const tk of SCAN_TICKERS) {
                     try {
-                      const [ch, snap] = await Promise.all([fetchOptionsChain(tk), fetchSnapshot([tk])]);
+                      const { chain: ch, spot: sp } = await fetchOptionsChainWithSpot(tk);
                       const rows = ch.data as unknown as ChainRow[];
-                      const sp = snap[tk]?.price ?? 0;
                       if (!sp || rows.length < 20) continue;
                       const exps = [...new Set(rows.map(c => c.expiration_date))].sort();
                       // Find front (30-60 DTE) and back (60-120 DTE)

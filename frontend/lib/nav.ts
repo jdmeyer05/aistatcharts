@@ -45,6 +45,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Strategy Scanner", href: "/strategy-scanner", description: "Multi-ticker × multi-strategy scan ranked by Deflated Sharpe", status: "live" },
       { label: "Signal Scanner", href: "/signal-scanner", description: "8-tab institutional scanner: momentum, mean reversion, value", status: "live" },
       { label: "Correlation", href: "/correlation", description: "Cross-asset matrix, regime analysis, PCA, clustering", status: "live" },
+      { label: "Causality", href: "/causality", description: "Macro causal research: lead/lag, Granger, transfer entropy, VAR/IRF — across 50+ macro series", status: "live" },
       { label: "Quant Lab", href: "/quant-lab", description: "AFML: frac diff, CUSUM, SADF, meta-labeling, VPIN, entropy", status: "live" },
       { label: "Factor Decomposition", href: "/factors", description: "Fama-French 5-factor + momentum decomposition", status: "live" },
       { label: "Portfolio Optimizer", href: "/portfolio-optimizer", description: "9 allocation methods + Black-Litterman", status: "live" },

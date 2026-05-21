@@ -325,22 +325,10 @@ async def options_chain(
 
     tk = ticker.upper()
 
-    # Single-expiration path — just hit the legacy helper (cache-friendly)
-    if expiration:
-        df, expirations = await asyncio.gather(
-            asyncio.to_thread(fetch_options_chain, tk, expiration),
-            asyncio.to_thread(get_expiration_dates, tk),
-        )
-        if df is None or df.empty:
-            return {"ticker": ticker, "data": [], "expirations": expirations}
-        return {
-            "ticker": ticker,
-            "count": len(df),
-            "data": df_records(df),
-            "expirations": expirations,
-        }
-
-    # Full-chain fast path
+    # Helper used by both single-expiration and full-chain paths. Returning
+    # `spot` in the chain response lets the frontend skip a separate
+    # /api/market/snapshot call — which removes a Promise.all coupling that
+    # made a slow snapshot fetch tank the whole "Load Chain" interaction.
     def _get_spot() -> float:
         try:
             snap = polygon_batch_snapshot([tk]) or {}
@@ -348,6 +336,24 @@ async def options_chain(
         except Exception:
             return 0.0
 
+    # Single-expiration path — just hit the legacy helper (cache-friendly)
+    if expiration:
+        df, expirations, spot = await asyncio.gather(
+            asyncio.to_thread(fetch_options_chain, tk, expiration),
+            asyncio.to_thread(get_expiration_dates, tk),
+            asyncio.to_thread(_get_spot),
+        )
+        if df is None or df.empty:
+            return {"ticker": ticker, "data": [], "expirations": expirations, "spot": spot}
+        return {
+            "ticker": ticker,
+            "count": len(df),
+            "data": df_records(df),
+            "expirations": expirations,
+            "spot": spot,
+        }
+
+    # Full-chain fast path
     spot, expirations_list, api_key = await asyncio.gather(
         asyncio.to_thread(_get_spot),
         asyncio.to_thread(get_expiration_dates, tk),
@@ -360,12 +366,13 @@ async def options_chain(
     if not spot or not api_key:
         df = await asyncio.to_thread(fetch_options_chain, tk, None)
         if df is None or df.empty:
-            return {"ticker": ticker, "data": [], "expirations": expirations}
+            return {"ticker": ticker, "data": [], "expirations": expirations, "spot": spot}
         return {
             "ticker": ticker,
             "count": len(df),
             "data": df_records(df),
             "expirations": expirations,
+            "spot": spot,
         }
 
     # Fan out across the nearest N expirations, strike-filtered at the source.
@@ -387,12 +394,13 @@ async def options_chain(
         # Fast path returned nothing — fall back to legacy for safety.
         df = await asyncio.to_thread(fetch_options_chain, tk, None)
         if df is None or df.empty:
-            return {"ticker": ticker, "data": [], "expirations": expirations}
+            return {"ticker": ticker, "data": [], "expirations": expirations, "spot": spot}
         return {
             "ticker": ticker,
             "count": len(df),
             "data": df_records(df),
             "expirations": expirations,
+            "spot": spot,
         }
 
     df = _raw_rows_to_chain_df(flat_results)
@@ -401,6 +409,7 @@ async def options_chain(
         "count": len(df),
         "data": df_records(df),
         "expirations": expirations,
+        "spot": spot,
     }
 
 
@@ -639,11 +648,14 @@ async def heatmap_data(
 @router.get("/events")
 async def upcoming_events(user: str = Depends(get_current_user)):
     """Get upcoming macro events and FOMC dates."""
-    from datetime import date
     import pandas as pd
     try:
         from src.economic_calendar import find_events_near_date, get_upcoming_fomc, FOMC_SEP_DATES
-        today = date.today()
+        # Anchor "today" to the US trading day (NY local), not server-local UTC.
+        # Cloud Run runs UTC, so a user viewing the home page in the evening ET
+        # would otherwise get every `days_away` shifted +1 because UTC has
+        # already rolled to tomorrow.
+        today = pd.Timestamp.now(tz="America/New_York").date()
         events = find_events_near_date(today.strftime("%Y-%m-%d"), window_days=14) or []
         fomc_dates = get_upcoming_fomc(3) or []
 
@@ -1622,11 +1634,14 @@ async def daily_briefing(request: Request, req: DailyBriefingRequest, user: str 
             pass
     vix_regime = "Low" if vix_price < 15 else "Normal" if vix_price < 20 else "Elevated" if vix_price < 30 else "High" if vix_price < 40 else "Extreme"
 
-    # FOMC + events
+    # FOMC + events. Anchor `today` to NY local so days_away matches the
+    # trading-day view a US-markets user expects (server runs UTC).
     fomc_dates = get_upcoming_fomc(3)
     fomc_events = []
+    today_ny = pd.Timestamp.now(tz="America/New_York").date()
     for fd in fomc_dates:
-        days_away = (pd.to_datetime(fd) - pd.Timestamp.now()).days
+        fd_date = pd.to_datetime(fd).date()
+        days_away = (fd_date - today_ny).days
         if 0 <= days_away <= 30:
             is_sep = fd in FOMC_SEP_DATES
             fomc_events.append({"date": fd, "days_away": days_away, "type": "FOMC + SEP/Dot Plot" if is_sep else "FOMC"})
@@ -2651,6 +2666,20 @@ ACCURACY RULES — non-negotiable:
 - Never invent tickers, news items, or events not in the payload.
 - If the context is thin (market closed, no news, no events), say so in one short paragraph and emit minimal filler for the other two. Do not pad.
 
+VIX REGIME CALIBRATION — use the `vix_level_band` field, not the 1D % change:
+- `complacent` (VIX < 15): "muted vol", "complacent", "carry-friendly". NEVER call this elevated.
+- `muted` (15 ≤ VIX < 20): "below-average vol", "muted", "benign". NEVER call this elevated.
+- `elevated` (20 ≤ VIX < 25): the only band that warrants "elevated".
+- `stressed` (25 ≤ VIX < 35): "stressed", "risk-off bid".
+- `panic` (VIX ≥ 35): "panic", "crisis-pricing".
+A VIX 1D move (e.g. +0.5%, +10%) describes the *direction*, not the *level*. A VIX up 0.5% but still printing 17 is a *muted* regime that is *firming*, not "elevated volatility". Get this right — the rest of the firm reads this and trades off the regime label.
+
+CITATION LABEL RULES — disambiguate every percentage:
+- Stock price moves: use ticker + signed %. "QQQ +0.96%". "USO -2.92%". Always include the +/- sign.
+- Single-name catalyst with non-price % (earnings, revenue, guidance, odds): suffix the metric. "VRT EPS +83% YoY". "LTRE -22% on guide cut". Never write a bare "Vertiv up 83%" — readers will misread it as a stock move.
+- News/release citations: short label of the catalyst itself ("Vertiv Q1 beat", "NFP miss"). Don't put a % in the label unless the % is part of the announced figure.
+- Polymarket / CFTC / odds-based: include the source verb. "Polymarket recession-2026 38% (-2pp)".
+
 LENGTH — HARD LIMITS:
 - Each paragraph: 60 words MAX. 3 paragraphs total.
 - Confidence + regime_label: ≤ 20 words combined.
@@ -2689,11 +2718,31 @@ async def market_driver(
     ctx = _assemble_market_driver_context()
     escalate = _should_escalate_to_claude(ctx)
 
+    # Derive an authoritative vol-regime label from the VIX print so the model
+    # can't call a sub-18 VIX "elevated" because of unrelated cross-asset noise.
+    # Bands match `vix_regime` further up in the file (line ~1626) so the home
+    # narrative agrees with the rest of the platform.
+    vix_q = ctx.get("quotes", {}).get("^VIX", {})
+    vix_price = float(vix_q.get("price") or 0)
+    if vix_price <= 0:
+        vix_band = "unknown"
+    elif vix_price < 15:
+        vix_band = "complacent"
+    elif vix_price < 20:
+        vix_band = "muted"
+    elif vix_price < 25:
+        vix_band = "elevated"
+    elif vix_price < 35:
+        vix_band = "stressed"
+    else:
+        vix_band = "panic"
+
     # Payload passed to the model — compact JSON the prompt tells it to cite from.
     payload = {
         "as_of_utc": ctx["as_of"],
         "market_open": ctx.get("market_open", False),
         "quotes": ctx.get("quotes", {}),
+        "vix_level_band": vix_band,
         "news_headlines": ctx.get("news", []),
         "upcoming_events_next_3d": ctx.get("events", []),
         "vol_regime": ctx.get("vol", ""),

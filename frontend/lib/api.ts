@@ -678,12 +678,41 @@ export async function fetchOptionsChain(
   count: number;
   data: Record<string, unknown>[];
   expirations: string[];
+  spot?: number;
 }> {
   const params = expiration ? `?expiration=${expiration}` : "";
   // 90s: SPY / QQQ chains paginate across dozens of Polygon snapshot pages
   // (250 contracts each × 20+ expirations). Default 25-30s wasn't enough on
   // cold cache. Single-expiration queries are much faster; keep same budget.
   return apiFetch(`/api/market/chain/${ticker}${params}`, { timeoutMs: 90_000 });
+}
+
+/**
+ * Chain + spot in a single resilient call.
+ *
+ * The chain endpoint now returns `spot` itself, so this avoids the
+ * Promise.all([chain, snapshot]) pattern that used to surface a slow/failed
+ * snapshot fetch as a chain failure (the snapshot's 30s default timeout was
+ * tanking "Load Chain" for users on cold Cloud Run). If the chain response
+ * lacks a spot (legacy fallback path, or a ticker the snapshot endpoint
+ * couldn't resolve), this performs a best-effort snapshot fetch as a
+ * fallback — failures are swallowed so the chain still renders.
+ */
+export async function fetchOptionsChainWithSpot(ticker: string): Promise<{
+  chain: Awaited<ReturnType<typeof fetchOptionsChain>>;
+  spot: number;
+}> {
+  const chain = await fetchOptionsChain(ticker);
+  let spot = chain.spot ?? 0;
+  if (!spot) {
+    try {
+      const snap = await fetchSnapshot([ticker]);
+      spot = snap[ticker]?.price ?? 0;
+    } catch {
+      // Best-effort fallback only — chain renders without spot.
+    }
+  }
+  return { chain, spot };
 }
 
 export interface MarketNews {
@@ -3074,5 +3103,303 @@ export async function fetchSectorMarket(etf: string): Promise<SectorMarketRespon
     method: "POST",
     body: JSON.stringify({ etf }),
     timeoutMs: 2 * 60_000,
+  });
+}
+
+// ─── Causality (macro causal research) ────────────────────────
+
+export type CausalityLookback = "1Y" | "3Y" | "5Y" | "10Y";
+export type CausalityCategory =
+  | "Equity" | "Factor" | "FX" | "Rates" | "Credit"
+  | "Commodity" | "Vol" | "Crypto" | "Macro";
+export type CausalityTransform = "log_return" | "diff" | "level";
+
+export interface CausalitySeriesMeta {
+  symbol: string;
+  label: string;
+  category: CausalityCategory;
+  source: "yfinance" | "fred";
+  transform: CausalityTransform;
+  description: string;
+}
+
+export interface CausalityUniverse {
+  count: number;
+  series: CausalitySeriesMeta[];
+  categories: Record<CausalityCategory, string[]>;
+}
+
+export async function fetchCausalityUniverse(): Promise<CausalityUniverse> {
+  return apiFetch("/api/causality/universe");
+}
+
+export interface CausalityCcfResult {
+  lags: number[];
+  ccf: (number | null)[];
+  conf_band: number;
+  n: number;
+  peak: { lag: number; rho: number };
+  x_leads: { lag: number; rho: number };
+  y_leads: { lag: number; rho: number };
+  contemp_rho: number;
+}
+
+export interface CausalityCcfPair {
+  x: { symbol: string; transform: CausalityTransform; adf_p: number | null };
+  y: { symbol: string; transform: CausalityTransform; adf_p: number | null };
+  lookback: CausalityLookback;
+  max_lag: number;
+  result: CausalityCcfResult;
+}
+
+export async function fetchCcfPair(
+  x: string,
+  y: string,
+  lookback: CausalityLookback = "5Y",
+  maxLag = 30,
+): Promise<CausalityCcfPair> {
+  return apiFetch(
+    `/api/causality/ccf?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}&lookback=${lookback}&max_lag=${maxLag}`,
+    { timeoutMs: 90_000 },
+  );
+}
+
+export interface CausalityCcfScanRow {
+  driver: string;
+  label: string;
+  category: CausalityCategory;
+  x_leads_lag: number;
+  x_leads_rho: number;
+  y_leads_lag: number;
+  y_leads_rho: number;
+  peak_lag: number;
+  peak_rho: number;
+  contemp_rho: number;
+  n: number;
+  conf_band: number;
+  transform: CausalityTransform;
+}
+
+export interface CausalityCcfScan {
+  target: string;
+  lookback: CausalityLookback;
+  max_lag: number;
+  target_meta: { transform: CausalityTransform; adf_p: number | null } | null;
+  rows: CausalityCcfScanRow[];
+}
+
+export async function fetchCcfScan(
+  target: string,
+  lookback: CausalityLookback = "5Y",
+  maxLag = 30,
+): Promise<CausalityCcfScan> {
+  return apiFetch(
+    `/api/causality/ccf-scan?target=${encodeURIComponent(target)}&lookback=${lookback}&max_lag=${maxLag}`,
+    { timeoutMs: 180_000 },
+  );
+}
+
+// Granger
+export type GrangerVerdict = "strong" | "moderate" | "weak" | "none";
+
+export interface GrangerLagRow {
+  lag: number;
+  f_stat: number;
+  p_value: number;
+}
+
+export interface GrangerDirection {
+  n: number;
+  max_lag_tested: number;
+  by_lag: GrangerLagRow[];
+  best: { lag: number; p_value: number };
+  verdict: GrangerVerdict;
+}
+
+export interface GrangerPair {
+  x: { symbol: string; transform: CausalityTransform; adf_p: number | null };
+  y: { symbol: string; transform: CausalityTransform; adf_p: number | null };
+  lookback: CausalityLookback;
+  max_lag: number;
+  x_to_y: GrangerDirection;
+  y_to_x: GrangerDirection;
+}
+
+export async function fetchGrangerPair(
+  x: string,
+  y: string,
+  lookback: CausalityLookback = "5Y",
+  maxLag = 10,
+): Promise<GrangerPair> {
+  return apiFetch(
+    `/api/causality/granger?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}&lookback=${lookback}&max_lag=${maxLag}`,
+    { timeoutMs: 90_000 },
+  );
+}
+
+export interface GrangerScanRow {
+  driver: string;
+  label: string;
+  category: CausalityCategory;
+  xy_best_lag: number;
+  xy_best_p: number;
+  xy_p_bonf: number;
+  yx_best_lag: number;
+  yx_best_p: number;
+  yx_p_bonf: number;
+  n: number;
+  transform: CausalityTransform;
+}
+
+export interface GrangerScan {
+  target: string;
+  lookback: CausalityLookback;
+  max_lag: number;
+  n_drivers_tested: number;
+  bonferroni_m: number;
+  target_meta: { transform: CausalityTransform; adf_p: number | null } | null;
+  rows: GrangerScanRow[];
+}
+
+export async function fetchGrangerScan(
+  target: string,
+  lookback: CausalityLookback = "5Y",
+  maxLag = 10,
+): Promise<GrangerScan> {
+  return apiFetch(
+    `/api/causality/granger-scan?target=${encodeURIComponent(target)}&lookback=${lookback}&max_lag=${maxLag}`,
+    { timeoutMs: 240_000 },
+  );
+}
+
+// Transfer Entropy
+export interface TeDirection {
+  te_bits: number;
+  p_value: number;
+  null_95th: number;
+}
+
+export interface TePair {
+  x: { symbol: string; transform: CausalityTransform; adf_p: number | null };
+  y: { symbol: string; transform: CausalityTransform; adf_p: number | null };
+  lookback: CausalityLookback;
+  bins: number;
+  n_perm: number;
+  n: number;
+  x_to_y: TeDirection;
+  y_to_x: TeDirection;
+  net_te: number;
+  dominant: string;
+}
+
+export async function fetchTePair(
+  x: string,
+  y: string,
+  lookback: CausalityLookback = "5Y",
+  bins = 3,
+  nPerm = 200,
+): Promise<TePair> {
+  return apiFetch(
+    `/api/causality/transfer-entropy?x=${encodeURIComponent(x)}&y=${encodeURIComponent(y)}&lookback=${lookback}&bins=${bins}&n_perm=${nPerm}`,
+    { timeoutMs: 120_000 },
+  );
+}
+
+export interface TeScanRow {
+  driver: string;
+  label: string;
+  category: CausalityCategory;
+  te_xy: number;
+  p_xy: number;
+  p_xy_bonf: number;
+  te_yx: number;
+  p_yx: number;
+  p_yx_bonf: number;
+  net_te: number;
+  null_95th: number;
+  n: number;
+  transform: CausalityTransform;
+}
+
+export interface TeScan {
+  target: string;
+  lookback: CausalityLookback;
+  bins: number;
+  n_perm: number;
+  n_drivers_tested: number;
+  bonferroni_m: number;
+  target_meta: { transform: CausalityTransform; adf_p: number | null } | null;
+  rows: TeScanRow[];
+}
+
+export async function fetchTeScan(
+  target: string,
+  lookback: CausalityLookback = "5Y",
+  bins = 3,
+  nPerm = 100,
+): Promise<TeScan> {
+  return apiFetch(
+    `/api/causality/transfer-entropy-scan?target=${encodeURIComponent(target)}&lookback=${lookback}&bins=${bins}&n_perm=${nPerm}`,
+    { timeoutMs: 240_000 },
+  );
+}
+
+// VAR + IRF
+export interface VarLagRow {
+  lag: number;
+  aic: number;
+  bic: number;
+}
+
+export interface VarShockResponse {
+  variable: string;
+  values: number[]; // one per horizon h = 0..irf_horizon
+}
+
+export interface VarShock {
+  origin: string;
+  responses: VarShockResponse[];
+}
+
+export interface VarFevdHorizon {
+  horizon: number;
+  contributions: Record<string, number>;
+}
+
+export interface VarFevdTarget {
+  target: string;
+  horizons: VarFevdHorizon[];
+}
+
+export interface VarBasket {
+  symbols: string[]; // Cholesky order applied
+  lookback: CausalityLookback;
+  n: number;
+  ic: "aic" | "bic";
+  max_lag_tested: number;
+  irf_horizon: number;
+  lag_table: VarLagRow[];
+  selected_lag: number;
+  best_aic_lag: number;
+  best_bic_lag: number;
+  transforms: Record<string, CausalityTransform>;
+  shocks: VarShock[];
+  fevd_targets: VarFevdTarget[];
+}
+
+export interface VarBasketRequest {
+  symbols: string[];
+  lookback?: CausalityLookback;
+  max_lag?: number;
+  irf_horizon?: number;
+  ic?: "aic" | "bic";
+  chol_order?: string[];
+}
+
+export async function fetchVarBasket(req: VarBasketRequest): Promise<VarBasket> {
+  return apiFetch("/api/causality/var", {
+    method: "POST",
+    body: JSON.stringify(req),
+    timeoutMs: 60_000,
   });
 }

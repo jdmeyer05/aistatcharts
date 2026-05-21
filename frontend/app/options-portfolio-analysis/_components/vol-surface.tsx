@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import {
-  fetchOptionsChain, fetchSnapshot, fetchPriceHistory,
+  fetchOptionsChainWithSpot, fetchPriceHistory,
   fetchTickerMetrics, fetchSurfaceSnapshots, saveSurfaceSnapshot,
   fetchAITradeIdeas,
   type PriceBar, type SurfaceSnapshot, type TickerMetrics,
@@ -516,17 +516,23 @@ export function VolSurfaceContent() {
 
   const tickerRef = useRef(ticker);
 
-  // Main data load — pass ticker through result to avoid stale closure
+  // Main data load — pass ticker through result to avoid stale closure.
+  // chain+spot is the critical pair (chain endpoint now embeds spot directly,
+  // so a slow snapshot can't tank the surface render). History and metrics
+  // are best-effort — allSettled keeps either failure from blocking the UI.
   const load = useMutation({
     mutationFn: async (tk: string) => {
       tickerRef.current = tk;
-      const [chain, snap, hist, met] = await Promise.all([
-        fetchOptionsChain(tk),
-        fetchSnapshot([tk]),
+      const [chSpotRes, histRes, metRes] = await Promise.allSettled([
+        fetchOptionsChainWithSpot(tk),
         fetchPriceHistory(tk, 252),
-        fetchTickerMetrics(tk).catch(() => null),
+        fetchTickerMetrics(tk),
       ]);
-      return { chain, spot: snap[tk]?.price ?? 0, history: hist.data, metrics: met, ticker: tk };
+      if (chSpotRes.status !== "fulfilled") throw chSpotRes.reason;
+      const { chain, spot } = chSpotRes.value;
+      const history = histRes.status === "fulfilled" ? histRes.value.data : [];
+      const metrics = metRes.status === "fulfilled" ? metRes.value : null;
+      return { chain, spot, history, metrics, ticker: tk };
     },
     onSuccess: (data) => {
       setPriceHistory(data.history);
@@ -558,12 +564,14 @@ export function VolSurfaceContent() {
   // Load cross-ticker for comparison
   const loadCross = useMutation({
     mutationFn: async (tk: string) => {
-      const [chain, snap, met] = await Promise.all([
-        fetchOptionsChain(tk),
-        fetchSnapshot([tk]),
-        fetchTickerMetrics(tk).catch(() => null),
+      const [chSpotRes, metRes] = await Promise.allSettled([
+        fetchOptionsChainWithSpot(tk),
+        fetchTickerMetrics(tk),
       ]);
-      return buildSurface(chain.data, snap[tk]?.price ?? 0, met, null);
+      if (chSpotRes.status !== "fulfilled") throw chSpotRes.reason;
+      const { chain, spot } = chSpotRes.value;
+      const met = metRes.status === "fulfilled" ? metRes.value : null;
+      return buildSurface(chain.data, spot, met, null);
     },
     onSuccess: (s) => setCrossSurface(s),
   });

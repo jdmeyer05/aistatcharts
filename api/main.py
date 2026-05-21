@@ -109,12 +109,20 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Sector pre-warm failed: {e}")
 
+    def _warm_causality() -> None:
+        try:
+            from api.routes.causality import prewarm_causality
+            prewarm_causality()
+        except Exception as e:
+            logger.warning(f"Causality pre-warm failed: {e}")
+
     loop = asyncio.get_event_loop()
     # Kick off in parallel so total warmup time ≈ slowest task, not the sum.
     await asyncio.gather(
         loop.run_in_executor(None, _warm_cftc),
         loop.run_in_executor(None, _warm_vol_landscape),
         loop.run_in_executor(None, _warm_sectors),
+        loop.run_in_executor(None, _warm_causality),
     )
 
 
@@ -220,6 +228,7 @@ _PATH_CACHE_HINTS = (
     ("/api/options/vol-landscape", "public, max-age=300, stale-while-revalidate=3600"),
     ("/api/fed-macro/",         "public, max-age=300, stale-while-revalidate=3600"),
     ("/api/sectors/",           "public, max-age=3600, stale-while-revalidate=21600"),
+    ("/api/causality/",         "public, max-age=3600, stale-while-revalidate=21600"),
 )
 
 
@@ -237,7 +246,7 @@ async def _cache_control_middleware(request, call_next):
     return response
 
 # Register route modules
-from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts, ai, cftc, wsb
+from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts, ai, cftc, wsb, causality
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -257,6 +266,7 @@ app.include_router(alerts.router, prefix="/api", tags=["Smart Money Alerts"])
 app.include_router(ai.router, prefix="/api/ai", tags=["AI Interpretation"])
 app.include_router(cftc.router, prefix="/api/cftc", tags=["CFTC Positioning"])
 app.include_router(wsb.router, prefix="/api/wsb", tags=["WallStreetBets"])
+app.include_router(causality.router, prefix="/api/causality", tags=["Causality"])
 
 
 @app.get("/api/health")
