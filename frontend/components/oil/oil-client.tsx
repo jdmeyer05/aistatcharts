@@ -608,6 +608,13 @@ export default function OilClient() {
 
         return (
           <div className="space-y-5">
+            {/* Data caveat — applies to every section on this tab. */}
+            <div className="card card-compact text-xs text-text-secondary border-warn/40 bg-warn-bg">
+              <span className="font-semibold text-warn">Data note</span> — EIA STEO&apos;s most recent ~6 months of world
+              supply are preliminary and typically revised upward, so monthly balances near the present overstate inventory
+              draws. Headline balances below use annual averages; the OECD level and monthly charts show raw STEO values.
+            </div>
+
             {/* Section A: OECD commercial inventory — seasonal band + forecast */}
             {(() => {
               // Seasonal band from the prior 5 complete calendar years.
@@ -687,17 +694,30 @@ export default function OilClient() {
               const prod = cut(data.world_production);
               const cons = cut(data.world_consumption);
               const crude = cut(data.world_crude);
-              const lProd = data.world_production.filter(r => !isFcast(r.period)).slice(-1)[0];
-              const lCons = data.world_consumption.filter(r => !isFcast(r.period)).slice(-1)[0];
-              const bal = lProd && lCons ? lProd.value - lCons.value : null;
+              // Headline uses ANNUAL averages, not the boundary month: STEO's
+              // most recent supply months are preliminary/understated, so a
+              // single-month balance overstates draws. Show the last full actual
+              // year + the forecast year.
+              const annualAvg = (recs: EIARecord[], yr: number): number | null => {
+                const v = recs.filter(r => yearOf(r.period) === yr).map(r => r.value);
+                return v.length > 0 ? v.reduce((a, b) => a + b, 0) / v.length : null;
+              };
+              const actualYear = calYear - 1; // last complete calendar year of actuals
+              const fcastYear = yearOf(data.world_production[data.world_production.length - 1].period);
+              const pA = annualAvg(prod, actualYear), cA = annualAvg(cons, actualYear);
+              const balA = pA != null && cA != null ? pA - cA : null;
+              const pF = annualAvg(prod, fcastYear), cF = annualAvg(cons, fcastYear);
+              const balF = pF != null && cF != null ? pF - cF : null;
               return (
                 <div className="card space-y-3">
                   <div className="text-sm font-semibold">World Supply vs Demand Balance</div>
                   <div className="flex flex-wrap gap-6">
-                    {lProd && <Metric label="World Production" value={`${lProd.value.toFixed(1)} mb/d`} delta={lProd.period.slice(0, 7)} />}
-                    {lCons && <Metric label="World Consumption" value={`${lCons.value.toFixed(1)} mb/d`} delta={lCons.period.slice(0, 7)} />}
-                    {bal != null && <Metric label="Implied Balance" value={`${bal > 0 ? "+" : ""}${bal.toFixed(2)} mb/d`}
-                      delta={bal > 0 ? "Surplus (build)" : "Deficit (draw)"} deltaType={bal > 0 ? "loss" : "gain"} />}
+                    {pA != null && <Metric label={`World Production (${actualYear})`} value={`${pA.toFixed(1)} mb/d`} delta="annual avg" />}
+                    {cA != null && <Metric label={`World Consumption (${actualYear})`} value={`${cA.toFixed(1)} mb/d`} delta="annual avg" />}
+                    {balA != null && <Metric label={`Implied Balance (${actualYear})`} value={`${balA > 0 ? "+" : ""}${balA.toFixed(2)} mb/d`}
+                      delta={balA > 0 ? "Surplus (build)" : "Deficit (draw)"} deltaType={balA > 0 ? "loss" : "gain"} />}
+                    {balF != null && <Metric label={`Balance (${fcastYear}F)`} value={`${balF > 0 ? "+" : ""}${balF.toFixed(2)} mb/d`}
+                      delta={balF > 0 ? "Surplus" : "Deficit"} deltaType={balF > 0 ? "loss" : "gain"} />}
                   </div>
                   <Plot data={[
                     // Shaded gap between supply and demand (drawn first, behind
@@ -727,7 +747,7 @@ export default function OilClient() {
                     annotations: fcastStart ? [{ x: fcastStart, y: 1, yref: "paper" as const, yanchor: "bottom" as const,
                       text: "STEO forecast →", showarrow: false, font: { size: 9, color: t.muted } }] : [],
                   }} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
-                  <p className="text-xs text-text-muted">Total petroleum &amp; other liquids (EIA STEO). Dotted = forecast; shaded = forecast horizon. Production &gt; consumption builds global stocks.</p>
+                  <p className="text-xs text-text-muted">Total petroleum &amp; other liquids (EIA STEO). Dotted = forecast; shaded = forecast horizon. Production &gt; consumption builds global stocks. The production dip around the present reflects preliminary, not-yet-complete monthly data and is typically revised up.</p>
                 </div>
               );
             })()}
@@ -765,7 +785,7 @@ export default function OilClient() {
                         fillcolor: t.muted + "10", line: { width: 0 }, layer: "below" as const }] : []),
                     ],
                   }} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
-                  <p className="text-xs text-text-muted">Implied world inventory change = production − consumption (EIA STEO T3 balance). Red = build (bearish), green = draw (bullish). Faded bars = forecast.</p>
+                  <p className="text-xs text-text-muted">Implied world inventory change = production − consumption (EIA STEO T3 balance). Red = build (bearish), green = draw (bullish). Faded bars = forecast. Bars around the present overstate draws — recent supply data is preliminary (see note above).</p>
                 </div>
               );
             })()}
