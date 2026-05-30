@@ -172,7 +172,10 @@ async def oil_bundle(user: str = Depends(get_current_user)):
     CACHE_KEY = "energy_oil_bundle_v3"
 
     cached = _get_bundle_cache(CACHE_KEY, ttl_minutes=30)
-    if cached:
+    # Ignore an incomplete cached bundle: a transient EIA failure on the core
+    # inventories series during a cold rebuild can otherwise pin an empty page
+    # for the full TTL (the frontend errors out when inventories is empty).
+    if cached and cached.get("inventories"):
         return cached
 
     from concurrent.futures import ThreadPoolExecutor
@@ -205,8 +208,11 @@ async def oil_bundle(user: str = Depends(get_current_user)):
         ("STEO.T3_STCHANGE_WORLD.M", 144),  # 20 Net world inventory withdrawals (mb/d)
     ]
 
-    # max_workers matches the series count so the fan-out stays single-batch.
-    with ThreadPoolExecutor(max_workers=len(series)) as pool:
+    # Cap concurrency below the series count: the cold rebuild after a cache-key
+    # bump cold-misses every series at once, and a 21-wide EIA fan-out (plus the
+    # startup prewarm firing its own) tripped transient failures. 10 keeps peak
+    # EIA pressure modest; warm series come from the api_cache layer anyway.
+    with ThreadPoolExecutor(max_workers=10) as pool:
         results = list(pool.map(lambda args: fetch_eia_data(*args), series))
 
     def to_records(df):
@@ -239,7 +245,11 @@ async def oil_bundle(user: str = Depends(get_current_user)):
         "world_stock_change": to_records(results[20]),
     }
 
-    _set_bundle_cache(CACHE_KEY, bundle, ttl_minutes=30)
+    # Only cache a bundle whose core series populated. Caching a partial bundle
+    # (e.g. inventories empty from a transient EIA hiccup) would serve a broken
+    # page for the full TTL; skipping the write lets the next request retry.
+    if bundle["inventories"]:
+        _set_bundle_cache(CACHE_KEY, bundle, ttl_minutes=30)
     return bundle
 
 

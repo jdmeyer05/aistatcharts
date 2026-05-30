@@ -135,8 +135,9 @@ async def _warm_caches() -> None:
                 return df_records(df[["period", "value", "wow_change"]])
 
             def _warm_oil_bundle():
-                if _get_bundle_cache("energy_oil_bundle_v3", ttl_minutes=30):
-                    return  # L2 already fresh — L1 was hydrated by the read
+                existing = _get_bundle_cache("energy_oil_bundle_v3", ttl_minutes=30)
+                if existing and existing.get("inventories"):
+                    return  # L2 already fresh + complete — L1 hydrated by the read
                 # Keep this list in lockstep with the /oil route in
                 # api/routes/energy.py. If they drift, prewarm fills a bundle
                 # the route would rebuild on first hit.
@@ -154,7 +155,7 @@ async def _warm_caches() -> None:
                     ("STEO.PATC_WORLD.M", 144),   ("STEO.COPR_WORLD.M", 144),
                     ("STEO.T3_STCHANGE_WORLD.M", 144),
                 ]
-                with ThreadPoolExecutor(max_workers=len(series)) as pool:
+                with ThreadPoolExecutor(max_workers=10) as pool:
                     results = list(pool.map(lambda a: fetch_eia_data(*a), series))
                 bundle = {
                     "inventories": _to_records(results[0]),
@@ -179,7 +180,8 @@ async def _warm_caches() -> None:
                     "world_crude":        _to_records(results[19]),
                     "world_stock_change": _to_records(results[20]),
                 }
-                _set_bundle_cache("energy_oil_bundle_v3", bundle, ttl_minutes=30)
+                if bundle["inventories"]:  # don't pin a partial bundle (see /oil route)
+                    _set_bundle_cache("energy_oil_bundle_v3", bundle, ttl_minutes=30)
 
             def _warm_natgas_bundle():
                 if _get_bundle_cache("energy_natgas_bundle", ttl_minutes=30):
