@@ -1049,6 +1049,12 @@ export interface OilBundle {
   padd3: EIARecord[];
   padd4: EIARecord[];
   padd5: EIARecord[];
+  // Track B — global / OECD (STEO monthly, carries an ~18-mo forecast tail)
+  oecd_stocks: EIARecord[];        // OECD commercial crude+liquids inventory (Mb, eop)
+  world_production: EIARecord[];   // World total liquids production (mb/d)
+  world_consumption: EIARecord[];  // World total liquids consumption (mb/d)
+  world_crude: EIARecord[];        // World crude oil production (mb/d)
+  world_stock_change: EIARecord[]; // Net world inventory withdrawals (mb/d)
 }
 
 export async function fetchOilBundle(): Promise<OilBundle> {
@@ -1077,6 +1083,11 @@ export function normalizeOilBundle(raw: Partial<OilBundle>): OilBundle {
     padd3:       raw.padd3       ?? [],
     padd4:       raw.padd4       ?? [],
     padd5:       raw.padd5       ?? [],
+    oecd_stocks:        raw.oecd_stocks        ?? [],
+    world_production:   raw.world_production   ?? [],
+    world_consumption:  raw.world_consumption  ?? [],
+    world_crude:        raw.world_crude        ?? [],
+    world_stock_change: raw.world_stock_change ?? [],
   };
 }
 

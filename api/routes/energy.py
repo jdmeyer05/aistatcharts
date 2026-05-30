@@ -166,8 +166,10 @@ async def oil_bundle(user: str = Depends(get_current_user)):
     # _v2: bundle gained SPR + 5 PADDs in 2026-05-29. Bumped so the cache
     # doesn't serve pre-deploy 10-field rows after a schema expansion — the
     # frontend assumes the new fields exist and would crash on undefined.
+    # _v3 (2026-05-30): Track B — global/OECD STEO series (oecd_stocks,
+    # world_production, world_consumption, world_crude, world_stock_change).
     # Any future shape change should bump again.
-    CACHE_KEY = "energy_oil_bundle_v2"
+    CACHE_KEY = "energy_oil_bundle_v3"
 
     cached = _get_bundle_cache(CACHE_KEY, ttl_minutes=30)
     if cached:
@@ -193,10 +195,18 @@ async def oil_bundle(user: str = Depends(get_current_user)):
         ("PET.WCESTP31.W", 520),   # 13 PADD 3 Gulf Coast crude (excl SPR)
         ("PET.WCESTP41.W", 520),   # 14 PADD 4 Rocky Mountain crude (excl SPR)
         ("PET.WCESTP51.W", 520),   # 15 PADD 5 West Coast crude (excl SPR)
+        # Track B — global / OECD (STEO, monthly). These series carry an ~18-mo
+        # forecast tail past the current month; 144 rows = ~12 yrs history +
+        # forecast, enough for the OECD 5-year seasonal band.
+        ("STEO.PASC_OECD_T3.M", 144),   # 16 OECD commercial crude+liquids inventory (Mb, eop)
+        ("STEO.PAPR_WORLD.M", 144),     # 17 World total liquids production (mb/d)
+        ("STEO.PATC_WORLD.M", 144),     # 18 World total liquids consumption (mb/d)
+        ("STEO.COPR_WORLD.M", 144),     # 19 World crude oil production (mb/d)
+        ("STEO.T3_STCHANGE_WORLD.M", 144),  # 20 Net world inventory withdrawals (mb/d)
     ]
 
-    # max_workers=16 matches the new series count so the fan-out stays single-batch.
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    # max_workers matches the series count so the fan-out stays single-batch.
+    with ThreadPoolExecutor(max_workers=len(series)) as pool:
         results = list(pool.map(lambda args: fetch_eia_data(*args), series))
 
     def to_records(df):
@@ -221,6 +231,12 @@ async def oil_bundle(user: str = Depends(get_current_user)):
         "padd3":       to_records(results[13]),
         "padd4":       to_records(results[14]),
         "padd5":       to_records(results[15]),
+        # Track B — global / OECD (STEO monthly, includes forecast tail)
+        "oecd_stocks":       to_records(results[16]),
+        "world_production":  to_records(results[17]),
+        "world_consumption": to_records(results[18]),
+        "world_crude":       to_records(results[19]),
+        "world_stock_change": to_records(results[20]),
     }
 
     _set_bundle_cache(CACHE_KEY, bundle, ttl_minutes=30)

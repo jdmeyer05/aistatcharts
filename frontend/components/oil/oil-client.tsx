@@ -12,7 +12,10 @@ import { Plot } from "@/components/plot";
 const TABS = [
   "Inventories + 5-Year Band", "YoY Seasonality", "Weekly Builds / Draws", "WTI Price Overlay",
   "Cushing Storage", "Imports / Exports", "Refinery Utilization", "Product Inventories",
+  "Global / OECD Stocks",
 ];
+
+const MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function weekOfYear(dateStr: string): number {
   const d = new Date(dateStr + "T12:00:00");
@@ -21,6 +24,9 @@ function weekOfYear(dateStr: string): number {
 }
 function yearOf(dateStr: string): number {
   return new Date(dateStr + "T12:00:00").getFullYear();
+}
+function monthOf(dateStr: string): number {
+  return new Date(dateStr + "T12:00:00").getMonth() + 1;
 }
 function last(arr: EIARecord[]): EIARecord { return arr[arr.length - 1]; }
 function tail(arr: EIARecord[], n: number): EIARecord[] { return arr.slice(-n); }
@@ -566,6 +572,206 @@ export default function OilClient() {
           </div>
         </div>
       )}
+
+      {/* Tab 8: Global / OECD Stocks — STEO monthly, history + forecast */}
+      {activeTab === 8 && (() => {
+        const oecd = data.oecd_stocks;
+        if (oecd.length === 0) {
+          return <div className="card text-sm text-text-muted">Global / OECD STEO data unavailable.</div>;
+        }
+        // STEO carries an ~18-mo forecast tail. EIA doesn't tag actual vs
+        // forecast in the seriesid feed, so we split on the calendar: periods
+        // dated after today are forecast. STEO actuals themselves lag ~1-2
+        // months, so the most recent "actual" months are early estimates —
+        // noted in the captions.
+        const todayISO = new Date().toISOString().slice(0, 10);
+        const calYear = new Date().getFullYear();
+        const isFcast = (p: string) => p > todayISO;
+
+        /** Split a time series into solid-actual + dashed-forecast trace pair.
+         * The forecast trace is seeded with the last actual point so the two
+         * segments join without a visual gap. */
+        const histFcast = (recs: EIARecord[], color: string, name: string) => {
+          const s = recs.slice().sort((a, b) => (a.period < b.period ? -1 : 1));
+          const act = s.filter(r => !isFcast(r.period));
+          const fc = s.filter(r => isFcast(r.period));
+          if (act.length > 0 && fc.length > 0) fc.unshift(act[act.length - 1]);
+          return [
+            { x: act.map(r => r.period), y: act.map(r => r.value), type: "scatter" as const, mode: "lines" as const,
+              name, line: { color, width: 2 } },
+            { x: fc.map(r => r.period), y: fc.map(r => r.value), type: "scatter" as const, mode: "lines" as const,
+              name: `${name} (forecast)`, line: { color, width: 2, dash: "dot" as const }, showlegend: false,
+              hovertemplate: "%{x}<br>%{y:.2f} (forecast)<extra></extra>" },
+          ];
+        };
+        const fcastStart = oecd.find(r => isFcast(r.period))?.period;
+
+        return (
+          <div className="space-y-5">
+            {/* Section A: OECD commercial inventory — seasonal band + forecast */}
+            {(() => {
+              // Seasonal band from the prior 5 complete calendar years.
+              const byMonth = new Map<number, number[]>();
+              for (const r of oecd) {
+                const y = yearOf(r.period);
+                if (y >= calYear - 5 && y <= calYear - 1) {
+                  const m = monthOf(r.period);
+                  if (!byMonth.has(m)) byMonth.set(m, []);
+                  byMonth.get(m)!.push(r.value);
+                }
+              }
+              const band = Array.from(byMonth.entries()).map(([month, vals]) => ({
+                month, avg: vals.reduce((s, v) => s + v, 0) / vals.length, min: Math.min(...vals), max: Math.max(...vals),
+              })).sort((a, b) => a.month - b.month);
+
+              const cyr = oecd.filter(r => yearOf(r.period) === calYear)
+                .map(r => ({ month: monthOf(r.period), value: r.value, fc: isFcast(r.period) }))
+                .sort((a, b) => a.month - b.month);
+              const cyrAct = cyr.filter(d => !d.fc);
+              const cyrFc = cyr.filter(d => d.fc);
+              if (cyrAct.length > 0 && cyrFc.length > 0) cyrFc.unshift(cyrAct[cyrAct.length - 1]);
+
+              // Metrics: latest actual, MoM, YoY, vs 5-yr avg for that month.
+              const actual = oecd.filter(r => !isFcast(r.period));
+              const latestA = actual[actual.length - 1];
+              const prevA = actual[actual.length - 2];
+              const mom = latestA && prevA ? latestA.value - prevA.value : null;
+              const latestMonth = latestA ? monthOf(latestA.period) : null;
+              const latestY = latestA ? yearOf(latestA.period) : null;
+              const yoyRec = actual.find(r => monthOf(r.period) === latestMonth && yearOf(r.period) === (latestY ?? 0) - 1);
+              const yoy = latestA && yoyRec ? latestA.value - yoyRec.value : null;
+              const bandNow = band.find(b => b.month === latestMonth);
+              const vsAvg = latestA && bandNow ? latestA.value - bandNow.avg : null;
+
+              return (
+                <div className="card space-y-3">
+                  <div className="text-sm font-semibold">OECD Commercial Inventory vs 5-Year Range</div>
+                  <div className="flex flex-wrap gap-6">
+                    {latestA && (
+                      <Metric label={`OECD Stocks (${latestA.period.slice(0, 7)})`} value={`${latestA.value.toFixed(0)}M bbls`}
+                        delta={mom != null ? `${mom > 0 ? "+" : ""}${mom.toFixed(0)}M MoM` : undefined}
+                        deltaType={mom != null ? (mom > 0 ? "gain" : "loss") : undefined} />
+                    )}
+                    {yoy != null && <Metric label="YoY Change" value={`${yoy > 0 ? "+" : ""}${yoy.toFixed(0)}M bbls`}
+                      delta={`${(yoy / (yoyRec!.value) * 100).toFixed(1)}%`} deltaType={yoy > 0 ? "gain" : "loss"} />}
+                    {vsAvg != null && <Metric label="vs 5-Year Average" value={`${Math.abs(vsAvg).toFixed(0)}M ${vsAvg > 0 ? "Above" : "Below"}`} />}
+                  </div>
+                  <Plot data={[
+                    ...(band.length > 0 ? [{
+                      x: [...band.map(s => s.month), ...band.slice().reverse().map(s => s.month)],
+                      y: [...band.map(s => s.max), ...band.slice().reverse().map(s => s.min)],
+                      fill: "toself" as const, fillcolor: t.accent + "12", line: { color: "transparent", width: 0 },
+                      name: "5-Year Range", hoverinfo: "skip" as const, type: "scatter" as const, mode: "lines" as const,
+                    }, {
+                      x: band.map(s => s.month), y: band.map(s => s.avg), type: "scatter" as const, mode: "lines" as const,
+                      name: "5-Year Average", line: { color: t.spot, width: 2, dash: "dash" as const },
+                    }] : []),
+                    ...(cyrAct.length > 0 ? [{ x: cyrAct.map(d => d.month), y: cyrAct.map(d => d.value), type: "scatter" as const, mode: "lines" as const,
+                      name: `${calYear} Actual`, line: { color: t.hv20, width: 2.5 } }] : []),
+                    ...(cyrFc.length > 1 ? [{ x: cyrFc.map(d => d.month), y: cyrFc.map(d => d.value), type: "scatter" as const, mode: "lines" as const,
+                      name: `${calYear} STEO Forecast`, line: { color: t.hv20, width: 2.5, dash: "dot" as const } }] : []),
+                  ]} layout={{
+                    height: 440, ...L,
+                    yaxis: { title: "Millions of Barrels", gridcolor: t.grid },
+                    xaxis: { title: "Month", gridcolor: t.grid, tickmode: "array" as const, tickvals: MONTH_ABBR.map((_, i) => i).slice(1), ticktext: MONTH_ABBR.slice(1), range: [0.5, 12.5] },
+                    hovermode: "x unified", legend: { x: 0.01, y: 0.99, bgcolor: "transparent" },
+                  }} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+                  <p className="text-xs text-text-muted">OECD end-of-period commercial crude + liquids stocks (EIA STEO, PASC_OECD_T3). Dotted = STEO forecast; actuals lag ~1-2 months. Below the band = tight global market.</p>
+                </div>
+              );
+            })()}
+
+            {/* Section B: World supply vs demand balance */}
+            {data.world_production.length > 0 && data.world_consumption.length > 0 && (() => {
+              const cut = (recs: EIARecord[]) => recs.filter(r => yearOf(r.period) >= calYear - 7);
+              const prod = cut(data.world_production);
+              const cons = cut(data.world_consumption);
+              const crude = cut(data.world_crude);
+              const lProd = data.world_production.filter(r => !isFcast(r.period)).slice(-1)[0];
+              const lCons = data.world_consumption.filter(r => !isFcast(r.period)).slice(-1)[0];
+              const bal = lProd && lCons ? lProd.value - lCons.value : null;
+              return (
+                <div className="card space-y-3">
+                  <div className="text-sm font-semibold">World Supply vs Demand Balance</div>
+                  <div className="flex flex-wrap gap-6">
+                    {lProd && <Metric label="World Production" value={`${lProd.value.toFixed(1)} mb/d`} delta={lProd.period.slice(0, 7)} />}
+                    {lCons && <Metric label="World Consumption" value={`${lCons.value.toFixed(1)} mb/d`} delta={lCons.period.slice(0, 7)} />}
+                    {bal != null && <Metric label="Implied Balance" value={`${bal > 0 ? "+" : ""}${bal.toFixed(2)} mb/d`}
+                      delta={bal > 0 ? "Surplus (build)" : "Deficit (draw)"} deltaType={bal > 0 ? "loss" : "gain"} />}
+                  </div>
+                  <Plot data={[
+                    // Shaded gap between supply and demand (drawn first, behind
+                    // the lines). tonexty fills prod→cons; single neutral fill
+                    // since the sign flips over the series.
+                    { x: cons.map(r => r.period), y: cons.map(r => r.value), type: "scatter" as const, mode: "lines" as const,
+                      line: { width: 0, color: "transparent" }, hoverinfo: "skip" as const, showlegend: false },
+                    { x: prod.map(r => r.period), y: prod.map(r => r.value), type: "scatter" as const, mode: "lines" as const,
+                      fill: "tonexty" as const, fillcolor: t.accent + "14", line: { width: 0, color: "transparent" },
+                      hoverinfo: "skip" as const, showlegend: false },
+                    ...histFcast(prod, t.gain, "Total Liquids Production"),
+                    ...histFcast(cons, t.spot, "Total Liquids Consumption"),
+                    ...(crude.length > 0 ? [{
+                      x: crude.filter(r => !isFcast(r.period)).map(r => r.period),
+                      y: crude.filter(r => !isFcast(r.period)).map(r => r.value),
+                      type: "scatter" as const, mode: "lines" as const, name: "Crude Production",
+                      line: { color: t.muted, width: 1.2 },
+                    }] : []),
+                  ]} layout={{
+                    height: 440, ...L,
+                    yaxis: { title: "Million Barrels / Day", gridcolor: t.grid },
+                    xaxis: { gridcolor: t.grid },
+                    hovermode: "x unified", legend: { x: 0.01, y: 0.99, bgcolor: "transparent" },
+                    shapes: fcastStart ? [{ type: "rect" as const, xref: "x" as const, yref: "paper" as const,
+                      x0: fcastStart, x1: prod[prod.length - 1]?.period, y0: 0, y1: 1,
+                      fillcolor: t.muted + "10", line: { width: 0 }, layer: "below" as const }] : [],
+                    annotations: fcastStart ? [{ x: fcastStart, y: 1, yref: "paper" as const, yanchor: "bottom" as const,
+                      text: "STEO forecast →", showarrow: false, font: { size: 9, color: t.muted } }] : [],
+                  }} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+                  <p className="text-xs text-text-muted">Total petroleum &amp; other liquids (EIA STEO). Dotted = forecast; shaded = forecast horizon. Production &gt; consumption builds global stocks.</p>
+                </div>
+              );
+            })()}
+
+            {/* Section C: Implied global builds / draws */}
+            {data.world_stock_change.length > 0 && (() => {
+              // T3_STCHANGE_WORLD is net inventory *withdrawals* (mb/d): positive
+              // = draw. Flip the sign so the bar shows the inventory *change* —
+              // positive bar = build (oversupply, bearish), negative = draw.
+              const recs = data.world_stock_change.filter(r => yearOf(r.period) >= calYear - 5);
+              const builds = recs.map(r => ({ period: r.period, change: -r.value, fc: isFcast(r.period) }));
+              // Disjoint actual / forecast x positions → overlay so each month
+              // shows a single bar; forecast bars faded.
+              const bAct = builds.filter(b => !b.fc);
+              const bFc = builds.filter(b => b.fc);
+              return (
+                <div className="card space-y-2">
+                  <div className="text-sm font-semibold">Implied Global Builds / Draws</div>
+                  <Plot data={[
+                    { x: bAct.map(b => b.period), y: bAct.map(b => b.change), type: "bar" as const, name: "Actual",
+                      marker: { color: bAct.map(b => (b.change > 0 ? t.loss : t.gain)) },
+                      hovertemplate: "%{x}<br>%{y:+.2f} mb/d<extra></extra>" },
+                    { x: bFc.map(b => b.period), y: bFc.map(b => b.change), type: "bar" as const, name: "Forecast",
+                      marker: { color: bFc.map(b => (b.change > 0 ? t.loss : t.gain)), opacity: 0.45 },
+                      hovertemplate: "%{x}<br>%{y:+.2f} mb/d (forecast)<extra></extra>" },
+                  ]} layout={{
+                    height: 360, ...L, barmode: "overlay" as const,
+                    yaxis: { title: "Stock Change (mb/d)", gridcolor: t.grid },
+                    xaxis: { gridcolor: t.grid },
+                    hovermode: "x unified", showlegend: false,
+                    shapes: [
+                      { type: "line" as const, y0: 0, y1: 0, x0: builds[0]?.period, x1: builds[builds.length - 1]?.period, line: { color: t.muted, width: 1 } },
+                      ...(fcastStart ? [{ type: "rect" as const, xref: "x" as const, yref: "paper" as const,
+                        x0: fcastStart, x1: builds[builds.length - 1]?.period, y0: 0, y1: 1,
+                        fillcolor: t.muted + "10", line: { width: 0 }, layer: "below" as const }] : []),
+                    ],
+                  }} config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+                  <p className="text-xs text-text-muted">Implied world inventory change = production − consumption (EIA STEO T3 balance). Red = build (bearish), green = draw (bullish). Faded bars = forecast.</p>
+                </div>
+              );
+            })()}
+          </div>
+        );
+      })()}
     </div>
   );
 }

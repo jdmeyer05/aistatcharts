@@ -135,7 +135,7 @@ async def _warm_caches() -> None:
                 return df_records(df[["period", "value", "wow_change"]])
 
             def _warm_oil_bundle():
-                if _get_bundle_cache("energy_oil_bundle_v2", ttl_minutes=30):
+                if _get_bundle_cache("energy_oil_bundle_v3", ttl_minutes=30):
                     return  # L2 already fresh — L1 was hydrated by the read
                 # Keep this list in lockstep with the /oil route in
                 # api/routes/energy.py. If they drift, prewarm fills a bundle
@@ -150,8 +150,11 @@ async def _warm_caches() -> None:
                     ("PET.WCESTP11.W", 520), ("PET.WCESTP21.W", 520),
                     ("PET.WCESTP31.W", 520), ("PET.WCESTP41.W", 520),
                     ("PET.WCESTP51.W", 520),
+                    ("STEO.PASC_OECD_T3.M", 144), ("STEO.PAPR_WORLD.M", 144),
+                    ("STEO.PATC_WORLD.M", 144),   ("STEO.COPR_WORLD.M", 144),
+                    ("STEO.T3_STCHANGE_WORLD.M", 144),
                 ]
-                with ThreadPoolExecutor(max_workers=16) as pool:
+                with ThreadPoolExecutor(max_workers=len(series)) as pool:
                     results = list(pool.map(lambda a: fetch_eia_data(*a), series))
                 bundle = {
                     "inventories": _to_records(results[0]),
@@ -170,8 +173,13 @@ async def _warm_caches() -> None:
                     "padd3":       _to_records(results[13]),
                     "padd4":       _to_records(results[14]),
                     "padd5":       _to_records(results[15]),
+                    "oecd_stocks":        _to_records(results[16]),
+                    "world_production":   _to_records(results[17]),
+                    "world_consumption":  _to_records(results[18]),
+                    "world_crude":        _to_records(results[19]),
+                    "world_stock_change": _to_records(results[20]),
                 }
-                _set_bundle_cache("energy_oil_bundle_v2", bundle, ttl_minutes=30)
+                _set_bundle_cache("energy_oil_bundle_v3", bundle, ttl_minutes=30)
 
             def _warm_natgas_bundle():
                 if _get_bundle_cache("energy_natgas_bundle", ttl_minutes=30):
