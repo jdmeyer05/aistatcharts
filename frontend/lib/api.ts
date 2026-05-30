@@ -1052,7 +1052,32 @@ export interface OilBundle {
 }
 
 export async function fetchOilBundle(): Promise<OilBundle> {
-  return apiFetch("/api/energy/oil", { timeoutMs: 60_000 });
+  const raw = await apiFetch<Partial<OilBundle>>("/api/energy/oil", { timeoutMs: 60_000 });
+  return normalizeOilBundle(raw);
+}
+
+/** Fill missing fields with []. Lets us evolve the bundle (adding SPR / PADDs
+ * etc.) without crashing on stale backend cache or older Cloud Run revisions
+ * that haven't rolled yet. */
+export function normalizeOilBundle(raw: Partial<OilBundle>): OilBundle {
+  return {
+    inventories: raw.inventories ?? [],
+    production:  raw.production  ?? [],
+    cushing:     raw.cushing     ?? [],
+    refinery:    raw.refinery    ?? [],
+    imports:     raw.imports     ?? [],
+    exports:     raw.exports     ?? [],
+    wti:         raw.wti         ?? [],
+    gasoline:    raw.gasoline    ?? [],
+    distillate:  raw.distillate  ?? [],
+    supplied:    raw.supplied    ?? [],
+    spr:         raw.spr         ?? [],
+    padd1:       raw.padd1       ?? [],
+    padd2:       raw.padd2       ?? [],
+    padd3:       raw.padd3       ?? [],
+    padd4:       raw.padd4       ?? [],
+    padd5:       raw.padd5       ?? [],
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

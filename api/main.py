@@ -135,7 +135,7 @@ async def _warm_caches() -> None:
                 return df_records(df[["period", "value", "wow_change"]])
 
             def _warm_oil_bundle():
-                if _get_bundle_cache("energy_oil_bundle", ttl_minutes=30):
+                if _get_bundle_cache("energy_oil_bundle_v2", ttl_minutes=30):
                     return  # L2 already fresh — L1 was hydrated by the read
                 # Keep this list in lockstep with the /oil route in
                 # api/routes/energy.py. If they drift, prewarm fills a bundle
@@ -171,7 +171,7 @@ async def _warm_caches() -> None:
                     "padd4":       _to_records(results[14]),
                     "padd5":       _to_records(results[15]),
                 }
-                _set_bundle_cache("energy_oil_bundle", bundle, ttl_minutes=30)
+                _set_bundle_cache("energy_oil_bundle_v2", bundle, ttl_minutes=30)
 
             def _warm_natgas_bundle():
                 if _get_bundle_cache("energy_natgas_bundle", ttl_minutes=30):

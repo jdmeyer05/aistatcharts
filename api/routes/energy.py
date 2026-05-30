@@ -163,7 +163,11 @@ async def natgas_bundle(user: str = Depends(get_current_user)):
 @router.get("/oil")
 async def oil_bundle(user: str = Depends(get_current_user)):
     """Fetch all oil fundamental series in parallel — inventories, production, prices, trade, products."""
-    CACHE_KEY = "energy_oil_bundle"
+    # _v2: bundle gained SPR + 5 PADDs in 2026-05-29. Bumped so the cache
+    # doesn't serve pre-deploy 10-field rows after a schema expansion — the
+    # frontend assumes the new fields exist and would crash on undefined.
+    # Any future shape change should bump again.
+    CACHE_KEY = "energy_oil_bundle_v2"
 
     cached = _get_bundle_cache(CACHE_KEY, ttl_minutes=30)
     if cached:

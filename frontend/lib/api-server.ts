@@ -24,6 +24,7 @@ import type {
   OilBundle,
   NatGasBundle,
 } from "@/lib/api";
+import { normalizeOilBundle } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -71,12 +72,15 @@ export function fetchTrumpMonitorServer() {
   return serverFetch<TrumpMonitorResponse>("/api/trump/monitor", 10_000);
 }
 
-export function fetchOilBundleServer() {
-  // Bundle is ~165KB and the cold path fans out 10 EIA fetches. Give it room
+export async function fetchOilBundleServer(): Promise<OilBundle | null> {
+  // Bundle is ~165KB and the cold path fans out 16 EIA fetches. Give it room
   // — the backend keeps a 30-min Supabase L2 cache + a process-local L1, so
   // the typical SSR path is single-digit ms once warm. Timeout matches the
   // realistic worst case (cold-instance + EIA upstream blip).
-  return serverFetch<OilBundle>("/api/energy/oil", 15_000);
+  // Normalize so a stale-shape backend response can't poison the dehydrated
+  // cache (the client otherwise crashes on `data.spr.length`).
+  const raw = await serverFetch<Partial<OilBundle>>("/api/energy/oil", 15_000);
+  return raw ? normalizeOilBundle(raw) : null;
 }
 
 export function fetchNatGasBundleServer() {
