@@ -1,12 +1,22 @@
 """Energy data endpoints — EIA natural gas, oil, Henry Hub.
 
-Bundle endpoints cache the assembled response in ai_response_cache (repurposed as
-a general JSON cache) so repeat loads within the TTL skip all 8 EIA round-trips.
+Bundle endpoints cache the assembled response in two layers:
+
+  L1: process-local TTLCache. Microsecond reads, survives the request boundary
+      but not a Cloud Run instance restart.
+  L2: Supabase ai_response_cache. Survives restarts, shared across instances,
+      but each lookup is a ~100-300ms HTTP round-trip on the event loop.
+
+Order: L1 hit → return. L1 miss → L2 read; on hit, hydrate L1. L2 miss → caller
+rebuilds and writes through both layers. Without L1 every request paid for a
+Supabase read even when the answer hadn't changed; on a warm instance that was
+the dominant cost of /api/energy/{oil,natgas} after the 8 EIA fetches.
 """
 
 import json
 import logging
 from datetime import datetime, timedelta
+from cachetools import TTLCache
 from fastapi import APIRouter, Depends, Query
 from api._json_safe import df_records
 from api.deps import get_current_user
@@ -14,9 +24,27 @@ from api.deps import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# L1: process-local. Sized for the handful of cacheable bundles this module
+# manages (oil, natgas, ercot, fama-french, etc.) plus a little headroom. TTL
+# matches the longest server-side cache we hand out; per-key reads still honour
+# the caller's ttl_minutes by comparing the stored timestamp.
+_L1_CACHE: TTLCache = TTLCache(maxsize=32, ttl=60 * 60 * 6)
+
 
 def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
-    """Read a cached JSON bundle from Supabase ai_response_cache."""
+    """Read a cached JSON bundle, L1 first then Supabase L2."""
+    # L1: cheap dict access, no I/O.
+    entry = _L1_CACHE.get(key)
+    if entry is not None:
+        stored_at, data = entry
+        if (datetime.now() - stored_at).total_seconds() < ttl_minutes * 60:
+            return data
+        # Stale per caller's tighter TTL — drop and fall through to L2 / rebuild,
+        # so subsequent reads don't re-pay the comparison.
+        _L1_CACHE.pop(key, None)
+
+    # L2: Supabase round-trip. Still sync — happens at most once per ttl_minutes
+    # per Cloud Run instance per key.
     try:
         from src.db import get_client
         db = get_client()
@@ -28,14 +56,17 @@ def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
             .limit(1).execute()
         if result.data:
             resp = result.data[0]["response"]
-            return json.loads(resp) if isinstance(resp, str) else resp
+            data = json.loads(resp) if isinstance(resp, str) else resp
+            _L1_CACHE[key] = (datetime.now(), data)
+            return data
     except Exception:
         pass
     return None
 
 
 def _set_bundle_cache(key: str, data: dict, ttl_minutes: int = 30) -> None:
-    """Write a JSON bundle to Supabase ai_response_cache."""
+    """Write a JSON bundle to L1 + Supabase L2."""
+    _L1_CACHE[key] = (datetime.now(), data)
     try:
         from src.db import get_client
         db = get_client()

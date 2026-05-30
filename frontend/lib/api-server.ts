@@ -21,6 +21,8 @@ import type {
   MarketDriverResponse,
   VolLandscapeScan,
   TrumpMonitorResponse,
+  OilBundle,
+  NatGasBundle,
 } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -67,4 +69,17 @@ export function fetchVolLandscapeServer() {
 
 export function fetchTrumpMonitorServer() {
   return serverFetch<TrumpMonitorResponse>("/api/trump/monitor", 10_000);
+}
+
+export function fetchOilBundleServer() {
+  // Bundle is ~165KB and the cold path fans out 10 EIA fetches. Give it room
+  // — the backend keeps a 30-min Supabase L2 cache + a process-local L1, so
+  // the typical SSR path is single-digit ms once warm. Timeout matches the
+  // realistic worst case (cold-instance + EIA upstream blip).
+  return serverFetch<OilBundle>("/api/energy/oil", 15_000);
+}
+
+export function fetchNatGasBundleServer() {
+  // Same L1/L2 cache layer as /oil; same 8-EIA cold fan-out shape.
+  return serverFetch<NatGasBundle>("/api/energy/natgas", 15_000);
 }

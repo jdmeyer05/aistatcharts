@@ -116,6 +116,86 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Causality pre-warm failed: {e}")
 
+    def _warm_energy() -> None:
+        """Prefill the oil + natgas bundle caches. Each bundle does ~10
+        parallel EIA fetches the first time; on a cold instance that's the
+        difference between a 0.4s and a 10-15s first paint for /oil and
+        /natgas. Both pages share the same _get_bundle_cache layer."""
+        try:
+            from api.routes.energy import (
+                _get_bundle_cache, _set_bundle_cache,
+            )
+            from concurrent.futures import ThreadPoolExecutor
+            from src.eia_helpers import fetch_eia_data
+            from api._json_safe import df_records
+
+            def _to_records(df):
+                if df is None or df.empty:
+                    return []
+                return df_records(df[["period", "value", "wow_change"]])
+
+            def _warm_oil_bundle():
+                if _get_bundle_cache("energy_oil_bundle", ttl_minutes=30):
+                    return  # L2 already fresh — L1 was hydrated by the read
+                series = [
+                    ("PET.WCESTUS1.W", 520), ("PET.WCRFPUS2.W", 260),
+                    ("PET.WCRSTUS1.W", 260), ("PET.WPULEUS3.W", 260),
+                    ("PET.WCEIMUS2.W", 260), ("PET.WCREXUS2.W", 260),
+                    ("PET.RWTC.W", 260),     ("PET.WGTSTUS1.W", 260),
+                    ("PET.WDISTUS1.W", 260), ("PET.WRPUPUS2.W", 260),
+                ]
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    results = list(pool.map(lambda a: fetch_eia_data(*a), series))
+                bundle = {
+                    "inventories": _to_records(results[0]),
+                    "production":  _to_records(results[1]),
+                    "cushing":     _to_records(results[2]),
+                    "refinery":    _to_records(results[3]),
+                    "imports":     _to_records(results[4]),
+                    "exports":     _to_records(results[5]),
+                    "wti":         _to_records(results[6]),
+                    "gasoline":    _to_records(results[7]),
+                    "distillate":  _to_records(results[8]),
+                    "supplied":    _to_records(results[9]),
+                }
+                _set_bundle_cache("energy_oil_bundle", bundle, ttl_minutes=30)
+
+            def _warm_natgas_bundle():
+                if _get_bundle_cache("energy_natgas_bundle", ttl_minutes=30):
+                    return
+                # Match the series list in /natgas — keep them in lockstep.
+                series = [
+                    ("NG.NW2_EPG0_SWO_R48_BCF.W", 520),
+                    ("NG.NW2_EPG0_SWO_R31_BCF.W", 260),
+                    ("NG.NW2_EPG0_SWO_R32_BCF.W", 260),
+                    ("NG.NW2_EPG0_SWO_R33_BCF.W", 260),
+                    ("NG.NW2_EPG0_SWO_R34_BCF.W", 260),
+                    ("NG.NW2_EPG0_SWO_R35_BCF.W", 260),
+                    ("NG.RNGWHHD.W", 260),
+                    ("NG.N9140US2.M", 60),
+                ]
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    results = list(pool.map(lambda a: fetch_eia_data(*a), series))
+                bundle = {
+                    "storage": _to_records(results[0]),
+                    "regions": {
+                        "East":           _to_records(results[1]),
+                        "Midwest":        _to_records(results[2]),
+                        "Mountain":       _to_records(results[3]),
+                        "Pacific":        _to_records(results[4]),
+                        "South Central":  _to_records(results[5]),
+                    },
+                    "henry_hub":   _to_records(results[6]),
+                    "consumption": _to_records(results[7]),
+                }
+                _set_bundle_cache("energy_natgas_bundle", bundle, ttl_minutes=30)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                list(pool.map(lambda fn: fn(), [_warm_oil_bundle, _warm_natgas_bundle]))
+            logger.info("Energy (oil + natgas) caches pre-warmed")
+        except Exception as e:
+            logger.warning(f"Energy pre-warm failed: {e}")
+
     loop = asyncio.get_event_loop()
     # Kick off in parallel so total warmup time ≈ slowest task, not the sum.
     await asyncio.gather(
@@ -123,6 +203,7 @@ async def _warm_caches() -> None:
         loop.run_in_executor(None, _warm_vol_landscape),
         loop.run_in_executor(None, _warm_sectors),
         loop.run_in_executor(None, _warm_causality),
+        loop.run_in_executor(None, _warm_energy),
     )
 
 
