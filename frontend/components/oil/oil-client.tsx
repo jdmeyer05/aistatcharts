@@ -25,6 +25,39 @@ function yearOf(dateStr: string): number {
 function last(arr: EIARecord[]): EIARecord { return arr[arr.length - 1]; }
 function tail(arr: EIARecord[], n: number): EIARecord[] { return arr.slice(-n); }
 
+/** Empirical CDF — % of `values` strictly less than `target`. Equal values count
+ * as half a position (mid-rank), so a target equal to every observation lands
+ * at ~50% rather than 0% or 100%. */
+function percentileRank(values: number[], target: number): number {
+  if (values.length === 0) return 0;
+  let lt = 0, eq = 0;
+  for (const v of values) {
+    if (v < target) lt += 1;
+    else if (v === target) eq += 1;
+  }
+  return ((lt + 0.5 * eq) / values.length) * 100;
+}
+
+/** Color palette for the 5 PADDs. Stable across charts so the regional
+ * stacked-area and the ranked table line up visually. */
+function paddColors(t: { accent: string; hv60: string; gain: string; spot: string; hv20: string }) {
+  return {
+    p1: t.accent, // East Coast — coastal blue
+    p2: t.hv60,   // Midwest — purple (Cushing / WTI delivery)
+    p3: t.gain,   // Gulf Coast — green (the big refining hub)
+    p4: t.spot,   // Rocky Mountain — amber
+    p5: t.hv20,   // West Coast — orange (isolated market)
+  };
+}
+
+const PADD_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: "PADD 1 (East Coast)",
+  2: "PADD 2 (Midwest)",
+  3: "PADD 3 (Gulf Coast)",
+  4: "PADD 4 (Rocky Mtn)",
+  5: "PADD 5 (West Coast)",
+};
+
 export default function OilClient() {
   const { resolvedTheme } = useTheme();
   const t = getChartTheme(resolvedTheme === "dark");
@@ -107,6 +140,17 @@ export default function OilClient() {
         <div className="flex flex-wrap gap-6">
           <Metric label="Commercial Inventories" value={`${invMb.toFixed(1)}M bbls`}
             delta={`${invWow > 0 ? "+" : ""}${invWow.toFixed(2)}M WoW`} deltaType={invWow > 0 ? "loss" : "gain"} />
+          {data.spr.length > 0 && (() => {
+            const l = last(data.spr); const sprMb = l.value / 1000; const wow = (l.wow_change ?? 0) / 1000;
+            // SPR convention is opposite of commercial: builds are a positive
+            // (security) signal, draws are negative.
+            return <Metric label="Strategic Petroleum Reserve" value={`${sprMb.toFixed(1)}M bbls`}
+              delta={`${wow > 0 ? "+" : ""}${wow.toFixed(2)}M WoW`} deltaType={wow >= 0 ? "gain" : "loss"} />;
+          })()}
+          {data.spr.length > 0 && (() => {
+            const totalMb = (latest.value + last(data.spr).value) / 1000;
+            return <Metric label="Total US Crude" value={`${totalMb.toFixed(1)}M bbls`} />;
+          })()}
           {data.production.length > 0 && (() => {
             const l = last(data.production); const mbpd = l.value / 1000; const wow = (l.wow_change ?? 0) / 1000;
             return <Metric label="US Field Production" value={`${mbpd.toFixed(1)}M bpd`} delta={`${wow > 0 ? "+" : ""}${wow.toFixed(2)}M WoW`} deltaType={wow > 0 ? "gain" : "loss"} />;
@@ -145,46 +189,242 @@ export default function OilClient() {
         ))}
       </div>
 
-      {/* Tab 0: Inventories + 5-Year Band */}
-      {activeTab === 0 && (() => {
-        // All three traces share a numeric week-of-year (1-52) x-axis so the
-        // current-year actuals overlay the historical band directly. Prior
-        // bug: band used string week labels while actuals used date strings,
-        // so Plotly treated them as categorical and laid them side-by-side.
-        const currentYearInv = inv
-          .filter(r => yearOf(r.period) === currentYear)
-          .map(r => ({ week: weekOfYear(r.period), value: r.value / 1000 }))
-          .sort((a, b) => a.week - b.week);
-        return (
-          <div className="card">
-            <Plot data={[
-              ...(fiveYrStats.length > 0 ? [{
-                x: [...fiveYrStats.map(s => s.week), ...fiveYrStats.slice().reverse().map(s => s.week)],
-                y: [...fiveYrStats.map(s => s.max), ...fiveYrStats.slice().reverse().map(s => s.min)],
-                fill: "toself" as const, fillcolor: t.accent + "12", line: { color: "transparent", width: 0 },
-                name: "5-Year Range", hoverinfo: "skip" as const, type: "scatter" as const, mode: "lines" as const,
-              }, {
-                x: fiveYrStats.map(s => s.week),
-                y: fiveYrStats.map(s => s.avg), type: "scatter" as const, mode: "lines" as const,
-                name: "5-Year Average", line: { color: t.spot, width: 2, dash: "dash" as const },
-              }] : []),
-              {
-                x: currentYearInv.map(d => d.week),
-                y: currentYearInv.map(d => d.value),
-                type: "scatter" as const, mode: "lines" as const,
-                name: `${currentYear} Actual`, line: { color: t.hv20, width: 2.5 },
-              },
-            ]} layout={{
-              height: 500, ...L,
-              yaxis: { title: "Millions of Barrels", gridcolor: t.grid },
-              xaxis: { title: "Week of Year", gridcolor: t.grid, range: [1, 52], dtick: 4 },
-              hovermode: "x unified",
-              legend: { x: 0.01, y: 0.99, bgcolor: "transparent" },
-            }}
-              config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
-          </div>
-        );
-      })()}
+      {/* Tab 0: Inventories deep-dive — 5-yr band + PADD breakdown + SPR + DoS trend */}
+      {activeTab === 0 && (
+        <div className="space-y-5">
+          {/* Section 1: Commercial crude vs 5-year band */}
+          {(() => {
+            // All three traces share a numeric week-of-year (1-52) x-axis so
+            // the current-year actuals overlay the historical band directly.
+            // Prior bug: band used string week labels while actuals used date
+            // strings, so Plotly treated them as categorical and laid them
+            // side-by-side.
+            const currentYearInv = inv
+              .filter(r => yearOf(r.period) === currentYear)
+              .map(r => ({ week: weekOfYear(r.period), value: r.value / 1000 }))
+              .sort((a, b) => a.week - b.week);
+            return (
+              <div className="card space-y-2">
+                <div className="text-sm font-semibold">Commercial Crude vs 5-Year Range</div>
+                <Plot data={[
+                  ...(fiveYrStats.length > 0 ? [{
+                    x: [...fiveYrStats.map(s => s.week), ...fiveYrStats.slice().reverse().map(s => s.week)],
+                    y: [...fiveYrStats.map(s => s.max), ...fiveYrStats.slice().reverse().map(s => s.min)],
+                    fill: "toself" as const, fillcolor: t.accent + "12", line: { color: "transparent", width: 0 },
+                    name: "5-Year Range", hoverinfo: "skip" as const, type: "scatter" as const, mode: "lines" as const,
+                  }, {
+                    x: fiveYrStats.map(s => s.week),
+                    y: fiveYrStats.map(s => s.avg), type: "scatter" as const, mode: "lines" as const,
+                    name: "5-Year Average", line: { color: t.spot, width: 2, dash: "dash" as const },
+                  }] : []),
+                  {
+                    x: currentYearInv.map(d => d.week),
+                    y: currentYearInv.map(d => d.value),
+                    type: "scatter" as const, mode: "lines" as const,
+                    name: `${currentYear} Actual`, line: { color: t.hv20, width: 2.5 },
+                  },
+                ]} layout={{
+                  height: 460, ...L,
+                  yaxis: { title: "Millions of Barrels", gridcolor: t.grid },
+                  xaxis: { title: "Week of Year", gridcolor: t.grid, range: [1, 52], dtick: 4 },
+                  hovermode: "x unified",
+                  legend: { x: 0.01, y: 0.99, bgcolor: "transparent" },
+                }}
+                  config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+              </div>
+            );
+          })()}
+
+          {/* Section 2: PADD regional breakdown — stacked area + ranked table */}
+          {(() => {
+            const padds: { id: 1 | 2 | 3 | 4 | 5; data: EIARecord[] }[] = [
+              { id: 1, data: data.padd1 },
+              { id: 2, data: data.padd2 },
+              { id: 3, data: data.padd3 },
+              { id: 4, data: data.padd4 },
+              { id: 5, data: data.padd5 },
+            ].filter(p => p.data.length > 0) as typeof padds;
+            if (padds.length === 0) return null;
+            const colors = paddColors(t);
+            const colorById = { 1: colors.p1, 2: colors.p2, 3: colors.p3, 4: colors.p4, 5: colors.p5 };
+
+            // Build ranked-table rows: current Mb, WoW Mb, 5-yr percentile rank.
+            // Percentile uses the last 5 years (260 weekly obs) so it scales
+            // with PADD size — a PADD2 percentile of 80 is comparable to a
+            // PADD5 percentile of 80 even though absolute levels differ ~5×.
+            const rows = padds.map(p => {
+              const l = last(p.data);
+              const mb = l.value / 1000;
+              const wow = (l.wow_change ?? 0) / 1000;
+              const hist = tail(p.data, 260).map(r => r.value);
+              const pct = percentileRank(hist, l.value);
+              return { id: p.id, label: PADD_LABELS[p.id], mb, wow, pct, color: colorById[p.id] };
+            }).sort((a, b) => b.mb - a.mb); // largest first
+
+            return (
+              <div className="card space-y-3">
+                <div className="text-sm font-semibold">PADD Regional Breakdown</div>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="lg:col-span-2">
+                    <Plot data={padds.map(p => {
+                      const recs = tail(p.data, 260);
+                      return {
+                        x: recs.map(r => r.period),
+                        y: recs.map(r => r.value / 1000),
+                        type: "scatter" as const, mode: "lines" as const,
+                        name: PADD_LABELS[p.id],
+                        stackgroup: "one",
+                        line: { color: colorById[p.id], width: 0.5 },
+                        hovertemplate: `${PADD_LABELS[p.id]}<br>%{x}<br>%{y:.1f}M bbls<extra></extra>`,
+                      };
+                    })}
+                      layout={{
+                        height: 420, ...L,
+                        yaxis: { title: "Millions of Barrels", gridcolor: t.grid },
+                        xaxis: { gridcolor: t.grid },
+                        hovermode: "x unified",
+                        legend: { x: 0.01, y: 0.99, bgcolor: "transparent" },
+                      }}
+                      config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="data-table text-xs w-full">
+                      <thead><tr><th className="text-left">Region</th><th className="text-right">Now</th><th className="text-right">WoW</th><th className="text-right">5y %ile</th></tr></thead>
+                      <tbody>
+                        {rows.map(r => (
+                          <tr key={r.id}>
+                            <td className="font-semibold whitespace-nowrap"><span style={{ color: r.color }}>■</span> {r.label}</td>
+                            <td className="font-data text-right">{r.mb.toFixed(1)}M</td>
+                            <td className={`font-data text-right ${r.wow > 0 ? "text-loss" : "text-gain"}`}>{r.wow > 0 ? "+" : ""}{r.wow.toFixed(2)}M</td>
+                            <td className="font-data text-right">{r.pct.toFixed(0)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <p className="text-xs text-text-muted mt-3">WoW colored on commercial-inventory convention: builds are bearish (red), draws are bullish (green). Percentile = empirical rank vs prior 260 weeks.</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Section 3: Strategic Petroleum Reserve */}
+          {data.spr.length > 0 && (() => {
+            const recs = tail(data.spr, 520);
+            const l = last(recs);
+            const sprMb = l.value / 1000;
+            const wow = (l.wow_change ?? 0) / 1000;
+            const peakRec = recs.reduce((a, b) => (b.value > a.value ? b : a), recs[0]);
+            const troughRec = recs.reduce((a, b) => (b.value < a.value ? b : a), recs[0]);
+            const peakMb = peakRec.value / 1000;
+            const troughMb = troughRec.value / 1000;
+            return (
+              <div className="card space-y-3">
+                <div className="text-sm font-semibold">Strategic Petroleum Reserve</div>
+                <div className="flex flex-wrap gap-6">
+                  <Metric label="SPR Stocks" value={`${sprMb.toFixed(1)}M bbls`}
+                    delta={`${wow > 0 ? "+" : ""}${wow.toFixed(2)}M WoW`}
+                    deltaType={wow >= 0 ? "gain" : "loss"} />
+                  <Metric label="10-Year Peak" value={`${peakMb.toFixed(1)}M bbls`}
+                    delta={peakRec.period} />
+                  <Metric label="10-Year Trough" value={`${troughMb.toFixed(1)}M bbls`}
+                    delta={troughRec.period} />
+                  <Metric label="From Trough" value={`${(sprMb - troughMb).toFixed(1)}M bbls`}
+                    delta={`${((sprMb - troughMb) / troughMb * 100).toFixed(1)}%`}
+                    deltaType="gain" />
+                </div>
+                <Plot data={[{
+                  x: recs.map(r => r.period),
+                  y: recs.map(r => r.value / 1000),
+                  type: "scatter" as const, mode: "lines" as const,
+                  name: "SPR Stocks", line: { color: t.accent, width: 2 },
+                  fill: "tozeroy" as const, fillcolor: t.accent + "14",
+                  hovertemplate: "%{x}<br>%{y:.1f}M bbls<extra></extra>",
+                }]}
+                  layout={{
+                    height: 360, ...L,
+                    yaxis: { title: "Millions of Barrels", gridcolor: t.grid, rangemode: "tozero" as const },
+                    xaxis: { gridcolor: t.grid },
+                    hovermode: "x unified",
+                    showlegend: false,
+                  }}
+                  config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+              </div>
+            );
+          })()}
+
+          {/* Section 4: Days of Supply trend */}
+          {data.supplied.length > 0 && (() => {
+            // Align inventory and supplied by report period (both weekly).
+            // EIA reports supplied as the 4-week avg of daily product supplied,
+            // so DoS at period t = inv_t / supplied_t (same units cancel,
+            // result in days).
+            const suppliedMap = new Map(data.supplied.map(r => [r.period, r.value]));
+            const dosSeries = inv
+              .filter(r => {
+                const s = suppliedMap.get(r.period);
+                return s != null && s > 0;
+              })
+              .map(r => ({ period: r.period, dos: r.value / (suppliedMap.get(r.period) as number) }));
+            if (dosSeries.length === 0) return null;
+
+            // 5-year band of DoS by week-of-year.
+            const dosByWeek = new Map<number, number[]>();
+            for (const d of dosSeries) {
+              const yr = yearOf(d.period);
+              if (yr >= currentYear - 5 && yr <= currentYear - 1) {
+                const w = weekOfYear(d.period);
+                if (!dosByWeek.has(w)) dosByWeek.set(w, []);
+                dosByWeek.get(w)!.push(d.dos);
+              }
+            }
+            const dosStats = Array.from(dosByWeek.entries()).map(([week, vals]) => ({
+              week,
+              avg: vals.reduce((s, v) => s + v, 0) / vals.length,
+              min: Math.min(...vals),
+              max: Math.max(...vals),
+            })).sort((a, b) => a.week - b.week);
+
+            const currentYearDos = dosSeries
+              .filter(d => yearOf(d.period) === currentYear)
+              .map(d => ({ week: weekOfYear(d.period), value: d.dos }))
+              .sort((a, b) => a.week - b.week);
+
+            return (
+              <div className="card space-y-2">
+                <div className="text-sm font-semibold">Days of Supply — 5-Year Range</div>
+                <Plot data={[
+                  ...(dosStats.length > 0 ? [{
+                    x: [...dosStats.map(s => s.week), ...dosStats.slice().reverse().map(s => s.week)],
+                    y: [...dosStats.map(s => s.max), ...dosStats.slice().reverse().map(s => s.min)],
+                    fill: "toself" as const, fillcolor: t.accent + "12", line: { color: "transparent", width: 0 },
+                    name: "5-Year Range", hoverinfo: "skip" as const, type: "scatter" as const, mode: "lines" as const,
+                  }, {
+                    x: dosStats.map(s => s.week),
+                    y: dosStats.map(s => s.avg),
+                    type: "scatter" as const, mode: "lines" as const,
+                    name: "5-Year Average", line: { color: t.spot, width: 2, dash: "dash" as const },
+                  }] : []),
+                  {
+                    x: currentYearDos.map(d => d.week),
+                    y: currentYearDos.map(d => d.value),
+                    type: "scatter" as const, mode: "lines" as const,
+                    name: `${currentYear} Actual`, line: { color: t.hv20, width: 2.5 },
+                  },
+                ]} layout={{
+                  height: 360, ...L,
+                  yaxis: { title: "Days of Supply", gridcolor: t.grid },
+                  xaxis: { title: "Week of Year", gridcolor: t.grid, range: [1, 52], dtick: 4 },
+                  hovermode: "x unified",
+                  legend: { x: 0.01, y: 0.99, bgcolor: "transparent" },
+                }}
+                  config={{ displayModeBar: false, responsive: true }} style={{ width: "100%" }} />
+                <p className="text-xs text-text-muted">Commercial crude ÷ total product supplied (EIA WPSR demand proxy). Higher = looser market.</p>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* Tab 1: YoY Seasonality */}
       {activeTab === 1 && (

@@ -173,19 +173,26 @@ async def oil_bundle(user: str = Depends(get_current_user)):
     from src.eia_helpers import fetch_eia_data
 
     series = [
-        ("PET.WCESTUS1.W", 520),   # Commercial crude inventories
-        ("PET.WCRFPUS2.W", 260),   # US field production
-        ("PET.WCRSTUS1.W", 260),   # Cushing, OK storage
-        ("PET.WPULEUS3.W", 260),   # Refinery utilization
-        ("PET.WCEIMUS2.W", 260),   # Imports
-        ("PET.WCREXUS2.W", 260),   # Exports
-        ("PET.RWTC.W", 260),       # WTI spot price
-        ("PET.WGTSTUS1.W", 260),   # Gasoline inventories
-        ("PET.WDISTUS1.W", 260),   # Distillate inventories
-        ("PET.WRPUPUS2.W", 260),   # Product supplied (demand proxy)
+        ("PET.WCESTUS1.W", 520),   # 0  Commercial crude inventories
+        ("PET.WCRFPUS2.W", 260),   # 1  US field production
+        ("PET.WCRSTUS1.W", 260),   # 2  Cushing, OK storage
+        ("PET.WPULEUS3.W", 260),   # 3  Refinery utilization
+        ("PET.WCEIMUS2.W", 260),   # 4  Imports
+        ("PET.WCREXUS2.W", 260),   # 5  Exports
+        ("PET.RWTC.W", 260),       # 6  WTI spot price
+        ("PET.WGTSTUS1.W", 260),   # 7  Gasoline inventories
+        ("PET.WDISTUS1.W", 260),   # 8  Distillate inventories
+        ("PET.WRPUPUS2.W", 520),   # 9  Product supplied (demand proxy) — 520 for DoS 5-yr trend
+        ("PET.WCSSTUS1.W", 520),   # 10 Strategic Petroleum Reserve stocks
+        ("PET.WCESTP11.W", 520),   # 11 PADD 1 East Coast crude (excl SPR)
+        ("PET.WCESTP21.W", 520),   # 12 PADD 2 Midwest crude (excl SPR)
+        ("PET.WCESTP31.W", 520),   # 13 PADD 3 Gulf Coast crude (excl SPR)
+        ("PET.WCESTP41.W", 520),   # 14 PADD 4 Rocky Mountain crude (excl SPR)
+        ("PET.WCESTP51.W", 520),   # 15 PADD 5 West Coast crude (excl SPR)
     ]
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # max_workers=16 matches the new series count so the fan-out stays single-batch.
+    with ThreadPoolExecutor(max_workers=16) as pool:
         results = list(pool.map(lambda args: fetch_eia_data(*args), series))
 
     def to_records(df):
@@ -195,15 +202,21 @@ async def oil_bundle(user: str = Depends(get_current_user)):
 
     bundle = {
         "inventories": to_records(results[0]),
-        "production": to_records(results[1]),
-        "cushing": to_records(results[2]),
-        "refinery": to_records(results[3]),
-        "imports": to_records(results[4]),
-        "exports": to_records(results[5]),
-        "wti": to_records(results[6]),
-        "gasoline": to_records(results[7]),
-        "distillate": to_records(results[8]),
-        "supplied": to_records(results[9]),
+        "production":  to_records(results[1]),
+        "cushing":     to_records(results[2]),
+        "refinery":    to_records(results[3]),
+        "imports":     to_records(results[4]),
+        "exports":     to_records(results[5]),
+        "wti":         to_records(results[6]),
+        "gasoline":    to_records(results[7]),
+        "distillate":  to_records(results[8]),
+        "supplied":    to_records(results[9]),
+        "spr":         to_records(results[10]),
+        "padd1":       to_records(results[11]),
+        "padd2":       to_records(results[12]),
+        "padd3":       to_records(results[13]),
+        "padd4":       to_records(results[14]),
+        "padd5":       to_records(results[15]),
     }
 
     _set_bundle_cache(CACHE_KEY, bundle, ttl_minutes=30)

@@ -1043,6 +1043,12 @@ export interface OilBundle {
   gasoline: EIARecord[];
   distillate: EIARecord[];
   supplied: EIARecord[];
+  spr: EIARecord[];
+  padd1: EIARecord[];
+  padd2: EIARecord[];
+  padd3: EIARecord[];
+  padd4: EIARecord[];
+  padd5: EIARecord[];
 }
 
 export async function fetchOilBundle(): Promise<OilBundle> {

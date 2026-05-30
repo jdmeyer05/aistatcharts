@@ -137,14 +137,21 @@ async def _warm_caches() -> None:
             def _warm_oil_bundle():
                 if _get_bundle_cache("energy_oil_bundle", ttl_minutes=30):
                     return  # L2 already fresh — L1 was hydrated by the read
+                # Keep this list in lockstep with the /oil route in
+                # api/routes/energy.py. If they drift, prewarm fills a bundle
+                # the route would rebuild on first hit.
                 series = [
                     ("PET.WCESTUS1.W", 520), ("PET.WCRFPUS2.W", 260),
                     ("PET.WCRSTUS1.W", 260), ("PET.WPULEUS3.W", 260),
                     ("PET.WCEIMUS2.W", 260), ("PET.WCREXUS2.W", 260),
                     ("PET.RWTC.W", 260),     ("PET.WGTSTUS1.W", 260),
-                    ("PET.WDISTUS1.W", 260), ("PET.WRPUPUS2.W", 260),
+                    ("PET.WDISTUS1.W", 260), ("PET.WRPUPUS2.W", 520),
+                    ("PET.WCSSTUS1.W", 520),
+                    ("PET.WCESTP11.W", 520), ("PET.WCESTP21.W", 520),
+                    ("PET.WCESTP31.W", 520), ("PET.WCESTP41.W", 520),
+                    ("PET.WCESTP51.W", 520),
                 ]
-                with ThreadPoolExecutor(max_workers=8) as pool:
+                with ThreadPoolExecutor(max_workers=16) as pool:
                     results = list(pool.map(lambda a: fetch_eia_data(*a), series))
                 bundle = {
                     "inventories": _to_records(results[0]),
@@ -157,6 +164,12 @@ async def _warm_caches() -> None:
                     "gasoline":    _to_records(results[7]),
                     "distillate":  _to_records(results[8]),
                     "supplied":    _to_records(results[9]),
+                    "spr":         _to_records(results[10]),
+                    "padd1":       _to_records(results[11]),
+                    "padd2":       _to_records(results[12]),
+                    "padd3":       _to_records(results[13]),
+                    "padd4":       _to_records(results[14]),
+                    "padd5":       _to_records(results[15]),
                 }
                 _set_bundle_cache("energy_oil_bundle", bundle, ttl_minutes=30)
 
