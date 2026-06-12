@@ -13,6 +13,7 @@ Supabase read even when the answer hadn't changed; on a warm instance that was
 the dominant cost of /api/energy/{oil,natgas} after the 8 EIA fetches.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -31,9 +32,8 @@ router = APIRouter()
 _L1_CACHE: TTLCache = TTLCache(maxsize=32, ttl=60 * 60 * 6)
 
 
-def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
-    """Read a cached JSON bundle, L1 first then Supabase L2."""
-    # L1: cheap dict access, no I/O.
+def _l1_lookup(key: str, ttl_minutes: int) -> dict | None:
+    """L1 read: cheap dict access, no I/O. Returns None on miss or staleness."""
     entry = _L1_CACHE.get(key)
     if entry is not None:
         stored_at, data = entry
@@ -42,9 +42,13 @@ def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
         # Stale per caller's tighter TTL — drop and fall through to L2 / rebuild,
         # so subsequent reads don't re-pay the comparison.
         _L1_CACHE.pop(key, None)
+    return None
 
-    # L2: Supabase round-trip. Still sync — happens at most once per ttl_minutes
-    # per Cloud Run instance per key.
+
+def _l2_lookup(key: str) -> dict | None:
+    """L2 read: a single Supabase HTTP round-trip. SYNC — call it via
+    ``asyncio.to_thread`` from an async route so it doesn't block the event
+    loop; the prewarm worker threads call it directly. Hydrates L1 on hit."""
     try:
         from src.db import get_client
         db = get_client()
@@ -62,6 +66,25 @@ def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
+    """Sync read (L1 then L2). For the prewarm worker threads, which run in a
+    plain sync context. Async routes should prefer ``_get_bundle_cache_async``."""
+    data = _l1_lookup(key, ttl_minutes)
+    if data is not None:
+        return data
+    return _l2_lookup(key)
+
+
+async def _get_bundle_cache_async(key: str, ttl_minutes: int = 30) -> dict | None:
+    """Async read: L1 inline on the event loop (microseconds), L2 offloaded to a
+    worker thread so the sync Supabase round-trip can't block the loop on the
+    cold-instance first-request path."""
+    data = _l1_lookup(key, ttl_minutes)
+    if data is not None:
+        return data
+    return await asyncio.to_thread(_l2_lookup, key)
 
 
 def _set_bundle_cache(key: str, data: dict, ttl_minutes: int = 30) -> None:
@@ -114,7 +137,7 @@ async def natgas_bundle(user: str = Depends(get_current_user)):
     CACHE_KEY = "energy_natgas_bundle"
 
     # Fast path: return cached bundle (~5ms)
-    cached = _get_bundle_cache(CACHE_KEY, ttl_minutes=30)
+    cached = await _get_bundle_cache_async(CACHE_KEY, ttl_minutes=30)
     if cached:
         return cached
 
@@ -154,8 +177,8 @@ async def natgas_bundle(user: str = Depends(get_current_user)):
         "consumption": to_records(results[7]),
     }
 
-    # Cache the assembled bundle for 30 min
-    _set_bundle_cache(CACHE_KEY, bundle, ttl_minutes=30)
+    # Cache the assembled bundle for 30 min (offloaded — Supabase write is sync)
+    await asyncio.to_thread(_set_bundle_cache, CACHE_KEY, bundle, 30)
 
     return bundle
 
@@ -171,7 +194,7 @@ async def oil_bundle(user: str = Depends(get_current_user)):
     # Any future shape change should bump again.
     CACHE_KEY = "energy_oil_bundle_v3"
 
-    cached = _get_bundle_cache(CACHE_KEY, ttl_minutes=30)
+    cached = await _get_bundle_cache_async(CACHE_KEY, ttl_minutes=30)
     # Ignore an incomplete cached bundle: a transient EIA failure on the core
     # inventories series during a cold rebuild can otherwise pin an empty page
     # for the full TTL (the frontend errors out when inventories is empty).
@@ -249,7 +272,7 @@ async def oil_bundle(user: str = Depends(get_current_user)):
     # (e.g. inventories empty from a transient EIA hiccup) would serve a broken
     # page for the full TTL; skipping the write lets the next request retry.
     if bundle["inventories"]:
-        _set_bundle_cache(CACHE_KEY, bundle, ttl_minutes=30)
+        await asyncio.to_thread(_set_bundle_cache, CACHE_KEY, bundle, 30)
     return bundle
 
 
@@ -272,7 +295,7 @@ async def ercot_bundle(user: str = Depends(get_current_user)):
     """Fetch all ERCOT dashboard endpoints in parallel."""
     CACHE_KEY = "energy_ercot_bundle"
 
-    cached = _get_bundle_cache(CACHE_KEY, ttl_minutes=5)
+    cached = await _get_bundle_cache_async(CACHE_KEY, ttl_minutes=5)
     if cached:
         return cached
 
@@ -291,7 +314,7 @@ async def ercot_bundle(user: str = Depends(get_current_user)):
         "ancillary": results[3],
     }
 
-    _set_bundle_cache(CACHE_KEY, bundle, ttl_minutes=5)
+    await asyncio.to_thread(_set_bundle_cache, CACHE_KEY, bundle, 5)
     return bundle
 
 
@@ -334,7 +357,7 @@ async def futures_snapshot(user: str = Depends(get_current_user)):
     """Fetch snapshot for all futures tickers across 6 asset classes."""
     CACHE_KEY = "energy_futures_snapshot"
 
-    cached = _get_bundle_cache(CACHE_KEY, ttl_minutes=5)
+    cached = await _get_bundle_cache_async(CACHE_KEY, ttl_minutes=5)
     if cached:
         return cached
 
@@ -364,5 +387,5 @@ async def futures_snapshot(user: str = Depends(get_current_user)):
                 items.append({"ticker": tk, "name": name, "price": s["price"], "change": change, "pct_change": pct})
         result[sector] = items
 
-    _set_bundle_cache(CACHE_KEY, result, ttl_minutes=5)
+    await asyncio.to_thread(_set_bundle_cache, CACHE_KEY, result, 5)
     return result

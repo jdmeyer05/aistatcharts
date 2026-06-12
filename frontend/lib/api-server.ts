@@ -87,3 +87,11 @@ export function fetchNatGasBundleServer() {
   // Same L1/L2 cache layer as /oil; same 8-EIA cold fan-out shape.
   return serverFetch<NatGasBundle>("/api/energy/natgas", 15_000);
 }
+
+export function fetchErcotBundleServer() {
+  // Live grid bundle — 4 ERCOT dashboard fetches behind the same L1/L2 cache
+  // (5-min TTL). The startup pre-warm primes it, so the SSR path is usually a
+  // single-digit-ms L1 read. Untyped passthrough to match the client's
+  // fetchErcotBundle (Record<string, any>); the page guards before seeding.
+  return serverFetch<Record<string, unknown>>("/api/energy/ercot-bundle", 15_000);
+}

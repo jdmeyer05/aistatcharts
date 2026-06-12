@@ -219,6 +219,50 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Energy pre-warm failed: {e}")
 
+    def _warm_ercot() -> None:
+        """Prefill the two ERCOT pages' cold paths.
+
+        /ercot-power reads the `energy_ercot_bundle` bundle (4 parallel ERCOT
+        dashboard fetches, same _get_bundle_cache layer as oil/natgas). Its TTL
+        is only 5 min — live grid data — so this mainly buys a warm first paint
+        for the visitor right after a deploy / revision restart.
+
+        /ercot-capacity has its own module-level TTL cache in src.ercot_capacity;
+        calling discover_months() + the latest month's fetch_capacity_file()
+        fills it so the first visitor skips the file-server probe + Excel parse.
+        """
+        try:
+            from api.routes.energy import _get_bundle_cache, _set_bundle_cache
+
+            # Power dashboard bundle — mirror the /ercot-bundle route.
+            if not _get_bundle_cache("energy_ercot_bundle", ttl_minutes=5):
+                from concurrent.futures import ThreadPoolExecutor
+                from src.ercot_api import fetch_dashboard
+                endpoints = ["fuel-mix", "supply-demand", "loadForecastVsActual", "ancillary-services"]
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    results = list(pool.map(fetch_dashboard, endpoints))
+                bundle = {
+                    "fuel_mix": results[0],
+                    "supply_demand": results[1],
+                    "load_forecast": results[2],
+                    "ancillary": results[3],
+                }
+                # Don't pin an empty bundle if ERCOT's dashboard was unreachable;
+                # the next request will retry the fan-out.
+                if bundle["fuel_mix"]:
+                    _set_bundle_cache("energy_ercot_bundle", bundle, ttl_minutes=5)
+
+            # Capacity pipeline — warm the internal cache for the default view
+            # (latest month, all projects). The MoM tab's other months stay lazy.
+            from src.ercot_capacity import discover_months, fetch_capacity_file
+            months = discover_months(lookback=12)
+            if months:
+                latest = months[0]
+                fetch_capacity_file(latest["date_path"], latest["month_label"], planned_only=False)
+            logger.info("ERCOT caches pre-warmed")
+        except Exception as e:
+            logger.warning(f"ERCOT pre-warm failed: {e}")
+
     loop = asyncio.get_event_loop()
     # Kick off in parallel so total warmup time ≈ slowest task, not the sum.
     await asyncio.gather(
@@ -227,6 +271,7 @@ async def _warm_caches() -> None:
         loop.run_in_executor(None, _warm_sectors),
         loop.run_in_executor(None, _warm_causality),
         loop.run_in_executor(None, _warm_energy),
+        loop.run_in_executor(None, _warm_ercot),
     )
 
 
