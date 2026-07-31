@@ -49,7 +49,7 @@ export default async function HomePage() {
     fetchEventsServer(),
     fetchCtaFlowsServer(),
     fetchMacroPressureServer(),
-    fetchSectorRrgServer(),
+    fetchSectorRrgServer(4),
   ]);
 
   // Seed the dehydrated cache only when the upstream call succeeded —
@@ -85,7 +85,7 @@ export default async function HomePage() {
     queryClient.setQueryData(["macro-pressure"], macroPressure);
   }
   if (sectorRrg?.available) {
-    queryClient.setQueryData(["sector-rrg", 8], sectorRrg);
+    queryClient.setQueryData(["sector-rrg", 4], sectorRrg);
   }
 
   return (

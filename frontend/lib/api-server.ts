@@ -97,7 +97,7 @@ export function fetchMacroPressureServer() {
   return serverFetch<MacroPressureBoard>("/api/market/macro-pressure", 15_000);
 }
 
-export function fetchSectorRrgServer(tailWeeks = 8) {
+export function fetchSectorRrgServer(tailWeeks = 4) {
   // ~4s cold across 12 yfinance series; cached 45 min server-side.
   return serverFetch<SectorRrg>(`/api/sectors/rrg?tail_weeks=${tailWeeks}`, 15_000);
 }

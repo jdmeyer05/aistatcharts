@@ -77,11 +77,12 @@ def _quadrant(ratio: float, mom: float) -> str:
     return "improving"
 
 
-def sector_rrg(tail_weeks: int = 8, lookback: str = "3Y") -> dict:
-    """RS-Ratio / RS-Momentum for each sector, with a weekly tail.
+def sector_rrg(tail_weeks: int = 4, lookback: str = "3Y") -> dict:
+    """RS-Ratio / RS-Momentum for each sector, with a trailing path.
 
-    The tail is sampled weekly rather than daily — a daily tail on a 3-month
-    baseline is mostly noise and renders as a scribble.
+    Defaults to a one-month trail. Sampled to ~12 points across whatever window
+    is requested: dense enough to read as a curve, sparse enough that daily
+    noise doesn't turn it into a scribble.
     """
     from src.causality import aligned_panel
 
@@ -118,11 +119,12 @@ def sector_rrg(tail_weeks: int = 8, lookback: str = "3Y") -> dict:
             unavailable.append(sym)
             continue
 
-        # Weekly tail, oldest first, so the front-end can draw a path.
+        # Oldest first, so the front-end can draw a path and taper it.
         tail_df = joined.iloc[-(tail_weeks * 5):]
+        stride = max(1, len(tail_df) // 12)
         tail = [
             {"date": idx.strftime("%Y-%m-%d"), "ratio": round(float(r.ratio), 2), "mom": round(float(r.mom), 2)}
-            for idx, r in tail_df.iloc[::5].iterrows()
+            for idx, r in tail_df.iloc[::stride].iterrows()
         ]
         cur = joined.iloc[-1]
         # Ensure the live point terminates the tail even when the weekly

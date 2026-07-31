@@ -39,8 +39,8 @@ export default function SectorRrgCard() {
   const isDark = resolvedTheme === "dark";
 
   const q = useQuery<SectorRrg>({
-    queryKey: ["sector-rrg", 8],
-    queryFn: () => fetchSectorRrg(8),
+    queryKey: ["sector-rrg", 4],
+    queryFn: () => fetchSectorRrg(4),
     refetchInterval: 30 * 60_000,
     staleTime: 25 * 60_000,
   });
@@ -73,14 +73,21 @@ export default function SectorRrgCard() {
   const traces = rows.flatMap((r) => {
     const c = qColor[r.quadrant];
     return [
-      // Tail first so the head dot draws on top of it.
+      // Tail first so the head dot draws on top of it. Graduated marker size
+      // along the path tapers it toward the present, which is what makes the
+      // direction of travel readable without an arrowhead.
       {
         x: r.tail.map((p) => p.ratio),
         y: r.tail.map((p) => p.mom),
         type: "scatter" as const,
-        mode: "lines" as const,
-        line: { color: c, width: 1, shape: "spline" as const },
-        opacity: 0.4,
+        mode: "lines+markers" as const,
+        line: { color: c, width: 1.25, shape: "spline" as const },
+        marker: {
+          color: c,
+          size: r.tail.map((_, i) => 2 + (i / Math.max(1, r.tail.length - 1)) * 3),
+          line: { width: 0 },
+        },
+        opacity: 0.45,
         hoverinfo: "skip" as const,
         showlegend: false,
       },
@@ -109,7 +116,7 @@ export default function SectorRrgCard() {
             Sector Rotation
           </h2>
           <div className="text-[0.6rem] text-text-muted mt-0.5">
-            Relative strength vs momentum against the S&amp;P 500 · {d?.tail_weeks ?? 8}-week trail
+            Relative strength vs momentum against the S&amp;P 500 · {d?.tail_weeks ?? 4}-week trail
           </div>
         </div>
         <Link href="/sectors" className="text-[0.6rem] text-text-muted hover:text-accent whitespace-nowrap">
@@ -144,7 +151,7 @@ export default function SectorRrgCard() {
           <Plot
             data={traces}
             layout={{
-              height: 340,
+              height: 360,
               ...L,
               xaxis: { title: "Relative strength →", range: [lo, hi], gridcolor: t.grid, zeroline: false },
               yaxis: { title: "Momentum →", range: [lo, hi], gridcolor: t.grid, zeroline: false },
@@ -152,6 +159,16 @@ export default function SectorRrgCard() {
               // Quadrant dividers at 100/100 — the only reference lines that
               // carry meaning here, so they're the only ones drawn.
               shapes: [
+                // Quadrant tints, drawn below everything. Kept very low alpha:
+                // they orient the eye without competing with the marks.
+                { type: "rect", x0: 100, x1: hi, y0: 100, y1: hi, layer: "below",
+                  fillcolor: t.gain, opacity: isDark ? 0.07 : 0.05, line: { width: 0 } },
+                { type: "rect", x0: 100, x1: hi, y0: lo, y1: 100, layer: "below",
+                  fillcolor: t.spot, opacity: isDark ? 0.07 : 0.05, line: { width: 0 } },
+                { type: "rect", x0: lo, x1: 100, y0: lo, y1: 100, layer: "below",
+                  fillcolor: t.loss, opacity: isDark ? 0.07 : 0.05, line: { width: 0 } },
+                { type: "rect", x0: lo, x1: 100, y0: 100, y1: hi, layer: "below",
+                  fillcolor: t.accent, opacity: isDark ? 0.07 : 0.05, line: { width: 0 } },
                 { type: "line", x0: 100, x1: 100, y0: lo, y1: hi, line: { color: t.muted, width: 1, dash: "dot" } },
                 { type: "line", x0: lo, x1: hi, y0: 100, y1: 100, line: { color: t.muted, width: 1, dash: "dot" } },
               ],

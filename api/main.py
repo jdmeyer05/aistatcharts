@@ -131,7 +131,7 @@ async def _warm_caches() -> None:
         renders on the home page."""
         try:
             from api.routes.sectors import _sector_rrg_cached
-            _sector_rrg_cached(8)
+            _sector_rrg_cached(4)
         except Exception as e:
             logger.warning(f"Sector RRG pre-warm failed: {e}")
 
