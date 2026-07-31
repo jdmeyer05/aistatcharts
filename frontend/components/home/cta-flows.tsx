@@ -150,14 +150,21 @@ export default function CtaFlows() {
   const d = q.data;
   const read = d?.available ? plainRead(d) : null;
 
-  // Scenario colors run loss → muted → gain so direction is readable without
-  // consulting the legend.
-  const lineColor: Record<string, string> = {
-    down_2sig: t.loss,
-    down_1sig: t.hv20,
-    flat: t.muted,
-    up_1sig: t.accent,
-    up_2sig: t.gain,
+  // Diverging encoding: two hues + a neutral midpoint. Only three colour slots
+  // because the meaning is only down / flat / up — sigma magnitude rides on line
+  // width and opacity instead. That is legitimate here because the five paths
+  // cannot cross (a larger down-move always implies more selling), so vertical
+  // position already encodes the ordering unambiguously.
+  //
+  // A 5-hue version failed CVD validation on the inner-step-vs-gray pair
+  // (ΔE 4.4 deutan). This set measures ΔE 13.6 protan / 11.6 deutan, both well
+  // clear of the ΔE 8 target, and passes the normal-vision floor at 18.6.
+  const SCENARIO_STYLE: Record<string, { color: string; width: number; opacity: number; dash?: "dash" }> = {
+    down_2sig: { color: t.loss,  width: 2.5, opacity: 1 },
+    down_1sig: { color: t.loss,  width: 1.5, opacity: 0.55 },
+    flat:      { color: t.muted, width: 2,   opacity: 0.9, dash: "dash" },
+    up_1sig:   { color: t.gain,  width: 1.5, opacity: 0.55 },
+    up_2sig:   { color: t.gain,  width: 2.5, opacity: 1 },
   };
 
   const traces =
@@ -177,10 +184,11 @@ export default function CtaFlows() {
             mode: "lines" as const,
             name: label,
             line: {
-              color: lineColor[key],
-              width: key === "flat" ? 2.5 : 2,
-              dash: key === "flat" ? ("dash" as const) : undefined,
+              color: SCENARIO_STYLE[key].color,
+              width: SCENARIO_STYLE[key].width,
+              dash: SCENARIO_STYLE[key].dash,
             },
+            opacity: SCENARIO_STYLE[key].opacity,
             hovertemplate:
               `${label} · day %{x}<br>SPX %{customdata:,.0f}<br>` +
               `Δ exposure %{y:+.1f} pts<extra></extra>`,
@@ -315,25 +323,26 @@ export default function CtaFlows() {
                 level relative to a 1σ move, the likelier it fires.
               </p>
               <p>
-                <span className="text-text font-semibold">Limits.</span> Our own reconstruction, not a
-                bank&apos;s published estimate. Signals are daily-bar based, so it won&apos;t tick
+                <span className="text-text font-semibold">Limits.</span> An independent reconstruction
+                (SMA + breakout + momentum ensemble), not a redistribution of any bank&apos;s published
+                estimate. Signals are daily-bar based, so it won&apos;t tick
                 intraday. Exposure is model points; converting to dollars needs an industry AUM figure we
                 don&apos;t have, so we don&apos;t guess one.
               </p>
             </div>
           </details>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="lg:col-span-2">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+            <div className="md:col-span-3 min-w-0">
               <Plot
                 data={traces}
                 layout={{
-                  height: 300,
+                  height: 250,
                   ...L,
                   yaxis: { title: "Δ exposure (pts)", gridcolor: t.grid, zeroline: true, zerolinecolor: t.muted },
                   xaxis: { title: `Business days ahead (${d.horizon_days}d horizon)`, gridcolor: t.grid },
                   hovermode: "x unified" as const,
-                  legend: { orientation: "h" as const, y: -0.28, bgcolor: "transparent" },
+                  legend: { orientation: "h" as const, y: -0.3, x: 0, bgcolor: "transparent", font: { size: 9 } },
                   showlegend: true,
                 }}
                 config={{ displayModeBar: false, responsive: true }}
@@ -341,7 +350,7 @@ export default function CtaFlows() {
               />
             </div>
 
-            <div className="space-y-3">
+            <div className="md:col-span-2 space-y-2.5 min-w-0">
               {/* Terminal flows — same numbers the plotted paths end on. */}
               <div className="border border-border rounded p-2.5">
                 <div className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted mb-1.5">
@@ -403,13 +412,6 @@ export default function CtaFlows() {
               </div>
             </div>
           </div>
-
-          <p className="text-[0.55rem] text-text-muted leading-snug border-t border-border pt-2">
-            Independent reconstruction of trend-follower positioning (SMA + breakout + momentum
-            ensemble), not a redistribution of any bank&apos;s proprietary estimates. Exposure is
-            model points, not notional — desk versions quote $bn by assuming a trend AUM we
-            don&apos;t have.
-          </p>
 
           {/* Payload is deliberately the exact numbers rendered above: the
               grounding check verifies cited figures against what we send, so

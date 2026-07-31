@@ -94,6 +94,24 @@ export default function MacroPressure() {
     return out;
   }, [d]);
 
+  // Split into two balanced columns. A single 12-row table stretched the whole
+  // card width, leaving a canyon of dead space between the label and its
+  // numbers; two columns halve the height and pull each number back toward the
+  // row it belongs to. Balanced on total ROWS rather than group count so the
+  // columns end up the same height.
+  const columns = useMemo<[string, MacroFactorRow[]][][]>(() => {
+    const total = grouped.reduce((n, [, rows]) => n + rows.length + 1, 0);
+    const left: [string, MacroFactorRow[]][] = [];
+    const right: [string, MacroFactorRow[]][] = [];
+    let acc = 0;
+    for (const entry of grouped) {
+      // +1 for the group heading row.
+      if (acc < total / 2 || left.length === 0) { left.push(entry); acc += entry[1].length + 1; }
+      else right.push(entry);
+    }
+    return right.length ? [left, right] : [left];
+  }, [grouped]);
+
   return (
     <div className="card space-y-3">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -158,67 +176,60 @@ export default function MacroPressure() {
             </div>
           )}
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-[0.68rem] min-w-[34rem]">
-              <thead>
-                <tr className="text-text-muted border-b border-border">
-                  <th className="text-left font-medium py-1">Factor</th>
-                  <th className="text-right font-medium py-1 tabular-nums">Level</th>
-                  <th className="text-right font-medium py-1 tabular-nums">Δ{d.change_window_days}d</th>
-                  <th className="text-right font-medium py-1 tabular-nums">Pctile</th>
-                  <th className="text-right font-medium py-1">Pressure</th>
-                </tr>
-              </thead>
-              <tbody>
-                {grouped.map(([group, rows]) => (
-                  // Key belongs on the Fragment: it's the element returned by
-                  // map(), so keying the inner <tr> instead trips React's
-                  // missing-key warning and defeats reconciliation.
-                  <Fragment key={group}>
-                    <tr>
-                      <td colSpan={5} className="pt-2 pb-0.5">
-                        <span className="text-[0.58rem] font-bold uppercase tracking-wider text-text-muted">
-                          {group}
-                        </span>
-                      </td>
-                    </tr>
-                    {rows.map((r) => (
-                      <tr key={r.key} className="border-b border-border/40 last:border-0">
-                        <td className="py-1">
-                          <span className="text-text" title={r.why}>{r.label}</span>
-                          {/* The user asked for technical vs fundamental to be
-                              legible at a glance, so tag every row. */}
-                          <span className="ml-1.5 text-[0.52rem] uppercase tracking-wide text-text-muted/70">
-                            {r.kind === "fundamental" ? "fund" : "tech"}
-                          </span>
-                          {r.stale && (
-                            <span
-                              className="ml-1 text-[0.52rem] uppercase text-spot"
-                              title={`Last print ${r.last_print} — ${r.stale_days}d ago. Its flat reading means no new data, not no pressure.`}
-                            >
-                              stale
-                            </span>
-                          )}
-                        </td>
-                        <td className="text-right tabular-nums text-text py-1">{fmtLevel(r)}</td>
-                        <td className={`text-right tabular-nums py-1 ${r.change > 0 ? "text-text" : "text-text"}`}>
-                          {fmtChange(r)}
-                        </td>
-                        <td className="text-right tabular-nums text-text-muted py-1">
-                          {Math.round(r.pctile * 100)}%
-                        </td>
-                        <td className={`text-right py-1 font-semibold ${verdictClass(r.verdict)}`}>
-                          <span className="inline-flex items-center gap-1.5 justify-end">
-                            <span className={`w-1.5 h-1.5 rounded-full ${verdictDot(r.verdict)}`} />
-                            {r.verdict}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-1">
+            {columns.map((col, ci) => (
+              <table key={ci} className="w-full text-[0.68rem]">
+                <thead>
+                  <tr className="text-text-muted border-b border-border">
+                    <th className="text-left font-medium py-1">Factor</th>
+                    <th className="text-right font-medium py-1 tabular-nums w-[4.5rem]">Level</th>
+                    <th className="text-right font-medium py-1 tabular-nums w-[4rem]">Δ{d.change_window_days}d</th>
+                    <th className="text-right font-medium py-1 tabular-nums w-[3rem]">Pct</th>
+                    <th className="text-right font-medium py-1 w-[5.5rem]">Pressure</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {col.map(([group, rows]) => (
+                    <Fragment key={group}>
+                      <tr>
+                        <td colSpan={5} className="pt-2 pb-0.5">
+                          <span className="text-[0.58rem] font-bold uppercase tracking-wider text-text-muted">
+                            {group}
                           </span>
                         </td>
                       </tr>
-                    ))}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
+                      {rows.map((r) => (
+                        <tr key={r.key} className="border-b border-border/40 last:border-0">
+                          <td className="py-1 pr-2">
+                            <span className="text-text" title={r.why}>{r.label}</span>
+                            <span className="ml-1.5 text-[0.52rem] uppercase tracking-wide text-text-muted/70">
+                              {r.kind === "fundamental" ? "fund" : "tech"}
+                            </span>
+                            {r.stale && (
+                              <span className="ml-1 text-[0.52rem] uppercase text-spot"
+                                title={`Last print ${r.last_print} — ${r.stale_days}d ago. Its flat reading means no new data, not no pressure.`}>
+                                stale
+                              </span>
+                            )}
+                          </td>
+                          <td className="text-right tabular-nums text-text py-1">{fmtLevel(r)}</td>
+                          <td className="text-right tabular-nums text-text py-1">{fmtChange(r)}</td>
+                          <td className="text-right tabular-nums text-text-muted py-1">
+                            {Math.round(r.pctile * 100)}
+                          </td>
+                          <td className={`text-right py-1 font-semibold ${verdictClass(r.verdict)}`}>
+                            <span className="inline-flex items-center gap-1 justify-end whitespace-nowrap">
+                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${verdictDot(r.verdict)}`} />
+                              {r.verdict}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            ))}
           </div>
 
           <details className="group">
