@@ -332,12 +332,12 @@ export default function CtaFlows() {
             </div>
           </details>
 
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            <div className="md:col-span-3 min-w-0">
+          <div className="space-y-3">
+            <div className="min-w-0">
               <Plot
                 data={traces}
                 layout={{
-                  height: 250,
+                  height: 220,
                   ...L,
                   yaxis: { title: "Δ exposure (pts)", gridcolor: t.grid, zeroline: true, zerolinecolor: t.muted },
                   xaxis: { title: `Business days ahead (${d.horizon_days}d horizon)`, gridcolor: t.grid },
@@ -350,7 +350,7 @@ export default function CtaFlows() {
               />
             </div>
 
-            <div className="md:col-span-2 space-y-2.5 min-w-0">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 min-w-0">
               {/* Terminal flows — same numbers the plotted paths end on. */}
               <div className="border border-border rounded p-2.5">
                 <div className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted mb-1.5">

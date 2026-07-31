@@ -126,6 +126,13 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Macro pressure pre-warm failed: {e}")
 
+    def _warm_sp_valuation() -> None:
+        try:
+            from api.routes.market import _sp_valuation_cached
+            _sp_valuation_cached()
+        except Exception as e:
+            logger.warning(f"S&P valuation pre-warm failed: {e}")
+
     def _warm_sector_rrg() -> None:
         """Prefill the sector RRG — ~4s of yfinance on a cold instance, and it
         renders on the home page."""
@@ -291,6 +298,7 @@ async def _warm_caches() -> None:
         loop.run_in_executor(None, _warm_causality),
         loop.run_in_executor(None, _warm_macro_pressure),
         loop.run_in_executor(None, _warm_sector_rrg),
+        loop.run_in_executor(None, _warm_sp_valuation),
         loop.run_in_executor(None, _warm_energy),
         loop.run_in_executor(None, _warm_ercot),
     )

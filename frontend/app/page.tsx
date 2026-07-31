@@ -31,6 +31,7 @@ import {
   fetchCtaFlowsServer,
   fetchMacroPressureServer,
   fetchSectorRrgServer,
+  fetchSpValuationServer,
 } from "@/lib/api-server";
 
 export const revalidate = 30;
@@ -40,7 +41,7 @@ export default async function HomePage() {
   const queryClient = new QueryClient();
 
   const tickers = [...PULSE_TICKERS];
-  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows, macroPressure, sectorRrg] = await Promise.all([
+  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows, macroPressure, sectorRrg, spValuation] = await Promise.all([
     fetchSnapshotServer(tickers),
     fetchMarketDriverServer(),
     fetchHeatmapServer("sectors"),
@@ -50,6 +51,7 @@ export default async function HomePage() {
     fetchCtaFlowsServer(),
     fetchMacroPressureServer(),
     fetchSectorRrgServer(4),
+    fetchSpValuationServer(),
   ]);
 
   // Seed the dehydrated cache only when the upstream call succeeded —
@@ -86,6 +88,9 @@ export default async function HomePage() {
   }
   if (sectorRrg?.available) {
     queryClient.setQueryData(["sector-rrg", 4], sectorRrg);
+  }
+  if (spValuation?.available) {
+    queryClient.setQueryData(["sp-valuation"], spValuation);
   }
 
   return (

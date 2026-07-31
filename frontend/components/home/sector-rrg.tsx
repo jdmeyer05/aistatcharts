@@ -146,12 +146,12 @@ export default function SectorRrgCard() {
 
       {d?.available && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-            <div className="md:col-span-3 min-w-0">
+          <div className="space-y-3">
+            <div className="min-w-0">
           <Plot
             data={traces}
             layout={{
-              height: 360,
+              height: 300,
               ...L,
               xaxis: { title: "Relative strength →", range: [lo, hi], gridcolor: t.grid, zeroline: false },
               yaxis: { title: "Momentum →", range: [lo, hi], gridcolor: t.grid, zeroline: false },
@@ -188,7 +188,7 @@ export default function SectorRrgCard() {
           />
             </div>
 
-            <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-1 gap-2 content-start min-w-0">
+            <div className="grid grid-cols-2 gap-2 content-start min-w-0">
             {QUADRANTS.map(({ key, label, blurb }) => {
               const members = rows.filter((r) => r.quadrant === key);
               return (

@@ -26,6 +26,7 @@ import type {
   CtaFlowBoard,
   MacroPressureBoard,
   SectorRrg,
+  SpValuation,
 } from "@/lib/api";
 import { normalizeOilBundle } from "@/lib/api";
 
@@ -95,6 +96,10 @@ export function fetchMacroPressureServer() {
   // ~4s cold across 14 FRED/yfinance series, but the API pre-warms it at
   // startup and holds it 45 min, so the SSR path is normally a dict hit.
   return serverFetch<MacroPressureBoard>("/api/market/macro-pressure", 15_000);
+}
+
+export function fetchSpValuationServer() {
+  return serverFetch<SpValuation>("/api/market/sp-valuation", 15_000);
 }
 
 export function fetchSectorRrgServer(tailWeeks = 4) {

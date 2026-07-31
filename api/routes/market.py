@@ -2740,6 +2740,37 @@ def _macro_pressure_cached(lookback: str) -> dict:
     return board
 
 
+_SPVAL_CACHE: dict = {}
+_SPVAL_TTL_S = 6 * 60 * 60
+
+
+def _sp_valuation_cached() -> dict:
+    """6h cache. These are monthly-cadence series behind an HTML scrape — there
+    is nothing to gain from re-fetching, and plenty to lose by hammering a
+    source that has no API and would be within its rights to block us."""
+    from time import time as _now
+    hit = _SPVAL_CACHE.get("v")
+    if hit and (_now() - hit[0]) < _SPVAL_TTL_S:
+        return hit[1]
+    from src.sp_valuation import sp_valuation
+    board = sp_valuation()
+    if board.get("available"):
+        _SPVAL_CACHE["v"] = (_now(), board)
+    return board
+
+
+@router.get("/sp-valuation")
+async def sp_valuation_endpoint(user: str = Depends(get_current_user)):
+    """S&P 500 valuation multiples against their own long-run history.
+
+    Level treatment, not change: valuation sits at extremes for years, so the
+    change-scored macro board would read it as neutral almost permanently.
+    Not a timing signal — rich valuation raises the consequence of a drawdown
+    without predicting one.
+    """
+    return await asyncio.to_thread(_sp_valuation_cached)
+
+
 @router.get("/macro-pressure")
 async def macro_pressure(
     lookback: str = Query("3Y", pattern="^(1Y|2Y|3Y|5Y|10Y)$"),

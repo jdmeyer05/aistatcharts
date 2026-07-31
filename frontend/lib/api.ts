@@ -2795,6 +2795,27 @@ export async function fetchCtaFlows(code = "13874A"): Promise<CtaFlowBoard> {
   });
 }
 
+// ─── S&P valuation (multpl.com) ──────────────────────────────────
+
+export interface SpValuationRow {
+  key: string; label: string; unit: "x" | "pct"; why: string;
+  value: number; mean: number | null; median: number | null;
+  min?: number | null; max?: number | null;
+  premium_to_median_pct: number | null;
+  asof_text?: string | null;
+}
+
+export interface SpValuation {
+  available: boolean; reason?: string; asof?: string; source?: string;
+  median_premium_pct?: number | null;
+  rows?: SpValuationRow[];
+  unavailable?: string[];
+}
+
+export async function fetchSpValuation(): Promise<SpValuation> {
+  return apiFetch("/api/market/sp-valuation", { timeoutMs: 30_000 });
+}
+
 // ─── Sector Relative Rotation Graph ──────────────────────────────
 
 export type RrgQuadrant = "leading" | "weakening" | "lagging" | "improving";

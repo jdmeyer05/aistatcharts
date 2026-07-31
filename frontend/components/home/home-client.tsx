@@ -7,14 +7,14 @@
  *   1. Market Pulse Strip       (30s refetch)
  *   2. What's Driving Markets   (5 min refetch, backend caches 15 min)
  *   3. Sector Relative  |  Vol Landscape Snapshot     (60s / 5min)
- *   4. Sector Rotation — RRG vs S&P                     (30 min refetch)
- *   5. Macro Pressure — equity-impact scorecard        (30 min refetch)
- *   6. CTA Positioning — S&P 500 flow board            (30 min refetch)
+ *   4. S&P Valuation strip                             (60 min refetch)
+ *   5. Sector Rotation  |  CTA Positioning             (30 min / 30 min)
+ *   6. Macro Pressure — equity-impact scorecard        (30 min refetch)
  *   7. News             |  Trump / Tweet Watch         (derived / 2min)
  *   8. Macro Calendar — next 14 days                   (10 min refetch)
  *
  * The page shell is a Server Component (`app/page.tsx`) which prefetches
- * all nine endpoints in parallel and ships dehydrated query state via
+ * all ten endpoints in parallel and ships dehydrated query state via
  * HydrationBoundary. This component picks up the cache instantly on
  * hydration — no fetch waterfall on first paint — then refetches on its
  * normal cadence in the background.
@@ -37,6 +37,7 @@ import { PULSE_TICKERS, PULSE_LABELS } from "@/lib/home-constants";
 import CtaFlows from "@/components/home/cta-flows";
 import MacroPressure from "@/components/home/macro-pressure";
 import SectorRrgCard from "@/components/home/sector-rrg";
+import SpValuationStrip from "@/components/home/sp-valuation";
 
 function fmtAgo(iso: string): string {
   try {
@@ -426,9 +427,12 @@ export default function HomeClient() {
         <SectorRelative />
         <VolLandscapeSnapshot />
       </div>
-      <SectorRrgCard />
+      <SpValuationStrip />
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <SectorRrgCard />
+        <CtaFlows />
+      </div>
       <MacroPressure />
-      <CtaFlows />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <NewsPanel citations={driverQ.data?.citations} />
         <TweetWatch />
