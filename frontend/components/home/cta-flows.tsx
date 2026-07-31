@@ -138,10 +138,13 @@ export default function CtaFlows() {
   const L = getBaseLayout(t);
 
   const q = useQuery<CtaFlowBoard>({
+    // Signals are daily-bar based behind a 4h server price cache, so polling
+    // faster than this returns identical numbers while re-running the path
+    // walk server-side on every call. 30m keeps it fresh without the churn.
     queryKey: ["cta-flows", "13874A"],
     queryFn: () => fetchCtaFlows("13874A"),
-    refetchInterval: 10 * 60_000,
-    staleTime: 5 * 60_000,
+    refetchInterval: 30 * 60_000,
+    staleTime: 25 * 60_000,
   });
 
   const d = q.data;
@@ -167,6 +170,9 @@ export default function CtaFlows() {
             // Anchor every path at 0 on day 0: these are *changes* in exposure
             // from today, so they must share an origin to be comparable.
             y: [0, ...s.path.map((p) => p.delta_exposure)],
+            // Carry the projected index level so hover answers "at what price?",
+            // which is the question that makes a flow number actionable.
+            customdata: [d.last_price, ...s.path.map((p) => p.price)],
             type: "scatter" as const,
             mode: "lines" as const,
             name: label,
@@ -175,7 +181,9 @@ export default function CtaFlows() {
               width: key === "flat" ? 2.5 : 2,
               dash: key === "flat" ? ("dash" as const) : undefined,
             },
-            hovertemplate: `${label}: %{y:.1f} pts<br>day %{x}<extra></extra>`,
+            hovertemplate:
+              `${label} · day %{x}<br>SPX %{customdata:,.0f}<br>` +
+              `Δ exposure %{y:+.1f} pts<extra></extra>`,
           }];
         })
       : [];
@@ -215,9 +223,25 @@ export default function CtaFlows() {
       )}
 
       {!q.isLoading && !d?.available && (
-        <p className="text-xs text-text-muted py-4">
-          CTA model unavailable{d?.reason ? ` — ${d.reason}` : ""}.
-        </p>
+        <div className="py-4 flex items-baseline gap-2 flex-wrap">
+          <p className="text-xs text-text-muted">
+            {/* A fetch failure and a model that returned unavailable are
+                different problems — say which one happened. */}
+            {q.isError
+              ? "Couldn't load the CTA model."
+              : `CTA model unavailable${d?.reason ? ` — ${d.reason}` : ""}.`}
+          </p>
+          {q.isError && (
+            <button
+              type="button"
+              onClick={() => q.refetch()}
+              disabled={q.isFetching}
+              className="text-[0.65rem] text-accent hover:underline disabled:opacity-50"
+            >
+              {q.isFetching ? "Retrying…" : "Retry"}
+            </button>
+          )}
+        </div>
       )}
 
       {d?.available && (
@@ -225,7 +249,22 @@ export default function CtaFlows() {
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-[0.65rem] text-text-muted">
             <span>Spot <span className="text-text font-semibold tabular-nums">{d.last_price.toLocaleString()}</span></span>
             <span>Current exposure <span className="text-text font-semibold tabular-nums">{signed(d.current_exposure)}</span></span>
-            <span>1σ over {d.horizon_days}d <span className="text-text font-semibold tabular-nums">±{d.sigma_1_pct}%</span></span>
+            {/* Both sigmas, because the table quotes both horizons — showing only
+                the 20d one leaves the 1W column unanchored to any price move. */}
+            {typeof d.sigma_1w_pct === "number" && (
+              <span>1σ week <span className="text-text font-semibold tabular-nums">±{d.sigma_1w_pct}%</span></span>
+            )}
+            {/* Label by the horizon the number actually describes. sigma_1_pct
+                covers horizon_days, which only equals the 1M sigma at the
+                default 20 — don't call it "month" if the horizon was changed. */}
+            {typeof d.sigma_1m_pct === "number" ? (
+              <span>1σ month <span className="text-text font-semibold tabular-nums">±{d.sigma_1m_pct}%</span></span>
+            ) : (
+              <span>1σ over {d.horizon_days}d <span className="text-text font-semibold tabular-nums">±{d.sigma_1_pct}%</span></span>
+            )}
+            {d.price_asof && (
+              <span className="ml-auto">Bars through <span className="text-text font-semibold tabular-nums">{d.price_asof}</span></span>
+            )}
           </div>
 
           {/* Derived read — pure arithmetic on the payload, always present so the
@@ -255,6 +294,13 @@ export default function CtaFlows() {
                 change if the index lands at that scenario&apos;s price in {d.horizon_days} business days.
                 All lines start at zero because they measure change from today&apos;s{" "}
                 {signed(d.current_exposure)}. Below zero means selling, above means buying.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Chart vs table.</span> The chart is the{" "}
+                {d.horizon_days}-day fan, so only its right edge lines up with the table&apos;s 1M column.
+                Its fifth day is <em>not</em> the 1W column — each horizon scales its own sigma, so a
+                one-week scenario targets a smaller move ({typeof d.sigma_1w_pct === "number" ? `±${d.sigma_1w_pct}%` : "smaller"} at
+                1σ) than the monthly path happens to pass through on day five.
               </p>
               <p>
                 <span className="text-text font-semibold">Why it moves equities.</span> This flow is

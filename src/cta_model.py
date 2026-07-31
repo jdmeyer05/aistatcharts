@@ -512,6 +512,12 @@ def cta_flow_board(cftc_code: str = "13874A", horizon_days: int = 20) -> dict:
         return {"available": False, "code": cftc_code,
                 "reason": paths.get("reason", "insufficient history")}
 
+    # NOTE for future readers: `scenarios` (the plotted paths) and `terminal`
+    # (the 1w/1m table) are NOT the same projection sampled at two points.
+    # Each horizon scales its own sigma, so the 1w scenario targets a smaller
+    # move than the 20-day path passes through at day 5. Only the path's final
+    # day coincides with the matching horizon's terminal. Do not "reconcile"
+    # them by reading the path at day 5 — that is a different price scenario.
     scens = compute_scenarios(close)
     return {
         "available": True,
@@ -534,6 +540,13 @@ def cta_flow_board(cftc_code: str = "13874A", horizon_days: int = 20) -> dict:
         "terminal": scens.get("horizons", {}),
         "bias_1w": scens.get("bias_1w"),
         "bias_1m": scens.get("bias_1m"),
+        # Date of the last price bar the model actually saw. `asof` below is
+        # when we computed — with a 4h price cache those differ, and the bar
+        # date is the honest freshness signal to show a user.
+        "price_asof": (
+            prices["date"].iloc[-1].strftime("%Y-%m-%d")
+            if "date" in prices.columns and not prices.empty else None
+        ),
         "asof": datetime.utcnow().isoformat() + "Z",
     }
 

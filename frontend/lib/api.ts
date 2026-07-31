@@ -2783,6 +2783,9 @@ export interface CtaFlowBoard {
   terminal: Record<string, Record<string, CtaScenario>>;
   bias_1w?: CtaBias;
   bias_1m?: CtaBias;
+  /** Date of the last price bar used — the real freshness signal. `asof` is
+   *  merely when the board was computed, which a price cache makes newer. */
+  price_asof?: string | null;
   asof?: string;
 }
 
