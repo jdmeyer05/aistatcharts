@@ -2778,6 +2778,82 @@ def _es_levels_cached(profile_sessions: int) -> dict:
     return board
 
 
+_ES_BRIEF_CACHE: dict = {}
+_ES_BRIEF_TTL_S = 180
+
+
+def _es_brief_cached() -> dict:
+    """The whole ES picture in one call: session clock, scheduled risk, levels,
+    CTA flow, macro backdrop, and macro news.
+
+    Bundled because the briefing is only useful as a synthesis — six separate
+    round-trips would let the panels disagree about what time it is. Cached 3
+    minutes: the levels develop intraday and the countdown has to stay honest.
+
+    Every source is independently optional. A briefing missing its CTA block is
+    still worth reading; one that 500s because a single upstream blipped is not.
+    """
+    from time import time as _now
+    hit = _ES_BRIEF_CACHE.get("v")
+    if hit and (_now() - hit[0]) < _ES_BRIEF_TTL_S:
+        return hit[1]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _safe(fn, label):
+        try:
+            return fn()
+        except Exception as e:
+            logger.warning(f"es-brief: {label} failed: {e}")
+            return None
+
+    from src.es_session import es_session_brief
+    from src.es_levels import es_levels
+    from src.cta_model import cta_flow_board
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_sess = pool.submit(_safe, es_session_brief, "session")
+        f_lvl = pool.submit(_safe, es_levels, "levels")
+        f_cta = pool.submit(_safe, lambda: cta_flow_board("13874A"), "cta")
+        f_macro = pool.submit(_safe, lambda: _macro_pressure_cached("3Y"), "macro")
+
+    sess, lvl, cta, macro = f_sess.result(), f_lvl.result(), f_cta.result(), f_macro.result()
+
+    out = {
+        "available": bool(sess or lvl),
+        "asof": (sess or {}).get("asof"),
+        "session": (sess or {}).get("session"),
+        "schedule": (sess or {}).get("schedule", []),
+        "next_event": (sess or {}).get("next_event"),
+        "high_impact_today": (sess or {}).get("high_impact_today", []),
+        "news": (sess or {}).get("news", []),
+        "levels": lvl if (lvl or {}).get("available") else None,
+        "cta": {
+            "bias_1w": (cta or {}).get("bias_1w"),
+            "current_exposure": (cta or {}).get("current_exposure"),
+            "pivots": (cta or {}).get("pivots"),
+            "terminal_1w": ((cta or {}).get("terminal") or {}).get("1w"),
+        } if (cta or {}).get("available") else None,
+        "macro": {
+            "net_label": (macro or {}).get("net_label"),
+            "net_score": (macro or {}).get("net_score"),
+            "counts": (macro or {}).get("counts"),
+            "biggest_headwind": ((macro or {}).get("biggest_headwind") or {}).get("label"),
+            "biggest_support": ((macro or {}).get("biggest_support") or {}).get("label"),
+        } if (macro or {}).get("available") else None,
+        "degraded": [k for k, v in (("session", sess), ("levels", lvl), ("cta", cta), ("macro", macro)) if not v],
+    }
+    if out["available"]:
+        _ES_BRIEF_CACHE["v"] = (_now(), out)
+    return out
+
+
+@router.get("/es-brief")
+async def es_brief_endpoint(user: str = Depends(get_current_user)):
+    """Everything needed for the top-of-page ES session briefing, in one call."""
+    return await asyncio.to_thread(_es_brief_cached)
+
+
 @router.get("/es-levels")
 async def es_levels_endpoint(
     profile_sessions: int = Query(1, ge=1, le=5),
