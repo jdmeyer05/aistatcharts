@@ -4,7 +4,10 @@ numpy>=1.26.0
 plotly>=5.18.0
 supabase>=2.0.0
 openai>=1.12.0
-anthropic>=0.30.0
+# Floor is load-bearing: the AI routes pass `fallbacks=` to
+# client.beta.messages.create (beta server-side-fallback-2026-06-01), which
+# does not exist in older SDKs. Anything below this fails at call time, not import.
+anthropic>=0.120.0
 google-genai>=1.0.0
 scikit-learn>=1.3.0
 scipy>=1.11.0

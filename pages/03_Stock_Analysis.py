@@ -599,7 +599,7 @@ MODEL_CONFIGS = {
     "claude": {
         "name": "Claude Sonnet",
         "base_url": "anthropic",  # special flag — uses anthropic SDK
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-5",
         "key_name": "ANTHROPIC_API_KEY",
         "extra_instructions": "Use your knowledge to assess the latest market conditions, analyst consensus, and any recent news for this ticker.",
         "color": "#d4a574",
@@ -628,12 +628,15 @@ Produce your complete analysis for {ticker}. Respond with ONLY valid JSON."""
             client = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
                 model=config["model"],
-                max_tokens=3000,
-                temperature=0.3,
+                # Sonnet 5 thinks by default (4.6 did not) and thinking shares
+                # this budget with the JSON analysis.
+                max_tokens=8000,
                 system=STOCK_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
-            raw = response.content[0].text
+            if response.stop_reason == "refusal":
+                raise RuntimeError(f"{config['name']} declined the request")
+            raw = next((b.text for b in response.content if getattr(b, "type", None) == "text"), "")
         else:
             # OpenAI-compatible APIs (OpenAI, Grok, Gemini)
             from openai import OpenAI

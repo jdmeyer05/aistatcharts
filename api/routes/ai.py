@@ -26,7 +26,7 @@ from src.api_keys import get_secret
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-MODEL = "claude-opus-4-7"
+MODEL = "claude-opus-5"
 
 BASE_SYSTEM = """You are a senior quantitative analyst at an institutional trading desk. The user is looking at a page in our quant research platform and wants you to tell them WHAT IT MEANS — not describe what they're seeing, but interpret it.
 
@@ -515,9 +515,19 @@ async def interpret(
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        msg = client.beta.messages.create(
             model=MODEL,
-            max_tokens=700,
+            # Opus 5 thinks by default and thinking counts against max_tokens,
+            # so this budget covers reasoning + prose — not the ~700 tokens of
+            # interpretation we actually want back. Effort caps the reasoning
+            # spend; this endpoint is high-volume and user-facing.
+            max_tokens=4000,
+            output_config={"effort": "medium"},
+            # Safety classifiers can decline; "default" re-serves the request on
+            # Anthropic's recommended model for the refusal category, so there's
+            # no fallback model list to keep up to date here.
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
             system=[
                 {
                     "type": "text",
@@ -529,7 +539,15 @@ async def interpret(
             ],
             messages=[{"role": "user", "content": user_message}],
         )
-        text_blocks = [b.text for b in msg.content if hasattr(b, "text")]
+        # Opus 5 and whatever model the fallback routes to can both decline.
+        # That returns a 200 with stop_reason="refusal" and no text blocks —
+        # without this the endpoint would serve an empty interpretation.
+        if msg.stop_reason == "refusal":
+            category = getattr(getattr(msg, "stop_details", None), "category", None)
+            logger.warning(f"Claude declined interpret page={body.page} category={category}")
+            raise HTTPException(502, "Claude declined to interpret this data.")
+
+        text_blocks = [b.text for b in msg.content if getattr(b, "type", None) == "text"]
         interpretation = "\n".join(text_blocks)
         grounding = _check_grounding(interpretation, body.data)
         result = {
@@ -555,6 +573,8 @@ async def interpret(
             except Exception as e:
                 logger.debug(f"ai interpret cache write failed: {e}")
         return {**result, "cache_hit": False}
+    except HTTPException:
+        raise
     except anthropic.BadRequestError as e:
         logger.warning(f"Claude rejected interpret request: {e}")
         raise HTTPException(400, f"Claude rejected the request: {e}")

@@ -13,6 +13,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _claude_text(response) -> str:
+    """Pull the text out of a Claude response, raising if the model declined.
+
+    Opus 5's safety classifiers — and those of whatever model the fallback
+    routes to — can decline a request. That comes back as a 200 with
+    stop_reason="refusal" and no text blocks, so without this check the caller
+    would serve a blank analysis as if it had succeeded. Callers here already
+    wrap these calls in try/except and return {"success": False, ...}, so
+    raising surfaces it properly.
+    """
+    if getattr(response, "stop_reason", None) == "refusal":
+        category = getattr(getattr(response, "stop_details", None), "category", None)
+        logger.warning(f"Claude declined request (model={response.model}, category={category})")
+        raise RuntimeError("Claude declined to analyze this request.")
+    return "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+
+
 @router.get("/snapshot")
 async def batch_snapshot(
     tickers: str = Query(..., description="Comma-separated tickers"),
@@ -1207,7 +1224,7 @@ STOCK_MODEL_CONFIGS = {
     "claude": {
         "name": "Claude Opus",
         "base_url": "anthropic",
-        "model": "claude-opus-4-6",
+        "model": "claude-opus-5",
         "key_name": "ANTHROPIC_API_KEY",
         "extra": "Use your knowledge to assess the latest market conditions, analyst consensus, and any recent news.",
         "color": "#d4a574",
@@ -1231,12 +1248,17 @@ def _call_stock_model(model_key: str, stock_prompt: str, ticker: str) -> dict:
         if config["base_url"] == "anthropic":
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
-            response = client.messages.create(
-                model=config["model"], max_tokens=3000, temperature=0.3,
+            response = client.beta.messages.create(
+                # Opus 5 thinks by default and thinking shares this budget with
+                # the JSON payload, so it needs headroom well past the ~3k the
+                # analysis itself uses — a truncated response fails to parse.
+                model=config["model"], max_tokens=8000,
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
                 system=STOCK_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
-            raw = response.content[0].text
+            raw = _claude_text(response)
         else:
             from openai import OpenAI
             client_kwargs = {"api_key": api_key}
@@ -2754,7 +2776,7 @@ async def market_driver(
         + ("Markets are CLOSED — frame paragraph 2 as the current after-hours / weekend stance and paragraph 3 as the forward view for the next session." if not ctx.get("market_open") else "Markets are OPEN — frame paragraph 2 as the live regime and paragraph 3 as intraday levels + overnight catalysts.")
     )
 
-    model_used = "claude-opus-4-7" if escalate else "gemini-3.1-pro-preview"
+    model_used = "claude-opus-5" if escalate else "gemini-3.1-pro-preview"
     raw_output = ""
 
     try:
@@ -2764,13 +2786,15 @@ async def market_driver(
             if not key:
                 raise RuntimeError("ANTHROPIC_API_KEY not configured")
             client = anthropic.Anthropic(api_key=key)
-            msg = client.messages.create(
-                model="claude-opus-4-7",
-                max_tokens=2000,
+            msg = client.beta.messages.create(
+                model="claude-opus-5",
+                max_tokens=6000,  # thinking + ~2k of prose
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
                 system=[{"type": "text", "text": _MARKET_DRIVER_SYSTEM, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user_message}],
             )
-            raw_output = "".join(b.text for b in msg.content if hasattr(b, "text"))
+            raw_output = _claude_text(msg)
         else:
             from google import genai
             from google.genai import types
@@ -4956,17 +4980,21 @@ RULES:
         if not api_key:
             return {"success": False, "error": "Gemini API key not configured"}
 
-        # Use Claude Sonnet for reliability + speed (Gemini thinking models can be slow)
+        # Claude for reliability + speed (Gemini thinking models can be slow).
+        # The +4000 is thinking headroom: Opus 5 reasons by default and that
+        # shares the budget with the ideas themselves.
         import anthropic
         claude = anthropic.Anthropic(api_key=get_secret("ANTHROPIC_API_KEY"))
-        max_tokens = max(2000, n_ideas * 250 + 500)
-        response = claude.messages.create(
-            model="claude-opus-4-6",
+        max_tokens = max(6000, n_ideas * 250 + 4000)
+        response = claude.beta.messages.create(
+            model="claude-opus-5",
             max_tokens=max_tokens,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
             system=system,
             messages=[{"role": "user", "content": ctx}],
         )
-        text = response.content[0].text.strip() if response.content else ""
+        text = _claude_text(response).strip()
         # Strip citation tags
         import re as _re2
         text = _re2.sub(r'\[web:\d+\]', '', text)
@@ -5029,7 +5057,12 @@ async def trade_idea_quick(request: Request, req: TradeIdeaQuickRequest, user: s
 
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
+            # Sonnet 5 thinks by default where Sonnet 4.6 did not, and thinking
+            # shares max_tokens. A 250-token budget leaves nothing for the
+            # verdict, so keep this call thinking-free as it was on 4.6 — it's a
+            # terse ENTER/WAIT/SKIP call that doesn't need reasoning tokens.
+            thinking={"type": "disabled"},
             max_tokens=250,
             system=(
                 "You are a quant trader. Give a clear VERDICT: ENTER, WAIT, or SKIP. "
@@ -5040,7 +5073,7 @@ async def trade_idea_quick(request: Request, req: TradeIdeaQuickRequest, user: s
             ),
             messages=[{"role": "user", "content": ctx}],
         )
-        text = response.content[0].text.strip()
+        text = _claude_text(response).strip()
         verdict = "WAIT"
         for v in ["ENTER", "SKIP", "WAIT"]:
             if v in text[:50].upper():
@@ -5742,13 +5775,15 @@ descriptions as "no material events" rather than as a red flag."""
 
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=800,
+        response = client.beta.messages.create(
+            model="claude-opus-5",
+            max_tokens=4000,  # thinking + ~800 of verdict prose
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
             system="You are a portfolio manager reviewing a client's position. Be direct and specific. Reference the data provided. No hedging — give a clear verdict.",
             messages=[{"role": "user", "content": prompt}],
         )
-        analysis = response.content[0].text.strip()
+        analysis = _claude_text(response).strip()
 
         # Extract verdict from first line
         verdict = "HOLD"
@@ -7177,13 +7212,23 @@ Be terse — the numbers are already displayed, don't repeat them."""
 
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-opus-4-6" if req.deep else "claude-sonnet-4-6",
-            max_tokens=3000,
-            system=_ARCHITECT_SYSTEM,
-            messages=claude_messages,
-        )
-        analysis = response.content[0].text.strip()
+        if req.deep:
+            response = client.beta.messages.create(
+                model="claude-opus-5",
+                max_tokens=8000,  # thinking + ~3k of analysis
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+                system=_ARCHITECT_SYSTEM,
+                messages=claude_messages,
+            )
+        else:
+            response = client.messages.create(
+                model="claude-sonnet-5",
+                max_tokens=6000,  # Sonnet 5 also thinks by default (4.6 did not)
+                system=_ARCHITECT_SYSTEM,
+                messages=claude_messages,
+            )
+        analysis = _claude_text(response).strip()
 
         return {
             "success": True,

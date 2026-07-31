@@ -142,7 +142,7 @@ def _grok_request(model: str, instructions: str, prompt: str, timeout: float = 1
     raise last_err
 
 
-def _claude_request(system: str, prompt: str, max_tokens: int = 4000, model: str = "claude-opus-4-6") -> str:
+def _claude_request(system: str, prompt: str, max_tokens: int = 8000, model: str = "claude-opus-5") -> str:
     """Call Claude via Anthropic SDK."""
     import anthropic
     api_key = _get_key("ANTHROPIC_API_KEY")
@@ -150,14 +150,33 @@ def _claude_request(system: str, prompt: str, max_tokens: int = 4000, model: str
         raise ValueError("ANTHROPIC_API_KEY not configured")
 
     client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
+    kwargs = dict(
         model=model,
         max_tokens=max_tokens,
-        temperature=0.3,
         system=system,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text if response.content else ""
+    # Opus 5's safety classifiers can decline; "default" re-serves the request
+    # on Anthropic's recommended model for the refusal category. Sonnet calls
+    # go down the plain path — fallbacks aren't configured for that tier here.
+    if model.startswith("claude-opus"):
+        response = client.beta.messages.create(
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            **kwargs,
+        )
+    else:
+        response = client.messages.create(**kwargs)
+
+    # A decline — by Opus 5's classifiers or the fallback model's — returns a
+    # 200 with no text blocks. Raise rather than return "" so callers that
+    # already guard these calls degrade explicitly instead of persisting an
+    # empty field.
+    if response.stop_reason == "refusal":
+        category = getattr(getattr(response, "stop_details", None), "category", None)
+        raise RuntimeError(f"Claude declined the request (model={model}, category={category})")
+
+    return next((b.text for b in response.content if getattr(b, "type", None) == "text"), "")
 
 
 def _gemini_request(system: str, prompt: str, max_tokens: int = 3000) -> str:
@@ -579,7 +598,7 @@ async def get_psych_profile(request: Request, user: str = Depends(get_current_us
         )
 
         def _gen_sonnet():
-            return _claude_request(PSYCH_PROFILE_SYSTEM, PROFILE_JSON_PROMPT, max_tokens=4000, model="claude-sonnet-4-6")
+            return _claude_request(PSYCH_PROFILE_SYSTEM, PROFILE_JSON_PROMPT, max_tokens=8000, model="claude-sonnet-5")
 
         # Opus: deep narrative only (no JSON structure needed)
         NARRATIVE_PROMPT = """Write a comprehensive psychological and behavioral profile of Donald Trump
@@ -593,7 +612,7 @@ Ground every claim in specific historical examples with dates. Be clinical and e
 Write 800-1200 words in markdown format."""
 
         def _gen_opus():
-            return _claude_request(PSYCH_PROFILE_SYSTEM, NARRATIVE_PROMPT, max_tokens=3000, model="claude-opus-4-6")
+            return _claude_request(PSYCH_PROFILE_SYSTEM, NARRATIVE_PROMPT, max_tokens=8000, model="claude-opus-5")
 
         def _gen_grok():
             return _grok_request(
@@ -642,7 +661,7 @@ Write 800-1200 words in markdown format."""
 
                 db.table("trump_psych_profile").insert({
                     "profile_version": next_ver,
-                    "model": "claude-opus-4-6",
+                    "model": "claude-opus-5",
                     "mbti": parsed.get("mbti"),
                     "big_five": parsed.get("big_five", {}),
                     "dark_triad": parsed.get("dark_triad", {}),
@@ -730,7 +749,10 @@ async def decode_statement(request: Request, req: DecodeRequest, user: str = Dep
                     media_type = "image/webp"
 
             response = client.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
+                # Straight transcription — no reasoning needed, and Sonnet 5
+                # would otherwise think by default and eat this budget.
+                thinking={"type": "disabled"},
                 max_tokens=1000,
                 messages=[{
                     "role": "user",
@@ -746,7 +768,7 @@ async def decode_statement(request: Request, req: DecodeRequest, user: str = Dep
                     ],
                 }],
             )
-            extracted_text = response.content[0].text.strip() if response.content else ""
+            extracted_text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), "").strip()
             _log.info(f"OCR extracted {len(extracted_text)} chars from screenshot")
         except Exception as e:
             _log.warning(f"Screenshot OCR failed: {e}")
@@ -781,7 +803,7 @@ async def decode_statement(request: Request, req: DecodeRequest, user: str = Dep
             historical_analogs=analogs_text,
             positions=positions,
         )
-        raw = _claude_request(DECODE_SYSTEM, prompt, max_tokens=4000)
+        raw = _claude_request(DECODE_SYSTEM, prompt, max_tokens=8000)
         return _extract_json(raw)
 
     def run_gemini(reactions_text: str):
@@ -843,7 +865,7 @@ async def decode_statement(request: Request, req: DecodeRequest, user: str = Dep
         # Attribution
         "model_sources": {
             "grok": "grok-4-1-fast-reasoning (historical analogs + mood)",
-            "claude": "claude-opus-4-6 (psychological decode + bluff scoring)",
+            "claude": "claude-opus-5 (psychological decode + bluff scoring)",
             "gemini": "gemini-3.1-pro (market impact modeling)",
         },
     }
@@ -920,7 +942,7 @@ the market reaction. Return JSON:
                 psych_profile=psych_profile[:6000],
                 historical_analogs=analogs_text,
             )
-            raw = _claude_request(PREDICT_SYSTEM, prompt, max_tokens=4000)
+            raw = _claude_request(PREDICT_SYSTEM, prompt, max_tokens=8000)
             return _extract_json(raw)
 
         # Phase 1: Grok searches

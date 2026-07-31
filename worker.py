@@ -281,11 +281,17 @@ Provide your assessment as JSON:
             import anthropic
             client = anthropic.Anthropic(api_key=anthropic_key)
             resp = client.messages.create(
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
+                # Sonnet 5 thinks by default where 4.6 did not, and thinking
+                # shares max_tokens with the JSON body we need to parse below.
+                thinking={"type": "disabled"},
                 max_tokens=1000,
                 messages=[{"role": "user", "content": base_prompt}],
             )
-            raw = resp.content[0].text
+            if resp.stop_reason == "refusal":
+                # Otherwise this surfaces as a confusing JSON decode error below.
+                raise RuntimeError("Claude declined the assessment request")
+            raw = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
             import re
             cleaned = re.sub(r"^```json?\s*", "", raw.strip())
             cleaned = re.sub(r"\s*```$", "", cleaned)

@@ -89,8 +89,8 @@ Opens at **http://localhost:8501** (or next available port).
 |-------|-----|------|
 | **Grok 4** | `grok-4.20-0309-reasoning` | Real-time visual OSINT with **live web search** enabled: war maps, satellite imagery, X/Twitter breaking news, narrative shifts |
 | **Gemini 3.1 Pro** | `gemini-3.1-pro-preview` | Quantitative engine with **Google Search grounding**: facility-by-facility supply model, oil price math, economic impact |
-| **Claude Sonnet** | `claude-sonnet-4-6` | Bayesian reasoning (no search — analyzes provided data only): scenario trees, ceasefire decomposition, red-teaming, confidence intervals |
-| **Claude Opus** *(Platinum)* | `claude-opus-4-6` | Upgraded Claude with deeper reasoning |
+| **Claude Sonnet 5** | `claude-sonnet-5` | Bayesian reasoning (no search — analyzes provided data only): scenario trees, ceasefire decomposition, red-teaming, confidence intervals |
+| **Claude Opus 5** *(Platinum)* | `claude-opus-5` | Upgraded Claude with deeper reasoning and adaptive thinking |
 
 ### Independent Grok Calls (auto-refresh, no button needed)
 

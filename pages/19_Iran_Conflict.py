@@ -615,7 +615,7 @@ MODEL_CONFIGS = {
     "claude": {
         "name": "Claude Sonnet",
         "base_url": "anthropic",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-5",
         "key_name": "ANTHROPIC_API_KEY",
         "extra_instructions": (
             "YOUR ROLE: Strategic reasoning & probability specialist. You are the decision-making engine.\n"
@@ -1188,14 +1188,32 @@ Produce your complete analysis. Respond with ONLY valid JSON."""
         elif config["base_url"] == "anthropic":
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
-            response = client.messages.create(
+            # Both Claude 5 tiers think by default and thinking shares the
+            # budget with the JSON payload, so this branch needs headroom the
+            # other providers don't. model_max_tokens is shared, hence the bump
+            # here rather than at its definition.
+            _anthropic_kwargs = dict(
                 model=config["model"],
-                max_tokens=model_max_tokens,
-                temperature=0.3,
+                max_tokens=model_max_tokens + 5000,
                 system=CONFLICT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
-            raw = response.content[0].text
+            # Platinum tier routes this branch to Opus 5, whose safety
+            # classifiers can decline — "default" re-serves the request on
+            # Anthropic's recommended model for the refusal category.
+            if str(config["model"]).startswith("claude-opus"):
+                response = client.beta.messages.create(
+                    betas=["server-side-fallback-2026-07-01"],
+                    fallbacks="default",
+                    **_anthropic_kwargs,
+                )
+            else:
+                response = client.messages.create(**_anthropic_kwargs)
+            if response.stop_reason == "refusal":
+                # Declined by Opus 5's classifiers and the fallback model alike —
+                # fail this model so the blend drops it instead of parsing "".
+                raise RuntimeError(f"{config['name']} declined the request")
+            raw = next((b.text for b in response.content if getattr(b, "type", None) == "text"), "")
             if response.stop_reason == "max_tokens":
                 logger.warning(f"{config['name']} response truncated (stop_reason=max_tokens)")
         else:
@@ -3428,7 +3446,7 @@ with tab_ai, error_boundary("AI Analysis"):
     if user_tier == "platinum":
         # Platinum: upgrade Claude Sonnet → Opus
         active_configs["claude"] = dict(active_configs["claude"])
-        active_configs["claude"]["model"] = "claude-opus-4-6"
+        active_configs["claude"]["model"] = "claude-opus-5"
         active_configs["claude"]["name"] = "Claude Opus"
 
     model_names = ", ".join(mc["name"] for mc in active_configs.values())
