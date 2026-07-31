@@ -22,6 +22,7 @@ import Link from "next/link";
 import { useTheme } from "next-themes";
 import { useQuery } from "@tanstack/react-query";
 import { Plot } from "@/components/plot";
+import { AIInterpretation } from "@/components/ai-interpretation";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { fetchCtaFlows, type CtaBias, type CtaFlowBoard } from "@/lib/api";
 
@@ -65,6 +66,66 @@ function signed(n: number, digits = 1): string {
   return `${n > 0 ? "+" : ""}${n.toFixed(digits)}`;
 }
 
+/**
+ * Plain-language read derived arithmetically from the payload — no model call.
+ * The AI panel below gives the richer take, but a user who never clicks it
+ * should still be told what the numbers mean, so this always renders.
+ */
+function plainRead(d: CtaFlowBoard): { headline: string; detail: string } | null {
+  const w = d.terminal?.["1w"];
+  if (!w) return null;
+  const down = w["down_2sig"]?.delta_exposure;
+  const up = w["up_2sig"]?.delta_exposure;
+  if (typeof down !== "number" || typeof up !== "number") return null;
+
+  // Nearest pivot by absolute distance — the one most likely to fire.
+  const pivots = Object.entries(d.pivots ?? {}).filter(([, p]) => p);
+  const nearest = pivots.length
+    ? pivots.reduce((a, b) => (Math.abs(a[1]!.distance_pct) <= Math.abs(b[1]!.distance_pct) ? a : b))
+    : null;
+  const nearestLabel = nearest
+    ? PIVOT_ROWS.find((r) => r.key === nearest[0])?.label ?? nearest[0]
+    : null;
+
+  let headline: string;
+  if (d.bias_1w === "all_selling") {
+    headline = "Systematic supply in every scenario — trend flow is a headwind regardless of direction.";
+  } else if (d.bias_1w === "all_buying") {
+    headline = "Systematic demand in every scenario — trend flow is a tailwind regardless of direction.";
+  } else if (d.bias_1w === "neutral") {
+    headline = "Trend flow is dormant — little mechanical buying or selling on either side.";
+  } else {
+    // Mixed is the common case and the most misread: it is not "neutral".
+    const skew =
+      Math.abs(down) > Math.abs(up) * 1.15
+        ? "with more force behind a selloff than a rally"
+        : Math.abs(up) > Math.abs(down) * 1.15
+          ? "with more force behind a rally than a selloff"
+          : "roughly symmetrically";
+    headline = `Trend flow amplifies whichever way price breaks, ${skew}.`;
+  }
+
+  // The quoted deltas are the 1-WEEK terminals, so they must be described with
+  // the 1-week sigma. sigma_1_pct covers horizon_days (20d) and would overstate
+  // the weekly move by roughly 2x.
+  const sig1w = d.sigma_1w_pct;
+  const move2sig = typeof sig1w === "number" ? (sig1w * 2).toFixed(2) : null;
+
+  const detail =
+    (move2sig
+      ? `Over a week, a 2σ drop (−${move2sig}%) implies ${signed(down)} pts of exposure change and a 2σ rally (+${move2sig}%) implies ${signed(up)}.`
+      : `Over a week, a 2σ drop implies ${signed(down)} pts of exposure change and a 2σ rally implies ${signed(up)}.`) +
+    (nearest && nearestLabel
+      ? ` Nearest flip level is the ${nearestLabel.toLowerCase()} pivot at ${nearest[1]!.level.toLocaleString()} ` +
+        `(${signed(nearest[1]!.distance_pct, 2)}% away)` +
+        (typeof sig1w === "number" && Math.abs(nearest[1]!.distance_pct) <= sig1w
+          ? " — inside a 1σ week, so it is live on this horizon."
+          : ".")
+      : "");
+
+  return { headline, detail };
+}
+
 function flowClass(n: number): string {
   if (n > 1) return "text-gain";
   if (n < -1) return "text-loss";
@@ -84,6 +145,7 @@ export default function CtaFlows() {
   });
 
   const d = q.data;
+  const read = d?.available ? plainRead(d) : null;
 
   // Scenario colors run loss → muted → gain so direction is readable without
   // consulting the legend.
@@ -165,6 +227,55 @@ export default function CtaFlows() {
             <span>Current exposure <span className="text-text font-semibold tabular-nums">{signed(d.current_exposure)}</span></span>
             <span>1σ over {d.horizon_days}d <span className="text-text font-semibold tabular-nums">±{d.sigma_1_pct}%</span></span>
           </div>
+
+          {/* Derived read — pure arithmetic on the payload, always present so the
+              card is never just numbers without a takeaway. */}
+          {read && (
+            <div className="border-l-2 border-l-accent bg-accent/5 px-3 py-2 rounded-r">
+              <p className="text-xs text-text font-semibold leading-snug">{read.headline}</p>
+              <p className="text-[0.65rem] text-text-muted leading-snug mt-1">{read.detail}</p>
+            </div>
+          )}
+
+          {/* Methodology, collapsed — explains the concept without displacing data. */}
+          <details className="group">
+            <summary className="text-[0.62rem] text-text-muted hover:text-accent cursor-pointer select-none list-none flex items-center gap-1">
+              <span className="transition-transform group-open:rotate-90">▸</span>
+              How to read this
+            </summary>
+            <div className="text-[0.65rem] text-text-muted leading-relaxed mt-2 space-y-1.5 pl-3 border-l border-border">
+              <p>
+                <span className="text-text font-semibold">What it models.</span> Trend-following funds (CTAs)
+                size S&amp;P exposure off price signals alone — moving averages, breakouts, momentum. Their
+                buying and selling is mechanical: it fires when price crosses a level, regardless of
+                valuation or news. That makes it forecastable in a way discretionary flow isn&apos;t.
+              </p>
+              <p>
+                <span className="text-text font-semibold">The chart.</span> Each line is projected exposure
+                change if the index lands at that scenario&apos;s price in {d.horizon_days} business days.
+                All lines start at zero because they measure change from today&apos;s{" "}
+                {signed(d.current_exposure)}. Below zero means selling, above means buying.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Why it moves equities.</span> This flow is
+                price-insensitive and concentrated in liquid futures, so it lands on the index path over
+                days-to-weeks. When selling clusters below spot, dips get amplified into larger drawdowns;
+                when buying clusters above, breakouts get extended. Direction-dependent flow (the common
+                case) widens both tails rather than picking a side.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Pivots.</span> Prices where a trend component
+                flips sign. Spot crossing one converts projected flow into actual flow — the closer the
+                level relative to a 1σ move, the likelier it fires.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Limits.</span> Our own reconstruction, not a
+                bank&apos;s published estimate. Signals are daily-bar based, so it won&apos;t tick
+                intraday. Exposure is model points; converting to dollars needs an industry AUM figure we
+                don&apos;t have, so we don&apos;t guess one.
+              </p>
+            </div>
+          </details>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
@@ -253,6 +364,26 @@ export default function CtaFlows() {
             model points, not notional — desk versions quote $bn by assuming a trend AUM we
             don&apos;t have.
           </p>
+
+          {/* Payload is deliberately the exact numbers rendered above: the
+              grounding check verifies cited figures against what we send, so
+              anything the model quotes has to trace back to the card. */}
+          <AIInterpretation
+            page="home_cta_flows"
+            buttonLabel="Interpret CTA flows"
+            data={{
+              last_price: d.last_price,
+              current_exposure: d.current_exposure,
+              sigma_1_pct: d.sigma_1_pct,
+              horizon_days: d.horizon_days,
+              sigma_1w_pct: d.sigma_1w_pct,
+              sigma_1m_pct: d.sigma_1m_pct,
+              bias_1w: d.bias_1w,
+              bias_1m: d.bias_1m,
+              terminal: d.terminal,
+              pivots: d.pivots,
+            }}
+          />
         </>
       )}
     </div>

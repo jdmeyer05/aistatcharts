@@ -2771,7 +2771,12 @@ export interface CtaFlowBoard {
   name: string | null;
   last_price: number;
   current_exposure: number;
+  /** 1σ move over `horizon_days` — the chart's own horizon. */
   sigma_1_pct: number;
+  /** Per-horizon sigmas matching the `terminal` table. Don't describe a 1w
+   *  flow using sigma_1_pct when horizon_days is 20. */
+  sigma_1w_pct?: number;
+  sigma_1m_pct?: number;
   horizon_days: number;
   scenarios: Record<string, CtaScenarioPath>;
   pivots: Partial<Record<"short_term" | "medium_term" | "long_term", CtaPivot>>;

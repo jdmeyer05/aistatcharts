@@ -523,6 +523,11 @@ def cta_flow_board(cftc_code: str = "13874A", horizon_days: int = 20) -> dict:
         "sigma_1_pct": paths["sigma_1_pct"],
         "horizon_days": paths["horizon_days"],
         "scenarios": paths["scenarios"],
+        # Per-horizon sigmas. The chart's own sigma covers horizon_days, but the
+        # terminal table quotes 1w AND 1m — consumers that describe a 1w flow
+        # must not label it with the 20-day sigma.
+        "sigma_1w_pct": scens.get("vol_1w_pct"),
+        "sigma_1m_pct": scens.get("vol_1m_pct"),
         "pivots": key_pivot_levels(close),
         # Terminal flows straight from compute_scenarios so the callout boxes
         # and the plotted path endpoints are the same numbers by construction.
