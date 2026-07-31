@@ -2795,6 +2795,39 @@ export async function fetchCtaFlows(code = "13874A"): Promise<CtaFlowBoard> {
   });
 }
 
+// ─── Sector Relative Rotation Graph ──────────────────────────────
+
+export type RrgQuadrant = "leading" | "weakening" | "lagging" | "improving";
+
+export interface RrgPoint { date: string; ratio: number; mom: number }
+
+export interface RrgRow {
+  symbol: string;
+  label: string;
+  ratio: number;
+  mom: number;
+  quadrant: RrgQuadrant;
+  prev_quadrant: RrgQuadrant;
+  heading: number;
+  tail: RrgPoint[];
+}
+
+export interface SectorRrg {
+  available: boolean;
+  reason?: string;
+  benchmark?: string;
+  asof?: string;
+  data_asof?: string;
+  tail_weeks?: number;
+  counts?: Partial<Record<RrgQuadrant, number>>;
+  rows?: RrgRow[];
+  unavailable?: string[];
+}
+
+export async function fetchSectorRrg(tailWeeks = 8): Promise<SectorRrg> {
+  return apiFetch(`/api/sectors/rrg?tail_weeks=${tailWeeks}`, { timeoutMs: 30_000 });
+}
+
 // ─── Macro pressure scorecard (home page) ────────────────────────
 
 export type MacroVerdict = "supportive" | "neutral" | "headwind";

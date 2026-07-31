@@ -5,6 +5,7 @@ Data shapes mirror what src/sector_analysis.py renders into the Streamlit 8-tab 
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
@@ -12,7 +13,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from api.deps import get_current_user
@@ -472,6 +473,41 @@ class TickersBody(BaseModel):
 # ═══════════════════════════════════════════════
 # GET /api/sectors/configs
 # ═══════════════════════════════════════════════
+
+_RRG_CACHE: dict = {}
+_RRG_TTL_S = 45 * 60
+
+
+def _sector_rrg_cached(tail_weeks: int) -> dict:
+    """RRG behind a 45-minute cache — ~4s cold across 12 yfinance series, and
+    the inputs are daily bars, so recomputing per request buys nothing."""
+    from time import time as _now
+    hit = _RRG_CACHE.get(tail_weeks)
+    if hit and (_now() - hit[0]) < _RRG_TTL_S:
+        return hit[1]
+    from src.sector_rrg import sector_rrg
+    board = sector_rrg(tail_weeks=tail_weeks)
+    if board.get("available"):
+        _RRG_CACHE[tail_weeks] = (_now(), board)
+    return board
+
+
+@router.get("/rrg")
+async def sector_rotation(
+    tail_weeks: int = Query(8, ge=2, le=26),
+    user: str = Depends(get_current_user),
+):
+    """Relative Rotation Graph — sector strength vs momentum against the S&P 500.
+
+    Quadrants rotate clockwise when rotation is healthy: Improving -> Leading ->
+    Weakening -> Lagging. The trajectory matters more than the dot; a sector
+    curling out of Lagging is an earlier read than one already in Leading.
+
+    Reconstruction of the RRG method, not the licensed JdK indicators — the
+    quadrant behaviour matches, the absolute values will not tie out.
+    """
+    return await asyncio.to_thread(_sector_rrg_cached, tail_weeks)
+
 
 @router.get("/configs")
 async def get_configs(user: str = Depends(get_current_user)):

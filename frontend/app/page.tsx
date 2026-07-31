@@ -30,6 +30,7 @@ import {
   fetchEventsServer,
   fetchCtaFlowsServer,
   fetchMacroPressureServer,
+  fetchSectorRrgServer,
 } from "@/lib/api-server";
 
 export const revalidate = 30;
@@ -39,7 +40,7 @@ export default async function HomePage() {
   const queryClient = new QueryClient();
 
   const tickers = [...PULSE_TICKERS];
-  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows, macroPressure] = await Promise.all([
+  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows, macroPressure, sectorRrg] = await Promise.all([
     fetchSnapshotServer(tickers),
     fetchMarketDriverServer(),
     fetchHeatmapServer("sectors"),
@@ -48,6 +49,7 @@ export default async function HomePage() {
     fetchEventsServer(),
     fetchCtaFlowsServer(),
     fetchMacroPressureServer(),
+    fetchSectorRrgServer(),
   ]);
 
   // Seed the dehydrated cache only when the upstream call succeeded —
@@ -81,6 +83,9 @@ export default async function HomePage() {
   // card into its error state for the whole staleTime.
   if (macroPressure?.available) {
     queryClient.setQueryData(["macro-pressure"], macroPressure);
+  }
+  if (sectorRrg?.available) {
+    queryClient.setQueryData(["sector-rrg", 8], sectorRrg);
   }
 
   return (

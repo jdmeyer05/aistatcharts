@@ -126,6 +126,15 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Macro pressure pre-warm failed: {e}")
 
+    def _warm_sector_rrg() -> None:
+        """Prefill the sector RRG — ~4s of yfinance on a cold instance, and it
+        renders on the home page."""
+        try:
+            from api.routes.sectors import _sector_rrg_cached
+            _sector_rrg_cached(8)
+        except Exception as e:
+            logger.warning(f"Sector RRG pre-warm failed: {e}")
+
     def _warm_energy() -> None:
         """Prefill the oil + natgas bundle caches. Each bundle does ~10
         parallel EIA fetches the first time; on a cold instance that's the
@@ -281,6 +290,7 @@ async def _warm_caches() -> None:
         loop.run_in_executor(None, _warm_sectors),
         loop.run_in_executor(None, _warm_causality),
         loop.run_in_executor(None, _warm_macro_pressure),
+        loop.run_in_executor(None, _warm_sector_rrg),
         loop.run_in_executor(None, _warm_energy),
         loop.run_in_executor(None, _warm_ercot),
     )
