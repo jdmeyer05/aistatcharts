@@ -2759,6 +2759,40 @@ def _sp_valuation_cached() -> dict:
     return board
 
 
+_ES_LEVELS_CACHE: dict = {}
+_ES_LEVELS_TTL_S = 120
+
+
+def _es_levels_cached(profile_sessions: int) -> dict:
+    """Short 2-minute cache. Unlike the other boards these levels DEVELOP
+    intraday — session high/low, VWAP and the profile all move — so this is
+    only long enough to absorb a burst of requests, not to hold a view."""
+    from time import time as _now
+    hit = _ES_LEVELS_CACHE.get(profile_sessions)
+    if hit and (_now() - hit[0]) < _ES_LEVELS_TTL_S:
+        return hit[1]
+    from src.es_levels import es_levels
+    board = es_levels(profile_sessions=profile_sessions)
+    if board.get("available"):
+        _ES_LEVELS_CACHE[profile_sessions] = (_now(), board)
+    return board
+
+
+@router.get("/es-levels")
+async def es_levels_endpoint(
+    profile_sessions: int = Query(1, ge=1, le=5),
+    user: str = Depends(get_current_user),
+):
+    """Intraday reference levels for the E-mini S&P.
+
+    Prior RTH high/low/close, the overnight Globex range, today's developing
+    range and VWAP, and a volume profile (POC / value area). RTH and Globex are
+    kept separate on purpose — an overnight high made on thin volume behaves
+    differently from an RTH high made on size.
+    """
+    return await asyncio.to_thread(_es_levels_cached, profile_sessions)
+
+
 @router.get("/sp-valuation")
 async def sp_valuation_endpoint(user: str = Depends(get_current_user)):
     """S&P 500 valuation multiples against their own long-run history.
