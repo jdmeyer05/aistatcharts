@@ -7,8 +7,9 @@
  *   1. Market Pulse Strip       (30s refetch)
  *   2. What's Driving Markets   (5 min refetch, backend caches 15 min)
  *   3. Sector Relative  |  Vol Landscape Snapshot     (60s / 5min)
- *   4. News             |  Trump / Tweet Watch         (derived / 2min)
- *   5. Macro Calendar — next 14 days                   (10 min refetch)
+ *   4. CTA Positioning — S&P 500 flow board            (10 min refetch)
+ *   5. News             |  Trump / Tweet Watch         (derived / 2min)
+ *   6. Macro Calendar — next 14 days                   (10 min refetch)
  *
  * The page shell is a Server Component (`app/page.tsx`) which prefetches
  * all six endpoints in parallel and ships dehydrated query state via
@@ -31,6 +32,7 @@ import {
   type TrumpPost,
 } from "@/lib/api";
 import { PULSE_TICKERS, PULSE_LABELS } from "@/lib/home-constants";
+import CtaFlows from "@/components/home/cta-flows";
 
 function fmtAgo(iso: string): string {
   try {
@@ -420,6 +422,7 @@ export default function HomeClient() {
         <SectorRelative />
         <VolLandscapeSnapshot />
       </div>
+      <CtaFlows />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <NewsPanel citations={driverQ.data?.citations} />
         <TweetWatch />

@@ -32,6 +32,7 @@ from src.cftc import (
 from src.cta_model import (
     cta_model_status,
     cta_bias_scan,
+    cta_flow_board,
     all_vol_percentiles,
     reconstructed_cta_pnl,
     historical_analog,
@@ -146,6 +147,23 @@ async def get_cta_model(code: str, user: str = Depends(get_current_user)):
     price moves over 1w and 1m horizons. Also returns bias classification
     ('all_buying' / 'all_selling' / 'mixed' / 'neutral')."""
     return cta_model_status(code)
+
+
+@router.get("/cta-flows")
+async def get_cta_flows(
+    code: str = Query("13874A", description="CFTC contract code; defaults to S&P 500 E-mini"),
+    horizon_days: int = Query(20, ge=5, le=60),
+    user: str = Depends(get_current_user),
+):
+    """CTA flow board for the home page: projected exposure path under each
+    ±1σ/±2σ price scenario, the three headline pivot levels, and the terminal
+    1w/1m flows — in one call so the home fan-out doesn't pay three round-trips.
+
+    Exposure is in model points (-100..100), not notional dollars. Desk
+    readouts quote $bn by scaling to an assumed trend-following AUM; that
+    scalar is an assumption we don't have, so it is deliberately not applied.
+    """
+    return cta_flow_board(code, horizon_days=horizon_days)
 
 
 @router.get("/cta-bias-scan")

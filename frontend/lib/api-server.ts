@@ -23,6 +23,7 @@ import type {
   TrumpMonitorResponse,
   OilBundle,
   NatGasBundle,
+  CtaFlowBoard,
 } from "@/lib/api";
 import { normalizeOilBundle } from "@/lib/api";
 
@@ -86,6 +87,13 @@ export async function fetchOilBundleServer(): Promise<OilBundle | null> {
 export function fetchNatGasBundleServer() {
   // Same L1/L2 cache layer as /oil; same 8-EIA cold fan-out shape.
   return serverFetch<NatGasBundle>("/api/energy/natgas", 15_000);
+}
+
+export function fetchCtaFlowsServer(code = "13874A") {
+  // Bundled paths + pivots + terminal flows in one call. Price history is
+  // cached 4h server-side and the path walk is ~0.1s, so this is cheap once
+  // warm; the longer timeout covers a cold yfinance fetch.
+  return serverFetch<CtaFlowBoard>(`/api/cftc/cta-flows?code=${code}`, 15_000);
 }
 
 export function fetchErcotBundleServer() {

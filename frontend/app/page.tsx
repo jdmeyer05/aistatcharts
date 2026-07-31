@@ -28,6 +28,7 @@ import {
   fetchVolLandscapeServer,
   fetchTrumpMonitorServer,
   fetchEventsServer,
+  fetchCtaFlowsServer,
 } from "@/lib/api-server";
 
 export const revalidate = 30;
@@ -37,13 +38,14 @@ export default async function HomePage() {
   const queryClient = new QueryClient();
 
   const tickers = [...PULSE_TICKERS];
-  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events] = await Promise.all([
+  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows] = await Promise.all([
     fetchSnapshotServer(tickers),
     fetchMarketDriverServer(),
     fetchHeatmapServer("sectors"),
     fetchVolLandscapeServer(),
     fetchTrumpMonitorServer(),
     fetchEventsServer(),
+    fetchCtaFlowsServer(),
   ]);
 
   // Seed the dehydrated cache only when the upstream call succeeded —
@@ -66,6 +68,12 @@ export default async function HomePage() {
   }
   if (events) {
     queryClient.setQueryData(["events-home"], events);
+  }
+  // Seed only a usable board — an `available: false` payload (unmapped
+  // contract, thin history) would otherwise lock the card into its error
+  // state for the whole staleTime instead of letting the client retry.
+  if (ctaFlows?.available) {
+    queryClient.setQueryData(["cta-flows", "13874A"], ctaFlows);
   }
 
   return (

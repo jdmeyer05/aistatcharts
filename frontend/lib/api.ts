@@ -2738,6 +2738,55 @@ export interface CtaModelStatus {
   };
 }
 
+// ─── CTA flow board (home page chart) ────────────────────────────
+// Exposure is in model points (-100..100), not notional dollars. Desk
+// readouts quote $bn by scaling to an assumed trend-following AUM; we don't
+// have that scalar, so it is deliberately not applied anywhere here.
+
+export interface CtaPathPoint {
+  day: number;
+  price: number;
+  exposure: number;
+  delta_exposure: number;
+}
+
+export interface CtaScenarioPath {
+  target_price: number;
+  move_pct: number;
+  path: CtaPathPoint[];
+}
+
+export interface CtaPivot {
+  window: number;
+  level: number;
+  distance_pct: number;
+  side_if_breached: "long" | "short";
+}
+
+export interface CtaFlowBoard {
+  available: boolean;
+  reason?: string;
+  code: string;
+  symbol: string | null;
+  name: string | null;
+  last_price: number;
+  current_exposure: number;
+  sigma_1_pct: number;
+  horizon_days: number;
+  scenarios: Record<string, CtaScenarioPath>;
+  pivots: Partial<Record<"short_term" | "medium_term" | "long_term", CtaPivot>>;
+  terminal: Record<string, Record<string, CtaScenario>>;
+  bias_1w?: CtaBias;
+  bias_1m?: CtaBias;
+  asof?: string;
+}
+
+export async function fetchCtaFlows(code = "13874A"): Promise<CtaFlowBoard> {
+  return apiFetch(`/api/cftc/cta-flows?code=${encodeURIComponent(code)}`, {
+    timeoutMs: 30_000,
+  });
+}
+
 export interface CtaBiasRow {
   code: string;
   symbol: string | null;

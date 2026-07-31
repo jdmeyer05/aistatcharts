@@ -353,6 +353,104 @@ def compute_scenarios(close: pd.Series) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Scenario paths — exposure trajectory, not just the terminal point
+# ═══════════════════════════════════════════════════════════════════
+
+# Every signal in compute_exposure() reads only the tail of the series: the
+# deepest lookback is the 260-day breakout channel, and momentum needs
+# window(<=120) + 60 for its rolling std. ~320 rows therefore produces bit-for-bit
+# identical exposure to passing all 800, at a fraction of the rolling-window cost.
+# That matters here because a path walk evaluates exposure once per day per
+# scenario rather than once per scenario.
+_PATH_HISTORY_ROWS = 320
+
+
+# Desk readouts quote three CTA pivots rather than the full trigger ladder.
+# Map them to the trend lookbacks the ensemble actually weights, so the
+# published level is always a price the model genuinely flips on.
+_PIVOT_WINDOWS = {"short_term": 50, "medium_term": 100, "long_term": 200}
+
+
+def key_pivot_levels(close: pd.Series) -> dict:
+    """The three headline flip levels: short / medium / long-term trend.
+
+    Each is the SMA the corresponding ensemble component crosses zero at, so
+    "price below this ⇒ that component turns negative" holds by construction.
+    """
+    if close.empty or len(close) < 50:
+        return {}
+    last = float(close.iloc[-1])
+    out: dict = {}
+    for label, window in _PIVOT_WINDOWS.items():
+        if len(close) < window:
+            continue
+        sma = float(close.rolling(window).mean().iloc[-1])
+        out[label] = {
+            "window": window,
+            "level": round(sma, 2),
+            "distance_pct": round((sma - last) / last * 100, 2),
+            # Which way the component flips if spot crosses this level.
+            "side_if_breached": "short" if sma > last else "long",
+        }
+    return out
+
+
+def compute_scenario_paths(close: pd.Series, horizon_days: int = 20) -> dict:
+    """Day-by-day exposure trajectory under each price scenario.
+
+    compute_scenarios() answers "where does exposure end up"; this answers
+    "what does the route look like", which is what the flow chart plots.
+    Scenario keys and sigma buckets match compute_scenarios() exactly so the
+    chart and the tables can never disagree.
+    """
+    if close.empty or len(close) < 100:
+        return {"available": False, "reason": "insufficient price history"}
+
+    hist = close.tail(_PATH_HISTORY_ROWS).reset_index(drop=True)
+    current_exp = compute_exposure(hist)["exposure"]
+    last_price = float(hist.iloc[-1])
+    vol_ann = _realized_vol(hist, 60)
+    h_sigma = vol_ann * np.sqrt(horizon_days / 252)
+
+    sigmas = {
+        "down_2sig": -2 * h_sigma,
+        "down_1sig": -1 * h_sigma,
+        "flat": 0.0,
+        "up_1sig": 1 * h_sigma,
+        "up_2sig": 2 * h_sigma,
+    }
+
+    scenarios: dict = {}
+    for label, move in sigmas.items():
+        target = last_price * (1 + move)
+        proj = _project_price(last_price, target, horizon_days)
+        path = []
+        for d in range(1, horizon_days + 1):
+            walked = pd.concat([hist, proj.iloc[:d]], ignore_index=True)
+            exp = compute_exposure(walked)["exposure"]
+            path.append({
+                "day": d,
+                "price": round(float(proj.iloc[d - 1]), 2),
+                "exposure": exp,
+                "delta_exposure": round(exp - current_exp, 2),
+            })
+        scenarios[label] = {
+            "target_price": round(target, 2),
+            "move_pct": round(move * 100, 2),
+            "path": path,
+        }
+
+    return {
+        "available": True,
+        "current_exposure": current_exp,
+        "last_price": round(last_price, 2),
+        "horizon_days": horizon_days,
+        "sigma_1_pct": round(h_sigma * 100, 2),
+        "scenarios": scenarios,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Public CTA model status per contract
 # ═══════════════════════════════════════════════════════════════════
 
@@ -385,6 +483,53 @@ def cta_model_status(cftc_code: str) -> dict:
         "components": base["components"],
         "triggers": triggers[:10],  # 10 nearest triggers
         "scenarios": scens,
+    }
+
+
+def cta_flow_board(cftc_code: str = "13874A", horizon_days: int = 20) -> dict:
+    """One-call payload for the CTA flow chart: paths + pivots + terminal flows.
+
+    Bundled deliberately — the home page fans this out alongside six other
+    endpoints, so three round-trips for one card would sit on the critical
+    path. Defaults to S&P 500 E-mini, the contract the desk readouts quote.
+
+    Deliberately NOT wrapped in result_cached: that carries a 12h TTL, which is
+    fine for the weekly-cadence COT scans but would pin the home page to stale
+    flows. The 4h price cache already absorbs the expensive part; the path walk
+    itself is ~0.1s.
+    """
+    prices = _fetch_prices(cftc_code)
+    if prices.empty:
+        return {"available": False, "code": cftc_code,
+                "reason": "No price data (contract not mapped to yfinance)"}
+
+    from src.cftc import CONTRACTS_BY_CODE
+    spec = CONTRACTS_BY_CODE.get(cftc_code)
+    close = prices["Close"]
+
+    paths = compute_scenario_paths(close, horizon_days=horizon_days)
+    if not paths.get("available"):
+        return {"available": False, "code": cftc_code,
+                "reason": paths.get("reason", "insufficient history")}
+
+    scens = compute_scenarios(close)
+    return {
+        "available": True,
+        "code": cftc_code,
+        "symbol": spec.symbol if spec else None,
+        "name": spec.name if spec else None,
+        "last_price": paths["last_price"],
+        "current_exposure": paths["current_exposure"],
+        "sigma_1_pct": paths["sigma_1_pct"],
+        "horizon_days": paths["horizon_days"],
+        "scenarios": paths["scenarios"],
+        "pivots": key_pivot_levels(close),
+        # Terminal flows straight from compute_scenarios so the callout boxes
+        # and the plotted path endpoints are the same numbers by construction.
+        "terminal": scens.get("horizons", {}),
+        "bias_1w": scens.get("bias_1w"),
+        "bias_1m": scens.get("bias_1m"),
+        "asof": datetime.utcnow().isoformat() + "Z",
     }
 
 
