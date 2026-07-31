@@ -29,6 +29,7 @@ import {
   fetchTrumpMonitorServer,
   fetchEventsServer,
   fetchCtaFlowsServer,
+  fetchMacroPressureServer,
 } from "@/lib/api-server";
 
 export const revalidate = 30;
@@ -38,7 +39,7 @@ export default async function HomePage() {
   const queryClient = new QueryClient();
 
   const tickers = [...PULSE_TICKERS];
-  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows] = await Promise.all([
+  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows, macroPressure] = await Promise.all([
     fetchSnapshotServer(tickers),
     fetchMarketDriverServer(),
     fetchHeatmapServer("sectors"),
@@ -46,6 +47,7 @@ export default async function HomePage() {
     fetchTrumpMonitorServer(),
     fetchEventsServer(),
     fetchCtaFlowsServer(),
+    fetchMacroPressureServer(),
   ]);
 
   // Seed the dehydrated cache only when the upstream call succeeded —
@@ -74,6 +76,11 @@ export default async function HomePage() {
   // state for the whole staleTime instead of letting the client retry.
   if (ctaFlows?.available) {
     queryClient.setQueryData(["cta-flows", "13874A"], ctaFlows);
+  }
+  // Same rule as the CTA board: seeding an unavailable payload would lock the
+  // card into its error state for the whole staleTime.
+  if (macroPressure?.available) {
+    queryClient.setQueryData(["macro-pressure"], macroPressure);
   }
 
   return (

@@ -86,10 +86,21 @@ def aligned_panel(
     - Index is calendar-business days for `freq="B"`.
     """
     days = _lookback_days(lookback)
+
+    # Fetch concurrently — a 14-series panel took ~10s serially even warm, which
+    # is most of a request budget. Both underlying paths are thread-safe:
+    # fetch_ohlcv uses yf.Ticker().history() (NOT yf.download(), which isn't),
+    # and _fred_history is a plain requests.get. Cap workers so we don't hammer
+    # FRED. Results are re-ordered to match `symbols` so column order stays
+    # deterministic for callers.
+    from concurrent.futures import ThreadPoolExecutor
+
+    specs = [(sym, get_series(sym)) for sym in symbols]
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(specs)))) as pool:
+        fetched = list(pool.map(lambda sp: _fetch_one_series(sp[1], days), specs))
+
     series_list: list[pd.Series] = []
-    for sym in symbols:
-        spec = get_series(sym)
-        s = _fetch_one_series(spec, days)
+    for (sym, _spec), s in zip(specs, fetched):
         if s.empty:
             logger.info(f"aligned_panel: dropping {sym} (no data)")
             continue
@@ -109,7 +120,16 @@ def aligned_panel(
         idx = pd.date_range(df.index.min(), df.index.max(), freq="B")
     else:
         idx = pd.date_range(df.index.min(), df.index.max(), freq="W-FRI")
-    df = df.reindex(idx).ffill()
+
+    # Union the source index into the target grid BEFORE forward-filling.
+    # reindex() drops any observation whose date isn't on the grid, which
+    # leaves ffill with nothing to carry — so a series dated off-grid
+    # silently becomes all-NaN rather than being held flat. FRED does this
+    # constantly: initial jobless claims (ICSA) is stamped on Saturdays, so
+    # 0 of 108 observations survived a business-day reindex, and monthly
+    # prints (CPI, NFP, M2, UMCSENT) lose every month whose 1st is a weekend
+    # and then read as the prior month's value.
+    df = df.reindex(df.index.union(idx)).ffill().reindex(idx)
     # Drop rows where every column is still NaN (front of series before first obs)
     df = df.dropna(how="all")
     return df

@@ -116,6 +116,16 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Causality pre-warm failed: {e}")
 
+    def _warm_macro_pressure() -> None:
+        """Prefill the macro scorecard. ~4s across 14 FRED/yfinance series on a
+        cold instance, and it renders on the home page — without this the first
+        visitor after a scale-up wears the whole fetch."""
+        try:
+            from api.routes.market import _macro_pressure_cached
+            _macro_pressure_cached("3Y")
+        except Exception as e:
+            logger.warning(f"Macro pressure pre-warm failed: {e}")
+
     def _warm_energy() -> None:
         """Prefill the oil + natgas bundle caches. Each bundle does ~10
         parallel EIA fetches the first time; on a cold instance that's the
@@ -270,6 +280,7 @@ async def _warm_caches() -> None:
         loop.run_in_executor(None, _warm_vol_landscape),
         loop.run_in_executor(None, _warm_sectors),
         loop.run_in_executor(None, _warm_causality),
+        loop.run_in_executor(None, _warm_macro_pressure),
         loop.run_in_executor(None, _warm_energy),
         loop.run_in_executor(None, _warm_ercot),
     )

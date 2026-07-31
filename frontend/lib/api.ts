@@ -2795,6 +2795,56 @@ export async function fetchCtaFlows(code = "13874A"): Promise<CtaFlowBoard> {
   });
 }
 
+// ─── Macro pressure scorecard (home page) ────────────────────────
+
+export type MacroVerdict = "supportive" | "neutral" | "headwind";
+
+export interface MacroFactorRow {
+  key: string;
+  label: string;
+  group: string;
+  kind: "technical" | "fundamental";
+  unit: string;
+  change_mode: "abs" | "pct";
+  why: string;
+  /** Positive = equity-supportive. -adverse * z(change). */
+  score: number;
+  verdict: MacroVerdict;
+  level: number;
+  display_level: number;
+  display_unit: string;
+  change: number;
+  change_z: number;
+  /** Level's percentile within the lookback, 0..1. Context, not the verdict. */
+  pctile: number;
+  last_print: string | null;
+  stale_days: number;
+  /** Underlying print hasn't updated inside the change window — its zero
+   *  change means "no news", not "no pressure". */
+  stale: boolean;
+}
+
+export interface MacroPressureBoard {
+  available: boolean;
+  reason?: string;
+  asof?: string;
+  data_asof?: string;
+  lookback?: string;
+  change_window_days?: number;
+  net_score?: number;
+  net_label?: string;
+  counts?: Record<MacroVerdict, number>;
+  group_order?: string[];
+  biggest_headwind?: MacroFactorRow | null;
+  biggest_support?: MacroFactorRow | null;
+  rows?: MacroFactorRow[];
+  unavailable?: string[];
+}
+
+export async function fetchMacroPressure(): Promise<MacroPressureBoard> {
+  return apiFetch("/api/market/macro-pressure", { timeoutMs: 30_000 });
+}
+
 export interface CtaBiasRow {
   code: string;
   symbol: string | null;

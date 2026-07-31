@@ -24,6 +24,7 @@ import type {
   OilBundle,
   NatGasBundle,
   CtaFlowBoard,
+  MacroPressureBoard,
 } from "@/lib/api";
 import { normalizeOilBundle } from "@/lib/api";
 
@@ -87,6 +88,12 @@ export async function fetchOilBundleServer(): Promise<OilBundle | null> {
 export function fetchNatGasBundleServer() {
   // Same L1/L2 cache layer as /oil; same 8-EIA cold fan-out shape.
   return serverFetch<NatGasBundle>("/api/energy/natgas", 15_000);
+}
+
+export function fetchMacroPressureServer() {
+  // ~4s cold across 14 FRED/yfinance series, but the API pre-warms it at
+  // startup and holds it 45 min, so the SSR path is normally a dict hit.
+  return serverFetch<MacroPressureBoard>("/api/market/macro-pressure", 15_000);
 }
 
 export function fetchCtaFlowsServer(code = "13874A") {

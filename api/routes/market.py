@@ -1,5 +1,6 @@
 """Market data endpoints — prices, snapshots, options chains."""
 
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
@@ -2711,6 +2712,48 @@ LENGTH — HARD LIMITS:
 SELF-CHECK — before returning JSON:
 Draft your three paragraphs first. Then re-read once and verify: every number traces to the payload, every cited catalyst appears in the news/events list, regime_label is consistent with the cross-asset story in paragraph 2, "what to watch" references events/levels actually in the payload. Make small corrections if needed — this is a verification pass, not a rewrite. Return only the final revised JSON.
 """
+
+
+_MACRO_PRESSURE_CACHE: dict = {}
+_MACRO_PRESSURE_TTL_S = 45 * 60
+
+
+def _macro_pressure_cached(lookback: str) -> dict:
+    """Board behind a 45-minute in-process cache.
+
+    Cold cost is ~4s across 14 FRED/yfinance series. The inputs are daily-cadence
+    (several are weekly or monthly), so recomputing per request buys nothing and
+    would put a multi-second fetch on the home page's critical path. The startup
+    pre-warm fills this so the first real visitor doesn't pay for it.
+    """
+    from time import time as _now
+    hit = _MACRO_PRESSURE_CACHE.get(lookback)
+    if hit and (_now() - hit[0]) < _MACRO_PRESSURE_TTL_S:
+        return hit[1]
+
+    from src.macro_pressure import macro_pressure_board
+    board = macro_pressure_board(lookback=lookback)
+    # Never cache a failed board — a transient FRED outage would otherwise
+    # pin the card to an error for 45 minutes.
+    if board.get("available"):
+        _MACRO_PRESSURE_CACHE[lookback] = (_now(), board)
+    return board
+
+
+@router.get("/macro-pressure")
+async def macro_pressure(
+    lookback: str = Query("3Y", pattern="^(1Y|2Y|3Y|5Y|10Y)$"),
+    user: str = Depends(get_current_user),
+):
+    """Macro pressure scorecard — what the macro backdrop is doing to equities.
+
+    Each factor is scored on the z-score of its recent change, flipped by a
+    per-factor sign convention (does RISING hurt equities?), so the verdict is
+    arithmetic rather than judgement. Scored on change rather than level: a high
+    level that has been high for a year is already discounted. Level percentile
+    rides along as context.
+    """
+    return await asyncio.to_thread(_macro_pressure_cached, lookback)
 
 
 @router.get("/market-driver")
