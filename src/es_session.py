@@ -97,6 +97,35 @@ def _match_release(name: str) -> Release | None:
     return None
 
 
+def _holiday_caution(now: pd.Timestamp) -> str | None:
+    """Warn when the phase table's hours probably don't apply.
+
+    CME runs shortened sessions around US holidays — a 13:00 close the day
+    after Thanksgiving and on Christmas Eve, and full closures on the major
+    holidays. The phase table encodes a normal day, so rather than assert
+    hours that may be wrong, flag the day and let the trader check. Federal
+    holidays are a close-enough proxy; CME's calendar differs at the edges
+    (Good Friday shut, Columbus Day open), which is why this is a caution and
+    not a claim that the market is closed.
+    """
+    try:
+        from pandas.tseries.holiday import USFederalHolidayCalendar
+        d = now.normalize().tz_localize(None)
+        hols = USFederalHolidayCalendar().holidays(
+            start=d - pd.Timedelta(days=2), end=d + pd.Timedelta(days=2))
+        hset = {h.normalize() for h in hols}
+        if d in hset:
+            return "US holiday — CME runs a closed or abbreviated session; the hours above may not apply."
+        # Day after Thanksgiving (4th Thursday of November) and Christmas Eve
+        # are both 13:00 ET closes.
+        if (d.month == 11 and d.weekday() == 4 and (d - pd.Timedelta(days=1)) in hset) or \
+           (d.month == 12 and d.day == 24):
+            return "Early close — CME settles at 13:00 ET today."
+        return None
+    except Exception:
+        return None
+
+
 def current_phase(now: pd.Timestamp | None = None) -> dict:
     """Which session we're in, and what that implies for behaviour."""
     now = now or pd.Timestamp.now(tz=_TZ)
@@ -105,25 +134,66 @@ def current_phase(now: pd.Timestamp | None = None) -> dict:
     weekday = now.weekday()          # 0=Mon .. 6=Sun
     t = now.time()
 
-    # ES is closed 17:00-18:00 ET daily and all weekend until Sunday 18:00.
-    closed = (weekday == 5) or (weekday == 6 and t < dtime(18, 0)) or (dtime(17, 0) <= t < dtime(18, 0))
-    if closed:
-        return {"phase": "closed", "label": "Market closed",
-                "note": "ES is closed. Reopens Sunday 18:00 ET." if weekday >= 5
-                        else "Daily maintenance break, 17:00–18:00 ET.",
-                "is_rth": False, "now": now.isoformat()}
+    # CME hours for ES: the week opens Sunday 18:00 ET and runs continuously to
+    # Friday 17:00 ET, broken only by a one-hour maintenance halt at 17:00 each
+    # weekday evening. The weekly close matters: ES does NOT reopen on Friday
+    # evening, so treating 18:00 as a reopen every day of the week reported a
+    # live Globex session all Friday night when the market was shut.
+    if weekday == 5:                                    # Saturday
+        reason = "weekend"
+    elif weekday == 6 and t < dtime(18, 0):             # Sunday before the reopen
+        reason = "weekend"
+    elif weekday == 4 and t >= dtime(17, 0):            # Friday after the weekly close
+        reason = "weekend"
+    elif dtime(17, 0) <= t < dtime(18, 0):              # nightly maintenance halt
+        reason = "halt"
+    else:
+        reason = None
 
+    if reason:
+        return {
+            "phase": "closed",
+            "label": "Market closed",
+            "note": ("ES is closed for the weekend. Reopens Sunday 18:00 ET."
+                     if reason == "weekend"
+                     else "Daily maintenance break, 17:00–18:00 ET. Reopens at 18:00."),
+            "is_rth": False,
+            "now": now.isoformat(),
+        }
+
+    holiday = _holiday_caution(now)
     for phase, start, end, note in _PHASES:
         if start <= t < end:
             return {
                 "phase": phase,
                 "label": phase.replace("_", " ").title(),
-                "note": note,
+                "note": f"{note} {holiday}".strip() if holiday else note,
+                "holiday": holiday,
                 "is_rth": phase.startswith("rth"),
                 "now": now.isoformat(),
             }
     return {"phase": "overnight", "label": "Overnight", "note": "Globex session.",
             "is_rth": False, "now": now.isoformat()}
+
+
+def trading_session_day(now: pd.Timestamp | None = None) -> pd.Timestamp:
+    """The RTH date the current Globex session leads into.
+
+    After 18:00 ET the session that just opened belongs to the NEXT weekday, so
+    at 20:00 on a Monday the relevant schedule is Tuesday's, not the prints that
+    already came and went. `es_levels` anchors its levels the same way — if the
+    two disagree, the card shows one session's levels beside another session's
+    scheduled risk, which is worse than either alone.
+    """
+    now = now or pd.Timestamp.now(tz=_TZ)
+    if now.tzinfo is None:
+        now = now.tz_localize(_TZ)
+    day = now.normalize()
+    if now.time() >= dtime(18, 0):
+        day += pd.Timedelta(days=1)
+    while day.weekday() >= 5:                # no Saturday/Sunday session
+        day += pd.Timedelta(days=1)
+    return day
 
 
 def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
@@ -138,10 +208,11 @@ def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
     if now.tzinfo is None:
         now = now.tz_localize(_TZ)
 
-    today = now.date()
+    session_day = trading_session_day(now)
+    day = session_day.date()
     try:
         from src.economic_calendar import todays_events
-        events = todays_events(today) or []
+        events = todays_events(day) or []
     except Exception as e:
         logger.warning(f"calendar fetch failed: {e}")
         events = []
@@ -154,10 +225,14 @@ def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
             rel = _match_release(name)
             hh, mm = (rel.hour, rel.minute) if rel else (8, 30)
 
-        when = pd.Timestamp.combine(pd.Timestamp(today), dtime(hh, mm)).tz_localize(_TZ)
+        when = pd.Timestamp.combine(pd.Timestamp(day), dtime(hh, mm)).tz_localize(_TZ)
         mins = int((when - now).total_seconds() // 60)
         out.append({
             "name": name,
+            # Absolute instant, so the client counts down from a real timestamp
+            # instead of reconstructing one from a wall clock — which silently
+            # breaks the moment an event is on the next calendar day.
+            "when": when.isoformat(),
             "time_et": ev.get("time_et") or f"{hh:02d}:{mm:02d}",
             "impact": ev.get("impact") or "low",
             "note": ev.get("note") or "",
@@ -262,10 +337,15 @@ def es_session_brief() -> dict:
     upcoming = [e for e in schedule if e["status"] == "upcoming"]
     next_event = min(upcoming, key=lambda e: e["minutes_away"]) if upcoming else None
 
+    session_day = trading_session_day(now)
     return {
         "available": True,
         "asof": now.isoformat(),
         "session": current_phase(now),
+        # Which session the schedule describes. In the evening this is
+        # tomorrow's, matching where the levels are anchored.
+        "session_day": str(session_day.date()),
+        "schedule_is_today": session_day.date() == now.date(),
         "schedule": schedule,
         "next_event": next_event,
         "high_impact_today": [e for e in schedule if e["impact"] == "high"],

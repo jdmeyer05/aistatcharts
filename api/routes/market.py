@@ -2760,13 +2760,17 @@ def _sp_valuation_cached() -> dict:
 
 
 _ES_LEVELS_CACHE: dict = {}
-_ES_LEVELS_TTL_S = 120
+_ES_LEVELS_TTL_S = 60
 
 
 def _es_levels_cached(profile_sessions: int) -> dict:
-    """Short 2-minute cache. Unlike the other boards these levels DEVELOP
+    """Short 60-second cache. Unlike the other boards these levels DEVELOP
     intraday — session high/low, VWAP and the profile all move — so this is
-    only long enough to absorb a burst of requests, not to hold a view."""
+    only long enough to absorb a burst of requests, not to hold a view.
+
+    Kept under a minute because the payload's `mode` flips at 09:30: a longer
+    hold could serve a "premarket" card minutes after the cash open, which is
+    the worst possible moment to be showing yesterday's frame."""
     from time import time as _now
     hit = _ES_LEVELS_CACHE.get(profile_sessions)
     if hit and (_now() - hit[0]) < _ES_LEVELS_TTL_S:
@@ -2779,7 +2783,7 @@ def _es_levels_cached(profile_sessions: int) -> dict:
 
 
 _ES_BRIEF_CACHE: dict = {}
-_ES_BRIEF_TTL_S = 180
+_ES_BRIEF_TTL_S = 90
 
 
 def _es_brief_cached() -> dict:
@@ -2787,8 +2791,9 @@ def _es_brief_cached() -> dict:
     CTA flow, macro backdrop, and macro news.
 
     Bundled because the briefing is only useful as a synthesis — six separate
-    round-trips would let the panels disagree about what time it is. Cached 3
-    minutes: the levels develop intraday and the countdown has to stay honest.
+    round-trips would let the panels disagree about what time it is. Cached 90
+    seconds: the levels develop intraday, the payload's session `mode` flips at
+    the 09:30 open, and the countdown has to stay honest.
 
     Every source is independently optional. A briefing missing its CTA block is
     still worth reading; one that 500s because a single upstream blipped is not.
@@ -2823,6 +2828,8 @@ def _es_brief_cached() -> dict:
         "available": bool(sess or lvl),
         "asof": (sess or {}).get("asof"),
         "session": (sess or {}).get("session"),
+        "session_day": (sess or {}).get("session_day"),
+        "schedule_is_today": (sess or {}).get("schedule_is_today"),
         "schedule": (sess or {}).get("schedule", []),
         "next_event": (sess or {}).get("next_event"),
         "high_impact_today": (sess or {}).get("high_impact_today", []),

@@ -41,9 +41,12 @@ const fmtHandles = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(2)}`;
 
 function fmtCountdown(mins: number): string {
   const a = Math.abs(mins);
-  const h = Math.floor(a / 60);
+  const d = Math.floor(a / 1440);
+  const h = Math.floor((a % 1440) / 60);
   const m = a % 60;
-  const body = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  // Days matter now: in the evening the schedule is the NEXT session's, so a
+  // countdown can legitimately run past a day.
+  const body = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
   return mins >= 0 ? `in ${body}` : `${body} ago`;
 }
 
@@ -58,33 +61,18 @@ function fmtAgo(iso: string | null): string {
   return hr < 24 ? `${hr}h ago` : `${Math.floor(hr / 24)}d ago`;
 }
 
-/** Minutes since ET midnight, read from the browser clock in exchange time.
- *  Reading the wall clock in `America/New_York` keeps this correct for a user
- *  in any timezone, and correct across DST without a lookup table. */
-function etNowMinutes(): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
-  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  return h * 60 + m;
-}
 
-/** The ET clock as an external store, so countdowns stay live between the
- *  3-minute server refreshes without a setState-in-effect cascade. The server
- *  snapshot is null, which makes the card fall back to the server-computed
- *  `minutes_away` for SSR and hydration — no timestamp mismatch to reconcile. */
-const ET_CLOCK = {
+/** Wall clock as an external store, so countdowns stay live between server
+ *  refreshes without a setState-in-effect cascade. Quantised to the minute so
+ *  React's identity check settles instead of changing on every render. The
+ *  server snapshot is null, so SSR and hydration use the server-computed
+ *  `minutes_away` and there is no timestamp mismatch to reconcile. */
+const CLOCK = {
   subscribe(onChange: () => void) {
     const t = setInterval(onChange, 30_000);
     return () => clearInterval(t);
   },
-  // A primitive that only changes on a minute boundary, so React's identity
-  // check settles immediately rather than looping.
-  getSnapshot: (): number | null => etNowMinutes(),
+  getSnapshot: (): number | null => Math.floor(Date.now() / 60_000),
   getServerSnapshot: (): number | null => null,
 };
 
@@ -128,6 +116,16 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
   const last = lv.last;
   const g = (k: string) => by.get(k);
 
+  // Pre-open there is no session yet, so the frame is the overnight range and
+  // the gap. Saying "developing" about a session that has either finished or
+  // not begun is how a briefing quietly lies about what it is showing.
+  // `mode` absent means an older API build (the two deploy independently), so
+  // neither "developing" nor "final" can be asserted — fall back to neutral
+  // wording rather than guessing, since guessing wrong misdescribes the frame.
+  const knowsMode = Boolean(lv.mode);
+  const isPre = lv.mode === "premarket";
+  const isDone = lv.mode === "last_session" || lv.rth_complete === true;
+
   /* 1. Location — where price sits relative to value and VWAP. This single
      fact does more to set trend-vs-rotation expectations than anything else
      on the card, so it leads. */
@@ -135,21 +133,27 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
   const val = g("val");
   const vwap = g("vwap");
   const parts: string[] = [];
+  // Follows where the profile actually came from — early in a session the
+  // developing one has too few bars to mean anything, so the payload serves
+  // the prior session's and the sentence has to say so.
+  const whose = lv.profile_is_prior_session || isPre
+    ? "the prior session's value area"
+    : "the value area";
 
   if (vah && val) {
     if (last > vah.value) {
       parts.push(
-        `Price is above the value area high (${fmtPx(vah.value)}), in upside discovery — ` +
+        `Price is above ${whose} high (${fmtPx(vah.value)}), in upside discovery — ` +
           `outside value, sessions tend to trend rather than rotate`
       );
     } else if (last < val.value) {
       parts.push(
-        `Price is below the value area low (${fmtPx(val.value)}), in downside discovery — ` +
+        `Price is below ${whose} low (${fmtPx(val.value)}), in downside discovery — ` +
           `outside value, sessions tend to trend rather than rotate`
       );
     } else {
       parts.push(
-        `Price is inside the value area (${fmtPx(val.value)}–${fmtPx(vah.value)}), ` +
+        `Price is inside ${whose} (${fmtPx(val.value)}–${fmtPx(vah.value)}), ` +
           `where rotation is more likely than trend`
       );
     }
@@ -163,40 +167,62 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
   }
   const location = parts.length ? `${parts.join(", and ")}.` : "";
 
-  /* 2. Structure — how much of a normal day's range is already spent, and how
-     the session opened against yesterday. Both are range-budget questions. */
+  /* 2. Structure — how much range is spent and how price is positioned against
+     the prior close. Pre-open that means the overnight range and the gap;
+     during or after the session it means the RTH range. */
   const structBits: string[] = [];
   const th = g("today_high");
   const tl = g("today_low");
   const ph = g("py_high");
   const pl = g("py_low");
-  if (th && tl) {
+  const onH = g("on_high");
+  const onL = g("on_low");
+  const pc = g("py_close");
+
+  if (isPre && onH && onL) {
+    const onRange = onH.value - onL.value;
+    const pos = onRange > 0 ? ((last - onL.value) / onRange) * 100 : null;
+    structBits.push(
+      `Overnight has covered ${onRange.toFixed(2)} handles ` +
+        `(${fmtPx(onL.value)}–${fmtPx(onH.value)})` +
+        (pos != null ? `, with price ${Math.round(pos)}% up that range` : "")
+    );
+  } else if (th && tl) {
     const range = th.value - tl.value;
+    const verb = !knowsMode
+      ? "The session range is"
+      : isDone
+        ? "The session's final range was"
+        : "The developing range is";
     if (ph && pl) {
       const prior = ph.value - pl.value;
       const pct = prior > 0 ? (range / prior) * 100 : null;
       structBits.push(
-        `The developing range is ${range.toFixed(2)} handles` +
+        `${verb} ${range.toFixed(2)} handles` +
           (pct != null
             ? `, ${Math.round(pct)}% of the prior session's ${prior.toFixed(2)}` +
-              (pct < 50 ? " — room left before the day is stretched" : pct > 100 ? " — already an outsized day" : "")
+              (isDone ? "" : pct < 50 ? " — room left before the day is stretched" : pct > 100 ? " — already an outsized day" : "")
             : "")
       );
     } else {
-      structBits.push(`The developing range is ${range.toFixed(2)} handles`);
+      structBits.push(`${verb} ${range.toFixed(2)} handles`);
     }
   }
+
+  // Pre-open the gap is measured from the live price; once the bell has gone
+  // it is measured from where the session actually opened.
   const open = g("today_open");
-  const pc = g("py_close");
-  if (open && pc) {
-    const gap = open.value - pc.value;
+  const gapFrom = isPre ? last : open?.value;
+  if (gapFrom != null && pc) {
+    const gap = gapFrom - pc.value;
+    const verb = isPre ? "it is trading" : "it opened";
     if (Math.abs(gap) >= 0.25) {
       structBits.push(
-        `it opened ${Math.abs(gap).toFixed(2)} ${gap > 0 ? "above" : "below"} the prior close ` +
-          `(${fmtPx(pc.value)})`
+        `${verb} ${Math.abs(gap).toFixed(2)} ${gap > 0 ? "above" : "below"} the prior close ` +
+          `(${fmtPx(pc.value)})` + (isPre ? " — the gap as it stands into the open" : "")
       );
     } else {
-      structBits.push(`it opened flat to the prior close (${fmtPx(pc.value)})`);
+      structBits.push(`${verb} flat to the prior close (${fmtPx(pc.value)})`);
     }
   }
   const structure = structBits.length ? `${structBits.join(", and ")}.` : null;
@@ -219,9 +245,9 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
           ? " A pre-open print of this size makes the overnight range an unreliable guide."
           : "");
   } else if ((d.schedule ?? []).length) {
-    clock = "Everything scheduled for today has already printed; the rest of the session is left to positioning and the levels.";
+    clock = "Everything scheduled has already printed; the rest of the session is left to positioning and the levels.";
   } else {
-    clock = "Nothing scheduled on the macro calendar today — no timed catalyst to trade around.";
+    clock = "Nothing on the macro calendar for this session — no timed catalyst to trade around.";
   }
 
   /* 4. Directional lean — swing horizon, explicitly not an intraday trigger. */
@@ -257,17 +283,19 @@ export default function EsBriefing() {
   const d = q.data;
 
   const nowMin = useSyncExternalStore(
-    ET_CLOCK.subscribe,
-    ET_CLOCK.getSnapshot,
-    ET_CLOCK.getServerSnapshot
+    CLOCK.subscribe,
+    CLOCK.getSnapshot,
+    CLOCK.getServerSnapshot
   );
 
+  // Counts down from the release's absolute instant. Falls back to the
+  // server's figure before mount, or if an older API build sent no `when`.
   const liveMins = useMemo(() => {
     return (e: EsScheduleItem): number => {
-      if (nowMin == null) return e.minutes_away;
-      const [hh, mm] = e.time_et.split(":").map(Number);
-      if (!Number.isFinite(hh) || !Number.isFinite(mm)) return e.minutes_away;
-      return hh * 60 + mm - nowMin;
+      if (nowMin == null || !e.when) return e.minutes_away;
+      const t = Date.parse(e.when);
+      if (!Number.isFinite(t)) return e.minutes_away;
+      return Math.round(t / 60_000) - nowMin;
     };
   }, [nowMin]);
 
@@ -276,14 +304,26 @@ export default function EsBriefing() {
   const lv = d?.levels;
   const session = d?.session;
 
-  // The "Today" levels describe the most recent RTH session, which overnight
-  // and at the weekend is NOT the current calendar date. Say which one.
-  const sessionDateLabel = useMemo(() => {
-    if (!lv?.session_date || !session?.now) return null;
-    if (session.now.slice(0, 10) === lv.session_date) return null;
-    const [, m, day] = lv.session_date.split("-");
-    return `${m}/${day}`;
-  }, [lv, session]);
+  // Say plainly which frame the ladder describes. Driven off the payload's
+  // session mode rather than a date comparison, because the misleading case
+  // (pre-open, and the completed Friday session) shares today's date.
+  const frameLabel = useMemo(() => {
+    if (!lv?.available) return null;
+    // Fail safe on an older payload. The frontend and the API deploy
+    // independently, so a frontend-first rollout can see a response with no
+    // `mode`; asserting "developing" there would be the most misleading of the
+    // three states. Say nothing rather than something wrong.
+    if (!lv.mode) return null;
+    const md = (lv.session_date ?? "").split("-");
+    const stamp = md.length === 3 ? `${md[1]}/${md[2]}` : "";
+    if (lv.mode === "premarket") {
+      return { text: "pre-open · no RTH session yet", title: "The cash session hasn't opened. Session levels are omitted rather than filled in from yesterday; the overnight range is the developing one." };
+    }
+    if (lv.mode === "last_session" || lv.rth_complete) {
+      return { text: `session of ${stamp} · complete`, title: "The cash session has closed. These are its final values, not a developing range." };
+    }
+    return { text: `session of ${stamp} · developing`, title: "The cash session is open; session high, low and VWAP are still moving." };
+  }, [lv]);
 
   // Ladder rows: every level plus the last price, sorted high to low, so the
   // card reads the way a price ladder does.
@@ -294,6 +334,16 @@ export default function EsBriefing() {
     rows.push({ kind: "last" as const, value: lv.last });
     return rows.sort((a, b) => (b.kind === "last" ? b.value : b.l.value) - (a.kind === "last" ? a.value : a.l.value));
   }, [lv]);
+
+  // After 18:00 ET the schedule belongs to the next session, so the heading
+  // has to say which one — "today" beside tomorrow's payrolls is a lie.
+  const scheduleScope = useMemo(() => {
+    if (d?.schedule_is_today === false && d?.session_day) {
+      const [, m, day] = d.session_day.split("-");
+      return { label: `next session (${m}/${day})`, next: true };
+    }
+    return { label: "today", next: false };
+  }, [d]);
 
   const upcoming = useMemo(
     () => (d?.schedule ?? []).filter((e) => liveMins(e) > 0).sort((a, b) => liveMins(a) - liveMins(b)),
@@ -329,7 +379,14 @@ export default function EsBriefing() {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[0.6rem] text-text-muted">
+          <span
+            className={`text-[0.6rem] ${lv?.stale ? "text-loss font-semibold" : "text-text-muted"}`}
+            title={
+              lv?.stale
+                ? `The feed is ${lv.bar_age_min} minutes behind a session that is trading. Every level and distance on this card is computed off that stale price — check a live quote before acting.`
+                : "Age of the last 5-minute bar."
+            }
+          >
             {lv?.asof ? `bars ${fmtAgo(lv.asof)}` : d?.asof ? fmtAgo(d.asof) : ""}
           </span>
           <button
@@ -369,6 +426,38 @@ export default function EsBriefing() {
 
       {d?.available && (
         <>
+          {/* A stale feed makes every distance on this card wrong by the same
+              amount, so it outranks the read rather than sitting beside it. */}
+          {lv?.stale && (
+            <div className="border-l-2 border-l-loss bg-loss/10 px-3 py-2 rounded-r text-[0.68rem] leading-snug">
+              <span className="font-semibold text-loss">Quote is {lv.bar_age_min} minutes stale.</span>{" "}
+              <span className="text-text">
+                The session is trading but the bar feed is behind, so every level distance below is
+                measured from an old price. Check a live quote before acting on this.
+              </span>
+            </div>
+          )}
+
+          {/* Across a quarterly roll the continuous series steps by the roll
+              spread, so cross-session distances can be wrong by tens of
+              handles. Nothing else on the card would reveal it. */}
+          {lv?.contract_roll_risk && (
+            <div className="border-l-2 border-l-amber-400 bg-amber-500/10 px-3 py-2 rounded-r text-[0.68rem] leading-snug">
+              <span className="font-semibold text-amber-400">Quarterly roll window.</span>{" "}
+              <span className="text-text">
+                ES=F is a continuous front-month series, so prior-session levels may come from the
+                expiring contract while the last price is the new one — distances across sessions can
+                be off by the roll spread. Verify against your platform&apos;s contract before sizing.
+              </span>
+            </div>
+          )}
+
+          {session?.holiday && (
+            <div className="border-l-2 border-l-spot bg-spot/10 px-3 py-2 rounded-r text-[0.68rem] leading-snug text-text">
+              <span className="font-semibold">Holiday schedule.</span> {session.holiday}
+            </div>
+          )}
+
           {/* the read */}
           {read && (
             <div className="border-l-2 border-l-accent bg-accent/5 px-3 py-2 rounded-r text-[0.7rem] leading-relaxed space-y-1">
@@ -386,9 +475,9 @@ export default function EsBriefing() {
                 <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
                   Reference levels
                 </h3>
-                {sessionDateLabel && (
-                  <span className="text-[0.55rem] text-text-muted" title="No RTH session today yet — these describe the most recent one.">
-                    session of {sessionDateLabel}
+                {frameLabel && (
+                  <span className="text-[0.55rem] text-text-muted" title={frameLabel.title}>
+                    {frameLabel.text}
                   </span>
                 )}
               </div>
@@ -417,7 +506,17 @@ export default function EsBriefing() {
                         title={row.l.note}
                       >
                         <span className="tabular-nums text-text w-[4.5rem]">{fmtPx(row.l.value)}</span>
-                        <span className="text-text-muted truncate flex-1 min-w-0">{row.l.label}</span>
+                        <span className="text-text-muted truncate flex-1 min-w-0">
+                          {row.l.label}
+                          {lv?.nearest?.key === row.l.key && (
+                            <span
+                              className="ml-1.5 text-[0.52rem] uppercase tracking-wide text-accent font-semibold"
+                              title="Closest reference level to the last price — the first one price has to resolve."
+                            >
+                              nearest
+                            </span>
+                          )}
+                        </span>
                         <span
                           className={`tabular-nums shrink-0 ${
                             row.l.side === "above" ? "text-gain" : "text-loss"
@@ -445,11 +544,11 @@ export default function EsBriefing() {
               {/* scheduled risk */}
               <div className="space-y-1.5">
                 <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                  Scheduled risk — today
+                  Scheduled risk — {scheduleScope.label}
                 </h3>
                 {(d.schedule ?? []).length === 0 ? (
                   <p className="text-[0.65rem] text-text-muted">
-                    Nothing on the macro calendar today.
+                    Nothing on the macro calendar for {scheduleScope.label}.
                   </p>
                 ) : (
                   <div className="space-y-1">
@@ -621,7 +720,14 @@ export default function EsBriefing() {
                 ? {
                     last: lv.last,
                     asof: lv.asof,
+                    mode: lv.mode,
+                    stale: lv.stale,
+                    bar_age_min: lv.bar_age_min,
+                    rth_complete: lv.rth_complete,
+                    overnight_developing: lv.overnight_developing,
                     session_date: lv.session_date,
+                    prior_session_date: lv.prior_session_date,
+                    profile_session_date: lv.profile_session_date,
                     rth_open_bars: lv.rth_open_bars,
                     nearest: lv.nearest,
                     levels: lv.levels?.map((l) => ({

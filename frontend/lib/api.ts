@@ -2829,6 +2829,8 @@ export interface EsSessionPhase {
   phase: string;
   label: string;
   note: string;
+  /** Set when CME's hours likely differ from the normal session table. */
+  holiday?: string | null;
   is_rth: boolean;
   now: string;
 }
@@ -2836,6 +2838,9 @@ export interface EsSessionPhase {
 export interface EsScheduleItem {
   name: string;
   time_et: string;
+  /** Absolute ET instant of the release. Countdowns derive from this, so they
+   *  stay correct when the session's schedule is on the next calendar day. */
+  when?: string;
   impact: EsImpact;
   note: string;
   /** Rule-derived date rather than a published one — can slip a day. */
@@ -2857,15 +2862,39 @@ export interface EsLevel {
   side: "above" | "below";
 }
 
+/** Which frame the levels describe. `rth` = a cash session is open or done
+ *  today; `premarket` = Globex running, no RTH yet, so the overnight range is
+ *  the developing one and no session levels exist; `last_session` = market
+ *  closed with nothing developing, describing the last completed session. */
+export type EsLevelsMode = "rth" | "premarket" | "last_session";
+
 export interface EsLevels {
   available: boolean;
   reason?: string;
   symbol: string;
   last: number;
   asof: string;
+  /** Age of the last bar in minutes — a quote you might size off declares its age. */
+  bar_age_min: number;
+  /** Bars lagging a session that is actually trading. False when simply closed. */
+  stale: boolean;
+  mode: EsLevelsMode;
   session_date: string;
+  prior_session_date: string | null;
   rth_open_bars: number;
+  rth_complete: boolean;
+  overnight_developing: boolean;
+  overnight_bars: number;
+  /** ES=F is a continuous front-month series: across a quarterly roll it steps
+   *  by the roll spread, so prior-session levels can be from the expiring
+   *  contract while `last` is the new one. Flagged, not silently corrected. */
+  contract_roll_risk?: boolean;
+  /** True when the value area shown is the prior session's, because the
+   *  developing one doesn't yet have enough bars to mean anything. */
+  profile_is_prior_session?: boolean;
   profile_sessions: number;
+  /** Which session the volume profile covers — the prior one before the bell. */
+  profile_session_date: string | null;
   nearest: EsLevel | null;
   levels: EsLevel[];
 }
@@ -2881,6 +2910,10 @@ export interface EsBrief {
   available: boolean;
   asof?: string;
   session?: EsSessionPhase;
+  /** The RTH date the current Globex session leads into — after 18:00 ET this
+   *  is the next weekday, and the schedule describes that session, not today's. */
+  session_day?: string;
+  schedule_is_today?: boolean;
   schedule?: EsScheduleItem[];
   next_event?: EsScheduleItem | null;
   high_impact_today?: EsScheduleItem[];
