@@ -664,6 +664,31 @@ async def heatmap_data(
     return {"group": group, "items": items}
 
 
+@router.get("/candle-patterns")
+async def candle_patterns(
+    symbol: str = Query("SPY", description="Ticker to scan"),
+    tranche: str | None = Query(None, description="Mega Cap | Large Cap | Mid Cap | Small Cap"),
+    sessions: int = Query(3, ge=1, le=10),
+    user: str = Depends(get_current_user),
+):
+    """Daily candlestick patterns on the most recent sessions, each with the
+    measured evidence for what it has been worth.
+
+    The detection is exact; the evidence is the point. Every pattern carries the
+    expectancy it produced against a baseline matched on size tranche, direction
+    and stop distance, plus the q-value across all 185 cells tested. Nothing in
+    the study survives multiple-testing correction, and the payload says so
+    rather than letting a detected pattern imply a forecast.
+
+    `tranche` selects the size cohort the evidence is quoted from. Without it the
+    widest-sample cell is used and flagged `tranche_is_proxy`, because a mega-cap
+    number quoted at a small cap is not that name's evidence.
+    """
+    import asyncio
+    from src.candle_patterns import detect
+    return await asyncio.to_thread(detect, symbol.upper(), tranche, sessions)
+
+
 @router.get("/events")
 async def upcoming_events(user: str = Depends(get_current_user)):
     """Get upcoming macro events and FOMC dates."""
