@@ -27,12 +27,19 @@ still loses three times in ten. They are a prior to update, not a signal.
 FOMC IS ABSENT ON PURPOSE. Release dates come from FRED, which does not carry
 FOMC meetings, and the hardcoded calendar only holds forward-looking dates —
 so there is no honest history to measure. Better a gap than an invented one.
+
+THE PATH SECTION RUNS ON A SHORTER WINDOW. Everything above is measured on ten
+years of daily bars. The intraday path statistics need hourly bars, and Yahoo
+serves at most 730 days of them — about 721 complete sessions. That is a sound
+sample, but it is a different and much shorter window than the daily study, and
+it covers one broad regime rather than several. Both windows are reported.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date as _date
+from datetime import time as _time
 
 import numpy as np
 import pandas as pd
@@ -43,6 +50,23 @@ _INDEX = "^GSPC"
 _DEFAULT_YEARS = 10
 _CACHE: dict = {}
 _TTL_S = 12 * 3600
+
+# Hourly RTH buckets. Yahoo aligns these to the cash open, so the 09:30 bar IS
+# the initial balance as `es_intraday._IB_MINUTES = 60` defines it — the live
+# card and these base rates are therefore measuring the same object. If that
+# constant ever changes, this study stops describing what the card shows.
+_TZ_NY = "America/New_York"
+_OPEN_T = _time(9, 30)
+_CLOSE_T = _time(16, 0)
+_SLOTS = ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"]
+_INTRADAY_DAYS = 730          # Yahoo's hard cap for hourly history
+_PATH_MIN_SESSIONS = 200
+
+# How far past the IB edge price has to travel before it counts as a break,
+# expressed as a fraction of the IB range. A break is not one event: at zero
+# buffer it is a coin flip, and by half an IB range it is a different animal
+# entirely. Reporting a single "IB break" number hides exactly that.
+_BREAK_BUFFERS = [0.0, 0.10, 0.25, 0.50]
 
 # Gap buckets in percent of the prior close. Small gaps behave differently from
 # large ones, and lumping them together hides exactly the effect being measured.
@@ -264,9 +288,253 @@ def event_base_rates(h: pd.DataFrame, years: int) -> dict:
     return out
 
 
+# ── Intraday path ─────────────────────────────────────────────────
+
+def _hourly() -> pd.DataFrame:
+    """One row per (session, hourly RTH bucket). Cached — this moves once a day.
+
+    Only COMPLETE sessions survive. A half-day or a partial bar makes every path
+    statistic wrong in the same direction — the range looks small and the
+    extreme looks early — so a session missing any bucket is dropped rather than
+    patched. Roughly nine of 730 go this way (holidays, early closes).
+    """
+    from time import time as _now
+    hit = _CACHE.get("hourly")
+    if hit and (_now() - hit[0]) < _TTL_S:
+        return hit[1]
+    try:
+        import yfinance as yf
+        h = yf.Ticker(_INDEX).history(period=f"{_INTRADAY_DAYS}d", interval="1h",
+                                      auto_adjust=False)
+        if h.empty:
+            return pd.DataFrame()
+        h.index = h.index.tz_convert(_TZ_NY)
+        h = h[["Open", "High", "Low", "Close"]].dropna()
+        h = h[[_OPEN_T <= t.time() < _CLOSE_T for t in h.index]]
+        h["day"] = h.index.normalize()
+        h["slot"] = [t.strftime("%H:%M") for t in h.index.time]
+        full = h.groupby("day")["slot"].nunique()
+        h = h[h["day"].isin(full[full == len(_SLOTS)].index)]
+        _CACHE["hourly"] = (_now(), h)
+        return h
+    except Exception as e:
+        logger.warning(f"intraday path history failed: {e}")
+        return pd.DataFrame()
+
+
+def _sessions(h: pd.DataFrame) -> pd.DataFrame:
+    """Collapse the hourly frame to one row per session, with the IB and extremes."""
+    # A duplicated bar for the same (day, slot) would silently produce a
+    # duplicated index here and misalign every column assembled below, so it is
+    # dropped rather than trusted — the completeness filter counts distinct
+    # slots and would not catch it.
+    h = h[~h.index.duplicated(keep="first")]
+    ib = h[h["slot"] == _SLOTS[0]].set_index("day")
+    ib = ib[~ib.index.duplicated(keep="first")]
+    g = h.groupby("day")
+    s = pd.DataFrame({
+        "ib_hi": ib["High"], "ib_lo": ib["Low"],
+        "hi": g["High"].max(), "lo": g["Low"].min(),
+        "open": g["Open"].first(), "close": g["Close"].last(),
+        "hi_slot": h.loc[g["High"].idxmax()].set_index("day")["slot"],
+        "lo_slot": h.loc[g["Low"].idxmin()].set_index("day")["slot"],
+    })
+    s["rng"] = s["hi"] - s["lo"]
+    s["ib_rng"] = s["ib_hi"] - s["ib_lo"]
+    # A zero range is a data artifact, not a session; it would divide by zero in
+    # every ratio below.
+    return s[(s["rng"] > 0) & (s["ib_rng"] > 0)]
+
+
+def _current_slot(now: pd.Timestamp | None) -> str | None:
+    """Which hourly bucket the clock is in, or None outside the cash session.
+
+    The weekday guard is defence in depth, not the real check. A time-of-day
+    test alone said 10:22 on a Saturday was the 10:30 bucket, which would have
+    put "30% of the range is still to come" on a card for a session that does
+    not exist. Callers that know the session model should pass `now=None`
+    unless it is genuinely RTH — `es_cockpit` does exactly that, and only that
+    path knows about holidays and half-days.
+    """
+    if now is None:
+        return None
+    t = now.tz_convert(_TZ_NY) if now.tzinfo else now.tz_localize(_TZ_NY)
+    if t.weekday() >= 5 or not (_OPEN_T <= t.time() < _CLOSE_T):
+        return None
+    mins = (t.hour * 60 + t.minute) - (9 * 60 + 30)
+    return _SLOTS[min(mins // 60, len(_SLOTS) - 1)]
+
+
+def path_base_rates(last: float | None = None,
+                    now: pd.Timestamp | None = None) -> dict:
+    """When the session's extremes print, and what an IB break is worth.
+
+    The daily statistics above say how big a session gets. These say WHEN it
+    gets there — which is the part an intraday trader actually trades against,
+    because a level three hours away is a different proposition at 10:00 than at
+    15:00, and most of the range is already spent by lunch.
+    """
+    h = _hourly()
+    if h.empty:
+        return {"available": False, "reason": "no intraday history"}
+    s = _sessions(h)
+    if len(s) < _PATH_MIN_SESSIONS:
+        return {"available": False, "reason": "not enough complete sessions"}
+    n = len(s)
+
+    # Where the extremes print. The 15:30 bucket is HALF the width of the others
+    # (15:30-16:00), so its share understates the closing drive per minute —
+    # flagged in the payload rather than silently rescaled, because rescaling
+    # would invent a number no session actually produced.
+    extremes = [{
+        "slot": sl,
+        "minutes": 30 if sl == _SLOTS[-1] else 60,
+        "high_pct": round(float((s["hi_slot"] == sl).mean() * 100), 1),
+        "low_pct": round(float((s["lo_slot"] == sl).mean() * 100), 1),
+    } for sl in _SLOTS]
+
+    # Cumulative: how much is already decided by the end of each hour.
+    progress = []
+    for i, sl in enumerate(_SLOTS):
+        done = set(_SLOTS[: i + 1])
+        upto = h[h["slot"].isin(done)].groupby("day")
+        frac = ((upto["High"].max() - upto["Low"].min()) / s["rng"]).dropna()
+        progress.append({
+            "slot": sl,
+            "range_complete_pct": round(float(frac.median() * 100), 1),
+            "range_complete_p25": round(float(frac.quantile(0.25) * 100), 1),
+            "high_in_pct": round(float(s["hi_slot"].isin(done).mean() * 100), 1),
+            "low_in_pct": round(float(s["lo_slot"].isin(done).mean() * 100), 1),
+            "both_in_pct": round(float((s["hi_slot"].isin(done)
+                                        & s["lo_slot"].isin(done)).mean() * 100), 1),
+        })
+
+    up0 = s["hi"] > s["ib_hi"]
+    dn0 = s["lo"] < s["ib_lo"]
+    ib_share = float((s["ib_rng"] / s["rng"]).median() * 100)
+
+    # IB breaks, by how decisive they are. `held` is the trader's question: given
+    # a break, did the session CLOSE beyond the IB edge, or fall back inside?
+    breaks = []
+    for buf in _BREAK_BUFFERS:
+        up = s["hi"] > s["ib_hi"] + buf * s["ib_rng"]
+        dn = s["lo"] < s["ib_lo"] - buf * s["ib_rng"]
+        bu, bd, clean = s[up], s[dn], s[up & ~dn]
+        if len(bu) < 40 or len(clean) < 40:
+            continue
+        breaks.append({
+            "buffer_pct_of_ib": round(buf * 100),
+            "up_n": int(len(bu)),
+            "up_held_pct": round(float((bu["close"] > bu["ib_hi"]).mean() * 100), 1),
+            "down_n": int(len(bd)),
+            "down_held_pct": round(float((bd["close"] < bd["ib_lo"]).mean() * 100), 1),
+            "both_sides_pct": round(float((up & dn).mean() * 100), 1),
+            "clean_up_n": int(len(clean)),
+            "clean_up_held_pct": round(float((clean["close"] > clean["ib_hi"]).mean() * 100), 1),
+        })
+
+    # Does a quiet first hour coil the day or just make a small target? The
+    # answer turns out to be mostly the latter, which is worth knowing.
+    # qcut raises when the tercile edges are not unique, which a run of identical
+    # IB widths would produce. That is a reason to drop this one table, not to
+    # lose the whole path study, so it degrades to empty.
+    width = []
+    try:
+        terc = pd.qcut(s["ib_rng"] / s["open"] * 100, 3, labels=["narrow", "middle", "wide"])
+    except (ValueError, IndexError) as e:
+        logger.warning(f"IB width terciles unavailable: {e}")
+        terc = pd.Series(index=s.index, dtype="object")
+    for lab in ("narrow", "middle", "wide"):
+        sel = s[terc == lab]
+        if len(sel) < 40:
+            continue
+        u, d = sel["hi"] > sel["ib_hi"], sel["lo"] < sel["ib_lo"]
+        width.append({
+            "band": lab,
+            "n": int(len(sel)),
+            "one_sided_pct": round(float(((u | d) & ~(u & d)).mean() * 100), 1),
+            "both_sides_pct": round(float((u & d).mean() * 100), 1),
+            "day_range_x_ib": round(float((sel["rng"] / sel["ib_rng"]).median()), 2),
+        })
+
+    loc = (s["close"] - s["lo"]) / s["rng"]
+
+    # Live pointer: what the clock says about how much is left.
+    slot = _current_slot(now)
+    live = None
+    if slot:
+        row = next(p for p in progress if p["slot"] == slot)
+        i = _SLOTS.index(slot)
+        live = {
+            "slot": slot,
+            "elapsed_label": f"through {slot}",
+            "range_complete_pct": row["range_complete_pct"],
+            "high_in_pct": row["high_in_pct"],
+            "low_in_pct": row["low_in_pct"],
+            "note": (f"By the end of this hour a typical session has covered "
+                     f"{row['range_complete_pct']:.0f}% of its full range, with the high "
+                     f"already in {row['high_in_pct']:.0f}% of the time and the low "
+                     f"{row['low_in_pct']:.0f}%."
+                     + ("" if i >= len(_SLOTS) - 1 else
+                        f" {100 - row['range_complete_pct']:.0f}% of the range is typically "
+                        f"still to come.")),
+        }
+
+    return {
+        "available": True,
+        "source": f"{_INDEX} cash session, hourly",
+        "sessions": n,
+        "from": str(s.index.min().date()),
+        "to": str(s.index.max().date()),
+        "slots": _SLOTS,
+        "extremes": extremes,
+        "progress": progress,
+        "initial_balance": {
+            "definition": "first hour of the cash session (09:30-10:30 ET)",
+            "share_of_day_range_pct": round(ib_share, 1),
+            "one_sided_pct": round(float(((up0 | dn0) & ~(up0 & dn0)).mean() * 100), 1),
+            "both_sides_pct": round(float((up0 & dn0).mean() * 100), 1),
+            "inside_pct": round(float((~up0 & ~dn0).mean() * 100), 1),
+            "held_high_of_day_pct": round(float((s["hi_slot"] == _SLOTS[0]).mean() * 100), 1),
+            "held_low_of_day_pct": round(float((s["lo_slot"] == _SLOTS[0]).mean() * 100), 1),
+            "note": ("Price leaves the first hour's range on all but a handful of "
+                     "sessions, so 'the IB extended' on its own says almost nothing. "
+                     "Whether it extends ONE side or both is the information."),
+        },
+        "ib_breaks": breaks,
+        "ib_width": width,
+        "close_location": {
+            "upper_third_pct": round(float((loc >= 2 / 3).mean() * 100), 1),
+            "middle_third_pct": round(float(((loc > 1 / 3) & (loc < 2 / 3)).mean() * 100), 1),
+            "lower_third_pct": round(float((loc <= 1 / 3).mean() * 100), 1),
+        },
+        "live": live,
+        "caveats": [
+            "Hourly buckets, so 'the high printed in the 10:30 hour' means inside that "
+            "hour, not at a timestamp.",
+            "The 15:30 bucket covers 30 minutes, half the width of the others — its share "
+            "of the extremes understates the closing drive minute for minute.",
+            "Cash-index RTH only. The Globex path is not measured here, and an overnight "
+            "extreme is invisible to this study.",
+            f"{n} sessions over roughly two and a half years — a much shorter window than "
+            "the daily statistics above, covering fewer regimes.",
+        ],
+    }
+
+
+def _safe_path(last: float | None, now: pd.Timestamp | None) -> dict:
+    try:
+        return path_base_rates(last=last, now=now)
+    except Exception as e:
+        logger.warning(f"path base rates failed: {e}")
+        return {"available": False, "reason": "path statistics unavailable"}
+
+
 def base_rates(last: float | None = None, gap_pct: float | None = None,
-               years: int = _DEFAULT_YEARS) -> dict:
-    """All measured base rates, optionally conditioned on today's gap."""
+               years: int = _DEFAULT_YEARS,
+               now: pd.Timestamp | None = None,
+               with_path: bool = True) -> dict:
+    """All measured base rates, optionally conditioned on today's gap and clock."""
     h = _daily(years)
     if h.empty:
         return {"available": False, "reason": "no index history"}
@@ -286,4 +554,11 @@ def base_rates(last: float | None = None, gap_pct: float | None = None,
         "gaps": gap_base_rates(h, gap_pct),
         "range": range_base_rates(h, last),
         "events": event_base_rates(h, years),
+        # The path study runs on its own, much shorter window, so it carries its
+        # own `sessions`/`from`/`to` rather than inheriting the ones above.
+        # It is also the newest and most fragile section, and it is contained
+        # here on purpose: an exception raised through this return would be
+        # caught upstream as "base_rates failed" and take the gap, range and
+        # event rates down with it, for a fault in none of them.
+        "path": _safe_path(last, now) if with_path else None,
     }

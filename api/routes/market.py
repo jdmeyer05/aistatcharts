@@ -2889,6 +2889,7 @@ def _es_brief_build() -> dict:
         "expected_move": cock.get("expected_move"),
         "gamma": cock.get("gamma"),
         "base_rates": cock.get("base_rates"),
+        "breadth": cock.get("breadth"),
         "conditions": gate,
         "gap_pct": cock.get("gap_pct"),
         "cta": {

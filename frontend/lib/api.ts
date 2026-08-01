@@ -3013,6 +3013,73 @@ export interface EsBaseRates {
     available: boolean; baseline_range_pct?: number; note?: string;
     events?: Array<{ name: string; n: number; median_range_pct: number; range_vs_normal: number | null; median_abs_move_pct: number; move_vs_normal: number | null; up_close_rate: number }>;
   };
+  /** WHEN the session gets where it is going, measured on hourly cash bars.
+   *  Its own, much shorter window than the daily statistics above — it carries
+   *  its own `sessions`/`from`/`to` and must not be labelled with theirs. */
+  path?: {
+    available: boolean;
+    reason?: string;
+    source?: string;
+    sessions?: number;
+    from?: string;
+    to?: string;
+    slots?: string[];
+    /** `minutes` is 30 for the final bucket and 60 for the rest — its share of
+     *  the extremes is not comparable to the others minute for minute. */
+    extremes?: Array<{ slot: string; minutes: number; high_pct: number; low_pct: number }>;
+    progress?: Array<{ slot: string; range_complete_pct: number; range_complete_p25: number; high_in_pct: number; low_in_pct: number; both_in_pct: number }>;
+    initial_balance?: {
+      definition: string; share_of_day_range_pct: number;
+      one_sided_pct: number; both_sides_pct: number; inside_pct: number;
+      held_high_of_day_pct: number; held_low_of_day_pct: number; note: string;
+    };
+    ib_breaks?: Array<{ buffer_pct_of_ib: number; up_n: number; up_held_pct: number; down_n: number; down_held_pct: number; both_sides_pct: number; clean_up_n: number; clean_up_held_pct: number }>;
+    ib_width?: Array<{ band: string; n: number; one_sided_pct: number; both_sides_pct: number; day_range_x_ib: number }>;
+    close_location?: { upper_third_pct: number; middle_third_pct: number; lower_third_pct: number };
+    /** Present ONLY during a live cash session — null on weekends, holidays and
+     *  outside 09:30-16:00, because "30% of the range is still to come" is a
+     *  lie about a day that is not trading. */
+    live?: { slot: string; elapsed_label: string; range_complete_pct: number; high_in_pct: number; low_in_pct: number; note: string } | null;
+    caveats?: string[];
+  } | null;
+}
+
+/** How many stocks are going with the index. Reconstructed on a liquid US
+ *  universe, NOT NYSE-listed issues, so it will not tie out against a terminal's
+ *  A/D or TRIN — the direction and the extremes carry, the counts are ours. */
+export interface EsBreadth {
+  available: boolean;
+  reason?: string;
+  /** True while the session is trading; false means these are the last
+   *  completed session's counts, named in `session`. */
+  live?: boolean;
+  session?: string | null;
+  asof_note?: string;
+  /** `n` is the names that have actually traded; `eligible_n` (live only) is how
+   *  many passed the liquidity filter, so the gap is participation. */
+  universe?: { n: number; eligible_n?: number | null; definition: string; note: string };
+  advancers?: number;
+  decliners?: number;
+  unchanged?: number;
+  net_advancers?: number;
+  net_advancers_pct?: number | null;
+  ad_ratio?: number | null;
+  up_volume?: number;
+  down_volume?: number;
+  up_volume_pct?: number | null;
+  volume_ratio?: number | null;
+  trin?: number | null;
+  trin_band?: { label: string; why: string } | null;
+  equal_vs_cap?: {
+    available: boolean;
+    equal_weight?: number; cap_weight?: number; spread_pct?: number;
+    label?: string; note?: string;
+  };
+  divergence?: { label: string; note: string } | null;
+  /** Always unavailable — NYSE TICK needs a classified tick stream no wired
+   *  source provides. The field exists to say so rather than to be filled in. */
+  tick?: { available: boolean; reason: string };
+  reconstruction?: string;
 }
 
 /** Whether the session suits intraday trading at all — conditions, never
@@ -3056,6 +3123,7 @@ export interface EsBrief {
   gamma?: EsGamma | null;
   intraday?: EsIntraday | null;
   base_rates?: EsBaseRates | null;
+  breadth?: EsBreadth | null;
   conditions?: EsConditions | null;
   /** Cash-open gap vs the prior close, in percent. Before the bell this is the
    *  gap as it currently stands, measured from the live price. */

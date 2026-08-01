@@ -148,6 +148,60 @@ export default function PageInterpretation() {
           }
         : null,
 
+      // WHEN the session gets there, not how far. `live` is the intraday-critical
+      // part — it says how much range is typically left from this hour — so it
+      // goes first and survives truncation; the full hourly table is context.
+      // Its window is its own and shorter than the daily rates above, which is
+      // why the label travels with it rather than being inherited.
+      session_path: br?.path?.available
+        ? {
+            where_we_are: br.path.live,
+            source: br.path.source, sessions: br.path.sessions,
+            first_hour: br.path.initial_balance,
+            ib_break_follow_through: br.path.ib_breaks,
+            ib_width_effect: br.path.ib_width,
+            extreme_by_hour: br.path.extremes?.map((e) => ({
+              slot: e.slot, high_pct: e.high_pct, low_pct: e.low_pct, minutes: e.minutes,
+            })),
+            range_covered_by_hour: br.path.progress?.map((p) => ({
+              slot: p.slot, range_complete_pct: p.range_complete_pct, both_extremes_in_pct: p.both_in_pct,
+            })),
+            // The full caveat list is a UI disclosure; only the two that would
+            // change how these numbers are READ are worth prompt budget.
+            caveat:
+              "Hourly buckets, cash RTH only. The 15:30 bucket is 30 minutes, half the " +
+              "width of the others, so its share of the extremes understates the close.",
+          }
+        : null,
+
+      // How many stocks are going with the index. Intraday-critical and cheap,
+      // so it sits ahead of the schedule and the swing blocks.
+      breadth: brief.breadth?.available
+        ? {
+            live: brief.breadth.live,
+            session: brief.breadth.session,
+            universe_n: brief.breadth.universe?.n,
+            net_advancers_pct: brief.breadth.net_advancers_pct,
+            advancers: brief.breadth.advancers,
+            decliners: brief.breadth.decliners,
+            ad_ratio: brief.breadth.ad_ratio,
+            up_volume_pct: brief.breadth.up_volume_pct,
+            trin: brief.breadth.trin,
+            trin_band: brief.breadth.trin_band?.label,
+            equal_vs_cap: brief.breadth.equal_vs_cap?.available
+              ? {
+                  spread_pct: brief.breadth.equal_vs_cap.spread_pct,
+                  label: brief.breadth.equal_vs_cap.label,
+                }
+              : null,
+            divergence: brief.breadth.divergence,
+            caveat:
+              "Reconstructed on a liquid US universe, not NYSE-listed issues — direction " +
+              "and extremes carry, absolute counts will not match a terminal. NYSE TICK is " +
+              "not available from any wired source and is absent, not approximated.",
+          }
+        : null,
+
       todays_schedule: brief.schedule,
       macro_news: (brief.news ?? []).slice(0, 6).map((n) => ({ source: n.source, title: n.title })),
 

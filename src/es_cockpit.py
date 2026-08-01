@@ -197,7 +197,8 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
 
 def es_cockpit(now: pd.Timestamp | None = None,
                with_gamma: bool = True,
-               with_base_rates: bool = True) -> dict:
+               with_base_rates: bool = True,
+               with_breadth: bool = True) -> dict:
     """The full intraday picture, from one bar fetch and one session model."""
     from src.es_levels import session_frames, es_levels
 
@@ -244,6 +245,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
     from src.es_expected_move import expected_move
     from src.dealer_gamma import dealer_gamma
     from src.es_baserates import base_rates
+    from src.es_breadth import market_breadth
 
     # The expected move is always computed for the SESSION AHEAD. So a range
     # already in the books may belong to a different session than the estimate,
@@ -266,13 +268,29 @@ def es_cockpit(now: pd.Timestamp | None = None,
             overnight_range=on_range if developing else None), "expected_move")
         f_gamma = pool.submit(_safe, lambda: dealer_gamma(session_day, es_last=last),
                               "gamma") if with_gamma else None
-        f_br = pool.submit(_safe, lambda: base_rates(last=last, gap_pct=gap_pct),
+        # The path statistics need the wall clock, not the session date, to say
+        # how much of the range is typically still ahead. Only hand it over when
+        # the cash session is actually trading: `mode` is the authoritative
+        # answer (it knows holidays and half-days, which a clock does not), and
+        # a "70% of the range is spent" pointer on a closed day is a lie about
+        # the frame in exactly the way the levels bug was.
+        clock_et = now if now is not None else pd.Timestamp.now(tz=_TZ)
+        clock = clock_et if live else None
+        f_br = pool.submit(_safe, lambda: base_rates(last=last, gap_pct=gap_pct, now=clock),
                            "base_rates") if with_base_rates else None
+        # Breadth derives its own index comparison so it always describes the
+        # same window as its counts — see the note in `market_breadth`. It is
+        # handed an EXCHANGE-LOCAL clock, never `now` as passed: Cloud Run is
+        # UTC, so after 20:00 ET a bare `date.today()` is already tomorrow and
+        # the walk back to the last traded session starts a day too far out.
+        f_bd = pool.submit(_safe, lambda: market_breadth(now=clock_et), "breadth") \
+            if with_breadth else None
 
         intraday = f_intra.result()
         em = f_em.result()
         gamma = f_gamma.result() if f_gamma else None
         rates = f_br.result() if f_br else None
+        breadth = f_bd.result() if f_bd else None
 
     return {
         "available": True,
@@ -281,7 +299,9 @@ def es_cockpit(now: pd.Timestamp | None = None,
         "expected_move": em,
         "gamma": gamma,
         "base_rates": rates,
+        "breadth": breadth,
         "gap_pct": round(gap_pct, 3) if gap_pct is not None else None,
         "degraded": [k for k, v in (("intraday", intraday), ("expected_move", em),
-                                    ("gamma", gamma), ("base_rates", rates)) if not v],
+                                    ("gamma", gamma), ("base_rates", rates),
+                                    ("breadth", breadth)) if not v],
     }

@@ -1004,6 +1004,116 @@ export default function EsBriefing() {
             </div>
           </div>
 
+          {/* ── breadth: how many stocks are going with the index ── */}
+          {d.breadth?.available && (
+            <div className="border-t border-border pt-3 space-y-2">
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                  Breadth
+                </h3>
+                <span className="text-[0.55rem] text-text-muted" title={d.breadth.universe?.note}>
+                  {d.breadth.universe?.n?.toLocaleString()}
+                  {d.breadth.universe?.eligible_n
+                    ? ` of ${d.breadth.universe.eligible_n.toLocaleString()}`
+                    : ""}{" "}
+                  names · {d.breadth.live ? "live" : `last session ${d.breadth.session ?? ""}`}
+                </span>
+              </div>
+
+              {/* Fires before the cash open, when only a fraction of the universe
+                  has printed and the counts are a thin sample. */}
+              {d.breadth.live &&
+                (d.breadth.universe?.eligible_n ?? 0) > 0 &&
+                (d.breadth.universe?.n ?? 0) / (d.breadth.universe?.eligible_n ?? 1) < 0.8 && (
+                  <p className="text-[0.6rem] text-amber-400 border-l-2 border-l-amber-400/50 pl-2">
+                    {d.breadth.asof_note}
+                  </p>
+                )}
+
+              {d.breadth.divergence && (
+                <p
+                  className={`text-[0.65rem] text-text border-l-2 pl-2 ${
+                    d.breadth.divergence.label === "divergent"
+                      ? "border-l-amber-400"
+                      : "border-l-accent"
+                  }`}
+                >
+                  {d.breadth.divergence.note}
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-[0.6rem]">
+                <div title="Advancing minus declining names, as a share of the universe. Self-normalising, so it is comparable across sessions.">
+                  <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                    Net advancers
+                  </div>
+                  <div
+                    className={`text-[0.95rem] font-semibold tabular-nums ${
+                      (d.breadth.net_advancers_pct ?? 0) >= 0 ? "text-gain" : "text-loss"
+                    }`}
+                  >
+                    {(d.breadth.net_advancers_pct ?? 0) > 0 ? "+" : ""}
+                    {d.breadth.net_advancers_pct?.toFixed(0)}%
+                  </div>
+                  <div className="text-[0.55rem] text-text-muted tabular-nums">
+                    {d.breadth.advancers?.toLocaleString()} up ·{" "}
+                    {d.breadth.decliners?.toLocaleString()} down
+                  </div>
+                </div>
+
+                <div title="Advancing names divided by declining names.">
+                  <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                    A/D ratio
+                  </div>
+                  <div className="text-[0.95rem] font-semibold tabular-nums text-text">
+                    {d.breadth.ad_ratio?.toFixed(2) ?? "—"}
+                  </div>
+                  <div className="text-[0.55rem] text-text-muted tabular-nums">
+                    {d.breadth.up_volume_pct?.toFixed(0)}% of volume up
+                  </div>
+                </div>
+
+                <div title={d.breadth.trin_band?.why}>
+                  <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                    TRIN
+                  </div>
+                  <div className="text-[0.95rem] font-semibold tabular-nums text-text">
+                    {d.breadth.trin?.toFixed(2) ?? "—"}
+                  </div>
+                  <div className="text-[0.55rem] text-text-muted truncate">
+                    {d.breadth.trin_band?.label ?? "—"}
+                  </div>
+                </div>
+
+                {d.breadth.equal_vs_cap?.available && (
+                  <div title={d.breadth.equal_vs_cap.note}>
+                    <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                      Equal vs cap
+                    </div>
+                    <div
+                      className={`text-[0.95rem] font-semibold tabular-nums ${
+                        (d.breadth.equal_vs_cap.spread_pct ?? 0) >= 0 ? "text-gain" : "text-loss"
+                      }`}
+                    >
+                      {(d.breadth.equal_vs_cap.spread_pct ?? 0) > 0 ? "+" : ""}
+                      {d.breadth.equal_vs_cap.spread_pct?.toFixed(2)}%
+                    </div>
+                    <div className="text-[0.55rem] text-text-muted truncate">
+                      {d.breadth.equal_vs_cap.label} · RSP{" "}
+                      {d.breadth.equal_vs_cap.equal_weight?.toFixed(2)}% vs SPY{" "}
+                      {d.breadth.equal_vs_cap.cap_weight?.toFixed(2)}%
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-[0.52rem] text-text-muted leading-snug">
+                {d.breadth.reconstruction}
+                {d.breadth.tick && !d.breadth.tick.available && ` NYSE TICK is not shown: ${d.breadth.tick.reason}`}
+              </p>
+            </div>
+          )}
+
           {/* ── measured base rates ── */}
           {d.base_rates?.available && (
             <div className="border-t border-border pt-3 space-y-1.5">
@@ -1084,6 +1194,144 @@ export default function EsBriefing() {
                   )}
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ── intraday path: WHEN the session gets there ── */}
+          {d.base_rates?.path?.available && (
+            <div className="border-t border-border pt-3 space-y-2">
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                  Session path
+                </h3>
+                {/* Its own window — shorter than the daily study above, and
+                    labelling it with those sessions would overstate it. */}
+                <span className="text-[0.55rem] text-text-muted">
+                  {d.base_rates.path.source} · {d.base_rates.path.sessions?.toLocaleString()} sessions ·{" "}
+                  {d.base_rates.path.from} to {d.base_rates.path.to}
+                </span>
+              </div>
+
+              {d.base_rates.path.live && (
+                <p className="text-[0.65rem] text-text border-l-2 border-l-accent pl-2">
+                  {d.base_rates.path.live.note}
+                </p>
+              )}
+
+              {/* Hourly strip. Reads left to right as the session does. */}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[26rem] text-[0.6rem] tabular-nums border-collapse">
+                  <thead>
+                    <tr className="text-text-muted">
+                      <th className="text-left font-normal text-[0.55rem] uppercase tracking-wider pb-1">
+                        By hour
+                      </th>
+                      {(d.base_rates.path.extremes ?? []).map((e) => (
+                        <th
+                          key={e.slot}
+                          className={`text-right font-normal pb-1 px-1 ${
+                            d.base_rates?.path?.live?.slot === e.slot ? "text-accent font-semibold" : ""
+                          }`}
+                          title={e.minutes === 30
+                            ? "15:30–16:00 is a half-width bucket — its share understates the closing drive minute for minute."
+                            : `${e.slot}–${String(Number(e.slot.slice(0, 2)) + 1).padStart(2, "0")}:30 ET, 60 minutes.`}
+                        >
+                          {e.slot}
+                          {e.minutes === 30 && <span className="text-text-muted">*</span>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-t border-border" title="Share of sessions whose HIGH printed inside this hour.">
+                      <td className="text-text-muted py-0.5">High prints here</td>
+                      {(d.base_rates.path.extremes ?? []).map((e) => (
+                        <td key={e.slot} className="text-right px-1 text-text">{e.high_pct.toFixed(0)}%</td>
+                      ))}
+                    </tr>
+                    <tr className="border-t border-border" title="Share of sessions whose LOW printed inside this hour.">
+                      <td className="text-text-muted py-0.5">Low prints here</td>
+                      {(d.base_rates.path.extremes ?? []).map((e) => (
+                        <td key={e.slot} className="text-right px-1 text-text">{e.low_pct.toFixed(0)}%</td>
+                      ))}
+                    </tr>
+                    <tr className="border-t border-border" title="Median share of the full session range already covered by the end of this hour.">
+                      <td className="text-text-muted py-0.5">Range covered</td>
+                      {(d.base_rates.path.progress ?? []).map((p) => (
+                        <td key={p.slot} className="text-right px-1 text-text">{p.range_complete_pct.toFixed(0)}%</td>
+                      ))}
+                    </tr>
+                    <tr className="border-t border-border" title="Share of sessions where BOTH the high and the low are already in by the end of this hour — the day's range is settled.">
+                      <td className="text-text-muted py-0.5">Both extremes in</td>
+                      {(d.base_rates.path.progress ?? []).map((p) => (
+                        <td key={p.slot} className="text-right px-1 text-text">{p.both_in_pct.toFixed(0)}%</td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2 text-[0.6rem]">
+                {d.base_rates.path.initial_balance && (
+                  <div>
+                    <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5"
+                         title={d.base_rates.path.initial_balance.definition}>
+                      First hour (initial balance)
+                    </div>
+                    <div className="flex justify-between gap-2 tabular-nums">
+                      <span className="text-text-muted">Holds the day&apos;s high</span>
+                      <span className="text-text">{d.base_rates.path.initial_balance.held_high_of_day_pct.toFixed(0)}%</span>
+                    </div>
+                    <div className="flex justify-between gap-2 tabular-nums">
+                      <span className="text-text-muted">Holds the day&apos;s low</span>
+                      <span className="text-text">{d.base_rates.path.initial_balance.held_low_of_day_pct.toFixed(0)}%</span>
+                    </div>
+                    <div className="flex justify-between gap-2 tabular-nums" title="Price leaves the first hour's range on one side only — the clean, tradeable case.">
+                      <span className="text-text-muted">Extends one side</span>
+                      <span className="text-text">{d.base_rates.path.initial_balance.one_sided_pct.toFixed(0)}%</span>
+                    </div>
+                    <div className="flex justify-between gap-2 tabular-nums" title="Price leaves the first hour's range on BOTH sides — the whipsaw case.">
+                      <span className="text-text-muted">Extends both sides</span>
+                      <span className="text-text">{d.base_rates.path.initial_balance.both_sides_pct.toFixed(0)}%</span>
+                    </div>
+                    <div className="flex justify-between gap-2 tabular-nums" title="Median first-hour range as a share of the full session range.">
+                      <span className="text-text-muted">Share of day range</span>
+                      <span className="text-text">{d.base_rates.path.initial_balance.share_of_day_range_pct.toFixed(0)}%</span>
+                    </div>
+                  </div>
+                )}
+
+                {(d.base_rates.path.ib_breaks ?? []).length > 0 && (
+                  <div>
+                    <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5"
+                         title="A break is not one event. How far past the first hour's edge price travels changes what it is worth.">
+                      IB break held into the close
+                    </div>
+                    {(d.base_rates.path.ib_breaks ?? []).map((b) => (
+                      <div key={b.buffer_pct_of_ib} className="flex justify-between gap-2 tabular-nums"
+                           title={`Up-breaks n=${b.up_n}, closed above the IB high ${b.up_held_pct.toFixed(0)}% of the time. Down-breaks n=${b.down_n}, held ${b.down_held_pct.toFixed(0)}%. Both sides broken on ${b.both_sides_pct.toFixed(0)}% of all sessions at this threshold.`}>
+                        <span className="text-text-muted truncate">
+                          {b.buffer_pct_of_ib === 0
+                            ? "Any break"
+                            : `${b.buffer_pct_of_ib}% of IB beyond`}
+                        </span>
+                        <span className="text-text">
+                          {b.up_held_pct.toFixed(0)}%
+                          <span className="text-text-muted"> · both {b.both_sides_pct.toFixed(0)}%</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {d.base_rates.path.initial_balance?.note && (
+                <p className="text-[0.52rem] text-text-muted leading-snug">
+                  {d.base_rates.path.initial_balance.note}
+                  {d.base_rates.path.extremes?.some((e) => e.minutes === 30) &&
+                    " * 15:30 covers 30 minutes, half the width of the other buckets."}
+                </p>
+              )}
             </div>
           )}
 
