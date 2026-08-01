@@ -46,6 +46,37 @@ _POLYGON_SYMBOL_MAP = {
 }
 
 
+def is_equity_symbol(yf_symbol: str) -> bool:
+    """Whether Polygon's STOCKS endpoints can legitimately answer for this symbol.
+
+    THIS GUARD EXISTS BECAUSE THE BARE ROOTS COLLIDE WITH REAL EQUITIES. The map
+    above sends futures to their bare root — `ES=F` to `ES`, `CL=F` to `CL` — on
+    the belief that Polygon serves continuous contracts that way. It does not:
+    those are the stocks endpoints, and they answer with the LISTED COMPANY of
+    that name. Measured against the live API, 11 of the mapped futures resolve to
+    an unrelated equity:
+
+        ES=F -> Eversource Energy      CL=F -> Colgate-Palmolive
+        NG=F -> NovaGold               SI=F -> Shoulder Innovations
+        BZ=F -> Kanzhun                ZS=F -> Zscaler ... and five more
+
+    The price sanity bounds do not save this. Colgate at $91.30 sits inside WTI's
+    (30, 250) band, NovaGold at $5.83 inside Henry Hub's (1, 15), and Shoulder
+    Innovations at $22.74 inside silver's (15, 100) — each one passes as a
+    plausible quote for a completely different instrument, which is worse than an
+    obvious error because nothing looks wrong.
+
+    Everything in `_POLYGON_SYMBOL_MAP` is an index, a future or a crypto pair,
+    so none of it belongs on a stocks endpoint. Excluded here, these route to the
+    yfinance fallback, which quotes them correctly.
+    """
+    if yf_symbol in _POLYGON_SYMBOL_MAP:
+        return False
+    if yf_symbol.endswith("=F") or yf_symbol.endswith(".NYM"):
+        return False
+    return not any(c in yf_symbol for c in ("^", ":"))
+
+
 def polygon_symbol(yf_symbol: str) -> str:
     """Convert a yfinance-style symbol to Polygon format."""
     if yf_symbol in _POLYGON_SYMBOL_MAP:
@@ -64,13 +95,24 @@ def polygon_snapshot(symbol: str) -> dict | None:
     if not api_key:
         return None
     sym = polygon_symbol(symbol)
+
+    # A future maps to a BARE root that is a live equity ticker on EVERY Polygon
+    # endpoint — the stocks snapshot and the aggs range alike. `/aggs/ticker/CL/`
+    # returns Colgate-Palmolive's daily bars just as readily as the snapshot
+    # does, so gating only the snapshot fixes nothing. Polygon cannot serve these
+    # at all on this plan: return nothing and let yfinance quote them, which it
+    # does correctly. Prefixed symbols (`I:SPX`, `X:BTCUSD`) cannot collide with
+    # an equity ticker, so they still go through the aggs path below.
+    if not is_equity_symbol(symbol) and ":" not in sym:
+        return None
+
     try:
-        # Try stocks/indices snapshot first
+        # Stocks snapshot — ONLY for things that are actually stocks.
         r = requests.get(
             f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{sym}",
             params={"apiKey": api_key}, timeout=10,
-        )
-        if r.status_code == 200:
+        ) if is_equity_symbol(symbol) else None
+        if r is not None and r.status_code == 200:
             data = r.json()
             ticker = data.get("ticker", {})
             if ticker:
@@ -159,6 +201,85 @@ _BATCH_SNAPSHOT_CACHE: TTLCache = TTLCache(maxsize=64, ttl=30)
 _BATCH_SNAPSHOT_LOCK = Lock()
 
 
+_CLOSED_SESSION_CACHE: dict = {}
+_CLOSED_SESSION_TTL_S = 30 * 60
+
+
+def _grouped_daily_raw(day: str) -> dict:
+    """{ticker: bar} for one date. Empty on weekends and holidays, which is the
+    only reliable way to tell whether a date actually traded — Polygon answers
+    200 with no results rather than erroring."""
+    api_key = _get_polygon_key()
+    if not api_key:
+        return {}
+    try:
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}",
+            params={"adjusted": "true", "apiKey": api_key}, timeout=20,
+        )
+        if r.status_code != 200:
+            return {}
+        return {row["T"]: row for row in r.json().get("results", []) if row.get("T")}
+    except Exception as e:
+        logger.warning(f"Grouped daily {day} failed: {e}")
+        return {}
+
+
+def _last_completed_session() -> dict:
+    """Close and true change for the most recent session that actually traded.
+
+    WHY THIS EXISTS. Polygon's snapshot zeroes its `day` block when the market is
+    shut. The batch path below then falls back to `prevDay.c` for the price while
+    still dividing by `prevDay.c` for the change — the same number on both sides
+    — so every symbol reported exactly 0.00%. Prices were right and the whole
+    platform's change columns were silently flat: 44 of 45 tickers across all
+    five heatmap groups, every night and all weekend.
+
+    The honest number while closed is the last completed session's own change,
+    which needs the close BEFORE `prevDay` — and the snapshot does not carry it.
+    Two grouped-daily calls cover every US ticker at once, so this costs the same
+    whether one symbol needs it or five hundred.
+
+    Equities and ETFs only. Indices, futures and crypto are not in the grouped
+    endpoint; they fall through to the per-symbol fallback that already handles
+    them.
+    """
+    import time as _time
+    hit = _CLOSED_SESSION_CACHE.get("v")
+    if hit and (_time.time() - hit[0]) < _CLOSED_SESSION_TTL_S:
+        return hit[1]
+
+    from datetime import date as _d, timedelta as _td
+    try:
+        import pandas as _pd
+        # Exchange-local: Cloud Run is UTC, where after 20:00 ET "today" is
+        # already tomorrow and the walk back would start a day too far out.
+        anchor = _pd.Timestamp.now(tz="America/New_York").date()
+    except Exception:
+        anchor = _d.today()
+
+    frames, day = [], anchor
+    for _ in range(10):
+        if day.weekday() < 5:
+            g = _grouped_daily_raw(day.isoformat())
+            if g:
+                frames.append(g)
+                if len(frames) == 2:
+                    break
+        day -= _td(days=1)
+    if len(frames) < 2:
+        return {}
+
+    cur, prv = frames
+    out = {}
+    for tk, row in cur.items():
+        c, p = row.get("c"), (prv.get(tk) or {}).get("c")
+        if c and p:
+            out[tk] = {"price": c, "prev_close": p, "change": round((c / p - 1) * 100, 2)}
+    _CLOSED_SESSION_CACHE["v"] = (_time.time(), out)
+    return out
+
+
 def polygon_batch_snapshot(symbols: list) -> dict:
     """Get price snapshots for multiple symbols via Polygon all-tickers snapshot.
     Returns {original_symbol: {price, prev_close, change}}.
@@ -192,25 +313,48 @@ def polygon_batch_snapshot(symbols: list) -> dict:
 
     # Try the bulk snapshot endpoint (one API call for remaining tickers)
     try:
-        # Build a set of polygon-formatted symbols for matching — only uncached
-        sym_map = {polygon_symbol(s): s for s in symbols_to_fetch}
-        poly_syms = ",".join(sym_map.keys())
+        # Build a set of polygon-formatted symbols for matching — only uncached,
+        # and only genuine equities: a future's bare root is a real listed ticker
+        # on this endpoint and would come back as that company. Non-equities fall
+        # through to `missing` below and are resolved by the yfinance fallback.
+        sym_map = {polygon_symbol(s): s for s in symbols_to_fetch if is_equity_symbol(s)}
+        # Symbols the snapshot can only price, not change, because the session
+        # it would measure against has not happened. Resolved together below.
+        needs_last_session: dict = {}
         r = requests.get(
             f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers",
-            params={"tickers": poly_syms, "apiKey": api_key}, timeout=15,
-        )
-        if r.status_code == 200:
+            params={"tickers": ",".join(sym_map.keys()), "apiKey": api_key}, timeout=15,
+        ) if sym_map else None
+        if r is not None and r.status_code == 200:
             for ticker in r.json().get("tickers", []):
                 tsym = ticker.get("ticker", "")
                 orig_sym = sym_map.get(tsym)
                 if orig_sym:
                     day = ticker.get("day", {})
                     prev = ticker.get("prevDay", {})
-                    price = day.get("c") or prev.get("c", 0)
+                    live_close = day.get("c") or 0
                     prev_close = prev.get("c", 0)
-                    if price and prev_close:
-                        chg = ((price / prev_close) - 1) * 100
-                        results[orig_sym] = {"price": price, "change": round(chg, 2)}
+                    if live_close and prev_close:
+                        chg = ((live_close / prev_close) - 1) * 100
+                        results[orig_sym] = {"price": live_close, "prev_close": prev_close,
+                                             "change": round(chg, 2)}
+                    elif prev_close:
+                        # Market shut: `day` is zeroed. Taking prevDay's close as
+                        # the price AND as the base is what made every change
+                        # read 0.00%; defer instead of computing that identity.
+                        needs_last_session[orig_sym] = (tsym, prev_close)
+
+        if needs_last_session:
+            last = _last_completed_session()
+            for orig_sym, (tsym, prev_close) in needs_last_session.items():
+                row = last.get(tsym)
+                if row:
+                    results[orig_sym] = dict(row)
+                else:
+                    # Not an equity or ETF (indices, futures, crypto are absent
+                    # from the grouped endpoint). Leave it out so the per-symbol
+                    # fallback resolves it rather than publishing a false flat.
+                    logger.info(f"{orig_sym}: no grouped bar while closed — deferring to fallback")
     except Exception as e:
         logger.warning(f"Polygon batch snapshot failed: {e}")
 

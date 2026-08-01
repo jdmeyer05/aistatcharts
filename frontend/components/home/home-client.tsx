@@ -238,6 +238,26 @@ function SectorRelative() {
         <Link href="/sector-analysis" className="text-[0.6rem] text-text-muted hover:text-accent">Full →</Link>
       </div>
       {q.isLoading && <div className="text-xs text-text-muted">Loading…</div>}
+      {/* Without this the card rendered a header over an empty box whenever the
+          rows were missing, which reads as "still loading" forever rather than
+          as a fault. Say which it is. */}
+      {!q.isLoading && sorted.length === 0 && (
+        <div className="py-2 flex items-baseline gap-2 flex-wrap">
+          <p className="text-xs text-text-muted">
+            {q.isError ? "Couldn't load sector performance." : "No sector data returned."}
+          </p>
+          {q.isError && (
+            <button
+              type="button"
+              onClick={() => q.refetch()}
+              disabled={q.isFetching}
+              className="text-[0.65rem] text-accent hover:underline disabled:opacity-50"
+            >
+              {q.isFetching ? "Retrying…" : "Retry"}
+            </button>
+          )}
+        </div>
+      )}
       <div className="space-y-1">
         {sorted.map((s) => {
           const pct = s.change || 0;
