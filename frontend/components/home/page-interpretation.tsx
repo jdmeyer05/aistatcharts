@@ -172,10 +172,15 @@ export default function PageInterpretation() {
           }
         : null,
 
-      sectors_today: {
-        leaders: sectors.slice(0, 3).map((s) => ({ label: s.label, change: s.change })),
-        laggards: sectors.slice(-3).map((s) => ({ label: s.label, change: s.change })),
-      },
+      // Guard the overlap: with fewer than six sectors, slice(0,3) and
+      // slice(-3) share rows and the model would see the same name as both
+      // leader and laggard.
+      sectors_today: sectors.length >= 6
+        ? {
+            leaders: sectors.slice(0, 3).map((s) => ({ label: s.label, change: s.change })),
+            laggards: sectors.slice(-3).map((s) => ({ label: s.label, change: s.change })),
+          }
+        : { all: sectors.map((s) => ({ label: s.label, change: s.change })) },
 
       sector_rotation_rrg: rrg?.available
         ? {

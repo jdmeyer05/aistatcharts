@@ -60,6 +60,14 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
         score -= 2
         reasons.append({"factor": "Midday", "effect": -2,
                         "why": "Volume fades and ranges compress — the highest chop risk of the day."})
+    elif phase == "post":
+        score -= 2
+        reasons.append({"factor": "Post-settlement", "effect": -2,
+                        "why": "Cash session is over; ES stays open but thin, and earnings land here."})
+    elif phase in ("overnight", "europe"):
+        score -= 1
+        reasons.append({"factor": "Globex session", "effect": -1,
+                        "why": "Outside cash hours — thinner liquidity, wider spreads, more false breaks."})
     elif mode == "premarket":
         reasons.append({"factor": "Pre-open", "effect": 0,
                         "why": "The cash session hasn't started; this is planning time, not trading time."})
@@ -157,15 +165,19 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
                            "trading, never which way to lean."),
         }
 
+    # Bands. The score is a sum of independent effects, so zero means neutral
+    # and has to read as workable — an earlier cut labelled a 0 "poor", which
+    # is simply wrong. One mild negative is likewise not a bad session; it
+    # takes two or more to be genuinely working against you. Long gamma is the
+    # more common regime and midday is a third of the session, so the strongest
+    # warning is reserved for -5 or worse, where several factors are hostile at
+    # once, rather than firing on an ordinary quiet afternoon.
     if score >= 4:
         verdict, note = "favourable", ("Conditions line up for intraday work. This is when to take "
                                        "the setups you actually wait for.")
-    elif score >= 1:
+    elif score >= -1:
         verdict, note = "workable", "Nothing exceptional either way. Be selective."
-    elif score >= -3:
-        # Long gamma is the more common regime and midday is a third of the
-        # session, so -3 is an ordinary quiet afternoon. Reserving the strongest
-        # warning for -4 keeps it meaningful instead of firing most days.
+    elif score >= -4:
         verdict, note = "poor", ("Conditions are working against you. Smaller size, or wait for "
                                  "a specific level rather than trading the middle.")
     else:

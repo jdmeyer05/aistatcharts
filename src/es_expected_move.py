@@ -68,9 +68,12 @@ def _spx_spot() -> float | None:
         return None
 
 
-def _vix1d() -> float | None:
-    """Cboe 1-day implied vol. Falls back to VIX9D, then VIX — each is a worse
-    proxy for a single session, so the fallback used is reported."""
+def _vix1d() -> tuple[float, str] | None:
+    """Cboe 1-day implied vol, with the ticker it came from.
+
+    Falls back to VIX9D then VIX — each a worse proxy for a single session, so
+    which one was used is returned and shown rather than silently substituted.
+    """
     import yfinance as yf
     for sym in ("^VIX1D", "^VIX9D", "^VIX"):
         try:

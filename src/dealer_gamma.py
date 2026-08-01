@@ -234,6 +234,8 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
     total_gex = float(sum(total_by_strike.values()))
     zero_dte = str(session_day.date())
     zero_gex = float(sum(per_expiry.get(zero_dte, {}).values()))
+    gross_zero = float(sum(abs(v) for v in per_expiry.get(zero_dte, {}).values()))
+    gross_total = float(sum(abs(v) for strikes in per_expiry.values() for v in strikes.values()))
 
     flip_info = _gamma_flip(contracts, spot, ref_day=session_day) or {}
     flip = flip_info.get("flip")
@@ -248,7 +250,15 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
 
     top = sorted(total_by_strike.items(), key=lambda kv: -abs(kv[1]))[:8]
 
-    regime = "long" if total_gex > 0 else "short"
+    # Derive the regime from the SAME recomputed profile that produces the flip.
+    # `total_gex` uses Polygon's per-contract gammas; the flip re-prices the
+    # book itself. Two different bases can disagree in sign, and a card that
+    # says "long gamma" while also saying price is below the flip contradicts
+    # itself on the one field that decides the playbook. Falls back to the
+    # Polygon total only when the profile could not be built.
+    gex_at_spot = flip_info.get("gex_at_spot")
+    basis = gex_at_spot if gex_at_spot is not None else total_gex
+    regime = "long" if basis > 0 else "short"
     if regime == "long":
         regime_note = ("Dealers are net long gamma, so their hedging LEANS AGAINST moves — "
                        "selling rallies, buying dips. Expect suppressed realised vol, rotation "
@@ -275,9 +285,16 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
         "regime": regime,
         "regime_note": regime_note,
         "total_gex": total_gex,
+        "gex_at_spot": gex_at_spot,
         "zero_dte_gex": zero_gex,
-        "zero_dte_share": (round(abs(zero_gex) / sum(abs(v) for v in total_by_strike.values()) * 100, 1)
-                           if total_by_strike else None),
+        # GROSS over GROSS. The question is "how much of the gamma on the board
+        # evaporates at today's close", which is a magnitude, so netting calls
+        # against puts — or one expiry against another at the same strike —
+        # answers something else. The old net-denominator version reported 23%
+        # where the gross figure is 48%, and could exceed 100% whenever expiries
+        # happened to offset.
+        "zero_dte_share": (round(gross_zero / gross_total * 100, 1)
+                           if gross_total > 0 else None),
         "flip_spx": flip,
         "flip_es": to_es(flip),
         "distance_to_flip": round(spot - flip, 2) if flip is not None else None,

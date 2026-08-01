@@ -238,8 +238,21 @@ def overnight_inventory(overnight: pd.DataFrame, prior_high: float | None,
     on_rng = on_hi - on_lo
     pos = (last - on_lo) / on_rng if on_rng > 0 else None
 
-    took_high = bool(prior_high is not None and on_hi > prior_high)
-    took_low = bool(prior_low is not None and on_lo < prior_low)
+    # Without the prior range there is nothing to be lopsided against, and
+    # reporting "balanced" would assert the opposite of what we know.
+    if prior_high is None or prior_low is None:
+        return {
+            "available": True, "high": round(on_hi, 2), "low": round(on_lo, 2),
+            "range": round(on_rng, 2),
+            "position_in_range": round(float(pos), 3) if pos is not None else None,
+            "took_prior_high": None, "took_prior_low": None,
+            "skew": "unknown",
+            "note": "No prior session range available, so there is no inventory read.",
+            "bars": int(len(overnight)),
+        }
+
+    took_high = bool(on_hi > prior_high)
+    took_low = bool(on_lo < prior_low)
 
     if took_high and not took_low:
         skew = "long"
@@ -387,7 +400,7 @@ _PEERS = [
 ]
 
 
-def cross_asset(session_day: pd.Timestamp | None = None) -> dict:
+def cross_asset() -> dict:
     """Same-day percent moves in the markets that confirm or contradict ES.
 
     Divergence is the signal here, not the level: ES making a new high while
@@ -447,5 +460,5 @@ def es_intraday(bars: pd.DataFrame, session_day: pd.Timestamp, last: float,
                                 if overnight is not None else {"available": False}),
         "naked_pocs": naked_pocs(bars, session_day, last),
         "unfilled_gaps": unfilled_gaps(bars, session_day, last),
-        "cross_asset": cross_asset(session_day) if with_cross_asset else {"available": False},
+        "cross_asset": cross_asset() if with_cross_asset else {"available": False},
     }
