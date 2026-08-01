@@ -227,7 +227,7 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
 
 def _levels_independent(reason: str, now: pd.Timestamp | None,
                         with_base_rates: bool, with_breadth: bool,
-                        with_candles: bool) -> dict:
+                        with_candles: bool, with_overnight: bool = True) -> dict:
     """What the cockpit can still say when the ES feed is the thing that failed.
 
     Breadth reads a Polygon snapshot; the candle context and the base rates read
@@ -238,6 +238,7 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
     """
     from src.es_baserates import base_rates
     from src.es_breadth import market_breadth
+    from src.es_overnight import overnight_base_rates
     from src.candle_context import candle_context
 
     def _safe(fn, label):
@@ -255,6 +256,10 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         rates = f_br.result() if f_br else None
         breadth = f_bd.result() if f_bd else None
         candles = f_cx.result() if f_cx else None
+        # The overnight STUDY is two years of history and does not depend on the
+        # live bars that just failed, so it still answers. Only the live read is
+        # lost, and the module already reports that as `live: None`.
+        overnight_ctx = _safe(overnight_base_rates, "overnight") if with_overnight else None
 
     return {
         "available": True,
@@ -266,10 +271,12 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         "base_rates": rates,
         "breadth": breadth,
         "candles": candles,
+        "overnight": overnight_ctx,
         "gap_pct": None,
         "degraded": ["levels", "intraday", "expected_move", "gamma"]
                     + [k for k, v in (("base_rates", rates), ("breadth", breadth),
-                                      ("candles", candles)) if not v],
+                                      ("candles", candles),
+                                      ("overnight", overnight_ctx)) if not v],
     }
 
 
@@ -277,7 +284,8 @@ def es_cockpit(now: pd.Timestamp | None = None,
                with_gamma: bool = True,
                with_base_rates: bool = True,
                with_breadth: bool = True,
-               with_candles: bool = True) -> dict:
+               with_candles: bool = True,
+               with_overnight: bool = True) -> dict:
     """The full intraday picture, from one bar fetch and one session model."""
     from src.es_levels import session_frames, es_levels
 
@@ -297,7 +305,8 @@ def es_cockpit(now: pd.Timestamp | None = None,
                        "serving the modules that do not depend on them")
         return _levels_independent(levels.get("reason") or "levels unavailable",
                                    now=now, with_base_rates=with_base_rates,
-                                   with_breadth=with_breadth, with_candles=with_candles)
+                                   with_breadth=with_breadth, with_candles=with_candles,
+                                   with_overnight=with_overnight)
 
     bars = frames["bars"]
     session_day = frames["session_day"]
@@ -336,6 +345,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
     from src.es_baserates import base_rates
     from src.es_breadth import market_breadth
     from src.candle_context import candle_context, range_divergence
+    from src.es_overnight import overnight_read
 
     # The expected move is always computed for the SESSION AHEAD. So a range
     # already in the books may belong to a different session than the estimate,
@@ -381,6 +391,11 @@ def es_cockpit(now: pd.Timestamp | None = None,
         # meaningless.
         f_cx = pool.submit(_safe, lambda: candle_context("^GSPC"), "candles") \
             if with_candles else None
+        # Handed the SAME frames the levels came from, so the overnight high it
+        # reasons about is the one on the ladder beside it — and so it costs no
+        # extra bar fetch against the futures tier's 5 calls a minute.
+        f_on = pool.submit(_safe, lambda: overnight_read(frames=frames), "overnight") \
+            if with_overnight else None
 
         intraday = f_intra.result()
         em = f_em.result()
@@ -388,6 +403,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
         rates = f_br.result() if f_br else None
         breadth = f_bd.result() if f_bd else None
         candles = f_cx.result() if f_cx else None
+        overnight_ctx = f_on.result() if f_on else None
 
     # REACHABILITY. The ladder quotes every level as a distance in handles, which
     # answers "how far" but not the question actually being asked at the open:
@@ -434,8 +450,10 @@ def es_cockpit(now: pd.Timestamp | None = None,
         "base_rates": rates,
         "breadth": breadth,
         "candles": candles,
+        "overnight": overnight_ctx,
         "gap_pct": round(gap_pct, 3) if gap_pct is not None else None,
         "degraded": [k for k, v in (("intraday", intraday), ("expected_move", em),
                                     ("gamma", gamma), ("base_rates", rates),
-                                    ("breadth", breadth), ("candles", candles)) if not v],
+                                    ("breadth", breadth), ("candles", candles),
+                                    ("overnight", overnight_ctx)) if not v],
     }

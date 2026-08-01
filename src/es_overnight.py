@@ -182,7 +182,17 @@ def _compute_base_rates() -> dict:
     n = len(s)
     s = s.copy()
     s["band"] = [_pos_band(x) for x in s["open_pct_in_on"]]
-    s["onq"] = pd.qcut(s["on_range_pct"], 4, labels=["tight", "below avg", "above avg", "wide"])
+    # Keep the real bin edges. Deriving them from each bucket's observed min/max
+    # leaves a sliver between buckets — 0.655 to 0.657 — where a live session
+    # matches nothing and silently loses its range expectation. The outer edges
+    # are opened up so a range beyond anything in the sample still lands.
+    _SIZE_LABELS = ["tight", "below avg", "above avg", "wide"]
+    s["onq"], _edges = pd.qcut(s["on_range_pct"], 4, labels=_SIZE_LABELS, retbins=True)
+    # A finite sentinel, not inf: this payload is JSON-serialised into Supabase
+    # and `Infinity` is not valid JSON — it would fail the cache write, or worse
+    # round-trip into something unparseable. No overnight range is 999% of price.
+    _edges = list(_edges)
+    _edges[0], _edges[-1] = 0.0, 999.0
 
     # 1. Does the overnight range survive the cash session?
     both = s["broke_onh"] & s["broke_onl"]
@@ -216,8 +226,8 @@ def _compute_base_rates() -> dict:
             # have to be carried in percent too. Matching a live session on
             # points against these medians drifts as the index level moves —
             # ES ran 6500->7500 across this sample alone.
-            "on_range_pct_lo": round(float(sub["on_range_pct"].min()), 3),
-            "on_range_pct_hi": round(float(sub["on_range_pct"].max()), 3),
+            "on_range_pct_lo": round(_edges[_SIZE_LABELS.index(str(lab))], 3),
+            "on_range_pct_hi": round(_edges[_SIZE_LABELS.index(str(lab)) + 1], 3),
             "median_on_range": round(float(sub["on_range"].median()), 1),
             "rth_p25": round(float(sub["rth_range"].quantile(0.25)), 1),
             "rth_median": round(float(sub["rth_range"].median()), 1),
@@ -359,7 +369,11 @@ def _compute_base_rates() -> dict:
     }
 
 
-@_result_cached("es_overnight_base")
+# Cache key carries a SCHEMA version. The payload shape has changed twice while
+# the key stayed fixed, and a stale entry missing a newly-added field is not a
+# stale number — it is a different shape that downstream `.get()` calls paper
+# over. Bump this whenever a field is added or its meaning changes.
+@_result_cached("es_overnight_base_v4")
 def _cached_base_rates() -> dict:
     r = _compute_base_rates()
     # The shared cache layer only refuses to store empty dicts and ones carrying
@@ -401,31 +415,42 @@ def _extension_now(base: dict, session_day: pd.Timestamp, last_ts: pd.Timestamp)
     }
 
 
-def overnight_read(base: dict | None = None) -> dict:
+def _CONTRACT_TICKER() -> str | None:
+    """Which ES contract the shared bar fetch resolved to, for labelling."""
+    try:
+        from src.es_levels import _CONTRACT
+        return _CONTRACT.get("ticker")
+    except Exception:
+        return None
+
+
+def overnight_read(base: dict | None = None, frames: dict | None = None) -> dict:
     """Today's overnight range, and what the base rates say to expect from it.
 
-    Degrades to the historical tables alone if the live session can't be read —
-    a missing live read must not blank the study, which is useful on its own.
+    `frames` is the cockpit's shared session split; pass it to avoid a second
+    bar fetch. Degrades to the historical tables alone if the live session can't
+    be read — a missing live read must not blank the study, which stands alone.
     """
-    from src.futures_data import fetch_front_bars
+    from src.es_levels import session_frames
 
     base = base or overnight_base_rates()
     if not base.get("available"):
         return base
 
-    bars, ticker = fetch_front_bars("ES", resolution="5min", limit=600)
-    if bars is None or bars.empty:
+    # Reuse the cockpit's session model rather than rebuilding one. `session_frames`
+    # exists so levels, structure, expected move and this all see ONE split from
+    # ONE bar fetch; a second hand-rolled model here would be free to drift from
+    # the levels card sitting next to it, and would spend an API call doing it.
+    if frames is None:
+        frames = session_frames()
+    if not frames:
         return {**base, "live": None}
 
-    # The most recent overnight block: bars from the last 18:00 boundary forward
-    # to either the cash open or the last bar, whichever comes first.
-    hhmm = [(t.hour, t.minute) for t in bars.index]
-    last_ts = bars.index[-1]
-    session_day = (last_ts + pd.Timedelta(days=1)).normalize() if last_ts.hour >= _ON_OPEN_HOUR \
-        else last_ts.normalize()
-    start = (session_day - pd.Timedelta(days=1)).replace(hour=_ON_OPEN_HOUR, minute=0)
-    on = bars[(bars.index >= start) & (bars.index < session_day.replace(hour=9, minute=30))]
-    if len(on) < 20:
+    on, rth = frames["overnight"], frames["cur_rth"]
+    session_day = frames["anchor"]
+    bars = frames["bars"]
+    ticker = _CONTRACT_TICKER()
+    if on is None or len(on) < 20 or bars.empty:
         return {**base, "live": None}
 
     onh, onl = float(on["High"].max()), float(on["Low"].min())
@@ -439,14 +464,12 @@ def overnight_read(base: dict | None = None) -> dict:
     # session silently asks a different question, and once price has left the
     # overnight range it is worse than that: it would report a 90.8% chance of
     # breaking a level that has already broken.
-    rth = bars[(bars.index >= session_day.replace(hour=9, minute=30))
-               & (bars.index < session_day.replace(hour=16, minute=0))]
-    if rth.empty:
+    if rth is None or rth.empty:
         phase, anchor, anchor_is_proxy = "premarket", last, True
     else:
         anchor = float(rth["Open"].iloc[0])
         anchor_is_proxy = False
-        phase = "rth" if rth.index[-1] < session_day.replace(hour=15, minute=55) else "complete"
+        phase = {"rth": "rth", "premarket": "premarket"}.get(frames.get("mode"), "complete")
 
     pos = (anchor - onl) / onr
     band = _pos_band(pos)
@@ -468,10 +491,16 @@ def overnight_read(base: dict | None = None) -> dict:
         if not broke_low:
             expected["breaks_on_low_pct"] = match["breaks_on_low_pct"]
 
+    # Bucket edges must be PRESENT to match. The permissive version of this —
+    # `.get(lo, -1) <= x <= .get(hi, 1e9)` — quietly matched every bucket when a
+    # cached payload predated the edges, so it returned the first one and
+    # reported a wide overnight as tight. A missing edge is a reason to say
+    # nothing, not to widen the bucket until something fits.
     on_range_pct = onr / anchor * 100
     size = next((b for b in base.get("by_overnight_size", [])
-                 if b.get("on_range_pct_lo", -1) <= on_range_pct <= b.get("on_range_pct_hi", 1e9)),
-                None)
+                 if b.get("on_range_pct_lo") is not None
+                 and b.get("on_range_pct_hi") is not None
+                 and b["on_range_pct_lo"] <= on_range_pct <= b["on_range_pct_hi"]), None)
 
     return {
         **base,
@@ -493,7 +522,8 @@ def overnight_read(base: dict | None = None) -> dict:
             "broke_on_high": broke_high,
             "broke_on_low": broke_low,
             "expected": expected,
-            "extension_if_it_breaks_now": _extension_now(base, session_day, last_ts=bars.index[-1]),
+            "extension_if_it_breaks_now": _extension_now(
+                base, pd.Timestamp(session_day), last_ts=bars.index[-1]),
             "rth_range_expectation": ({
                 "p25": size["rth_p25"], "median": size["rth_median"], "p75": size["rth_p75"],
                 "n": size["n"],
