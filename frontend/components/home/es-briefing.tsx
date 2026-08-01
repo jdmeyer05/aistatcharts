@@ -756,7 +756,17 @@ export default function EsBriefing() {
                     {d.macro && (
                       <div className="border border-border rounded px-2 py-1.5">
                         <div className="text-[0.55rem] uppercase tracking-wider text-text-muted">Macro backdrop</div>
-                        <div className="text-text font-semibold capitalize">{d.macro.net_label ?? "—"}</div>
+                        <div className="text-text font-semibold capitalize">
+                          {d.macro.net_label ?? "—"}
+                          {/* Coverage, not decoration: this verdict looked the
+                              same off 2 factors as off 12 during a FRED outage. */}
+                          {(d.macro.factors_unavailable ?? 0) > 0 && (
+                            <span className="ml-1.5 text-[0.55rem] uppercase tracking-wide text-spot font-semibold"
+                                  title={`${d.macro.factors_unavailable} of ${(d.macro.factors_reporting ?? 0) + (d.macro.factors_unavailable ?? 0)} macro factors failed to load. This verdict is built on the rest — treat it as provisional.`}>
+                              {d.macro.factors_reporting}/{(d.macro.factors_reporting ?? 0) + (d.macro.factors_unavailable ?? 0)}
+                            </span>
+                          )}
+                        </div>
                         {d.macro.counts && (
                           <div className="text-text-muted tabular-nums text-[0.6rem]">
                             {d.macro.counts.supportive}↑ · {d.macro.counts.neutral}– · {d.macro.counts.headwind}↓

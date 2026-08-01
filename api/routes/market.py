@@ -3013,6 +3013,11 @@ def _es_brief_build() -> dict:
             "counts": (macro or {}).get("counts"),
             "biggest_headwind": ((macro or {}).get("biggest_headwind") or {}).get("label"),
             "biggest_support": ((macro or {}).get("biggest_support") or {}).get("label"),
+            # A backdrop verdict built on two surviving factors reads exactly like
+            # one built on twelve. When FRED drops out the counts collapse and the
+            # label stays confident, so the coverage travels with it.
+            "factors_reporting": len((macro or {}).get("rows") or []),
+            "factors_unavailable": len((macro or {}).get("unavailable") or []),
         } if (macro or {}).get("available") else None,
         "degraded": ([k for k, v in (("session", sess), ("levels", lvl),
                                      ("cta", cta), ("macro", macro)) if not v]

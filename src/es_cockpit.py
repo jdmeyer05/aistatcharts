@@ -225,6 +225,54 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
     }
 
 
+def _levels_independent(reason: str, now: pd.Timestamp | None,
+                        with_base_rates: bool, with_breadth: bool,
+                        with_candles: bool) -> dict:
+    """What the cockpit can still say when the ES feed is the thing that failed.
+
+    Breadth reads a Polygon snapshot; the candle context and the base rates read
+    cash-index history. None of them need an ES bar, a session frame or a level,
+    so none of them should disappear because ES=F timed out. They are computed
+    without a `last` price, which only costs the gap conditioning on the base
+    rates and the reachability bands on levels that do not exist anyway.
+    """
+    from src.es_baserates import base_rates
+    from src.es_breadth import market_breadth
+    from src.candle_context import candle_context
+
+    def _safe(fn, label):
+        try:
+            return fn()
+        except Exception as e:
+            logger.warning(f"es-cockpit(degraded): {label} failed: {e}")
+            return None
+
+    clock_et = now if now is not None else pd.Timestamp.now(tz=_TZ)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_br = pool.submit(_safe, lambda: base_rates(now=None), "base_rates")             if with_base_rates else None
+        f_bd = pool.submit(_safe, lambda: market_breadth(now=clock_et), "breadth")             if with_breadth else None
+        f_cx = pool.submit(_safe, lambda: candle_context("^GSPC"), "candles")             if with_candles else None
+        rates = f_br.result() if f_br else None
+        breadth = f_bd.result() if f_bd else None
+        candles = f_cx.result() if f_cx else None
+
+    return {
+        "available": True,
+        "levels_unavailable_reason": reason,
+        "levels": {"available": False, "reason": reason},
+        "intraday": None,
+        "expected_move": None,
+        "gamma": None,
+        "base_rates": rates,
+        "breadth": breadth,
+        "candles": candles,
+        "gap_pct": None,
+        "degraded": ["levels", "intraday", "expected_move", "gamma"]
+                    + [k for k, v in (("base_rates", rates), ("breadth", breadth),
+                                      ("candles", candles)) if not v],
+    }
+
+
 def es_cockpit(now: pd.Timestamp | None = None,
                with_gamma: bool = True,
                with_base_rates: bool = True,
@@ -234,12 +282,22 @@ def es_cockpit(now: pd.Timestamp | None = None,
     from src.es_levels import session_frames, es_levels
 
     frames = session_frames(now=now)
-    if not frames:
-        return {"available": False, "reason": "no intraday ES data"}
-
-    levels = es_levels(frames=frames)
-    if not levels.get("available"):
-        return {"available": False, "reason": levels.get("reason", "levels unavailable")}
+    levels = es_levels(frames=frames) if frames else {"available": False,
+                                                      "reason": "no intraday ES data"}
+    if not frames or not levels.get("available"):
+        # LEVELS FAILING MUST NOT TAKE DOWN THE WHOLE CARD. This used to return
+        # `available: False` outright, which blanked expected move, gamma,
+        # structure, breadth AND the candle read together. Three of those do not
+        # touch ES levels or even the ES feed: breadth is a Polygon snapshot,
+        # the candle context and the base rates are cash-index history. A single
+        # yfinance hiccup on ES=F was erasing four modules that had no reason to
+        # care, and the card rendered "unavailable" four times over while every
+        # underlying source was healthy.
+        logger.warning(f"es-cockpit: levels unavailable ({levels.get('reason')}) — "
+                       "serving the modules that do not depend on them")
+        return _levels_independent(levels.get("reason") or "levels unavailable",
+                                   now=now, with_base_rates=with_base_rates,
+                                   with_breadth=with_breadth, with_candles=with_candles)
 
     bars = frames["bars"]
     session_day = frames["session_day"]

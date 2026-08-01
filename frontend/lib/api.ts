@@ -3175,6 +3175,10 @@ export interface EsBrief {
     counts?: { supportive: number; neutral: number; headwind: number };
     biggest_headwind?: string;
     biggest_support?: string;
+    /** Coverage. A verdict from two surviving factors looks identical to one
+     *  from twelve unless the card says otherwise. */
+    factors_reporting?: number;
+    factors_unavailable?: number;
   } | null;
   expected_move?: EsExpectedMove | null;
   gamma?: EsGamma | null;
