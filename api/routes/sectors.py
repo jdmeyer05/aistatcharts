@@ -718,19 +718,28 @@ async def sector_alpha(body: EtfBody, user: str = Depends(get_current_user)):
 # POST /api/sectors/prices — shared by Risk + Pairs tabs
 # ═══════════════════════════════════════════════
 
+_PERIOD_DAYS = {"1y": 252, "2y": 504, "3y": 756, "5y": 1260, "10y": 2520}
+
+
 def _price_history_batch(tickers: list[str], period: str = "2y") -> dict[str, list[dict]]:
-    """Fetch daily close history in parallel. Thread-safe per yfinance feedback memory."""
-    import yfinance as yf
+    """Fetch daily close history in parallel, through the shared OHLCV cache
+    (Supabase, served from Polygon for equities). These are sector constituents
+    — dozens of plain US tickers at a time, which is exactly the batch shape
+    that got the Cloud Run IP rate-limited when it went straight to yfinance."""
+    from src.ohlcv_cache import fetch_ohlcv
+
+    lookback = _PERIOD_DAYS.get(period, 504)
 
     def _one(tk: str):
         try:
-            hist = yf.Ticker(tk).history(period=period)
-            if hist.empty:
+            hist = fetch_ohlcv(tk, lookback_days=lookback)
+            if hist is None or hist.empty:
                 return tk, []
             return tk, [
-                {"date": idx.strftime("%Y-%m-%d"), "close": float(row["Close"])}
-                for idx, row in hist.iterrows()
-                if pd.notna(row["Close"])
+                {"date": idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx),
+                 "close": float(close)}
+                for idx, close in hist["Close"].items()
+                if pd.notna(close)
             ]
         except Exception as e:
             logger.warning(f"price fetch failed for {tk}: {e}")
