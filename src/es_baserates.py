@@ -59,7 +59,11 @@ _TZ_NY = "America/New_York"
 _OPEN_T = _time(9, 30)
 _CLOSE_T = _time(16, 0)
 _SLOTS = ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"]
-_INTRADAY_DAYS = 730          # Yahoo's hard cap for hourly history
+_INTRADAY_DAYS = 730          # Yahoo's hard cap for hourly history — fallback only
+_INTRADAY_SYMBOL = "SPY"      # Polygon carries no index entitlement; see _hourly
+_INTRADAY_YEARS = 5           # Polygon's history horizon on this plan
+_INTRADAY_BAR_MIN = 5         # 09:30 sits on the 5-minute grid, so slots are exact
+_MAX_PAGES = 60               # next_url pages; a 5y 5-minute pull takes ~20
 _PATH_MIN_SESSIONS = 200
 
 # How far past the IB edge price has to travel before it counts as a break,
@@ -290,6 +294,109 @@ def event_base_rates(h: pd.DataFrame, years: int) -> dict:
 
 # ── Intraday path ─────────────────────────────────────────────────
 
+def _polygon_5m(symbol: str, years: int) -> pd.DataFrame:
+    """5-minute bars from Polygon, ET, RTH only. Empty frame on any failure.
+
+    Five-minute rather than hourly ON PURPOSE. Polygon aligns hourly bars to the
+    clock, so its 09:00-10:00 bar is not the initial balance — adopting it would
+    silently redefine the IB and decouple this study from what the live card
+    shows. 09:30 sits exactly on the 5-minute grid, so bucketing the fine bars
+    here makes the boundary exact regardless of vendor convention.
+
+    Chunked because a single 5y request would exceed Polygon's 50k-row cap and
+    be truncated without saying so.
+    """
+    from datetime import timedelta as _td
+    try:
+        from src.api_keys import get_secret
+        import requests
+        api_key = get_secret("MASSIVE_API_KEY")
+        if not api_key:
+            return pd.DataFrame()
+
+        end = _date.today()
+
+        def _window(i: int) -> list | None:
+            """One year of bars, following Polygon's cursor to the end.
+
+            Polygon pages this endpoint via next_url and caps a page around 12k
+            bars NO MATTER WHAT `limit` says — the response reports queryCount
+            50000 alongside resultsCount 11921. Reading only the first page
+            silently returns about half the requested window, which looks like a
+            complete history that merely has fewer sessions in it.
+            """
+            w_end = end - _td(days=365 * i)
+            w_start = end - _td(days=365 * (i + 1)) + _td(days=1)
+            url = (f"https://api.polygon.io/v2/aggs/ticker/{symbol}"
+                   f"/range/{_INTRADAY_BAR_MIN}/minute/"
+                   f"{w_start.isoformat()}/{w_end.isoformat()}")
+            params = {"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": api_key}
+            out, pages = [], 0
+            while url and pages < _MAX_PAGES:
+                r = requests.get(url, params=params, timeout=30)
+                if r.status_code != 200:
+                    logger.warning(f"Polygon {_INTRADAY_BAR_MIN}m {symbol} "
+                                   f"{w_start}: HTTP {r.status_code}")
+                    return None
+                j = r.json()
+                out.extend(j.get("results") or [])
+                url = j.get("next_url")
+                params = {"apiKey": api_key}   # next_url already carries the query
+                pages += 1
+            if url:
+                # More pages remained. A truncated window is not a shorter
+                # window: it ends mid-session and biases every path statistic.
+                logger.warning(f"Polygon {_INTRADAY_BAR_MIN}m {symbol} {w_start}: still "
+                               f"paging after {_MAX_PAGES} pages — refusing a partial window")
+                return None
+            return out
+
+        # Windows are independent, so page them concurrently — the cursor within
+        # a window is strictly sequential and 5y of 5-minute bars is ~20 pages
+        # end to end, which is 15s of dead time on a cold instance that the ES
+        # brief pre-warm would otherwise absorb.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=years) as pool:
+            windows = list(pool.map(_window, range(years)))
+        if any(w is None for w in windows):
+            return pd.DataFrame()   # a hole would silently bias the study
+        rows = [b for w in windows for b in w]
+        if not rows:
+            return pd.DataFrame()
+
+        d = pd.DataFrame(rows)
+        d.index = pd.to_datetime(d["t"], unit="ms", utc=True).dt.tz_convert(_TZ_NY)
+        h = d.rename(columns={"o": "Open", "h": "High", "l": "Low", "c": "Close"})
+        h = h[["Open", "High", "Low", "Close"]].sort_index()
+        h = h[~h.index.duplicated(keep="first")].dropna()
+        return h[[_OPEN_T <= t.time() < _CLOSE_T for t in h.index]]
+    except Exception as e:
+        logger.warning(f"Polygon intraday fetch failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+def _to_slots(fine: pd.DataFrame) -> pd.DataFrame:
+    """Collapse intra-hour bars into the 09:30-anchored hourly buckets.
+
+    One row per (session, slot), indexed by the slot's opening timestamp, which
+    is the shape `_sessions` expects and keeps its `idxmax` lookups unique.
+    """
+    mins = fine.index.hour * 60 + fine.index.minute - (_OPEN_T.hour * 60 + _OPEN_T.minute)
+    fine = fine.assign(day=fine.index.normalize(),
+                       slot=[_SLOTS[m // 60] for m in mins])
+    g = fine.groupby(["day", "slot"], sort=True)
+    h = g.agg(Open=("Open", "first"), High=("High", "max"),
+              Low=("Low", "min"), Close=("Close", "last")).reset_index()
+    # Build the slot timestamp from the calendar date, not from str() of the
+    # tz-aware `day` — that carries a UTC offset into the string and parses back
+    # as mixed-offset objects. RTH never straddles a DST transition (those land
+    # at 02:00), so localizing is unambiguous.
+    naive = pd.to_datetime(h["day"].dt.strftime("%Y-%m-%d") + " " + h["slot"],
+                           format="%Y-%m-%d %H:%M")
+    h.index = naive.dt.tz_localize(_TZ_NY)
+    return h.sort_index()
+
+
 def _hourly() -> pd.DataFrame:
     """One row per (session, hourly RTH bucket). Cached — this moves once a day.
 
@@ -297,29 +404,52 @@ def _hourly() -> pd.DataFrame:
     statistic wrong in the same direction — the range looks small and the
     extreme looks early — so a session missing any bucket is dropped rather than
     patched. Roughly nine of 730 go this way (holidays, early closes).
+
+    Polygon 5-minute SPY is preferred over Yahoo hourly ^GSPC: five years of
+    history instead of Yahoo's hard 730-day cap on hourly bars, and no rate
+    limiting. SPY rather than the cash index because Polygon carries no index
+    entitlement here — which costs nothing, since every statistic below is a
+    ratio or a bucket share and so is invariant to the level of the series.
     """
     from time import time as _now
     hit = _CACHE.get("hourly")
     if hit and (_now() - hit[0]) < _TTL_S:
         return hit[1]
-    try:
-        import yfinance as yf
-        h = yf.Ticker(_INDEX).history(period=f"{_INTRADAY_DAYS}d", interval="1h",
-                                      auto_adjust=False)
-        if h.empty:
+
+    h = pd.DataFrame()
+    source = ""
+    fine = _polygon_5m(_INTRADAY_SYMBOL, _INTRADAY_YEARS)
+    if not fine.empty:
+        h = _to_slots(fine)
+        source = f"{_INTRADAY_SYMBOL} cash session, hourly buckets from 5-minute bars"
+
+    if h.empty:
+        # Yahoo hourly, the old path — shallower and rate-limitable, but it keeps
+        # the card alive when Polygon is unreachable.
+        try:
+            import yfinance as yf
+            y = yf.Ticker(_INDEX).history(period=f"{_INTRADAY_DAYS}d", interval="1h",
+                                          auto_adjust=False)
+            if y.empty:
+                return pd.DataFrame()
+            y.index = y.index.tz_convert(_TZ_NY)
+            y = y[["Open", "High", "Low", "Close"]].dropna()
+            y = y[[_OPEN_T <= t.time() < _CLOSE_T for t in y.index]]
+            y["day"] = y.index.normalize()
+            y["slot"] = [t.strftime("%H:%M") for t in y.index.time]
+            h = y
+            source = f"{_INDEX} cash session, hourly"
+        except Exception as e:
+            logger.warning(f"intraday path history failed: {e}")
             return pd.DataFrame()
-        h.index = h.index.tz_convert(_TZ_NY)
-        h = h[["Open", "High", "Low", "Close"]].dropna()
-        h = h[[_OPEN_T <= t.time() < _CLOSE_T for t in h.index]]
-        h["day"] = h.index.normalize()
-        h["slot"] = [t.strftime("%H:%M") for t in h.index.time]
-        full = h.groupby("day")["slot"].nunique()
-        h = h[h["day"].isin(full[full == len(_SLOTS)].index)]
-        _CACHE["hourly"] = (_now(), h)
-        return h
-    except Exception as e:
-        logger.warning(f"intraday path history failed: {e}")
-        return pd.DataFrame()
+
+    full = h.groupby("day")["slot"].nunique()
+    h = h[h["day"].isin(full[full == len(_SLOTS)].index)]
+    # Carried on the frame so the payload names the source it actually used
+    # rather than the one it hoped for.
+    h.attrs["source"] = source
+    _CACHE["hourly"] = (_now(), h)
+    return h
 
 
 def _sessions(h: pd.DataFrame) -> pd.DataFrame:
@@ -482,7 +612,7 @@ def path_base_rates(last: float | None = None,
 
     return {
         "available": True,
-        "source": f"{_INDEX} cash session, hourly",
+        "source": h.attrs.get("source") or f"{_INDEX} cash session, hourly",
         "sessions": n,
         "from": str(s.index.min().date()),
         "to": str(s.index.max().date()),
