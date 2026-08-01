@@ -142,6 +142,22 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Sector RRG pre-warm failed: {e}")
 
+    def _warm_es_brief() -> None:
+        """Prefill the ES session briefing — the lead card on the home page.
+
+        The heaviest first-call on the instance: intraday bars, the SPX option
+        chain for dealer gamma, and a decade of index history for the base
+        rates. Measured at ~37s on a brand-new revision against 0.17s warm, and
+        the home page's server-side prefetch gives up at 20s — so without this
+        the first visitor after a deploy loses the SSR seed for the one card
+        the page is built around and falls back to a client fetch.
+        """
+        try:
+            from api.routes.market import _es_brief_cached
+            _es_brief_cached()
+        except Exception as e:
+            logger.warning(f"ES brief pre-warm failed: {e}")
+
     def _warm_energy() -> None:
         """Prefill the oil + natgas bundle caches. Each bundle does ~10
         parallel EIA fetches the first time; on a cold instance that's the
@@ -299,6 +315,7 @@ async def _warm_caches() -> None:
         loop.run_in_executor(None, _warm_macro_pressure),
         loop.run_in_executor(None, _warm_sector_rrg),
         loop.run_in_executor(None, _warm_sp_valuation),
+        loop.run_in_executor(None, _warm_es_brief),
         loop.run_in_executor(None, _warm_energy),
         loop.run_in_executor(None, _warm_ercot),
     )
