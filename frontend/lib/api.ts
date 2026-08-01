@@ -2816,6 +2816,97 @@ export async function fetchSpValuation(): Promise<SpValuation> {
   return apiFetch("/api/market/sp-valuation", { timeoutMs: 30_000 });
 }
 
+// ─── ES session briefing ─────────────────────────────────────────
+// The top-of-page synthesis for someone trading the E-mini intraday. Bundled
+// server-side on purpose: six separate round-trips would let the panels
+// disagree about what time it is, and the whole point is one coherent read of
+// the session.
+
+export type EsImpact = "high" | "medium" | "low";
+
+export interface EsSessionPhase {
+  /** overnight | europe | premarket | rth_open | rth_midday | rth_close | post | closed */
+  phase: string;
+  label: string;
+  note: string;
+  is_rth: boolean;
+  now: string;
+}
+
+export interface EsScheduleItem {
+  name: string;
+  time_et: string;
+  impact: EsImpact;
+  note: string;
+  /** Rule-derived date rather than a published one — can slip a day. */
+  derived?: boolean;
+  minutes_away: number;
+  status: "upcoming" | "released";
+  before_open: boolean;
+}
+
+export interface EsLevel {
+  key: string;
+  label: string;
+  group: string;
+  note: string;
+  value: number;
+  /** Signed: last - level. Positive means price is above the level. */
+  distance: number;
+  distance_pct: number;
+  side: "above" | "below";
+}
+
+export interface EsLevels {
+  available: boolean;
+  reason?: string;
+  symbol: string;
+  last: number;
+  asof: string;
+  session_date: string;
+  rth_open_bars: number;
+  profile_sessions: number;
+  nearest: EsLevel | null;
+  levels: EsLevel[];
+}
+
+export interface EsNewsItem {
+  source: string;
+  title: string;
+  url: string | null;
+  published: string | null;
+}
+
+export interface EsBrief {
+  available: boolean;
+  asof?: string;
+  session?: EsSessionPhase;
+  schedule?: EsScheduleItem[];
+  next_event?: EsScheduleItem | null;
+  high_impact_today?: EsScheduleItem[];
+  news?: EsNewsItem[];
+  levels?: EsLevels | null;
+  cta?: {
+    bias_1w?: CtaBias;
+    current_exposure?: number;
+    pivots?: Partial<Record<"short_term" | "medium_term" | "long_term", CtaPivot>>;
+    terminal_1w?: Record<string, CtaScenario>;
+  } | null;
+  macro?: {
+    net_label?: string;
+    net_score?: number;
+    counts?: { supportive: number; neutral: number; headwind: number };
+    biggest_headwind?: string;
+    biggest_support?: string;
+  } | null;
+  /** Which upstreams failed — the card degrades per-block rather than 500ing. */
+  degraded?: string[];
+}
+
+export async function fetchEsBrief(): Promise<EsBrief> {
+  return apiFetch("/api/market/es-brief", { timeoutMs: 30_000 });
+}
+
 // ─── Sector Relative Rotation Graph ──────────────────────────────
 
 export type RrgQuadrant = "leading" | "weakening" | "lagging" | "improving";

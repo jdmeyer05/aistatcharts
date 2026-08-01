@@ -27,6 +27,7 @@ import type {
   MacroPressureBoard,
   SectorRrg,
   SpValuation,
+  EsBrief,
 } from "@/lib/api";
 import { normalizeOilBundle } from "@/lib/api";
 
@@ -100,6 +101,13 @@ export function fetchMacroPressureServer() {
 
 export function fetchSpValuationServer() {
   return serverFetch<SpValuation>("/api/market/sp-valuation", 15_000);
+}
+
+export function fetchEsBriefServer() {
+  // Session clock, levels, CTA and macro in one bundled call, cached 3 min
+  // server-side. The longer timeout covers a cold intraday-bar fetch; every
+  // block inside is independently optional, so a partial payload still renders.
+  return serverFetch<EsBrief>("/api/market/es-brief", 20_000);
 }
 
 export function fetchSectorRrgServer(tailWeeks = 4) {

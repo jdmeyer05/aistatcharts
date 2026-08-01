@@ -20,7 +20,7 @@ const geistMono = Geist_Mono({
 const SITE_URL = "https://www.aistatcharts.com";
 const SITE_NAME = "AI Statcharts";
 const SITE_DESC =
-  "Institutional-grade quantitative trading platform: cross-asset volatility analytics, CFTC positioning + CTA modeling, Smart Money tracking (insiders, 13F, activists, congressional), Fama-French factor decomposition, and AI-driven interpretation via Claude Opus 4.7 and GPT-5.";
+  "Institutional-grade quantitative trading platform: cross-asset volatility analytics, CFTC positioning + CTA modeling, Smart Money tracking (insiders, 13F, activists, congressional), Fama-French factor decomposition, and AI-driven interpretation via Claude Opus 5 and GPT-5.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),

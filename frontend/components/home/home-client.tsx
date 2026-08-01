@@ -5,16 +5,21 @@
  *
  * Layout (desktop, stacks on mobile):
  *   1. Market Pulse Strip       (30s refetch)
- *   2. What's Driving Markets   (5 min refetch, backend caches 15 min)
- *   3. Sector Relative  |  Vol Landscape Snapshot     (60s / 5min)
- *   4. S&P Valuation strip                             (60 min refetch)
- *   5. Sector Rotation  |  CTA Positioning             (30 min / 30 min)
- *   6. Macro Pressure — equity-impact scorecard        (30 min refetch)
- *   7. News             |  Trump / Tweet Watch         (derived / 2min)
- *   8. Macro Calendar — next 14 days                   (10 min refetch)
+ *   2. ES Session Briefing      (3 min refetch — levels develop intraday)
+ *   3. What's Driving Markets   (5 min refetch, backend caches 15 min)
+ *   4. Sector Relative  |  Vol Landscape Snapshot     (60s / 5min)
+ *   5. S&P Valuation strip                             (60 min refetch)
+ *   6. Sector Rotation  |  CTA Positioning             (30 min / 30 min)
+ *   7. Macro Pressure — equity-impact scorecard        (30 min refetch)
+ *   8. News             |  Trump / Tweet Watch         (derived / 2min)
+ *   9. Macro Calendar — next 14 days                   (10 min refetch)
+ *
+ * The briefing leads because this page is used as an intraday ES cockpit:
+ * it is the only card scoped to the current session, and everything below it
+ * runs on a swing horizon.
  *
  * The page shell is a Server Component (`app/page.tsx`) which prefetches
- * all ten endpoints in parallel and ships dehydrated query state via
+ * all eleven endpoints in parallel and ships dehydrated query state via
  * HydrationBoundary. This component picks up the cache instantly on
  * hydration — no fetch waterfall on first paint — then refetches on its
  * normal cadence in the background.
@@ -34,6 +39,7 @@ import {
   type TrumpPost,
 } from "@/lib/api";
 import { PULSE_TICKERS, PULSE_LABELS } from "@/lib/home-constants";
+import EsBriefing from "@/components/home/es-briefing";
 import CtaFlows from "@/components/home/cta-flows";
 import MacroPressure from "@/components/home/macro-pressure";
 import SectorRrgCard from "@/components/home/sector-rrg";
@@ -422,6 +428,7 @@ export default function HomeClient() {
   return (
     <div className="space-y-4">
       <MarketPulse />
+      <EsBriefing />
       <MarketDriverCard />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <SectorRelative />

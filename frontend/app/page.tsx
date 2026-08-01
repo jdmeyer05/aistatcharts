@@ -32,6 +32,7 @@ import {
   fetchMacroPressureServer,
   fetchSectorRrgServer,
   fetchSpValuationServer,
+  fetchEsBriefServer,
 } from "@/lib/api-server";
 
 export const revalidate = 30;
@@ -41,7 +42,7 @@ export default async function HomePage() {
   const queryClient = new QueryClient();
 
   const tickers = [...PULSE_TICKERS];
-  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows, macroPressure, sectorRrg, spValuation] = await Promise.all([
+  const [pulse, driver, heatmap, volLandscape, trumpMonitor, events, ctaFlows, macroPressure, sectorRrg, spValuation, esBrief] = await Promise.all([
     fetchSnapshotServer(tickers),
     fetchMarketDriverServer(),
     fetchHeatmapServer("sectors"),
@@ -52,6 +53,7 @@ export default async function HomePage() {
     fetchMacroPressureServer(),
     fetchSectorRrgServer(4),
     fetchSpValuationServer(),
+    fetchEsBriefServer(),
   ]);
 
   // Seed the dehydrated cache only when the upstream call succeeded —
@@ -91,6 +93,11 @@ export default async function HomePage() {
   }
   if (spValuation?.available) {
     queryClient.setQueryData(["sp-valuation"], spValuation);
+  }
+  // Same rule again — an unavailable briefing would pin the card to its error
+  // state for the whole staleTime rather than letting the client retry.
+  if (esBrief?.available) {
+    queryClient.setQueryData(["es-brief"], esBrief);
   }
 
   return (

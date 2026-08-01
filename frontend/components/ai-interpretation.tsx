@@ -19,7 +19,7 @@ interface Props {
 }
 
 /**
- * Claude Opus 4.7 interpretation panel — embed at the bottom of any data-rich
+ * Claude Opus 5 interpretation panel — embed at the bottom of any data-rich
  * page. Collapsed-by-default: user clicks to pay for a Claude call. Result
  * caches for the page's lifetime (same data won't retrigger until the user
  * re-clicks).
@@ -47,7 +47,7 @@ export function AIInterpretation({ page, data, subject, disabled, buttonLabel }:
           <div className="text-sm font-bold flex items-center gap-2">
             <span>AI Interpretation</span>
             <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-accent/20 text-accent">
-              Claude Opus 4.7
+              Claude Opus 5
             </span>
           </div>
           <div className="text-xs text-text-muted">
