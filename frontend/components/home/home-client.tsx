@@ -173,6 +173,27 @@ function MarketDriverCard() {
         </p>
       )}
 
+      {/* The endpoint answers 200 with empty paragraphs when the model's output
+          couldn't be used, so an empty body is a failure the card has to name —
+          otherwise it renders as a blank panel that looks like it is still
+          loading. Not cached server-side, so Refresh genuinely retries. */}
+      {d && !d.paragraphs?.what_happened && (
+        <div className="py-4 flex items-baseline gap-2 flex-wrap">
+          <p className="text-xs text-text-muted">
+            The model&apos;s output couldn&apos;t be read this cycle
+            {d.error ? ` (${d.error})` : ""}.
+          </p>
+          <button
+            type="button"
+            onClick={() => q.refetch()}
+            disabled={q.isFetching}
+            className="text-[0.65rem] text-accent hover:underline disabled:opacity-50"
+          >
+            {q.isFetching ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      )}
+
       {d && (
         <>
           <div className="space-y-2.5 text-sm leading-relaxed text-text">

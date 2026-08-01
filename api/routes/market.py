@@ -3026,9 +3026,19 @@ async def market_driver(
     )
 
     model_used = "claude-opus-5" if escalate else "gemini-3.1-pro-preview"
-    raw_output = ""
 
-    try:
+    def _generate() -> str:
+        """One generation attempt. Raises on a truncated response.
+
+        BUDGETS HERE COVER REASONING, NOT JUST PROSE. Both models think before
+        answering and those tokens are charged against the SAME output limit,
+        so a budget sized for the visible answer silently truncates it. Gemini
+        was measured at 1,700-2,800 thinking tokens against ~400 of actual JSON
+        on a 4,000 cap — leaving barely a thousand for the answer, so any
+        verbose day overran it and produced unparseable half-JSON. The old
+        comment reasoned from the ~180-word prose cap, which is exactly the
+        wrong quantity to size against.
+        """
         if escalate:
             import anthropic
             key = get_secret("ANTHROPIC_API_KEY")
@@ -3037,44 +3047,87 @@ async def market_driver(
             client = anthropic.Anthropic(api_key=key)
             msg = client.beta.messages.create(
                 model="claude-opus-5",
-                max_tokens=6000,  # thinking + ~2k of prose
+                max_tokens=12000,          # thinking + prose, not prose alone
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
-                system=[{"type": "text", "text": _MARKET_DRIVER_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+                system=[{"type": "text", "text": _MARKET_DRIVER_SYSTEM,
+                         "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user_message}],
             )
-            raw_output = _claude_text(msg)
-        else:
-            from google import genai
-            from google.genai import types
-            key = get_secret("GEMINI_API_KEY")
-            if not key:
-                raise RuntimeError("GEMINI_API_KEY not configured")
-            client = genai.Client(api_key=key)
-            resp = client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=f"{_MARKET_DRIVER_SYSTEM}\n\n{user_message}",
-                config=types.GenerateContentConfig(
-                    # 4000 is generous; the prompt caps output at ~180 words
-                    # total. Extra budget absorbs Gemini's internal chain-of-
-                    # thought tokens which are counted against the limit.
-                    max_output_tokens=4000,
-                    temperature=0.25,
-                    response_mime_type="application/json",
-                ),
-            )
-            raw_output = resp.text or ""
-    except Exception as e:
-        logger.warning(f"market-driver generation failed: {e} | raw_output_len={len(raw_output)}")
-        # Graceful fallback: surface the context itself so the UI isn't empty.
+            if getattr(msg, "stop_reason", None) == "max_tokens":
+                raise RuntimeError("response truncated at max_tokens")
+            return _claude_text(msg)
+
+        from google import genai
+        from google.genai import types
+        key = get_secret("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError("GEMINI_API_KEY not configured")
+        client = genai.Client(api_key=key)
+        resp = client.models.generate_content(
+            model="gemini-3.1-pro-preview",
+            contents=f"{_MARKET_DRIVER_SYSTEM}\n\n{user_message}",
+            config=types.GenerateContentConfig(
+                max_output_tokens=12000,
+                temperature=0.25,
+                response_mime_type="application/json",
+                # Pinned rather than left to the model default. This is a
+                # well-specified extraction against a fixed schema, and the
+                # unstated default burned ~2,500 tokens where 'medium' does the
+                # job in ~1,700 with no loss of quality. Pinning also means the
+                # budget maths above can't be invalidated by a default changing.
+                thinking_config=types.ThinkingConfig(thinking_level="medium"),
+            ),
+        )
+        cand = (resp.candidates or [None])[0]
+        finish = str(getattr(cand, "finish_reason", "") or "")
+        if "MAX_TOKENS" in finish.upper():
+            raise RuntimeError(f"response truncated: finish_reason={finish}")
+        return resp.text or ""
+
+    def _parse(raw: str) -> dict | None:
+        """Parse the model's JSON, or None. Gemini returns JSON directly when
+        response_mime_type is set; Claude may wrap it in a code fence."""
+        txt = (raw or "").strip()
+        if txt.startswith("```"):
+            txt = txt.strip("`").lstrip("json").strip()
+        if not txt:
+            return None
+        try:
+            obj = json.loads(txt)
+        except Exception:
+            return None
+        # A parse that yields no narrative is a failure wearing a success's
+        # clothes — the card would render three empty paragraphs.
+        if not isinstance(obj, dict) or not (obj.get("paragraphs") or {}).get("what_happened"):
+            return None
+        return obj
+
+    # Two attempts. A truncation or a malformed blob is usually transient, and
+    # the alternative is serving a broken card for a full cache cycle.
+    parsed: dict | None = None
+    last_error = ""
+    for attempt in (1, 2):
+        try:
+            parsed = _parse(_generate())
+            if parsed:
+                break
+            last_error = "model returned unparseable or empty JSON"
+            logger.warning(f"market-driver parse failed (attempt {attempt})")
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"market-driver generation failed (attempt {attempt}): {e}")
+
+    if not parsed:
+        # NOT CACHED. The previous version cached whatever came back, so a
+        # single bad generation pinned a "parse-failure" card — raw JSON dumped
+        # into the page — for the full 15 minutes. Returning uncached means the
+        # next refresh retries instead of re-serving the wreckage.
+        logger.error(f"market-driver unavailable after 2 attempts: {last_error}")
         return {
-            "error": str(e),
+            "error": last_error,
             "regime_label": "unavailable",
-            "paragraphs": {
-                "what_happened": "",
-                "whats_driving": "",
-                "what_to_watch": "",
-            },
+            "paragraphs": {"what_happened": "", "whats_driving": "", "what_to_watch": ""},
             "citations": [],
             "confidence": 0,
             "model": model_used,
@@ -3082,22 +3135,6 @@ async def market_driver(
             "as_of_utc": ctx["as_of"],
             "cache_hit": False,
             "quotes": ctx.get("quotes", {}),
-        }
-
-    # Parse model output. Gemini returns JSON directly when response_mime_type is set;
-    # Claude may wrap in a code fence. Strip fence conservatively.
-    txt = raw_output.strip()
-    if txt.startswith("```"):
-        txt = txt.strip("`").lstrip("json").strip()
-    try:
-        parsed = json.loads(txt)
-    except Exception as e:
-        logger.warning(f"market-driver JSON parse failed: {e}; raw={raw_output[:400]}")
-        parsed = {
-            "regime_label": "parse-failure",
-            "paragraphs": {"what_happened": txt[:800], "whats_driving": "", "what_to_watch": ""},
-            "citations": [],
-            "confidence": 0,
         }
 
     result = {
