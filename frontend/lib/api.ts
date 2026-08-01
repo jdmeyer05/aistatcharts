@@ -3108,6 +3108,13 @@ export interface EsCandleContext {
     n: number; next_up_pct: number; median_next_ret_pct: number;
     t: number; p: number; ic?: number | null; ic_t?: number | null; note: string;
   } | null;
+  /** All five close-location buckets, so the card can show the effect is
+   *  MONOTONIC — the only reason to believe a 10bp edge. Served from the study
+   *  rather than hardcoded client-side, which would drift on regeneration. */
+  close_location_curve?: Array<{
+    bucket: number; n: number; next_up_pct: number;
+    median_next_ret_pct: number; is_today: boolean;
+  }>;
   /** Options-implied range against the empirical one — two estimates of the same
    *  quantity from unrelated inputs. Present only when both exist. */
   vs_implied?: {

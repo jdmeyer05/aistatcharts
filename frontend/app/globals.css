@@ -32,6 +32,12 @@
   /* Second categorical hue for 2-series charts. Warm/cool against accent so the
      pair separates under CVD: validated ΔE 32.3 protan, 39.6 normal-vision. */
   --color-series2: #d97706;
+  /* Caution/stale/warn. Used as TEXT in 19 places (text-spot, bg-spot,
+     border-l-spot) that were silently painting NOTHING because this token was
+     never defined — the intended amber lives only in lib/chart-theme.ts, for
+     Plotly. #f59e0b from there is 2.15:1 on white, a WCAG fail for text, so the
+     light step is darkened to 5.02:1. */
+  --color-spot: #b45309;
 
   /* Semantic — muted market colors */
   --color-gain: #0f7b3f;
@@ -75,6 +81,8 @@ html.dark, .dark {
   /* Dark step CHOSEN, not flipped — #d97706 against the dark accent validates
      ΔE 29.7 protan and sits inside the dark lightness band. */
   --color-series2: #d97706;
+  /* Caution/stale/warn, dark step: 8.43:1 on this surface. */
+  --color-spot: #f59e0b;
 
   --color-gain: #34d058;
   --color-gain-bg: #0d2818;

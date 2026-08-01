@@ -27,28 +27,22 @@
 
 import type { EsCandleContext } from "@/lib/api";
 
-const CLV_BUCKETS = [
-  { label: "bottom fifth", up: 53.2, med: 0.133 },
-  { label: "lower-mid", up: 51.8, med: 0.074 },
-  { label: "mid", up: 51.2, med: 0.053 },
-  { label: "upper-mid", up: 51.5, med: 0.061 },
-  { label: "top fifth", up: 50.7, med: 0.035 },
-];
-
-function bucketOf(clv: number): number {
-  if (clv < 0.2) return 0;
-  if (clv < 0.4) return 1;
-  if (clv < 0.6) return 2;
-  if (clv < 0.8) return 3;
-  return 4;
-}
+// Labels only. The NUMBERS come from the payload — hardcoding them here would
+// let the card drift silently the first time the study is regenerated, and the
+// backend already knows which bucket today's bar landed in.
+const CLV_LABELS = ["bottom fifth", "lower-mid", "mid", "upper-mid", "top fifth"];
 
 /** A literal candle, scaled so 1 ATR is a fixed height. */
 function CandleGlyph({ bar }: { bar: NonNullable<EsCandleContext["bar"]> }) {
-  const H = 74;               // px for 1 ATR
+  // The glyph must fit a FIXED box. Scaling a fixed px-per-ATR meant a 3-ATR
+  // session rendered a 246px-tall SVG that shoved the layout apart — rare, and
+  // exactly the kind of day you would be looking at the card. So the box is
+  // fixed and the ATR rule scales inside it instead.
+  const BOX = 74;             // px the tallest element may occupy
   const pad = 12;
-  const total = bar.range_atr;
-  const scale = H;            // 1 ATR -> H px
+  const total = Math.max(bar.range_atr, 0.05);
+  const scale = BOX / Math.max(total, 1);   // 1 ATR is BOX px until range exceeds it
+  const H = scale;            // length of the 1-ATR reference rule
   const h = Math.max(total * scale, 2);
   const up = bar.body_atr >= 0;
   const bodyH = Math.max(Math.abs(bar.body_atr) * scale, 1.5);
@@ -141,7 +135,7 @@ function RangeBars({ d }: { d: EsCandleContext }) {
 export default function CandleContextBlock({ d }: { d: EsCandleContext | null | undefined }) {
   if (!d?.available || !d.bar) return null;
   const bar = d.bar;
-  const here = bucketOf(bar.close_location);
+  const curve = d.close_location_curve ?? [];
   const div = d.vs_implied;
 
   return (
@@ -181,36 +175,33 @@ export default function CandleContextBlock({ d }: { d: EsCandleContext | null | 
       </div>
 
       {/* Ordered ramp, today highlighted. Exists to make the monotonicity visible. */}
-      {d.direction_tilt && (
+      {d.direction_tilt && curve.length > 0 && (
         <div>
           <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-1">
             Where it closed → next session (measured, monotonic)
           </div>
           <div className="flex gap-[2px]">
-            {CLV_BUCKETS.map((b, i) => (
-              <div key={b.label} className="flex-1 min-w-0"
-                   title={`Closed ${b.label}: up ${b.up}% next session, median ${b.med >= 0 ? "+" : ""}${b.med}%.`}>
-                <div
-                  className={`h-6 rounded-sm flex items-end justify-center ${
-                    i === here ? "ring-1 ring-accent" : ""
-                  }`}
-                  style={{
-                    background: `color-mix(in oklab, var(--color-accent) ${14 + (4 - i) * 9}%, transparent)`,
-                  }}
-                >
-                  <span className={`text-[0.5rem] tabular-nums pb-0.5 ${
-                    i === here ? "text-text font-semibold" : "text-text-muted"
-                  }`}>
-                    {b.up.toFixed(1)}
-                  </span>
+            {curve.map((b, i) => {
+              // Shade by POSITION in the ordered sequence, never by value — an
+              // ordinal ramp, not a value ramp on nominal categories.
+              const shade = 14 + (curve.length - 1 - i) * 9;
+              return (
+                <div key={b.bucket} className="flex-1 min-w-0"
+                     title={`Closed ${CLV_LABELS[b.bucket] ?? b.bucket}: up ${b.next_up_pct.toFixed(1)}% next session over ${b.n.toLocaleString()} instances, median ${b.median_next_ret_pct >= 0 ? "+" : ""}${b.median_next_ret_pct.toFixed(3)}%.`}>
+                  <div
+                    className={`h-6 rounded-sm flex items-end justify-center ${b.is_today ? "ring-1 ring-accent" : ""}`}
+                    style={{ background: `color-mix(in oklab, var(--color-accent) ${shade}%, transparent)` }}
+                  >
+                    <span className={`text-[0.5rem] tabular-nums pb-0.5 ${b.is_today ? "text-text font-semibold" : "text-text-muted"}`}>
+                      {b.next_up_pct.toFixed(1)}
+                    </span>
+                  </div>
+                  <div className={`text-[0.45rem] text-center mt-0.5 truncate ${b.is_today ? "text-accent" : "text-text-muted"}`}>
+                    {b.is_today ? "today" : (CLV_LABELS[b.bucket] ?? "")}
+                  </div>
                 </div>
-                <div className={`text-[0.45rem] text-center mt-0.5 truncate ${
-                  i === here ? "text-accent" : "text-text-muted"
-                }`}>
-                  {i === here ? "today" : b.label}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <p className="text-[0.52rem] text-text-muted leading-snug mt-1.5">
             A strong close predicts <span className="text-text">weakness</span>, not follow-through

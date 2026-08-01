@@ -197,6 +197,18 @@ def candle_context(symbol: str, bars=None) -> dict:
                      f"is inside the daily noise three times out of four."),
         }
 
+    # The whole five-bucket curve, not just today's cell. The card draws the
+    # strip to show the effect is MONOTONIC — that is the only reason to believe
+    # a 10bp edge — and hardcoding these numbers in the frontend would let them
+    # drift silently the first time the study is regenerated.
+    curve = []
+    for i in range(len(meta["clv_edges"]) - 1):
+        row = T["clv_table"].get(str(i))
+        if not row:
+            continue
+        curve.append({"bucket": i, "n": row["n"], "next_up_pct": row["up"],
+                      "median_next_ret_pct": row["med_ret"], "is_today": i == cb})
+
     direction = None
     if ct:
         ics = T.get("ics", {}).get("clv->fwd_ret", {})
@@ -226,6 +238,7 @@ def candle_context(symbol: str, bars=None) -> dict:
         },
         "tomorrow_range": forecast,
         "direction_tilt": direction,
+        "close_location_curve": curve,
         "study": {
             "bars": meta.get("bars"), "sessions": meta.get("sessions"),
             "names": meta.get("names"), "from": meta.get("sample_from"),
