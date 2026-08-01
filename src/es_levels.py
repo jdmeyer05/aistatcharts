@@ -28,7 +28,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-SYMBOL = "ES=F"
+SYMBOL = "ES"          # product code; the traded contract is resolved per-day
 _TZ = "America/New_York"
 _RTH_OPEN = (9, 30)
 _RTH_CLOSE = (16, 0)
@@ -41,20 +41,31 @@ _VALUE_AREA = 0.70   # conventional 70% of volume around the POC
 _PROFILE_MIN_BARS = 24        # 2 hours of 5-minute bars
 
 
+_CONTRACT: dict[str, str | None] = {"ticker": None}
+
+
 def _fetch_bars(days: int = 5, interval: str = "5m") -> pd.DataFrame:
-    """5-minute ES bars in exchange local time. yf.Ticker().history(), never
-    yf.download() — the latter is not thread-safe and this runs in a pool."""
-    try:
-        import yfinance as yf
-        df = yf.Ticker(SYMBOL).history(period=f"{days}d", interval=interval, auto_adjust=False)
-        if df.empty:
-            return df
-        idx = pd.to_datetime(df.index)
-        df.index = idx.tz_convert(_TZ) if idx.tz is not None else idx.tz_localize("UTC").tz_convert(_TZ)
-        return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-    except Exception as e:
-        logger.warning(f"ES bar fetch failed: {e}")
+    """5-minute bars for the front ES contract, in exchange local time.
+
+    Real CME data via `futures_data`, not yfinance's `ES=F`. The old source was
+    the least reliable input on this page — it rate-limited, and its roll is
+    opaque, so the overnight session this module is built around was the part
+    most often missing. The Massive feed carries every ET hour except 17:00,
+    which is the settlement break rather than a gap.
+    """
+    from src.futures_data import fetch_front_bars
+
+    # ES trades ~23h, so a session is ~276 five-minute bars. Ask for the window
+    # in bars rather than days because the endpoint pages by row count.
+    per_day = {"1m": 1380, "5m": 276, "15m": 92, "1h": 23}.get(interval, 276)
+    resolution = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1hour"}.get(interval, "5min")
+    bars, ticker = fetch_front_bars(SYMBOL, resolution=resolution,
+                                    limit=min(int(per_day * days * 1.1) + 50, 50000))
+    _CONTRACT["ticker"] = ticker
+    if bars is None or bars.empty:
+        logger.warning("ES bar fetch returned nothing")
         return pd.DataFrame()
+    return bars
 
 
 def _is_rth(ts: pd.Timestamp) -> bool:
@@ -134,13 +145,17 @@ def _quarterly_expiry(year: int, month: int) -> pd.Timestamp:
 def _contract_roll_risk(day: pd.Timestamp) -> bool:
     """Whether `day` sits in a quarterly roll window.
 
-    `ES=F` is a CONTINUOUS front-month series: when volume rolls to the next
-    quarterly contract the series steps by the roll spread — tens of handles —
-    without anything in the data marking it. Prior-session levels can then be
-    from the expiring contract while the last price is the new one, and every
-    distance measured against them is wrong by that spread.
+    This used to flag a data defect: `ES=F` was a stitched continuous series that
+    stepped by the roll spread — tens of handles — with nothing in the data
+    marking it, so prior-session levels could be from the expiring contract while
+    the last price was the new one. Now that bars come from ONE named contract,
+    that discontinuity cannot occur: every level and the last price are the same
+    instrument by construction.
 
-    We can't repair that without contract-specific data, so we flag it. Volume
+    What remains is narrower and still worth saying. On the day volume migrates,
+    the front month this module resolves to changes, so "prior session high"
+    starts describing a contract the trader was not watching yesterday. The
+    levels are internally consistent; their reference just moved. Volume
     migrates around the Thursday eight days before expiry, so the window opens
     ~10 days out and closes at expiration.
     """
@@ -370,6 +385,10 @@ def es_levels(profile_sessions: int = 1, now: pd.Timestamp | None = None,
     return {
         "available": True,
         "symbol": SYMBOL,
+        # Which contract these levels are actually measured on. Now that this is
+        # a single named expiry rather than a stitched series, saying so is the
+        # difference between a level a trader can act on and one they can't.
+        "contract": _CONTRACT.get("ticker"),
         "last": round(last, 2),
         "asof": last_bar_ts.isoformat(),
         "bar_age_min": bar_age_min,
