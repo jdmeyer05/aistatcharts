@@ -23,8 +23,9 @@ Entitlement, measured rather than assumed (Futures Basic, the free tier):
 from __future__ import annotations
 
 import logging
+import threading
 import time as _time
-from datetime import date as _date, datetime as _datetime
+from datetime import date as _date
 
 import pandas as pd
 
@@ -33,11 +34,25 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.massive.com"
 _TZ = "America/New_York"
 
-# Basic allows 5 requests/minute. Everything here is cached hard, and a 429 is
-# retried rather than treated as an outage — on the free tier it is the expected
-# steady state under any concurrency, not an error.
-_RATE_LIMIT_SLEEP = 13.0
-_MAX_RETRIES = 4
+# Basic allows 5 requests/minute. Bursting and retrying loses calls: a 9-contract
+# history build dropped two contracts that way and silently produced a 450-session
+# study where 494 was available — the numbers still looked plausible, which is the
+# dangerous part. PACE the requests instead so a 429 is rare rather than routine.
+_MIN_INTERVAL = 12.5      # seconds between calls; 5/min with headroom
+_RATE_LIMIT_SLEEP = 15.0
+_MAX_RETRIES = 6
+
+_last_request = [0.0]
+_pace_lock = threading.Lock()
+
+
+def _pace() -> None:
+    """Serialise and space requests to stay inside the free tier's 5/min."""
+    with _pace_lock:
+        wait = _MIN_INTERVAL - (_time.time() - _last_request[0])
+        if wait > 0:
+            _time.sleep(wait)
+        _last_request[0] = _time.time()
 
 _bar_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
 _front_cache: dict[str, tuple[_date, str]] = {}
@@ -54,6 +69,7 @@ def _get(path: str, **params) -> dict | None:
             return None
         headers = {"Authorization": f"Bearer {key}"}
         for attempt in range(_MAX_RETRIES):
+            _pace()
             r = requests.get(f"{_BASE}{path}", params=params, headers=headers, timeout=30)
             if r.status_code == 429:
                 _time.sleep(_RATE_LIMIT_SLEEP)
