@@ -2813,16 +2813,28 @@ def _es_brief_cached() -> dict:
             return None
 
     from src.es_session import es_session_brief
-    from src.es_levels import es_levels
+    from src.es_cockpit import es_cockpit, conditions_gate
     from src.cta_model import cta_flow_board
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         f_sess = pool.submit(_safe, es_session_brief, "session")
-        f_lvl = pool.submit(_safe, es_levels, "levels")
+        # One call fetches the bars once and derives a single session model for
+        # levels, intraday structure, expected move, gamma and base rates.
+        f_cock = pool.submit(_safe, es_cockpit, "cockpit")
         f_cta = pool.submit(_safe, lambda: cta_flow_board("13874A"), "cta")
         f_macro = pool.submit(_safe, lambda: _macro_pressure_cached("3Y"), "macro")
 
-    sess, lvl, cta, macro = f_sess.result(), f_lvl.result(), f_cta.result(), f_macro.result()
+    sess, cock, cta, macro = f_sess.result(), f_cock.result(), f_cta.result(), f_macro.result()
+    cock = cock or {}
+    lvl = cock.get("levels")
+
+    gate = None
+    if cock.get("available"):
+        gate = _safe(lambda: conditions_gate(
+            lvl or {}, cock.get("intraday") or {}, cock.get("expected_move") or {},
+            cock.get("gamma") or {}, (sess or {}).get("session") or {},
+            (sess or {}).get("schedule") or [],
+        ), "conditions")
 
     out = {
         "available": bool(sess or lvl),
@@ -2835,6 +2847,12 @@ def _es_brief_cached() -> dict:
         "high_impact_today": (sess or {}).get("high_impact_today", []),
         "news": (sess or {}).get("news", []),
         "levels": lvl if (lvl or {}).get("available") else None,
+        "intraday": cock.get("intraday"),
+        "expected_move": cock.get("expected_move"),
+        "gamma": cock.get("gamma"),
+        "base_rates": cock.get("base_rates"),
+        "conditions": gate,
+        "gap_pct": cock.get("gap_pct"),
         "cta": {
             "bias_1w": (cta or {}).get("bias_1w"),
             "current_exposure": (cta or {}).get("current_exposure"),
@@ -2848,7 +2866,9 @@ def _es_brief_cached() -> dict:
             "biggest_headwind": ((macro or {}).get("biggest_headwind") or {}).get("label"),
             "biggest_support": ((macro or {}).get("biggest_support") or {}).get("label"),
         } if (macro or {}).get("available") else None,
-        "degraded": [k for k, v in (("session", sess), ("levels", lvl), ("cta", cta), ("macro", macro)) if not v],
+        "degraded": ([k for k, v in (("session", sess), ("levels", lvl),
+                                     ("cta", cta), ("macro", macro)) if not v]
+                     + list(cock.get("degraded") or [])),
     }
     if out["available"]:
         _ES_BRIEF_CACHE["v"] = (_now(), out)

@@ -74,9 +74,12 @@ FOMC_SEP_DATES = [
 # importance — GDP matters more to an economist than it does to the tape.
 _FRED_RELEASES: dict[int, tuple[str, int, int, str, str]] = {
     10:  ("CPI", 8, 30, "high",
-          "Largest single-print ES range expansion of a typical month."),
+          "The most-watched inflation print — but measured, CPI sessions run only ~1.0x a "
+          "normal full-session range (10y, 5y and 3y windows all agree). The violence is in "
+          "the first half hour and often retraces; don't size the whole day for it."),
     50:  ("Nonfarm payrolls", 8, 30, "high",
-          "The other top-tier print. Revisions matter as much as the headline."),
+          "Revisions matter as much as the headline. Measured at ~1.1-1.2x a normal session "
+          "range — the widest of the regular monthly prints."),
     54:  ("PCE / personal income", 8, 30, "high",
           "The Fed's preferred inflation gauge, but it lands weeks after the CPI "
           "that already telegraphed it — so it moves ES less than its billing."),

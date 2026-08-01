@@ -39,6 +39,9 @@ const fmtPx = (n: number) => n.toFixed(2);
 /** ES trades in quarter-points; "handles" is the trader's word for index points. */
 const fmtHandles = (n: number) => `${n > 0 ? "+" : ""}${n.toFixed(2)}`;
 
+const pctClass = (n: number | null | undefined) =>
+  n == null || n === 0 ? "text-text-muted" : n > 0 ? "text-gain" : "text-loss";
+
 function fmtCountdown(mins: number): string {
   const a = Math.abs(mins);
   const d = Math.floor(a / 1440);
@@ -92,6 +95,14 @@ const PHASE_CLASS: Record<string, string> = {
 
 /** Group → ladder accent. Overnight is deliberately dimmer than the RTH
  *  groups: those levels are made on thin volume and break more easily. */
+const CONDITION_CLASS: Record<string, string> = {
+  favourable: "border-gain/40 bg-gain/5",
+  workable: "border-border bg-surface-alt/30",
+  poor: "border-amber-400/40 bg-amber-500/5",
+  "stand aside": "border-loss/40 bg-loss/5",
+  "market closed": "border-border bg-surface-alt/30",
+};
+
 const GROUP_CLASS: Record<string, string> = {
   Today: "border-l-accent",
   "Prior session": "border-l-spot",
@@ -104,6 +115,8 @@ const GROUP_CLASS: Record<string, string> = {
 interface Read {
   location: string;
   structure: string | null;
+  room: string | null;
+  regime: string | null;
   clock: string | null;
   lean: string | null;
 }
@@ -227,6 +240,58 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
   }
   const structure = structBits.length ? `${structBits.join(", and ")}.` : null;
 
+  /* 2b. Room — how much of the day's expected range is left. This is the
+     sizing clause: a level three-quarters of an expected range away is not a
+     realistic target for a session that has already spent most of it. */
+  let room: string | null = null;
+  const em = d.expected_move;
+  if (em?.available && em.expected_range) {
+    // The estimate always describes the session AHEAD, so say so when that
+    // isn't today — otherwise a weekend read sounds like a live one.
+    const when = lv.mode === "last_session" ? "for the next session" : "today";
+    const bits: string[] = [
+      `The market is pricing a ${em.expected_range.toFixed(0)}-handle range ${when} ` +
+        `(${em.headline?.source ?? "implied"})`,
+    ];
+    if (em.consumed) {
+      bits.push(
+        `${em.consumed.pct.toFixed(0)}% of it is already spent` +
+          (em.consumed.pct >= 100
+            ? " — continuation from here is the tail, not the base case"
+            : em.consumed.pct <= 40
+              ? " — the day is still coiled"
+              : "")
+      );
+    } else if (em.overnight) {
+      bits.push(`the overnight range alone has used ${em.overnight.pct_of_expected.toFixed(0)}% of it`);
+    }
+    if (em.vol_regime && em.vol_regime.label !== "in line") {
+      bits.push(
+        em.vol_regime.label === "implied rich"
+          ? "options are pricing more movement than ES has been delivering"
+          : "ES has been moving more than options are pricing"
+      );
+    }
+    room = `${bits.join(", and ")}.`;
+  }
+
+  /* 2c. Regime — which way dealer hedging cuts. This decides whether the
+     location read above argues for fading or for following. */
+  let regime: string | null = null;
+  const gam = d.gamma;
+  if (gam?.available && gam.regime) {
+    const side = gam.above_flip ? "above" : "below";
+    regime =
+      `Dealers are net ${gam.regime} gamma` +
+      (gam.flip_es != null ? `, with price ${side} the gamma flip at ${fmtPx(gam.flip_es)}` : "") +
+      (gam.regime === "long"
+        ? " — hedging leans against moves, so breakouts struggle and rotation is the base case."
+        : " — hedging amplifies moves, so fading extremes is the losing side here.") +
+      (gam.call_wall_es != null && gam.put_wall_es != null
+        ? ` Heaviest strikes sit at ${fmtPx(gam.put_wall_es)} and ${fmtPx(gam.call_wall_es)}.`
+        : "");
+  }
+
   /* 3. The clock. */
   let clock: string | null = null;
   const upcoming = (d.schedule ?? []).filter((e) => liveMins(e) > 0);
@@ -265,7 +330,7 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
     ? `Swing-horizon lean: ${leanBits.join(", ")}. Context for which way to lean, not an intraday trigger.`
     : null;
 
-  return { location, structure, clock, lean };
+  return { location, structure, room, regime, clock, lean };
 }
 
 /* ─── card ────────────────────────────────────────────────────── */
@@ -458,11 +523,52 @@ export default function EsBriefing() {
             </div>
           )}
 
+          {/* Conditions gate. Leads because "should I engage with this session
+              at all" precedes every other question on the card, and standing
+              aside is the decision that saves the most money. */}
+          {d.conditions?.available && (
+            <div className={`border rounded px-3 py-2 ${CONDITION_CLASS[d.conditions.verdict] ?? "border-border"}`}>
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                  Conditions
+                </span>
+                <span className="text-xs font-bold uppercase tracking-wide">
+                  {d.conditions.verdict}
+                </span>
+                {d.conditions.score != null && (
+                  <span className="text-[0.6rem] tabular-nums text-text-muted">
+                    score {d.conditions.score > 0 ? "+" : ""}{d.conditions.score}
+                  </span>
+                )}
+                <span className="text-[0.65rem] text-text">{d.conditions.note}</span>
+              </div>
+              {d.conditions.reasons.length > 0 && (
+                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                  {d.conditions.reasons.map((r, i) => (
+                    <span key={i} className="text-[0.6rem] whitespace-nowrap" title={r.why}>
+                      <span
+                        className={`tabular-nums font-semibold ${
+                          r.effect > 0 ? "text-gain" : r.effect < 0 ? "text-loss" : "text-text-muted"
+                        }`}
+                      >
+                        {r.effect > 0 ? "+" : ""}{r.effect}
+                      </span>{" "}
+                      <span className="text-text-muted">{r.factor}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="text-[0.55rem] text-text-muted mt-1">{d.conditions.disclaimer}</p>
+            </div>
+          )}
+
           {/* the read */}
           {read && (
             <div className="border-l-2 border-l-accent bg-accent/5 px-3 py-2 rounded-r text-[0.7rem] leading-relaxed space-y-1">
               {read.location && <p className="text-text">{read.location}</p>}
               {read.structure && <p className="text-text">{read.structure}</p>}
+              {read.room && <p className="text-text">{read.room}</p>}
+              {read.regime && <p className="text-text">{read.regime}</p>}
               {read.clock && <p className="text-text">{read.clock}</p>}
               {read.lean && <p className="text-text-muted">{read.lean}</p>}
             </div>
@@ -665,6 +771,306 @@ export default function EsBriefing() {
             </div>
           </div>
 
+          {/* ── expected move · dealer gamma · session structure ── */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-border pt-3">
+            {/* expected move */}
+            <div className="space-y-1.5">
+              <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                Expected move — room to run
+              </h3>
+              {!d.expected_move?.available ? (
+                <p className="text-[0.65rem] text-text-muted">Expected move unavailable.</p>
+              ) : (
+                <>
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className="text-sm font-bold tabular-nums">
+                      ±{d.expected_move.expected_handles?.toFixed(0)}
+                    </span>
+                    <span className="text-[0.6rem] text-text-muted">
+                      1σ · range ~{d.expected_move.expected_range?.toFixed(0)} handles
+                    </span>
+                  </div>
+                  {d.expected_move.lower != null && d.expected_move.upper != null && (
+                    <div className="text-[0.62rem] tabular-nums text-text-muted">
+                      {fmtPx(d.expected_move.lower)} – {fmtPx(d.expected_move.upper)}
+                    </div>
+                  )}
+                  {d.expected_move.consumed && (
+                    <div className="space-y-0.5">
+                      <div className="h-1.5 bg-surface-alt rounded overflow-hidden">
+                        <div
+                          className={`h-full ${
+                            d.expected_move.consumed.pct >= 100 ? "bg-loss"
+                              : d.expected_move.consumed.pct >= 75 ? "bg-amber-400" : "bg-gain"
+                          }`}
+                          style={{ width: `${Math.min(100, d.expected_move.consumed.pct)}%` }}
+                        />
+                      </div>
+                      <div className="text-[0.6rem] text-text-muted tabular-nums">
+                        {d.expected_move.consumed.pct.toFixed(0)}% of the expected range used
+                        {" "}({d.expected_move.consumed.range.toFixed(0)} handles)
+                      </div>
+                    </div>
+                  )}
+                  <div className="space-y-0.5 pt-0.5">
+                    {(d.expected_move.estimates ?? []).map((e, i) => (
+                      <div key={i} className="flex items-baseline gap-1.5 text-[0.6rem]" title={e.detail}>
+                        <span className="text-text-muted flex-1 min-w-0 truncate">{e.source}</span>
+                        <span className="tabular-nums text-text">±{e.sigma_handles.toFixed(0)}</span>
+                        {e.quote_source === "settled" && (
+                          <span className="text-[0.5rem] uppercase text-text-muted/70" title="Market was closed — last settlement, not a live price.">
+                            settled
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {d.expected_move.vol_regime && (
+                    <p className="text-[0.58rem] text-text-muted leading-snug" title={d.expected_move.vol_regime.note}>
+                      IV {d.expected_move.vol_regime.implied.toFixed(1)} vs RV{" "}
+                      {d.expected_move.vol_regime.realized.toFixed(1)} —{" "}
+                      <span className="text-text">{d.expected_move.vol_regime.label}</span>
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* dealer gamma */}
+            <div className="space-y-1.5">
+              <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                Dealer gamma — SPX
+              </h3>
+              {!d.gamma?.available ? (
+                <p className="text-[0.65rem] text-text-muted">
+                  Gamma unavailable{d.gamma?.reason ? ` — ${d.gamma.reason}` : ""}.
+                </p>
+              ) : (
+                <>
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[0.6rem] font-bold uppercase ${
+                        d.gamma.regime === "short" ? "bg-loss/15 text-loss" : "bg-gain/15 text-gain"
+                      }`}
+                    >
+                      {d.gamma.regime} gamma
+                    </span>
+                    {d.gamma.zero_dte_share != null && (
+                      <span className="text-[0.58rem] text-text-muted" title="Share of total gamma expiring today. 0DTE gamma evaporates at the close.">
+                        0DTE {d.gamma.zero_dte_share.toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[0.6rem] text-text leading-snug">{d.gamma.regime_note}</p>
+                  <div className="space-y-0.5 text-[0.62rem] tabular-nums pt-0.5">
+                    {d.gamma.call_wall_es != null && (
+                      <div className="flex justify-between gap-2" title="Heaviest call gamma above spot — a magnet and a level price struggles through.">
+                        <span className="text-text-muted">Call wall</span>
+                        <span className="text-text">{fmtPx(d.gamma.call_wall_es)}</span>
+                      </div>
+                    )}
+                    {d.gamma.flip_es != null && (
+                      <div className="flex justify-between gap-2 font-semibold" title="Where aggregate dealer gamma crosses zero. Which side price is on decides whether hedging dampens or amplifies moves.">
+                        <span className="text-accent">Gamma flip</span>
+                        <span className="text-accent">{fmtPx(d.gamma.flip_es)}</span>
+                      </div>
+                    )}
+                    {d.gamma.put_wall_es != null && (
+                      <div className="flex justify-between gap-2" title="Heaviest put gamma below spot.">
+                        <span className="text-text-muted">Put wall</span>
+                        <span className="text-text">{fmtPx(d.gamma.put_wall_es)}</span>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[0.55rem] text-text-muted leading-snug pt-0.5">
+                    ES-converted from SPX using the {d.gamma.es_basis?.toFixed(2)} basis. Dealer
+                    inventory is inferred from open interest, not observed — treat the flip level
+                    and the shape as the signal, not the absolute number.
+                  </p>
+                </>
+              )}
+            </div>
+
+            {/* session structure */}
+            <div className="space-y-1.5">
+              <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                Session structure
+              </h3>
+              {!d.intraday?.available ? (
+                <p className="text-[0.65rem] text-text-muted">Structure unavailable.</p>
+              ) : (
+                <div className="space-y-1 text-[0.62rem]">
+                  {d.intraday.day_type?.available && (
+                    <div className="flex justify-between gap-2" title={d.intraday.day_type.note}>
+                      <span className="text-text-muted">Day type</span>
+                      <span className="text-text font-semibold capitalize">
+                        {d.intraday.day_type.label}
+                        {d.intraday.day_type.ib_multiple != null && (
+                          <span className="ml-1 font-normal text-text-muted tabular-nums">
+                            {d.intraday.day_type.ib_multiple.toFixed(2)}× IB
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  {d.intraday.opening_range?.ib && (
+                    <div className="flex justify-between gap-2" title="First hour of the cash session — the day's reference frame.">
+                      <span className="text-text-muted">Initial balance</span>
+                      <span className="tabular-nums text-text">
+                        {fmtPx(d.intraday.opening_range.ib.low)}–{fmtPx(d.intraday.opening_range.ib.high)}
+                      </span>
+                    </div>
+                  )}
+                  {d.intraday.opening_range?.or30 && (
+                    <div className="flex justify-between gap-2" title="First 30 minutes.">
+                      <span className="text-text-muted">Opening range 30m</span>
+                      <span className="tabular-nums text-text">
+                        {fmtPx(d.intraday.opening_range.or30.low)}–{fmtPx(d.intraday.opening_range.or30.high)}
+                      </span>
+                    </div>
+                  )}
+                  {d.intraday.relative_volume?.available && (
+                    <div className="flex justify-between gap-2" title={d.intraday.relative_volume.note}>
+                      <span className="text-text-muted">Participation</span>
+                      <span className="text-text">
+                        <span className="tabular-nums">{d.intraday.relative_volume.ratio?.toFixed(2)}×</span>{" "}
+                        <span className="text-text-muted">{d.intraday.relative_volume.verdict}</span>
+                      </span>
+                    </div>
+                  )}
+                  {d.intraday.overnight_inventory?.available && (
+                    <div className="flex justify-between gap-2" title={d.intraday.overnight_inventory.note}>
+                      <span className="text-text-muted">ON inventory</span>
+                      <span className="text-text capitalize">{d.intraday.overnight_inventory.skew}</span>
+                    </div>
+                  )}
+                  {(d.intraday.naked_pocs ?? []).length > 0 && (
+                    <div className="flex justify-between gap-2" title="Prior sessions' fairest prices that price hasn't returned to — they act as magnets.">
+                      <span className="text-text-muted">Naked POC</span>
+                      <span className="tabular-nums text-text">
+                        {fmtPx(d.intraday.naked_pocs![0].value)}
+                        <span className="text-text-muted ml-1">
+                          ({fmtHandles(d.intraday.naked_pocs![0].distance)})
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                  {(d.intraday.unfilled_gaps ?? []).length > 0 && (
+                    <div className="flex justify-between gap-2" title="Unfilled cash-session gap — price has not traded back through it.">
+                      <span className="text-text-muted">Unfilled gap</span>
+                      <span className="tabular-nums text-text">
+                        {fmtPx(d.intraday.unfilled_gaps![0].from)}
+                        <span className="text-text-muted ml-1">
+                          ({fmtHandles(d.intraday.unfilled_gaps![0].distance)})
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                  {d.intraday.cross_asset?.available && (
+                    <div className="pt-1 border-t border-border/40">
+                      <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                        Cross-asset
+                      </div>
+                      <div className="flex flex-wrap gap-x-2.5 gap-y-0.5">
+                        {(d.intraday.cross_asset.rows ?? []).map((r) => (
+                          <span key={r.symbol} className="whitespace-nowrap text-[0.6rem]" title={r.why}>
+                            <span className="text-text-muted">{r.label.split(" ")[0]}</span>{" "}
+                            <span className={`tabular-nums ${pctClass(r.change_pct)}`}>
+                              {r.change_pct > 0 ? "+" : ""}{r.change_pct.toFixed(2)}%
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── measured base rates ── */}
+          {d.base_rates?.available && (
+            <div className="border-t border-border pt-3 space-y-1.5">
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                  Measured base rates
+                </h3>
+                <span className="text-[0.55rem] text-text-muted">
+                  {d.base_rates.source} · {d.base_rates.sessions?.toLocaleString()} sessions ·{" "}
+                  {d.base_rates.from} to {d.base_rates.to}
+                </span>
+              </div>
+
+              {d.base_rates.gaps?.today && (
+                <p className="text-[0.65rem] text-text border-l-2 border-l-accent pl-2">
+                  {d.base_rates.gaps.today.note}
+                </p>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-5 gap-y-2 text-[0.6rem]">
+                <div>
+                  <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                    Gap fill, same session
+                  </div>
+                  {(d.base_rates.gaps?.buckets ?? []).map((b) => (
+                    <div key={b.bucket} className="flex justify-between gap-2 tabular-nums">
+                      <span className="text-text-muted truncate">{b.bucket}</span>
+                      <span className="text-text">{b.fill_rate.toFixed(0)}%</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div>
+                  <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                    Typical session
+                  </div>
+                  {d.base_rates.range?.available && (
+                    <>
+                      <div className="flex justify-between gap-2 tabular-nums">
+                        <span className="text-text-muted">Median range</span>
+                        <span className="text-text">{d.base_rates.range.median_range_handles?.toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between gap-2 tabular-nums">
+                        <span className="text-text-muted">90th pct</span>
+                        <span className="text-text">{d.base_rates.range.p90_handles?.toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between gap-2 tabular-nums" title="How often a session trades above the prior day's high.">
+                        <span className="text-text-muted">Takes prior high</span>
+                        <span className="text-text">{d.base_rates.range.took_prior_high_pct?.toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between gap-2 tabular-nums" title="How often a session trades below the prior day's low.">
+                        <span className="text-text-muted">Takes prior low</span>
+                        <span className="text-text">{d.base_rates.range.took_prior_low_pct?.toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between gap-2 tabular-nums" title="Most of the range is directional body rather than rotation.">
+                        <span className="text-text-muted">Trend day</span>
+                        <span className="text-text">{d.base_rates.range.trend_day_pct?.toFixed(0)}%</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div>
+                  <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
+                    Release days vs normal
+                  </div>
+                  {(d.base_rates.events?.events ?? []).map((e) => (
+                    <div key={e.name} className="flex justify-between gap-2 tabular-nums"
+                         title={`n=${e.n}. Median session range ${e.median_range_pct.toFixed(2)}% vs a ${d.base_rates?.events?.baseline_range_pct?.toFixed(2)}% baseline.`}>
+                      <span className="text-text-muted truncate">{e.name}</span>
+                      <span className="text-text">{e.range_vs_normal?.toFixed(2)}×</span>
+                    </div>
+                  ))}
+                  {d.base_rates.events?.note && (
+                    <p className="text-[0.52rem] text-text-muted mt-1 leading-snug">
+                      {d.base_rates.events.note}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           <details className="group">
             <summary className="text-[0.62rem] text-text-muted hover:text-accent cursor-pointer select-none list-none flex items-center gap-1">
               <span className="transition-transform group-open:rotate-90">▸</span>
@@ -694,6 +1100,31 @@ export default function EsBriefing() {
                 <span className="text-text font-semibold">Horizons don&apos;t mix.</span> The levels and the
                 clock are intraday. CTA flow and the macro scorecard run over days to weeks — they belong to
                 the lean, and turning either into an intraday entry is a category error.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Expected move is two numbers, not one.</span>{" "}
+                The ±figure is a one-sigma close-to-close move; the range beside it is the expected
+                high-low and is about 1.6× larger. The progress bar measures the session&apos;s range
+                against the <em>range</em>, because measuring a high-low against a close-to-close
+                sigma overstates it by roughly 60% and would flag an ordinary wide day as a historic
+                extension. An estimate tagged <span className="uppercase text-[0.55rem]">settled</span>{" "}
+                was priced with the market shut and is not used as the headline.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Gamma decides which playbook applies.</span>{" "}
+                Long gamma means dealer hedging leans against moves — breakouts struggle, rotation is
+                the base case, fading extremes works. Short gamma inverts all of it. Which side of the
+                flip level price sits on matters more than the size of the number. Dealer inventory is
+                <em> inferred</em> from open interest under the standard convention, never observed, so
+                the flip and the shape are the signal and the absolute total is an index, not a
+                quantity of anything.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Base rates are priors, not forecasts.</span>{" "}
+                Unconditional frequencies measured on the cash index, with n shown. They take no
+                account of the regime you are in, and a 70% rate still loses three times in ten. They
+                exist so a claim carries a number — and occasionally to contradict one: CPI sessions
+                measure at ~1.0× a normal range despite their reputation.
               </p>
               <p>
                 <span className="text-text font-semibold">Limits.</span> The volume profile bins each bar&apos;s
@@ -738,6 +1169,16 @@ export default function EsBriefing() {
                 : null,
               schedule: (d.schedule ?? []).map((e) => ({ ...e, minutes_away: liveMins(e) })),
               next_event: upcoming[0] ?? null,
+              conditions: d.conditions,
+              expected_move: d.expected_move
+                ? { ...d.expected_move, profile: undefined }
+                : null,
+              // The 81-point profile is for the chart, not the model — it would
+              // dominate the payload and says nothing the summary fields don't.
+              gamma: d.gamma ? { ...d.gamma, profile: undefined, top_strikes: undefined } : null,
+              intraday: d.intraday,
+              base_rates: d.base_rates,
+              gap_pct: d.gap_pct,
               cta: d.cta,
               macro: d.macro,
               news: (d.news ?? []).slice(0, 8).map((n) => ({ source: n.source, title: n.title })),

@@ -66,7 +66,8 @@ class Release:
 # name keeps this loosely coupled to whatever the calendar module labels things.
 _RELEASE_CLOCK: list[tuple[str, Release]] = [
     ("cpi",            Release("CPI", 8, 30, "high",
-                               "Largest single-print ES range expansion of a typical month.")),
+                               "Most-watched inflation print, but measured at only ~1.0x a normal "
+                               "full-session range — the move is concentrated in the first half hour.")),
     ("ppi",            Release("PPI", 8, 30, "medium", "Feeds the PCE nowcast more than it moves ES directly.")),
     ("payroll",        Release("Nonfarm payrolls", 8, 30, "high",
                                "The other top-tier print. Revisions matter as much as the headline.")),

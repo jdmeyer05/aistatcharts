@@ -165,7 +165,89 @@ def _globex_open_at_or_before(ts: pd.Timestamp) -> pd.Timestamp:
     return base - pd.Timedelta(days=1) if ts < base else base
 
 
-def es_levels(profile_sessions: int = 1, now: pd.Timestamp | None = None) -> dict:
+def session_frames(now: pd.Timestamp | None = None,
+                   bars: pd.DataFrame | None = None) -> dict | None:
+    """Split ES bars into the frames the session model implies.
+
+    Extracted so every module in the cockpit sees ONE session model from ONE
+    bar fetch. Levels, intraday structure and expected move all need the same
+    split, and computing it three times would let them drift apart — which is
+    precisely the class of bug this whole model exists to prevent.
+
+    Returns None when there is nothing usable.
+    """
+    now = now or pd.Timestamp.now(tz=_TZ)
+    if now.tzinfo is None:
+        now = now.tz_localize(_TZ)
+
+    if bars is None:
+        # 20 days rather than 5. A long weekend or holiday still leaves a prior
+        # RTH session in the window, and the extra history is what makes naked
+        # POCs and the relative-volume comparison meaningful downstream —
+        # measured at ~0.2s for the whole window, so the depth is free.
+        bars = _fetch_bars(days=20)
+    if bars is None or bars.empty:
+        return None
+
+    bars = bars.copy()
+    bars["session"] = bars.index.normalize()
+    bars["rth"] = [_is_rth(ts) for ts in bars.index]
+    # Never let a bar from the future leak in (yfinance occasionally returns a
+    # forming bar stamped ahead of the clock).
+    bars = bars[bars.index <= now]
+    if bars.empty:
+        return None
+
+    rth = bars[bars["rth"]]
+    if rth.empty:
+        return None
+
+    rth_dates = sorted(rth["session"].unique())
+
+    # Shared with the schedule so levels and scheduled risk can never describe
+    # two different sessions.
+    from src.es_session import trading_session_day
+    session_day = trading_session_day(now)
+
+    rth_open_ts = session_day + pd.Timedelta(hours=_RTH_OPEN[0], minutes=_RTH_OPEN[1])
+    globex_start = _globex_open_at_or_before(now)
+
+    cur_rth = rth[rth["session"] == session_day]
+    overnight = bars[(~bars["rth"]) & (bars.index >= globex_start) & (bars.index < rth_open_ts)]
+
+    if not cur_rth.empty:
+        mode, anchor = "rth", session_day
+    elif not overnight.empty:
+        mode, anchor = "premarket", session_day
+    else:
+        # Closed with nothing developing — describe the last completed session.
+        mode = "last_session"
+        anchor = rth_dates[-1]
+        cur_rth = rth[rth["session"] == anchor]
+        prior_close_ts = rth[rth["session"] < anchor].index.max() if len(rth_dates) > 1 else None
+        overnight = bars[(~bars["rth"]) & (bars.index < cur_rth.index.min())]
+        if prior_close_ts is not None:
+            overnight = overnight[overnight.index > prior_close_ts]
+
+    prior_dates = [d for d in rth_dates if d < anchor]
+
+    return {
+        "now": now,
+        "bars": bars,
+        "rth": rth,
+        "rth_dates": rth_dates,
+        "session_day": session_day,
+        "anchor": anchor,
+        "prior_dates": prior_dates,
+        "prior": prior_dates[-1] if prior_dates else None,
+        "cur_rth": cur_rth,
+        "overnight": overnight,
+        "mode": mode,
+    }
+
+
+def es_levels(profile_sessions: int = 1, now: pd.Timestamp | None = None,
+              frames: dict | None = None) -> dict:
     """Reference levels for the current ES session.
 
     ANCHORING IS THE WHOLE PROBLEM HERE. ES trades nearly 24h, so "the current
@@ -187,60 +269,15 @@ def es_levels(profile_sessions: int = 1, now: pd.Timestamp | None = None) -> dic
                         Friday-evening weekly close). Describes the last
                         completed session, which is what a weekend review wants.
     """
-    now = now or pd.Timestamp.now(tz=_TZ)
-    if now.tzinfo is None:
-        now = now.tz_localize(_TZ)
+    f = frames or session_frames(now=now)
+    if not f:
+        return {"available": False, "reason": "no usable intraday ES data"}
 
-    # 7 days rather than 5 so a long weekend or a holiday still leaves a prior
-    # RTH session in the window.
-    bars = _fetch_bars(days=7)
-    if bars.empty:
-        return {"available": False, "reason": "no intraday ES data"}
-
-    bars = bars.copy()
-    bars["session"] = bars.index.normalize()
-    bars["rth"] = [_is_rth(ts) for ts in bars.index]
-    # Never let a bar from the future leak in (yfinance occasionally returns a
-    # forming bar stamped ahead of the clock).
-    bars = bars[bars.index <= now]
-    if bars.empty:
-        return {"available": False, "reason": "no ES bars at or before now"}
-
-    rth = bars[bars["rth"]]
-    if rth.empty:
-        return {"available": False, "reason": "no RTH bars in window"}
-
-    rth_dates = sorted(rth["session"].unique())
-
-    # Shared with the schedule so levels and scheduled risk can never describe
-    # two different sessions.
-    from src.es_session import trading_session_day
-    session_day = trading_session_day(now)
-
-    rth_open_ts = session_day + pd.Timedelta(hours=_RTH_OPEN[0], minutes=_RTH_OPEN[1])
-    globex_start = _globex_open_at_or_before(now)
-
-    cur_rth = rth[rth["session"] == session_day]
-    overnight = bars[(~bars["rth"]) & (bars.index >= globex_start) & (bars.index < rth_open_ts)]
-
-    if not cur_rth.empty:
-        mode = "rth"
-        anchor = session_day
-    elif not overnight.empty:
-        mode = "premarket"
-        anchor = session_day
-    else:
-        # Closed with nothing developing — describe the last completed session.
-        mode = "last_session"
-        anchor = rth_dates[-1]
-        cur_rth = rth[rth["session"] == anchor]
-        prior_close_ts = rth[rth["session"] < anchor].index.max() if len(rth_dates) > 1 else None
-        overnight = bars[(~bars["rth"]) & (bars.index < cur_rth.index.min())]
-        if prior_close_ts is not None:
-            overnight = overnight[overnight.index > prior_close_ts]
-
-    prior_dates = [d for d in rth_dates if d < anchor]
-    prior = prior_dates[-1] if prior_dates else None
+    now = f["now"]
+    bars, rth = f["bars"], f["rth"]
+    rth_dates, session_day = f["rth_dates"], f["session_day"]
+    anchor, prior, prior_dates = f["anchor"], f["prior"], f["prior_dates"]
+    cur_rth, overnight, mode = f["cur_rth"], f["overnight"], f["mode"]
 
     last = float(bars["Close"].iloc[-1])
     last_bar_ts = bars.index[-1]

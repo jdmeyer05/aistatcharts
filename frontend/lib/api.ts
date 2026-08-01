@@ -2906,6 +2906,126 @@ export interface EsNewsItem {
   published: string | null;
 }
 
+/** One estimate of the day's range. `sigma_handles` is a one-sigma
+ *  close-to-close move; `range_handles` is the expected high-low, which is
+ *  ~1.6x larger. They are not interchangeable — see src/es_expected_move.py. */
+export interface EsMoveEstimate {
+  source: string;
+  sigma_handles: number;
+  range_handles: number;
+  pct: number | null;
+  detail: string;
+  forward_looking: boolean;
+  /** "settled" means the market was shut and the straddle is last settlement. */
+  quote_source?: string;
+}
+
+export interface EsExpectedMove {
+  available: boolean;
+  reason?: string;
+  spx_spot?: number | null;
+  headline?: EsMoveEstimate;
+  expected_handles?: number;
+  expected_range?: number;
+  upper?: number | null;
+  lower?: number | null;
+  estimates?: EsMoveEstimate[];
+  consumed?: { range: number; expected_range: number; pct: number; note?: string } | null;
+  vol_regime?: {
+    implied: number; realized: number; ratio: number; label: string; note: string;
+  } | null;
+  overnight?: { range: number; pct_of_expected: number } | null;
+}
+
+export interface EsGamma {
+  available: boolean;
+  reason?: string;
+  spx_spot?: number;
+  es_basis?: number | null;
+  regime?: "long" | "short";
+  regime_note?: string;
+  total_gex?: number;
+  zero_dte_gex?: number;
+  zero_dte_share?: number | null;
+  /** Level where aggregate dealer gamma crosses zero — the regime boundary. */
+  flip_spx?: number | null;
+  flip_es?: number | null;
+  distance_to_flip?: number | null;
+  above_flip?: boolean;
+  call_wall_es?: number | null;
+  put_wall_es?: number | null;
+  top_strikes?: Array<{ strike_spx: number; strike_es: number | null; gex: number; side: string }>;
+  profile?: Array<{ spot: number; gex: number }>;
+  expiries?: string[];
+}
+
+export interface EsIntraday {
+  available: boolean;
+  opening_range?: {
+    available: boolean;
+    or5?: { high: number; low: number; range: number; complete: boolean };
+    or15?: { high: number; low: number; range: number; complete: boolean };
+    or30?: { high: number; low: number; range: number; complete: boolean };
+    ib?: {
+      high: number; low: number; range: number; complete: boolean;
+      extension_up: number; extension_down: number; extended: boolean;
+    };
+  };
+  day_type?: {
+    available: boolean; label?: string; note?: string;
+    ib_multiple?: number; close_position?: number;
+    extension_direction?: string | null; range?: number;
+  };
+  relative_volume?: {
+    available: boolean; ratio?: number; verdict?: string; note?: string;
+    elapsed_minutes?: number; sessions_compared?: number;
+  };
+  overnight_inventory?: {
+    available: boolean; high?: number; low?: number; range?: number;
+    position_in_range?: number | null; took_prior_high?: boolean;
+    took_prior_low?: boolean; skew?: string; note?: string;
+  };
+  naked_pocs?: Array<{ date: string; value: number; distance: number; side: string; sessions_ago: number }>;
+  unfilled_gaps?: Array<{ date: string; from: number; to: number; size: number; direction: string; distance: number }>;
+  cross_asset?: { available: boolean; rows?: Array<{ symbol: string; label: string; why: string; last: number; change_pct: number }> };
+}
+
+export interface EsBaseRates {
+  available: boolean;
+  source?: string;
+  window_years?: number;
+  sessions?: number;
+  from?: string;
+  to?: string;
+  gaps?: {
+    available: boolean;
+    buckets?: Array<{ bucket: string; n: number; fill_rate: number; up_fill_rate: number | null; down_fill_rate: number | null; close_above_open_rate: number }>;
+    today?: { gap_pct: number; direction: string; bucket: string; fill_rate: number; n: number; note: string } | null;
+  };
+  range?: {
+    available: boolean; n?: number;
+    median_range_pct?: number; median_range_handles?: number | null;
+    p25_handles?: number | null; p75_handles?: number | null; p90_handles?: number | null;
+    took_prior_high_pct?: number; took_prior_low_pct?: number;
+    took_both_pct?: number; took_neither_pct?: number; trend_day_pct?: number;
+  };
+  events?: {
+    available: boolean; baseline_range_pct?: number; note?: string;
+    events?: Array<{ name: string; n: number; median_range_pct: number; range_vs_normal: number | null; median_abs_move_pct: number; move_vs_normal: number | null; up_close_rate: number }>;
+  };
+}
+
+/** Whether the session suits intraday trading at all — conditions, never
+ *  direction. Each reason states the points it contributed. */
+export interface EsConditions {
+  available: boolean;
+  score: number | null;
+  verdict: string;
+  note: string;
+  reasons: Array<{ factor: string; effect: number; why: string }>;
+  disclaimer?: string;
+}
+
 export interface EsBrief {
   available: boolean;
   asof?: string;
@@ -2932,6 +3052,14 @@ export interface EsBrief {
     biggest_headwind?: string;
     biggest_support?: string;
   } | null;
+  expected_move?: EsExpectedMove | null;
+  gamma?: EsGamma | null;
+  intraday?: EsIntraday | null;
+  base_rates?: EsBaseRates | null;
+  conditions?: EsConditions | null;
+  /** Cash-open gap vs the prior close, in percent. Before the bell this is the
+   *  gap as it currently stands, measured from the live price. */
+  gap_pct?: number | null;
   /** Which upstreams failed — the card degrades per-block rather than 500ing. */
   degraded?: string[];
 }
