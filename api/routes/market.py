@@ -2952,6 +2952,7 @@ def _es_brief_build() -> dict:
         "gamma": cock.get("gamma"),
         "base_rates": cock.get("base_rates"),
         "breadth": cock.get("breadth"),
+        "candles": cock.get("candles"),
         "conditions": gate,
         "gap_pct": cock.get("gap_pct"),
         "cta": {

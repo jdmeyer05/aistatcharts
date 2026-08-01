@@ -3082,6 +3082,43 @@ export interface EsBreadth {
   reconstruction?: string;
 }
 
+/** The last daily bar as six continuous numbers, plus what it says about
+ *  TOMORROW'S RANGE. Measured on 434,624 bars: geometry forecasts range with a
+ *  rank IC of 0.158 (t=75) and direction with -0.016 (t=-5.5). Size off the
+ *  range; the directional tilt is a tiebreaker, never a signal. */
+export interface EsCandleContext {
+  available: boolean;
+  reason?: string;
+  symbol?: string;
+  asof?: string;
+  close?: number;
+  bar?: {
+    range: number; range_atr: number; range_label: string;
+    body_atr: number; upper_wick_atr: number; lower_wick_atr: number;
+    close_location: number; close_location_label: string;
+    volume_vs_20d?: number | null;
+  };
+  tomorrow_range?: {
+    n: number; atr: number;
+    p25_atr: number; p50_atr: number; p75_atr: number; p90_atr: number;
+    p25: number; p50: number; p75: number; p90: number;
+    prob_exceeds_1_atr: number; note: string;
+  } | null;
+  direction_tilt?: {
+    n: number; next_up_pct: number; median_next_ret_pct: number;
+    t: number; p: number; ic?: number | null; ic_t?: number | null; note: string;
+  } | null;
+  /** Options-implied range against the empirical one — two estimates of the same
+   *  quantity from unrelated inputs. Present only when both exist. */
+  vs_implied?: {
+    implied_range: number; empirical_p50: number; ratio: number;
+    gap: number; gap_atr?: number | null;
+    label: string; note: string; caveat: string;
+  } | null;
+  study?: Record<string, unknown>;
+  disclaimer?: string;
+}
+
 /** Whether the session suits intraday trading at all — conditions, never
  *  direction. Each reason states the points it contributed. */
 export interface EsConditions {
@@ -3124,6 +3161,7 @@ export interface EsBrief {
   intraday?: EsIntraday | null;
   base_rates?: EsBaseRates | null;
   breadth?: EsBreadth | null;
+  candles?: EsCandleContext | null;
   conditions?: EsConditions | null;
   /** Cash-open gap vs the prior close, in percent. Before the bell this is the
    *  gap as it currently stands, measured from the live price. */

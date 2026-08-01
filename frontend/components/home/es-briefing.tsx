@@ -28,6 +28,7 @@ import {
   type EsLevel,
   type EsScheduleItem,
 } from "@/lib/api";
+import CandleContextBlock from "@/components/home/candle-context";
 
 /* ─── formatting ──────────────────────────────────────────────── */
 
@@ -1003,6 +1004,8 @@ export default function EsBriefing() {
               )}
             </div>
           </div>
+
+          <CandleContextBlock d={d.candles} />
 
           {/* ── breadth: how many stocks are going with the index ── */}
           {d.breadth?.available && (

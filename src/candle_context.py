@@ -79,6 +79,53 @@ _CLV_WORDS = ["in the bottom fifth of its range", "in the lower-middle of its ra
 _RANGE_WORDS = ["very narrow", "narrow", "average", "wide", "very wide"]
 
 
+def range_divergence(empirical_p50: float | None, implied_range: float | None,
+                     atr: float | None = None) -> dict | None:
+    """Options-implied range against what the tape has actually been doing.
+
+    These are two estimates of the SAME quantity — tomorrow's high-low — built
+    from unrelated inputs. The implied one comes from what people are paying for
+    optionality; the empirical one from how bars conditioned like today's have
+    actually resolved. When they disagree, that is the IV-vs-RV question asked
+    one day ahead and bar-conditioned, rather than over a trailing 20-day window.
+
+    Deliberately NOT expressed as a trade. A rich implied range is a reason to
+    prefer selling premium only if the empirical estimate is the better forecast,
+    and this module has no claim to that.
+    """
+    if not empirical_p50 or not implied_range or empirical_p50 <= 0:
+        return None
+    # Cast out of numpy: these arrive from pandas-backed callers and a np.float64
+    # is not JSON-serialisable by the API's encoder.
+    empirical_p50 = float(empirical_p50)
+    implied_range = float(implied_range)
+    atr = float(atr) if atr else None
+    ratio = implied_range / empirical_p50
+    if ratio >= 1.25:
+        label, note = "implied rich", (
+            "Options are pricing a wider session than bars conditioned like today's have "
+            "typically delivered. Premium is expensive against recent behaviour.")
+    elif ratio <= 0.8:
+        label, note = "implied cheap", (
+            "Options are pricing a narrower session than bars conditioned like today's have "
+            "typically delivered. Premium is cheap against recent behaviour.")
+    else:
+        label, note = "in line", (
+            "Options and recent bar behaviour agree on how much room tomorrow has.")
+    return {
+        "implied_range": round(implied_range, 2),
+        "empirical_p50": round(empirical_p50, 2),
+        "ratio": round(ratio, 2),
+        "gap": round(implied_range - empirical_p50, 2),
+        "gap_atr": round((implied_range - empirical_p50) / atr, 2) if atr else None,
+        "label": label,
+        "note": note,
+        "caveat": ("Two different estimators of the same quantity, not a spread you can "
+                   "trade directly. The implied figure is forward-looking and the empirical "
+                   "one is conditioned on today's bar; neither is the truth."),
+    }
+
+
 def candle_context(symbol: str, bars=None) -> dict:
     """The last daily bar described continuously, plus tomorrow's range distribution."""
     T = _tables()

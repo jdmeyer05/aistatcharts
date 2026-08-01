@@ -198,7 +198,8 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
 def es_cockpit(now: pd.Timestamp | None = None,
                with_gamma: bool = True,
                with_base_rates: bool = True,
-               with_breadth: bool = True) -> dict:
+               with_breadth: bool = True,
+               with_candles: bool = True) -> dict:
     """The full intraday picture, from one bar fetch and one session model."""
     from src.es_levels import session_frames, es_levels
 
@@ -246,6 +247,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
     from src.dealer_gamma import dealer_gamma
     from src.es_baserates import base_rates
     from src.es_breadth import market_breadth
+    from src.candle_context import candle_context, range_divergence
 
     # The expected move is always computed for the SESSION AHEAD. So a range
     # already in the books may belong to a different session than the estimate,
@@ -285,12 +287,26 @@ def es_cockpit(now: pd.Timestamp | None = None,
         # the walk back to the last traded session starts a day too far out.
         f_bd = pool.submit(_safe, lambda: market_breadth(now=clock_et), "breadth") \
             if with_breadth else None
+        # Cash index, NEVER ES=F. An ES daily bar opens at the 18:00 Globex open,
+        # so its body and shadows measure a different session than the one the
+        # study was built on — the same trap that makes ES gap statistics
+        # meaningless.
+        f_cx = pool.submit(_safe, lambda: candle_context("^GSPC"), "candles") \
+            if with_candles else None
 
         intraday = f_intra.result()
         em = f_em.result()
         gamma = f_gamma.result() if f_gamma else None
         rates = f_br.result() if f_br else None
         breadth = f_bd.result() if f_bd else None
+        candles = f_cx.result() if f_cx else None
+
+    # Two independent estimates of tomorrow's high-low: what options are paying
+    # for, and what bars conditioned like today's have actually delivered.
+    if candles and (candles.get("tomorrow_range") or {}).get("p50") and (em or {}).get("expected_range"):
+        candles["vs_implied"] = range_divergence(
+            candles["tomorrow_range"]["p50"], em.get("expected_range"),
+            atr=(candles.get("tomorrow_range") or {}).get("atr"))
 
     return {
         "available": True,
@@ -300,8 +316,9 @@ def es_cockpit(now: pd.Timestamp | None = None,
         "gamma": gamma,
         "base_rates": rates,
         "breadth": breadth,
+        "candles": candles,
         "gap_pct": round(gap_pct, 3) if gap_pct is not None else None,
         "degraded": [k for k, v in (("intraday", intraday), ("expected_move", em),
                                     ("gamma", gamma), ("base_rates", rates),
-                                    ("breadth", breadth)) if not v],
+                                    ("breadth", breadth), ("candles", candles)) if not v],
     }

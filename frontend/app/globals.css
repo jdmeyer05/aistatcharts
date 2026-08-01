@@ -29,6 +29,9 @@
   --color-accent: #1a56db;
   --color-accent-hover: #1648b3;
   --color-accent-light: #eff6ff;
+  /* Second categorical hue for 2-series charts. Warm/cool against accent so the
+     pair separates under CVD: validated ΔE 32.3 protan, 39.6 normal-vision. */
+  --color-series2: #d97706;
 
   /* Semantic — muted market colors */
   --color-gain: #0f7b3f;
@@ -69,6 +72,9 @@ html.dark, .dark {
   --color-accent: #4d9fff;
   --color-accent-hover: #6db5ff;
   --color-accent-light: #111d30;
+  /* Dark step CHOSEN, not flipped — #d97706 against the dark accent validates
+     ΔE 29.7 protan and sits inside the dark lightness band. */
+  --color-series2: #d97706;
 
   --color-gain: #34d058;
   --color-gain-bg: #0d2818;
