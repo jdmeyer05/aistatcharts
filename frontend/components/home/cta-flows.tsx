@@ -22,7 +22,6 @@ import Link from "next/link";
 import { useTheme } from "next-themes";
 import { useQuery } from "@tanstack/react-query";
 import { Plot } from "@/components/plot";
-import { AIInterpretation } from "@/components/ai-interpretation";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { fetchCtaFlows, type CtaBias, type CtaFlowBoard } from "@/lib/api";
 
@@ -413,25 +412,6 @@ export default function CtaFlows() {
             </div>
           </div>
 
-          {/* Payload is deliberately the exact numbers rendered above: the
-              grounding check verifies cited figures against what we send, so
-              anything the model quotes has to trace back to the card. */}
-          <AIInterpretation
-            page="home_cta_flows"
-            buttonLabel="Interpret CTA flows"
-            data={{
-              last_price: d.last_price,
-              current_exposure: d.current_exposure,
-              sigma_1_pct: d.sigma_1_pct,
-              horizon_days: d.horizon_days,
-              sigma_1w_pct: d.sigma_1w_pct,
-              sigma_1m_pct: d.sigma_1m_pct,
-              bias_1w: d.bias_1w,
-              bias_1m: d.bias_1m,
-              terminal: d.terminal,
-              pivots: d.pivots,
-            }}
-          />
         </>
       )}
     </div>

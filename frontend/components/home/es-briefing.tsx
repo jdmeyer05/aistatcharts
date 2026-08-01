@@ -21,7 +21,6 @@
 
 import { useMemo, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AIInterpretation } from "@/components/ai-interpretation";
 import {
   fetchEsBrief,
   type EsBrief,
@@ -1142,48 +1141,6 @@ export default function EsBriefing() {
             </div>
           )}
 
-          <AIInterpretation
-            page="home_es_briefing"
-            buttonLabel="Interpret this session"
-            data={{
-              session: d.session,
-              levels: lv?.available
-                ? {
-                    last: lv.last,
-                    asof: lv.asof,
-                    mode: lv.mode,
-                    stale: lv.stale,
-                    bar_age_min: lv.bar_age_min,
-                    rth_complete: lv.rth_complete,
-                    overnight_developing: lv.overnight_developing,
-                    session_date: lv.session_date,
-                    prior_session_date: lv.prior_session_date,
-                    profile_session_date: lv.profile_session_date,
-                    rth_open_bars: lv.rth_open_bars,
-                    nearest: lv.nearest,
-                    levels: lv.levels?.map((l) => ({
-                      key: l.key, label: l.label, group: l.group,
-                      value: l.value, distance: l.distance, side: l.side,
-                    })),
-                  }
-                : null,
-              schedule: (d.schedule ?? []).map((e) => ({ ...e, minutes_away: liveMins(e) })),
-              next_event: upcoming[0] ?? null,
-              conditions: d.conditions,
-              expected_move: d.expected_move
-                ? { ...d.expected_move, profile: undefined }
-                : null,
-              // The 81-point profile is for the chart, not the model — it would
-              // dominate the payload and says nothing the summary fields don't.
-              gamma: d.gamma ? { ...d.gamma, profile: undefined, top_strikes: undefined } : null,
-              intraday: d.intraday,
-              base_rates: d.base_rates,
-              gap_pct: d.gap_pct,
-              cta: d.cta,
-              macro: d.macro,
-              news: (d.news ?? []).slice(0, 8).map((n) => ({ source: n.source, title: n.title })),
-            }}
-          />
         </>
       )}
     </div>

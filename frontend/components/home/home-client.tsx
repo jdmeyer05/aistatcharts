@@ -40,6 +40,7 @@ import {
 } from "@/lib/api";
 import { PULSE_TICKERS, PULSE_LABELS } from "@/lib/home-constants";
 import EsBriefing from "@/components/home/es-briefing";
+import PageInterpretation from "@/components/home/page-interpretation";
 import CtaFlows from "@/components/home/cta-flows";
 import MacroPressure from "@/components/home/macro-pressure";
 import SectorRrgCard from "@/components/home/sector-rrg";
@@ -429,6 +430,10 @@ export default function HomeClient() {
     <div className="space-y-4">
       <MarketPulse />
       <EsBriefing />
+      {/* One interpretation for the whole page, sitting under the ES card
+          because that is the page's spine. It reads every card's cached data,
+          so it is placed high but stays collapsed until asked. */}
+      <PageInterpretation />
       <MarketDriverCard />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <SectorRelative />

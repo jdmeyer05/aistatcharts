@@ -16,7 +16,6 @@
 import Link from "next/link";
 import { Fragment, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AIInterpretation } from "@/components/ai-interpretation";
 import {
   fetchMacroPressure,
   type MacroPressureBoard,
@@ -273,25 +272,6 @@ export default function MacroPressure() {
             {d.unavailable && d.unavailable.length > 0 && ` · unavailable: ${d.unavailable.join(", ")}`}
           </div>
 
-          <AIInterpretation
-            page="home_macro_pressure"
-            buttonLabel="Interpret macro backdrop"
-            data={{
-              net_score: d.net_score,
-              net_label: d.net_label,
-              counts: d.counts,
-              change_window_days: d.change_window_days,
-              lookback: d.lookback,
-              data_asof: d.data_asof,
-              rows: d.rows?.map((r) => ({
-                label: r.label, group: r.group, kind: r.kind,
-                level: r.display_level, unit: r.display_unit,
-                change: r.change, change_mode: r.change_mode,
-                change_z: r.change_z, pctile: r.pctile,
-                score: r.score, verdict: r.verdict, stale: r.stale,
-              })),
-            }}
-          />
         </>
       )}
     </div>
