@@ -285,7 +285,16 @@ export default function PageInterpretation() {
         ? { median_premium_pct: valuation.median_premium_pct }
         : null,
 
-      upcoming_events_2w: (events?.events ?? []).slice(0, 6),
+      // High-impact prints FIRST, then nearest. The old date-ordered slice(0,6)
+      // cut Nonfarm payrolls and CPI out of the payload entirely, which is why
+      // the model asserted "no other events in the two-week window" while the
+      // calendar card on the same page listed both.
+      upcoming_events_2w: (() => {
+        const all = events?.events ?? [];
+        const high = all.filter((e) => e.impact === "high");
+        const rest = all.filter((e) => e.impact !== "high");
+        return [...high, ...rest.slice(0, Math.max(0, 8 - high.length))];
+      })(),
 
       // Only the regime label and citations from the driver card. Its own
       // paragraphs are another model's prose, and feeding them back would

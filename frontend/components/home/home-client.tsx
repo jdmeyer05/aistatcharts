@@ -477,7 +477,18 @@ function MacroCalendar() {
     refetchInterval: 10 * 60_000,
     staleTime: 9 * 60_000,
   });
-  const events = (q.data?.events ?? []).slice(0, 6);
+  // Take EVERY high-impact print first, then fill with the nearest of the rest.
+  // A plain .slice(0, 6) on a date-ordered list dropped Nonfarm payrolls and CPI
+  // — the two widest-range sessions of the month — because they sit furthest
+  // out, so a card titled "Next 2 Weeks" was omitting the only two that change
+  // how you size. Order is restored by date for display.
+  const events = useMemo(() => {
+    const all = q.data?.events ?? [];
+    const high = all.filter((e) => e.impact === "high");
+    const rest = all.filter((e) => e.impact !== "high");
+    return [...high, ...rest.slice(0, Math.max(0, 8 - high.length))]
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  }, [q.data?.events]);
 
   return (
     <div className="card card-compact space-y-2">
@@ -494,7 +505,11 @@ function MacroCalendar() {
               <span className="text-text-muted text-[0.6rem] tabular-nums">
                 {ev.date} · {ev.days_away === 0 ? "today" : `+${ev.days_away}d`}
               </span>
-              <span className="font-semibold text-text truncate" title={ev.name}>{ev.name}</span>
+              <span className={`font-semibold truncate ${ev.impact === "high" ? "text-text" : "text-text-muted"}`}
+                    title={`${ev.name}${ev.impact ? ` — ${ev.impact} impact` : ""}`}>
+                {ev.impact === "high" && <span className="text-spot mr-0.5">•</span>}
+                {ev.name}
+              </span>
             </div>
           ))}
         </div>

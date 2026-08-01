@@ -737,6 +737,10 @@ export interface CalendarEvent {
   name: string;
   date: string;
   days_away: number;
+  /** Ranks typical ES range expansion on the print, not economic importance.
+   *  Present so consumers prioritise by what moves the tape — a date-ordered
+   *  slice drops payrolls and CPI, which sit furthest out. */
+  impact?: "high" | "medium" | "low" | string | null;
 }
 
 export async function fetchEvents(): Promise<{ events: CalendarEvent[] }> {

@@ -731,7 +731,12 @@ async def upcoming_events(user: str = Depends(get_current_user)):
             days = ev.get("days_away", 0)
             if days < 0:
                 continue
-            items.append({"name": ev["name"], "date": ev.get("date", ""), "days_away": days})
+            # `impact` travels with the event so consumers can prioritise by what
+            # moves the tape rather than by what happens to be nearest. Without
+            # it, a date-ordered slice silently drops payrolls and CPI — the two
+            # widest-range prints of the month — because they sit furthest out.
+            items.append({"name": ev["name"], "date": ev.get("date", ""), "days_away": days,
+                          "impact": ev.get("impact")})
 
         event_dates = {e.get("date", "") for e in events}
         for fd in fomc_dates:

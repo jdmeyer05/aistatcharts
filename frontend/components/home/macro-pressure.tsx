@@ -119,6 +119,19 @@ export default function MacroPressure() {
             <h2 className="text-sm font-bold uppercase tracking-wider text-accent">
               Macro Pressure — Equities
             </h2>
+            {/* When a material share of factors failed to load, the verdict is
+                built on a fraction of its inputs. It was still rendered with
+                full confidence and the loss was visible only in a footnote —
+                a FRED outage once left this reading "mildly supportive" off 4
+                of 12 factors. Degraded coverage now says so in the badge. */}
+            {d?.available && (d.unavailable?.length ?? 0) > 0 && (
+              <span
+                className="px-2 py-0.5 rounded text-[0.6rem] font-bold uppercase bg-spot/15 text-spot"
+                title={`${d.unavailable?.length} of ${(d.rows?.length ?? 0) + (d.unavailable?.length ?? 0)} factors failed to load (${d.unavailable?.join(", ")}). The net below is computed from the rest — treat it as provisional.`}
+              >
+                {d.unavailable?.length} missing
+              </span>
+            )}
             {d?.available && (
               <span
                 className={`px-2 py-0.5 rounded text-[0.6rem] font-bold uppercase ${netClass(d.net_label)}`}
