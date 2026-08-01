@@ -487,8 +487,18 @@ def _sector_rrg_cached(tail_weeks: int) -> dict:
         return hit[1]
     from src.sector_rrg import sector_rrg
     board = sector_rrg(tail_weeks=tail_weeks)
-    if board.get("available"):
+    # DO NOT CACHE A DEGRADED BOARD. `available` stays True with three sectors
+    # of eleven, so a momentary yfinance rate-limit used to be frozen in for the
+    # full 45 minutes — the card showed a rotation map missing eight sectors long
+    # after the source had recovered. Serve what we have so the user sees
+    # something, but leave the cache empty so the very next request retries.
+    rows = len(board.get("rows") or [])
+    missing = len(board.get("unavailable") or [])
+    if board.get("available") and rows and missing <= max(1, (rows + missing) // 5):
         _RRG_CACHE[tail_weeks] = (_now(), board)
+    elif board.get("available"):
+        logger.warning(f"sector rrg degraded ({rows} of {rows + missing}) — serving "
+                       "without caching so the next request retries")
     return board
 
 

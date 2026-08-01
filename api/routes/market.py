@@ -2841,10 +2841,18 @@ def _macro_pressure_cached(lookback: str) -> dict:
 
     from src.macro_pressure import macro_pressure_board
     board = macro_pressure_board(lookback=lookback)
-    # Never cache a failed board — a transient FRED outage would otherwise
-    # pin the card to an error for 45 minutes.
-    if board.get("available"):
+    # Never cache a failed OR a materially degraded board. The original guard
+    # only caught total failure, but `available` stays True with four factors of
+    # twelve — so a transient FRED outage pinned a confident verdict built on a
+    # third of its inputs for the full 45 minutes, long after FRED recovered.
+    # Serve it, but leave the cache empty so the next request retries.
+    rows = len(board.get("rows") or [])
+    missing = len(board.get("unavailable") or [])
+    if board.get("available") and rows and missing <= max(1, (rows + missing) // 5):
         _MACRO_PRESSURE_CACHE[lookback] = (_now(), board)
+    elif board.get("available"):
+        logger.warning(f"macro board degraded ({rows} of {rows + missing}) — serving "
+                       "without caching so the next request retries")
     return board
 
 
