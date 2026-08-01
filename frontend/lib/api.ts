@@ -3207,6 +3207,13 @@ export interface MacroPressureBoard {
   change_window_days?: number;
   net_score?: number;
   net_label?: string;
+  /** The net is the mean of the factors that ACTUALLY REPORTED. A stale series
+   *  scores 0.0 only because its change window compares one print to itself —
+   *  that is missing data, not evidence of neutrality — so it is excluded and
+   *  counted here instead. */
+  net_from_n?: number;
+  net_total_n?: number;
+  net_excluded_stale?: number;
   counts?: Record<MacroVerdict, number>;
   group_order?: string[];
   biggest_headwind?: MacroFactorRow | null;

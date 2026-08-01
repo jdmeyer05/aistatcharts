@@ -2465,7 +2465,12 @@ _MARKET_DRIVER_PULSE = [
     ("QQQ", "Nasdaq 100"),
     ("IWM", "Russell 2000"),
     ("TLT", "20Y Treasury"),
-    ("DXY", "US Dollar"),
+    # `DXY` is not a real symbol on any source wired here — Polygon has no such
+    # equity, yfinance reports it delisted, and the row was silently dropped by
+    # the `price is None` guard, so the dollar has simply been absent from the
+    # synthesis context. `DX-Y.NYB` is the ICE dollar index yfinance actually
+    # serves, and is what the pulse strip has been using all along.
+    ("DX-Y.NYB", "US Dollar"),
     ("^VIX", "VIX"),
     ("GLD", "Gold"),
     ("USO", "WTI Crude"),
@@ -2498,15 +2503,19 @@ def _assemble_market_driver_context() -> dict:
             for tk, label in _MARKET_DRIVER_PULSE:
                 s = snaps.get(tk) or {}
                 price = s.get("price")
-                # polygon_batch_snapshot returns {price, change} — change is
-                # already percent. Use it directly; fall back to 0 if absent.
                 if price is None:
                     continue
-                out[tk] = {
-                    "label": label,
-                    "price": round(float(price), 3),
-                    "change_pct_1d": round(float(s.get("change") or 0), 2),
-                }
+                # `change` is already percent. It is OMITTED when no prior close
+                # could be established — and `or 0` here turned that unknown into
+                # a confident 0.00%, which the model then narrated as "flat price
+                # action across major indices" on a session where SPY closed
+                # +0.72%. An absent field the prompt is told to read as UNKNOWN
+                # is recoverable; a fabricated zero is not.
+                chg = s.get("change")
+                q = {"label": label, "price": round(float(price), 3)}
+                if chg is not None:
+                    q["change_pct_1d"] = round(float(chg), 2)
+                out[tk] = q
             # Fallback for indices Polygon's stock-snapshot doesn't cover
             # (e.g. ^VIX, DXY) — use a 2-bar history pull to compute last
             # close + 1D change.
@@ -2689,6 +2698,11 @@ ACCURACY RULES — non-negotiable:
 - Only cite numbers that appear in the context below. Derivations (e.g., "XLF +1.2% vs SPY +0.3% = +0.9% relative") are fine if shown.
 - Never invent tickers, news items, or events not in the payload.
 - If the context is thin (market closed, no news, no events), say so in one short paragraph and emit minimal filler for the other two. Do not pad.
+- A quote with NO `change_pct_1d` field means the day's move is UNKNOWN, not zero. Do not
+  describe it as flat, unchanged, or muted, and do not treat it as evidence of anything — say the
+  move is unavailable, or write around it using the quotes that do carry a change. Reporting an
+  absent move as "flat price action" is the single worst error you can make here, because it reads
+  as a confident market call rather than as missing data.
 
 VIX REGIME CALIBRATION — use the `vix_level_band` field, not the 1D % change:
 - `complacent` (VIX < 15): "muted vol", "complacent", "carry-friendly". NEVER call this elevated.

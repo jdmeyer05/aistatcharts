@@ -272,9 +272,23 @@ def macro_pressure_board(lookback: str = "3Y") -> dict:
     if not rows:
         return {"available": False, "reason": "no factor could be computed"}
 
-    mean_score = float(np.mean([r["score"] for r in rows]))
+    # A stale series scores 0.0 because its change window compares one print to
+    # itself — that is ABSENCE OF DATA, not evidence of neutrality, and the card
+    # already tells the reader exactly that ("its flat reading means no new data,
+    # not no pressure"). Averaging it in contradicted the card's own tooltip and
+    # dragged the net toward zero: U-Mich, 60 days stale, was pulling a 0.18 net
+    # down to 0.16 on its own. With several series delayed at once — holidays, a
+    # shutdown, a publication lag — the dilution compounds and the board reads
+    # calmer than the data supports, which is the wrong direction to be wrong in.
+    scored = [r for r in rows if not r["stale"]]
+    if not scored:
+        # Everything is stale. Fall back rather than divide by zero, and let the
+        # payload say so instead of publishing a confident 0.00 net.
+        scored = rows
+    mean_score = float(np.mean([r["score"] for r in scored]))
     counts = {v: sum(1 for r in rows if r["verdict"] == v)
               for v in ("supportive", "neutral", "headwind")}
+    n_stale = sum(1 for r in rows if r["stale"])
 
     # Most-extreme factor on each side — the ones worth naming in a summary.
     ranked = sorted(rows, key=lambda r: r["score"])
@@ -286,6 +300,11 @@ def macro_pressure_board(lookback: str = "3Y") -> dict:
         "change_window_days": _CHANGE_WINDOW,
         "net_score": round(mean_score, 2),
         "net_label": _net_label(mean_score),
+        # The net is the mean of the factors that ACTUALLY REPORTED. Both numbers
+        # travel with it so the reader can see what the average was taken over.
+        "net_from_n": len(scored),
+        "net_total_n": len(rows),
+        "net_excluded_stale": n_stale,
         "counts": counts,
         "group_order": GROUP_ORDER,
         "biggest_headwind": ranked[0] if ranked[0]["score"] < 0 else None,

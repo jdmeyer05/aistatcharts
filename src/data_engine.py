@@ -106,6 +106,16 @@ def polygon_snapshot(symbol: str) -> dict | None:
     if not is_equity_symbol(symbol) and ":" not in sym:
         return None
 
+    # Crypto trades 24/7, and Polygon's DAILY aggs only publish a bar once the
+    # UTC day has closed — so on a Saturday the newest bar is Friday's and the
+    # tile shows Friday's move for the one asset on the strip that is actually
+    # trading. Measured: -2.93% (Thu->Fri) against a true +0.29% on the day.
+    # The crypto snapshot and last-trade endpoints are 403 on this plan, so
+    # there is nothing live to read here; yfinance quotes it correctly and
+    # continuously, and the fallback reaches it.
+    if sym.startswith("X:"):
+        return None
+
     try:
         # Stocks snapshot — ONLY for things that are actually stocks.
         r = requests.get(
@@ -385,9 +395,18 @@ def polygon_batch_snapshot(symbols: list) -> dict:
         with ThreadPoolExecutor(max_workers=8) as pool:
             for sym, snap in zip(missing, pool.map(polygon_snapshot_with_fallback, missing)):
                 if snap and snap.get("price"):
-                    prev = snap.get("prev_close") or snap["price"]
-                    chg = ((snap["price"] / prev) - 1) * 100 if prev > 0 else 0
-                    results[sym] = {"price": snap["price"], "change": round(chg, 2)}
+                    prev = snap.get("prev_close")
+                    if prev and prev > 0:
+                        chg = ((snap["price"] / prev) - 1) * 100
+                        results[sym] = {"price": snap["price"], "prev_close": prev,
+                                        "change": round(chg, 2)}
+                    else:
+                        # Substituting the price for a missing prior close is how
+                        # you publish a confident 0.00% that means "unknown".
+                        # Omit `change` and let the card show a price with no move
+                        # rather than a move of zero.
+                        logger.info(f"{sym}: no prior close — publishing price without a change")
+                        results[sym] = {"price": snap["price"]}
 
     # Save all fetched results to Supabase cache
     new_results = {k: v for k, v in results.items() if k not in cached}
@@ -1034,6 +1053,22 @@ def _yfinance_snapshot(symbol: str) -> dict | None:
         price = info.get("lastPrice") or info.get("last_price", 0)
         prev = info.get("previousClose") or info.get("previous_close", 0)
         if price and price > 0:
+            # A missing `previousClose` used to return 0 here, and the caller
+            # then substitutes the price for it — which yields a 0.00% change,
+            # the same silent flat that hid the closed-market bug. Fall back to
+            # the prior DAILY BAR instead, so a missing field costs an extra
+            # call rather than publishing a wrong number that looks fine.
+            if not prev or prev <= 0:
+                try:
+                    h = t.history(period="7d", interval="1d", auto_adjust=False)
+                    closes = h["Close"].dropna() if "Close" in h else []
+                    if len(closes) >= 2:
+                        prev = float(closes.iloc[-2])
+                except Exception:
+                    pass
+            if not prev or prev <= 0:
+                logger.info(f"{symbol}: no prior close available — reporting price without a change")
+                return {"price": round(price, 4)}
             return {"price": round(price, 4), "prev_close": round(prev, 4)}
     except Exception as e:
         logger.warning(f"yfinance snapshot failed for {symbol}: {e}")

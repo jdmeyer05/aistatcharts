@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import statistics
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -152,7 +153,14 @@ def sp_valuation() -> dict:
         # Median across metrics rather than mean — one metric with a distorted
         # long-run baseline (price/book drifts structurally) shouldn't drag the
         # headline.
-        "median_premium_pct": round(sorted(prem)[len(prem) // 2], 1) if prem else None,
+        #
+        # `sorted(prem)[len(prem) // 2]` is NOT a median on an even-length list:
+        # it takes the upper of the two middle values. With all six metrics
+        # present that reported 104.1% against a true median of 97.7%, biasing
+        # the headline high by 6.4 points — and it was right only when an odd
+        # number of metrics happened to be available, so the error came and went
+        # with scraper availability.
+        "median_premium_pct": round(statistics.median(prem), 1) if prem else None,
         "rows": rows,
         "unavailable": [m.key for m, r in zip(METRICS, results) if not r],
     }

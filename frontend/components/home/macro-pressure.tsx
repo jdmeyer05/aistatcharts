@@ -120,14 +120,25 @@ export default function MacroPressure() {
               Macro Pressure — Equities
             </h2>
             {d?.available && (
-              <span className={`px-2 py-0.5 rounded text-[0.6rem] font-bold uppercase ${netClass(d.net_label)}`}>
+              <span
+                className={`px-2 py-0.5 rounded text-[0.6rem] font-bold uppercase ${netClass(d.net_label)}`}
+                title={
+                  d.net_from_n != null && d.net_total_n != null
+                    ? `Mean score ${d.net_score?.toFixed(2)} across the ${d.net_from_n} of ${d.net_total_n} factors that reported.` +
+                      (d.net_excluded_stale
+                        ? ` ${d.net_excluded_stale} stale ${d.net_excluded_stale === 1 ? "series is" : "series are"} excluded — a flat reading there means no new data, not no pressure.`
+                        : "")
+                    : `Mean factor score ${d.net_score?.toFixed(2)}.`
+                }
+              >
                 Net: {d.net_label}
               </span>
             )}
           </div>
           <div className="text-[0.6rem] text-text-muted mt-0.5">
             {d?.available
-              ? `${d.counts?.supportive ?? 0} supportive · ${d.counts?.neutral ?? 0} neutral · ${d.counts?.headwind ?? 0} headwind · ${d.change_window_days}-day change vs ${d.lookback} history`
+              ? `${d.counts?.supportive ?? 0} supportive · ${d.counts?.neutral ?? 0} neutral · ${d.counts?.headwind ?? 0} headwind · ${d.change_window_days}-day change vs ${d.lookback} history` +
+                (d.net_excluded_stale ? ` · net excludes ${d.net_excluded_stale} stale` : "")
               : "Rates, credit, dollar, vol, growth and inflation — scored for equity impact"}
           </div>
         </div>
