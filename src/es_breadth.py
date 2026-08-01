@@ -190,16 +190,44 @@ def _classify(df: pd.DataFrame) -> dict:
     }
 
 
-def _equal_vs_cap() -> dict:
+def _equal_vs_cap(snap: pd.DataFrame | None = None) -> dict:
     """Equal-weight against cap-weight — the cheapest honest breadth cross-check.
 
-    It is computed from two liquid ETFs rather than from a universe, so it fails
-    and succeeds independently of everything above. When the two disagree, the
-    reconstruction is the one to doubt.
+    METHODOLOGICALLY independent of the counts above: two ETF prices against a
+    universe tally, so it can contradict the reconstruction and that
+    contradiction is informative. It is NOT source-independent, and the docstring
+    used to claim it was. Both names are already sitting in the snapshot the
+    counts were built from, so reading them from anywhere else meant two extra
+    round-trips AND a second prior-close convention that could disagree with
+    every other number on the card — the exact failure the accuracy audit was
+    about. Same source, same arithmetic, consistent answer.
+
+    yfinance stays as the fallback for the case where the snapshot is missing or
+    the names are absent from it.
     """
     try:
-        import yfinance as yf
         out = {}
+        if snap is not None and not snap.empty:
+            for sym, key in (("RSP", "equal_weight"), ("SPY", "cap_weight")):
+                if sym in snap.index:
+                    row = snap.loc[sym]
+                    chg = row.get("chg_pct")
+                    # `chg_pct` is zeroed when the market is shut, so fall back to
+                    # the completed session rather than publish a flat 0.00%.
+                    if chg and float(row.get("vol") or 0) > 0:
+                        out[key] = round(float(chg), 2)
+            if len(out) == 2:
+                spread = round(out["equal_weight"] - out["cap_weight"], 2)
+                return {"available": True, **out, "spread_pct": spread,
+                        "source": "polygon snapshot",
+                        "label": ("broad" if spread > 0.15 else
+                                  "narrow" if spread < -0.15 else "even"),
+                        "note": ("Equal-weight minus cap-weight. Negative means the index is "
+                                 "being carried by its largest members while the average "
+                                 "stock lags.")}
+            out = {}
+
+        import yfinance as yf
         for sym, key in (("RSP", "equal_weight"), ("SPY", "cap_weight")):
             # yf.download is not thread-safe; Ticker().history is.
             h = yf.Ticker(sym).history(period="5d", interval="1d", auto_adjust=False)
@@ -212,6 +240,7 @@ def _equal_vs_cap() -> dict:
             "available": True,
             **out,
             "spread_pct": spread,
+            "source": "yfinance fallback",
             "label": ("broad" if spread > 0.15 else
                       "narrow" if spread < -0.15 else "even"),
             "note": ("Equal-weight minus cap-weight. Negative means the index is being "
@@ -288,7 +317,8 @@ def market_breadth(now: pd.Timestamp | None = None,
         return {"available": False, "reason": "universe too small to be meaningful"}
 
     stats = _classify(frame)
-    eq = _equal_vs_cap()
+    # Reuse the snapshot already in hand rather than re-fetching two names.
+    eq = _equal_vs_cap(snap if live else None)
 
     # The index move breadth is compared against has to describe the SAME window
     # the counts do. Passing ES's change works while the market is trading, but

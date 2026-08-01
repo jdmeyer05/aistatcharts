@@ -1105,7 +1105,11 @@ export default function EsBriefing() {
                 </div>
 
                 {d.breadth.equal_vs_cap?.available && (
-                  <div title={d.breadth.equal_vs_cap.note}>
+                  <div title={`${d.breadth.equal_vs_cap.note ?? ""}${
+                    d.breadth.equal_vs_cap.source
+                      ? ` Source: ${d.breadth.equal_vs_cap.source}.`
+                      : ""
+                  }`}>
                     <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">
                       Equal vs cap
                     </div>

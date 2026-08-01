@@ -3079,6 +3079,10 @@ export interface EsBreadth {
     available: boolean;
     equal_weight?: number; cap_weight?: number; spread_pct?: number;
     label?: string; note?: string;
+    /** Which feed answered — the same Polygon snapshot the counts came from
+     *  while the market trades, yfinance when it is shut or the names are
+     *  missing. Surfaced so a source change is visible rather than silent. */
+    source?: string;
   };
   divergence?: { label: string; note: string } | null;
   /** Always unavailable — NYSE TICK needs a classified tick stream no wired
