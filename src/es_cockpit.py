@@ -33,7 +33,8 @@ def _level(levels: list[dict], key: str) -> dict | None:
 
 
 def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
-                    session: dict, schedule: list[dict]) -> dict:
+                    session: dict, schedule: list[dict],
+                    breadth: dict | None = None) -> dict:
     """Is this session worth trading, on conditions alone?
 
     Scored from independent factors, each of which can only ever ADD or SUBTRACT
@@ -138,6 +139,35 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
         reasons.append({"factor": "High-impact print later", "effect": 0,
                         "why": f"{upcoming[0]['name']} at {upcoming[0]['time_et']} — the session "
                                "before it is usually a holding pattern."})
+
+    # Breadth. An index grinding higher on negative net advancers is a
+    # low-quality tape: the move is carried by a handful of names and does not
+    # follow through. That is a CONDITIONS statement, not a directional one — it
+    # says moves are unreliable, not which way they go — so it belongs here.
+    # It is also not double-counting the volume factor above: that measures
+    # participation, this measures dispersion, and they disagree often.
+    #
+    # DELIBERATELY ASYMMETRIC. Only the divergent case scores, and only -1. The
+    # bands below were tuned in an audit pass, and a factor that fired on every
+    # session would shift the whole score distribution under them. Confirmation
+    # is the common case and carries 0, so the gate reads exactly as it did
+    # before except on the sessions where breadth is actually telling you
+    # something. One consequence is intended and worth stating: a session
+    # already sitting at -1 tips to "poor" on a divergence alone, which is the
+    # right answer — mildly awkward conditions plus a narrow tape is worse than
+    # either by itself.
+    if (breadth or {}).get("available") and (breadth or {}).get("live"):
+        div = (breadth or {}).get("divergence") or {}
+        net = breadth.get("net_advancers_pct")
+        if div.get("label") == "divergent":
+            score -= 1
+            reasons.append({"factor": "Breadth diverging", "effect": -1,
+                            "why": f"Net advancers {net:+.0f}% against the index — the move is "
+                                   "carried by a few names and follow-through is unreliable."})
+        elif div.get("label") == "confirmed":
+            reasons.append({"factor": "Breadth confirms", "effect": 0,
+                            "why": f"Net advancers {net:+.0f}% agree with the index — the move "
+                                   "has the market behind it rather than a handful of names."})
 
     # Day type.
     dt = (intraday or {}).get("day_type") or {}
