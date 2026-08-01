@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from api._json_safe import df_records, json_safe
@@ -2784,6 +2785,10 @@ def _es_levels_cached(profile_sessions: int) -> dict:
 
 _ES_BRIEF_CACHE: dict = {}
 _ES_BRIEF_TTL_S = 90
+# Beyond this a stale payload is no longer worth serving and the caller waits
+# for a fresh build. Kept tight because the levels develop intraday.
+_ES_BRIEF_STALE_MAX_S = 150
+_ES_BRIEF_REFRESHING = threading.Event()
 
 
 def _es_brief_cached() -> dict:
@@ -2800,9 +2805,42 @@ def _es_brief_cached() -> dict:
     """
     from time import time as _now
     hit = _ES_BRIEF_CACHE.get("v")
-    if hit and (_now() - hit[0]) < _ES_BRIEF_TTL_S:
-        return hit[1]
+    if hit:
+        age = _now() - hit[0]
+        if age < _ES_BRIEF_TTL_S:
+            return hit[1]
+        # STALE-WHILE-REVALIDATE. A full build is ~5-8s in production, so with a
+        # plain TTL one unlucky request per cycle wore the whole rebuild — and
+        # since a trader reloads less often than every 90s, that request was
+        # usually theirs. Serve the slightly stale payload immediately and
+        # rebuild behind it, so nobody waits for the flagship card.
+        #
+        # Safe to serve stale because nothing time-sensitive is baked in: the
+        # client counts down from each release's absolute `when`, and derives
+        # the quote's age from the absolute `asof`, so neither can be
+        # understated by a cached response.
+        if age < _ES_BRIEF_STALE_MAX_S:
+            if not _ES_BRIEF_REFRESHING.is_set():
+                _ES_BRIEF_REFRESHING.set()
 
+                def _refresh() -> None:
+                    try:
+                        _es_brief_build()
+                    except Exception as e:
+                        logger.warning(f"es-brief background refresh failed: {e}")
+                    finally:
+                        _ES_BRIEF_REFRESHING.clear()
+
+                threading.Thread(target=_refresh, daemon=True,
+                                 name="es-brief-refresh").start()
+            return hit[1]
+
+    return _es_brief_build()
+
+
+def _es_brief_build() -> dict:
+    """Build the briefing and store it. Always does the real work."""
+    from time import time as _now
     from concurrent.futures import ThreadPoolExecutor
 
     def _safe(fn, label):

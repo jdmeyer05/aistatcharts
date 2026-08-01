@@ -368,6 +368,23 @@ export default function EsBriefing() {
   const lv = d?.levels;
   const session = d?.session;
 
+  // Quote age is derived from the absolute `asof`, never from the server's
+  // `bar_age_min`. The API serves a slightly stale payload while it rebuilds
+  // behind the request, and a baked-in age would then understate how old the
+  // price is — the one number that must never read younger than it is, since
+  // every distance on this card is measured from that price.
+  const { barAgeMin, isStale } = useMemo(() => {
+    const fallback = { barAgeMin: lv?.bar_age_min ?? null, isStale: Boolean(lv?.stale) };
+    if (!lv?.asof || nowMin == null) return fallback;
+    const t = Date.parse(lv.asof);
+    if (!Number.isFinite(t)) return fallback;
+    const age = nowMin - Math.round(t / 60_000);
+    // Only a session that is actually trading can have a stale feed — a
+    // four-hour-old bar on a Saturday is simply the last print.
+    const trading = lv.mode === "rth" || lv.mode === "premarket";
+    return { barAgeMin: age, isStale: trading && age > 15 };
+  }, [lv, nowMin]);
+
   // Say plainly which frame the ladder describes. Driven off the payload's
   // session mode rather than a date comparison, because the misleading case
   // (pre-open, and the completed Friday session) shares today's date.
@@ -444,10 +461,10 @@ export default function EsBriefing() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span
-            className={`text-[0.6rem] ${lv?.stale ? "text-loss font-semibold" : "text-text-muted"}`}
+            className={`text-[0.6rem] ${isStale ? "text-loss font-semibold" : "text-text-muted"}`}
             title={
-              lv?.stale
-                ? `The feed is ${lv.bar_age_min} minutes behind a session that is trading. Every level and distance on this card is computed off that stale price — check a live quote before acting.`
+              isStale
+                ? `The feed is ${barAgeMin} minutes behind a session that is trading. Every level and distance on this card is computed off that stale price — check a live quote before acting.`
                 : "Age of the last 5-minute bar."
             }
           >
@@ -492,9 +509,9 @@ export default function EsBriefing() {
         <>
           {/* A stale feed makes every distance on this card wrong by the same
               amount, so it outranks the read rather than sitting beside it. */}
-          {lv?.stale && (
+          {isStale && (
             <div className="border-l-2 border-l-loss bg-loss/10 px-3 py-2 rounded-r text-[0.68rem] leading-snug">
-              <span className="font-semibold text-loss">Quote is {lv.bar_age_min} minutes stale.</span>{" "}
+              <span className="font-semibold text-loss">Quote is {barAgeMin} minutes stale.</span>{" "}
               <span className="text-text">
                 The session is trading but the bar feed is behind, so every level distance below is
                 measured from an old price. Check a live quote before acting on this.
