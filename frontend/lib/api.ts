@@ -2860,6 +2860,11 @@ export interface EsLevel {
   distance: number;
   distance_pct: number;
   side: "above" | "below";
+  /** Distance as a share of the expected session range — the "can price even get
+   *  there today" question. Qualitative by design: a real touch probability
+   *  would need its own study. Absent when no expected move is available. */
+  pct_of_expected_range?: number;
+  reach?: "routine" | "reachable" | "a stretch" | "beyond a typical session";
 }
 
 /** Which frame the levels describe. `rth` = a cash session is open or done

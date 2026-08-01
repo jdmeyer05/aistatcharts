@@ -91,7 +91,13 @@ export default function PageInterpretation() {
             profile_is_prior_session: lv.profile_is_prior_session,
             contract_roll_risk: lv.contract_roll_risk,
             nearest: lv.nearest ? { label: lv.nearest.label, value: lv.nearest.value, distance: lv.nearest.distance } : null,
-            levels: lv.levels?.map((l) => ({ label: l.label, group: l.group, value: l.value, distance: l.distance })),
+            // `reach` is the difference between "the level is 40 handles away"
+            // and "the level is half a session's travel away" — the second is
+            // the one that decides whether it belongs in today's plan.
+            levels: lv.levels?.map((l) => ({
+              label: l.label, group: l.group, value: l.value, distance: l.distance,
+              pct_of_expected_range: l.pct_of_expected_range, reach: l.reach,
+            })),
           }
         : null,
 
@@ -199,6 +205,29 @@ export default function PageInterpretation() {
               "Reconstructed on a liquid US universe, not NYSE-listed issues — direction " +
               "and extremes carry, absolute counts will not match a terminal. NYSE TICK is " +
               "not available from any wired source and is absent, not approximated.",
+          }
+        : null,
+
+      // What yesterday's bar says about tomorrow's RANGE. Geometry forecasts
+      // range (IC 0.158, t=75) far better than direction (IC -0.016), so this
+      // block is for sizing and target realism, never for a directional call.
+      candle_context: brief.candles?.available
+        ? {
+            bar: brief.candles.bar,
+            tomorrow_range: brief.candles.tomorrow_range
+              ? {
+                  p25: brief.candles.tomorrow_range.p25,
+                  p50: brief.candles.tomorrow_range.p50,
+                  p75: brief.candles.tomorrow_range.p75,
+                  prob_exceeds_1_atr: brief.candles.tomorrow_range.prob_exceeds_1_atr,
+                  n: brief.candles.tomorrow_range.n,
+                }
+              : null,
+            measured_vs_implied: brief.candles.vs_implied,
+            direction_tilt_is_negligible: true,
+            caveat:
+              "Cash index (^GSPC), not ES. Range is the predictable part; the close-location " +
+              "tilt spans ~10bp and is context only, never a directional signal.",
           }
         : null,
 

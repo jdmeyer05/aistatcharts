@@ -623,10 +623,20 @@ export default function EsBriefing() {
                     ) : (
                       <div
                         key={row.l.key}
+                        /* Levels price cannot plausibly reach in one session are
+                           dimmed rather than hidden. They still frame the market,
+                           but planning a day around them is the mistake, and
+                           making that visible costs nothing. */
                         className={`flex items-center gap-2 py-1 pl-2 border-l-2 ${
                           GROUP_CLASS[row.l.group] ?? "border-l-border"
-                        } border-b border-b-border/30 last:border-b-0`}
-                        title={row.l.note}
+                        } border-b border-b-border/30 last:border-b-0 ${
+                          row.l.reach === "beyond a typical session" ? "opacity-45" : ""
+                        }`}
+                        title={
+                          row.l.reach
+                            ? `${row.l.note} — ${row.l.pct_of_expected_range}% of the expected session range away (${row.l.reach}).`
+                            : row.l.note
+                        }
                       >
                         <span className="tabular-nums text-text w-[4.5rem]">{fmtPx(row.l.value)}</span>
                         <span className="text-text-muted truncate flex-1 min-w-0">
@@ -644,7 +654,11 @@ export default function EsBriefing() {
                           className={`tabular-nums shrink-0 ${
                             row.l.side === "above" ? "text-gain" : "text-loss"
                           }`}
-                          title={`Price is ${Math.abs(row.l.distance).toFixed(2)} handles ${row.l.side} this level`}
+                          title={`Price is ${Math.abs(row.l.distance).toFixed(2)} handles ${row.l.side} this level.${
+                            row.l.reach
+                              ? ` That is ${row.l.pct_of_expected_range}% of the expected session range — ${row.l.reach}.`
+                              : ""
+                          }`}
                         >
                           {fmtHandles(row.l.distance)}
                         </span>
@@ -655,7 +669,9 @@ export default function EsBriefing() {
               )}
               <p className="text-[0.55rem] text-text-muted leading-snug pt-0.5">
                 Distances in handles, signed from the last price. Overnight levels are made on thin Globex
-                volume and break more easily than RTH levels made on size.
+                volume and break more easily than RTH levels made on size. Rows are dimmed when the level
+                sits further away than a whole expected session&apos;s range — still context, but not a
+                target for today. Hover any distance for its share of that range.
               </p>
             </div>
 

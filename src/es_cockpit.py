@@ -301,6 +301,35 @@ def es_cockpit(now: pd.Timestamp | None = None,
         breadth = f_bd.result() if f_bd else None
         candles = f_cx.result() if f_cx else None
 
+    # REACHABILITY. The ladder quotes every level as a distance in handles, which
+    # answers "how far" but not the question actually being asked at the open:
+    # can price even GET there in a session? Thirty handles is a routine walk on
+    # a day priced for ninety and most of a trend day on one priced for forty.
+    # Expressing each distance against the expected range turns a raw number into
+    # a decision, and it is the arithmetic a trader does in their head anyway.
+    #
+    # Denominated in the expected RANGE (high-low), not sigma, because this is
+    # about whether price TOUCHES the level intraday rather than where it closes.
+    # Kept qualitative on purpose: a real touch probability needs its own study,
+    # and inventing one here would be the fabricated precision this cockpit
+    # exists to keep out.
+    exp_range = (em or {}).get("expected_range")
+    if exp_range and levels.get("levels"):
+        for lv_row in levels["levels"]:
+            dist = lv_row.get("distance")
+            if dist is None:
+                continue
+            share = abs(dist) / exp_range * 100
+            lv_row["pct_of_expected_range"] = round(share)
+            if share <= 25:
+                lv_row["reach"] = "routine"
+            elif share <= 60:
+                lv_row["reach"] = "reachable"
+            elif share <= 100:
+                lv_row["reach"] = "a stretch"
+            else:
+                lv_row["reach"] = "beyond a typical session"
+
     # Two independent estimates of tomorrow's high-low: what options are paying
     # for, and what bars conditioned like today's have actually delivered.
     if candles and (candles.get("tomorrow_range") or {}).get("p50") and (em or {}).get("expected_range"):
