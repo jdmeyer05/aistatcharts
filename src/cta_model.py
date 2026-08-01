@@ -795,12 +795,18 @@ def historical_analog(top_n: int = 5) -> dict:
     similarities.sort(key=lambda x: -x[1])
     top = similarities[:top_n]
 
-    # Pull SPY forward returns for each analog
+    # Pull SPY forward returns for each analog. Through the OHLCV cache
+    # (Supabase, topped up from Polygon) rather than a direct yfinance hit —
+    # this runs inside the CTA bundle and was one of the calls that got the
+    # Cloud Run IP throttled.
     try:
-        import yfinance as yf
-        spy = yf.Ticker("SPY").history(period="10y", auto_adjust=False).reset_index()
-        spy["Date"] = pd.to_datetime(spy["Date"]).dt.tz_localize(None)
-        spy = spy.set_index("Date")["Close"]
+        from src.ohlcv_cache import fetch_ohlcv
+        _spy = fetch_ohlcv("SPY", lookback_days=2520)
+        if _spy is None or len(_spy) == 0:
+            spy = pd.Series(dtype=float)
+        else:
+            spy = _spy["Close"].copy()
+            spy.index = pd.to_datetime(spy.index)
     except Exception:
         spy = pd.Series(dtype=float)
 
@@ -808,8 +814,15 @@ def historical_analog(top_n: int = 5) -> dict:
         if spy.empty:
             return None
         try:
+            target = date + pd.Timedelta(weeks=weeks)
+            # asof() past the end of the series returns the LAST known price, so
+            # an analog only 4 weeks old would report its 4-week move as a
+            # 3-month return. The horizon hasn't elapsed — omit the field rather
+            # than answer with a shorter window wearing a longer label.
+            if target > spy.index[-1]:
+                return None
             start = spy.asof(date)
-            end = spy.asof(date + pd.Timedelta(weeks=weeks))
+            end = spy.asof(target)
             if start is None or end is None or np.isnan(start) or np.isnan(end):
                 return None
             return round(float((end - start) / start * 100), 2)

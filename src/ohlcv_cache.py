@@ -33,6 +33,33 @@ def _is_market_open() -> bool:
     return market_open <= et <= market_close
 
 
+# Polygon on this plan serves daily aggs for US equities/ETFs only, and only
+# ~5 calendar years back. Indices (^GSPC), futures (ES=F), FX (EURUSD=X) and
+# crypto (BTC-USD) come back as 200 with an EMPTY result set rather than an
+# error, so gate on symbol shape instead of paying for a request that cannot
+# succeed. Note we never rewrite a symbol to reach Polygon: a bare futures root
+# quotes a real, unrelated equity there (ES -> Eversource, CL -> Colgate).
+_POLYGON_MAX_HISTORY_DAYS = 365 * 5
+_NON_EQUITY_SUFFIXES = ("-USD", "-USDT", "-EUR", "-GBP", "-JPY")
+
+
+def _polygon_eligible(ticker: str) -> bool:
+    """True only for plain US equity/ETF symbols Polygon can actually serve."""
+    t = (ticker or "").upper()
+    if not t:
+        return False
+    if t.startswith("^") or "=" in t:
+        return False
+    if t.endswith(_NON_EQUITY_SUFFIXES):
+        return False
+    return all(c.isalpha() or c in ".-" for c in t)
+
+
+def _polygon_earliest() -> date:
+    """Oldest date Polygon will serve on this plan."""
+    return date.today() - timedelta(days=_POLYGON_MAX_HISTORY_DAYS)
+
+
 def _fetch_polygon_daily(ticker: str, start_date: str, end_date: str) -> pd.DataFrame | None:
     """Fetch daily bars from Polygon for a date range."""
     try:
@@ -72,17 +99,35 @@ def _fetch_yfinance(ticker: str, period: str) -> pd.DataFrame | None:
         return None
 
 
-def _load_from_supabase(ticker: str) -> tuple[pd.DataFrame | None, date | None]:
+# PostgREST enforces a server-side row cap (1000) that a client-side .limit()
+# cannot raise. The old read asked for 3000 rows ASCENDING and got the OLDEST
+# 1000 — silently discarding everything newer. A ticker with deep history read
+# back as years stale, so every call fell through to a full yfinance
+# re-download and the cache never once served it. Page explicitly.
+_PAGE = 1000
+
+
+def _load_from_supabase(ticker: str, since: date | None = None) -> tuple[pd.DataFrame | None, date | None]:
     """Load cached OHLCV from Supabase. Returns (df, latest_date) or (None, None)."""
     try:
         from src.db import get_client
         sb = get_client()
         if not sb:
             return None, None
-        r = sb.table("ohlcv_cache").select("date,open,high,low,close,volume").eq("ticker", ticker).order("date").limit(3000).execute()
-        if not r.data:
+        rows: list[dict] = []
+        offset = 0
+        while True:
+            q = sb.table("ohlcv_cache").select("date,open,high,low,close,volume").eq("ticker", ticker)
+            if since is not None:
+                q = q.gte("date", since.isoformat())
+            page = q.order("date").range(offset, offset + _PAGE - 1).execute()
+            rows.extend(page.data or [])
+            if not page.data or len(page.data) < _PAGE:
+                break
+            offset += _PAGE
+        if not rows:
             return None, None
-        df = pd.DataFrame(r.data)
+        df = pd.DataFrame(rows)
         df["date"] = pd.to_datetime(df["date"]).dt.date
         df = df.set_index("date")
         df.columns = ["Open", "High", "Low", "Close", "Volume"]
@@ -144,47 +189,70 @@ def fetch_ohlcv(ticker: str, lookback_days: int = 1260) -> pd.DataFrame | None:
         if _time.time() - ts < _MEM_TTL:
             return cached_mem
 
-    # Step 1: Check Supabase cache
-    cached_df, latest_cached = _load_from_supabase(ticker)
+    # Step 1: Check Supabase cache. Bounded to the window actually requested so
+    # the common case is a single page.
+    cached_df, latest_cached = _load_from_supabase(ticker, since=earliest_needed)
 
     if cached_df is not None and latest_cached is not None:
         # Step 2: Incremental update — only fetch missing days
         days_missing = (today - latest_cached).days
+        gap_start = latest_cached + timedelta(days=1)
+
         if days_missing <= 1:
             # Cache is current (or market closed today)
             df = cached_df
-        elif days_missing <= 30:
-            # Fetch just the missing days from Polygon (faster than yfinance for small ranges)
-            start = (latest_cached + timedelta(days=1)).isoformat()
-            end = today.isoformat()
-            new_df = _fetch_polygon_daily(ticker, start, end)
-            if new_df is None or len(new_df) == 0:
-                # Fallback to yfinance for the missing period
+        else:
+            # Polygon fills a gap of any length inside its 5y window in one
+            # request, so gap length is irrelevant to it. This used to be capped
+            # at 30 days, and anything staler fell through to a full multi-year
+            # yfinance re-download — which is self-reinforcing: once yfinance
+            # throttles, nothing is saved, so the next call makes the same
+            # expensive request against the same stale cache. SPY sat 50 days
+            # behind on exactly this loop.
+            new_df = None
+            if _polygon_eligible(ticker) and gap_start >= _polygon_earliest():
+                new_df = _fetch_polygon_daily(ticker, gap_start.isoformat(), today.isoformat())
+            if (new_df is None or len(new_df) == 0) and days_missing <= 30:
                 new_df = _fetch_yfinance(ticker, f"{days_missing + 5}d")
                 if new_df is not None:
                     new_df = new_df[new_df.index > latest_cached]
+
             if new_df is not None and len(new_df) > 0:
                 _save_to_supabase(ticker, new_df)
                 df = pd.concat([cached_df, new_df])
                 df = df[~df.index.duplicated(keep="last")]
                 df = df.sort_index()
+            elif days_missing > 30:
+                # Neither source could patch the gap — rebuild from yfinance.
+                full_df = _fetch_yfinance(ticker, period)
+                if full_df is not None:
+                    _save_to_supabase(ticker, full_df)
+                    df = full_df
+                else:
+                    df = cached_df  # stale, but real bars beat no bars
             else:
                 df = cached_df
-        else:
-            # Too many days missing — re-download full history
-            full_df = _fetch_yfinance(ticker, period)
-            if full_df is not None:
-                _save_to_supabase(ticker, full_df)
-                df = full_df
-            else:
-                df = cached_df  # use stale cache as fallback
 
         # Trim to requested lookback
         if len(df) > 0:
             df = df[df.index >= earliest_needed]
     else:
-        # Step 3: No cache — full download
-        df = _fetch_yfinance(ticker, period)
+        # Step 3: No cache — full download. Prefer Polygon when it can cover the
+        # whole requested window (it doesn't rate-limit); fall back to yfinance
+        # for indices/futures/crypto and for depth beyond Polygon's 5y horizon.
+        df = None
+        eligible = _polygon_eligible(ticker)
+        if eligible and earliest_needed >= _polygon_earliest():
+            df = _fetch_polygon_daily(ticker, earliest_needed.isoformat(), today.isoformat())
+        if df is None or len(df) == 0:
+            df = _fetch_yfinance(ticker, period)
+        if (df is None or len(df) == 0) and eligible:
+            # Last resort: shallower than asked for, but real. Better than
+            # blanking the caller because yfinance is throttling.
+            df = _fetch_polygon_daily(ticker, _polygon_earliest().isoformat(), today.isoformat())
+            if df is not None and len(df) > 0:
+                logger.warning(f"{ticker}: yfinance unavailable, seeded from Polygon "
+                               f"(5y max, {len(df)} bars) instead of {period}")
         if df is not None and len(df) > 0:
             _save_to_supabase(ticker, df)
         else:
