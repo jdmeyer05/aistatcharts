@@ -281,42 +281,76 @@ function VolLandscapeSnapshot() {
     staleTime: 4 * 60_000,
   });
   const d = q.data;
-  const topRows = useMemo(() => {
-    const rows = (d as { rows?: unknown[]; items?: unknown[]; top_dislocations?: unknown[] } | undefined);
-    const candidate = rows?.top_dislocations ?? rows?.rows ?? rows?.items ?? [];
-    return (candidate as Array<Record<string, unknown>>).slice(0, 5);
-  }, [d]);
+
+  // This card read `top_dislocations` / `rows` / `items`, and the endpoint
+  // returns none of them — it returns `metrics`, `divergences`, `summary`,
+  // `regime` and `regime_action`. Every one of those lookups resolved to
+  // undefined, so the fallback chain always produced an empty array and the
+  // card permanently displayed "No dislocations surfaced right now." It had
+  // never shown data. `divergences` is the field that actually carries the
+  // dislocations the card was written to show.
+  const divergences = useMemo(() => (d?.divergences ?? []).slice(0, 5), [d]);
+  const s = d?.summary;
 
   return (
     <div className="card card-compact space-y-2">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h3 className="text-xs font-bold uppercase tracking-wider text-accent">Vol Landscape</h3>
         <Link href="/vol-landscape" className="text-[0.6rem] text-text-muted hover:text-accent">Full →</Link>
       </div>
+
       {q.isLoading && <div className="text-xs text-text-muted">Loading…</div>}
-      {!q.isLoading && topRows.length === 0 && (
-        <div className="text-xs text-text-muted">No dislocations surfaced right now.</div>
+
+      {!q.isLoading && !d && (
+        <div className="text-xs text-text-muted">Vol landscape unavailable.</div>
       )}
-      <div className="space-y-1.5 text-xs">
-        {topRows.map((r, i) => {
-          const ticker = (r.ticker ?? r.symbol ?? r.underlying ?? "?") as string;
-          const label = (r.label ?? r.signal ?? r.note ?? "") as string;
-          const iv = r.iv ?? r.implied_vol ?? r.implied ?? null;
-          const rv = r.rv ?? r.realized_vol ?? r.realized ?? null;
-          return (
-            <div key={i} className="flex items-center gap-2 justify-between">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="font-bold tabular-nums">{ticker}</span>
-                <span className="text-text-muted truncate">{label}</span>
-              </div>
-              <div className="tabular-nums text-text-muted shrink-0">
-                {iv != null && `IV ${Number(iv).toFixed(1)}`}
-                {rv != null && ` · RV ${Number(rv).toFixed(1)}`}
-              </div>
+
+      {d && (
+        <>
+          {d.regime && (
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-[0.65rem] font-bold px-1.5 py-0.5 rounded bg-accent/15 text-accent">
+                {d.regime}
+              </span>
+              {d.regime_action && (
+                <span className="text-[0.65rem] text-text">{d.regime_action}</span>
+              )}
             </div>
-          );
-        })}
-      </div>
+          )}
+
+          {s && (
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.62rem] text-text-muted tabular-nums">
+              <span title="Average front-month implied vol across the scanned universe.">
+                avg IV <span className="text-text">{s.avg_iv?.toFixed(1)}</span>
+              </span>
+              <span title="Implied over realised. Above 1 means options are pricing more movement than has been delivered.">
+                IV/HV <span className="text-text">{s.avg_ivhv?.toFixed(2)}</span>
+              </span>
+              <span title="Names whose term structure is inverted — front vol above back vol, which prices near-term event risk.">
+                <span className="text-text">{s.n_inverted}</span> inverted
+              </span>
+              <span title="Names with unusually steep put skew.">
+                <span className="text-text">{s.n_steep_skew}</span> steep skew
+              </span>
+              <span className="text-text-muted/70">of {s.n_tickers}</span>
+            </div>
+          )}
+
+          {divergences.length === 0 ? (
+            <div className="text-xs text-text-muted">No cross-asset dislocations right now.</div>
+          ) : (
+            <div className="space-y-1 text-[0.65rem]">
+              {divergences.map((x, i) => (
+                <div key={i} className="flex items-start gap-2" title={x.description}>
+                  <span className="font-bold shrink-0 w-[4.5rem] truncate">{x.pair}</span>
+                  <span className="text-text-muted shrink-0 w-[3.5rem] truncate">{x.metric}</span>
+                  <span className="text-text flex-1 min-w-0 leading-snug">{x.signal}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

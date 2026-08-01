@@ -332,11 +332,15 @@ export default function CtaFlows() {
           </details>
 
           <div className="space-y-3">
-            <div className="min-w-0">
+            {/* Wrapper owns the height and clips; the chart fills it. With the
+                height only in `layout` and nothing reserved here, the SVG
+                overflowed its slot and painted over the "Flow by horizon"
+                block directly below. */}
+            <div className="min-w-0 h-[220px] overflow-hidden">
               <Plot
                 data={traces}
                 layout={{
-                  height: 220,
+                  autosize: true,
                   ...L,
                   yaxis: { title: "Δ exposure (pts)", gridcolor: t.grid, zeroline: true, zerolinecolor: t.muted },
                   xaxis: { title: `Business days ahead (${d.horizon_days}d horizon)`, gridcolor: t.grid },
@@ -345,7 +349,7 @@ export default function CtaFlows() {
                   showlegend: true,
                 }}
                 config={{ displayModeBar: false, responsive: true }}
-                style={{ width: "100%" }}
+                style={{ width: "100%", height: "100%" }}
               />
             </div>
 

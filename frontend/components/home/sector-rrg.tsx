@@ -147,11 +147,18 @@ export default function SectorRrgCard() {
       {d?.available && (
         <>
           <div className="space-y-3">
-            <div className="min-w-0">
+            {/* The wrapper owns the height and clips, the chart fills it.
+                Previously the height lived only in `layout` and the wrapper
+                reserved none, so Plotly's SVG sat in a slot that measured
+                shorter than the graph and painted straight over the next
+                sibling — the quadrant boxes below. `autosize` + a 100% height
+                inside a bounded, clipped box is the combination that keeps a
+                responsive Plotly chart inside its own space. */}
+            <div className="min-w-0 h-[300px] overflow-hidden">
           <Plot
             data={traces}
             layout={{
-              height: 300,
+              autosize: true,
               ...L,
               xaxis: { title: "Relative strength →", range: [lo, hi], gridcolor: t.grid, zeroline: false },
               yaxis: { title: "Momentum →", range: [lo, hi], gridcolor: t.grid, zeroline: false },
@@ -184,7 +191,7 @@ export default function SectorRrgCard() {
               ],
             }}
             config={{ displayModeBar: false, responsive: true }}
-            style={{ width: "100%" }}
+            style={{ width: "100%", height: "100%" }}
           />
             </div>
 
