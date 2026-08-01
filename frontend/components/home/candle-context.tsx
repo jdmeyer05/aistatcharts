@@ -153,8 +153,8 @@ export default function CandleContextBlock({ d }: { d: EsCandleContext | null | 
         <p className={`text-[0.65rem] text-text border-l-2 pl-2 ${
           div.label === "in line" ? "border-l-accent" : "border-l-amber-400"
         }`} title={div.caveat}>
-          Options price <span className="tabular-nums">{div.implied_range.toFixed(0)}</span>, bars
-          like today&apos;s have delivered <span className="tabular-nums">{div.empirical_p50.toFixed(0)}</span>
+          Options price <span className="tabular-nums">{div.implied_range.toFixed(2)}</span>, bars
+          like today&apos;s have delivered <span className="tabular-nums">{div.empirical_p50.toFixed(2)}</span>
           {" "}— <span className="font-semibold">{div.label}</span> at{" "}
           <span className="tabular-nums">{div.ratio.toFixed(2)}×</span>. {div.note}
         </p>

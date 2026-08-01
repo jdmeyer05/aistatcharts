@@ -2692,8 +2692,39 @@ def _assemble_market_driver_context() -> dict:
     except Exception:
         ctx["market_open"] = False
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = [pool.submit(fn) for fn in (_pulse, _news, _events, _vol, _cftc)]
+    def _breadth() -> None:
+        """How many stocks went with the index.
+
+        Without this the synthesis can say "large caps caught a bid" and cannot
+        say the bid was NARROW — which on a session like 2026-07-31 (SPY +0.72%,
+        net advancers -12%) is the entire story. It is the difference between a
+        rally and a handful of names carrying a tape that is weakening
+        underneath, and it is exactly what a "what's driving markets" paragraph
+        exists to surface. The module is cached for 60s and already built for
+        the ES card, so this costs nothing on the common path.
+        """
+        try:
+            from src.es_breadth import market_breadth
+            b = market_breadth() or {}
+            if not b.get("available"):
+                return
+            ctx["breadth"] = {
+                "live": b.get("live"),
+                "session": b.get("session"),
+                "net_advancers_pct": b.get("net_advancers_pct"),
+                "ad_ratio": b.get("ad_ratio"),
+                "up_volume_pct": b.get("up_volume_pct"),
+                "trin": b.get("trin"),
+                "equal_vs_cap_spread_pct": (b.get("equal_vs_cap") or {}).get("spread_pct"),
+                "divergence": (b.get("divergence") or {}).get("label"),
+                "universe_note": "Liquid US universe, NOT NYSE-listed issues — never call it "
+                                 "'the NYSE advance-decline' and never claim it ties out to a terminal.",
+            }
+        except Exception as e:
+            logger.warning(f"market-driver breadth failed: {e}")
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(fn) for fn in (_pulse, _news, _events, _vol, _cftc, _breadth)]
         for f in futures:
             try:
                 f.result(timeout=15)
@@ -2756,6 +2787,15 @@ ACCURACY RULES — non-negotiable:
   move is unavailable, or write around it using the quotes that do carry a change. Reporting an
   absent move as "flat price action" is the single worst error you can make here, because it reads
   as a confident market call rather than as missing data.
+
+BREADTH DECIDES WHETHER A MOVE IS A RALLY OR A FEW NAMES. When `breadth` is present and its
+`divergence` reads `divergent`, the index move is NOT confirmed by the majority of stocks, and
+writing "stocks rallied" without that qualifier is the most misleading sentence available to you
+here. Lead paragraph two with it when it fires: an index up on a negative `net_advancers_pct` is
+narrow, narrow moves retrace, and `equal_vs_cap_spread_pct` is the independent confirmation. When
+breadth CONFIRMS, say so in three words and move on — it is only the story when it disagrees.
+Never present these as NYSE figures; they are a liquid-universe reconstruction and will not tie
+out against a terminal.
 
 VIX REGIME CALIBRATION — use the `vix_level_band` field, not the 1D % change:
 - `complacent` (VIX < 15): "muted vol", "complacent", "carry-friendly". NEVER call this elevated.
