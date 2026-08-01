@@ -45,27 +45,63 @@ def _l1_lookup(key: str, ttl_minutes: int) -> dict | None:
     return None
 
 
-def _l2_lookup(key: str) -> dict | None:
+def _l2_lookup(key: str, ttl_minutes: int | None = None) -> dict | None:
     """L2 read: a single Supabase HTTP round-trip. SYNC — call it via
     ``asyncio.to_thread`` from an async route so it doesn't block the event
-    loop; the prewarm worker threads call it directly. Hydrates L1 on hit."""
+    loop; the prewarm worker threads call it directly. Hydrates L1 on hit.
+
+    HYDRATES L1 WITH THE ROW'S TRUE AGE, NOT `now`. Stamping an L2 hit as if it
+    had just been built restarted the age clock on data that was already old:
+    L1 would expire at its TTL, fall through to an L2 row that was still valid,
+    hydrate itself as brand new, and serve the SAME bundle for another full TTL
+    window. Observed on the market-driver synthesis — 18.3 minutes old against a
+    declared 15-minute TTL, and climbing — because every near-expiry L2 hit
+    bought another 15 minutes. Worst case was roughly double whatever TTL the
+    caller asked for, on every bundle that goes through here.
+    """
     try:
         from src.db import get_client
         db = get_client()
         if not db:
             return None
-        result = db.table("ai_response_cache").select("response")\
+        result = db.table("ai_response_cache").select("response, created_at")\
             .eq("input_hash", key)\
             .gt("expires_at", datetime.now().isoformat())\
             .limit(1).execute()
         if result.data:
-            resp = result.data[0]["response"]
+            row = result.data[0]
+            resp = row["response"]
             data = json.loads(resp) if isinstance(resp, str) else resp
-            _L1_CACHE[key] = (datetime.now(), data)
+            stored_at = _parse_stored_at(row.get("created_at"))
+            # The row can outlive a caller that wants it fresher than whoever
+            # wrote it. Honour the tighter request rather than the row's expiry.
+            if ttl_minutes is not None and \
+                    (datetime.now() - stored_at).total_seconds() >= ttl_minutes * 60:
+                return None
+            _L1_CACHE[key] = (stored_at, data)
             return data
     except Exception:
         pass
     return None
+
+
+def _parse_stored_at(raw) -> datetime:
+    """`created_at` as a NAIVE local-comparable datetime, matching the writer.
+
+    Everything here compares against a naive ``datetime.now()``, so a
+    timezone-aware value coming back from Supabase would raise on subtraction.
+    Falls back to `now` only when the column is unusable — which degrades to the
+    previous behaviour for that one read rather than failing the lookup.
+    """
+    if not raw:
+        return datetime.now()
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return datetime.now()
 
 
 def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
@@ -74,7 +110,9 @@ def _get_bundle_cache(key: str, ttl_minutes: int = 30) -> dict | None:
     data = _l1_lookup(key, ttl_minutes)
     if data is not None:
         return data
-    return _l2_lookup(key)
+    # `ttl_minutes` has to reach L2 as well — applying it to L1 alone was how a
+    # 15-minute bundle stayed live for 18-plus.
+    return _l2_lookup(key, ttl_minutes)
 
 
 async def _get_bundle_cache_async(key: str, ttl_minutes: int = 30) -> dict | None:
@@ -84,7 +122,7 @@ async def _get_bundle_cache_async(key: str, ttl_minutes: int = 30) -> dict | Non
     data = _l1_lookup(key, ttl_minutes)
     if data is not None:
         return data
-    return await asyncio.to_thread(_l2_lookup, key)
+    return await asyncio.to_thread(_l2_lookup, key, ttl_minutes)
 
 
 def _set_bundle_cache(key: str, data: dict, ttl_minutes: int = 30) -> None:
