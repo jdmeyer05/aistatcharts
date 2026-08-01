@@ -258,7 +258,13 @@ _FEEDS: list[tuple[str, str]] = [
     ("Federal Reserve", "https://www.federalreserve.gov/feeds/press_all.xml"),
     ("CNBC Economy", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258"),
     ("CNBC Markets", "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839135"),
-    ("MarketWatch", "https://feeds.content.dowjones.io/public/rss/mw_topstories"),
+    # Both MarketWatch feeds were dropped after measuring them. mw_topstories
+    # carries personal finance ("can she claim her late husband's Social
+    # Security"), so the relevance filter discarded 100% of it. mw_marketpulse
+    # is macro but ABANDONED — it still answers 200 with items dated 2024-10 to
+    # 2025-07, over a year stale. A feed can fail by returning old news as
+    # easily as by returning an error, and only one of those looks like failure.
+    ("Investing.com", "https://www.investing.com/rss/news_14.rss"),
 ]
 
 # Headlines that actually move the index, rather than everything published.
@@ -266,6 +272,25 @@ _RELEVANT = re.compile(
     r"\b(fed|fomc|powell|rate cut|rate hike|inflation|cpi|pce|payroll|jobs|unemployment|"
     r"jobless|gdp|recession|tariff|treasury|yield|earnings|guidance|s&p|nasdaq|stocks|"
     r"selloff|rally|dollar|oil|hawkish|dovish)\b", re.I)
+
+# Tier 1 moves the whole index; tier 2 is market-wide colour. RANKED rather than
+# filtered, because "key news" is an ordering problem — dropping a story to make
+# room for a fresher one is how an FOMC statement ends up under a stock tip.
+_TIER1 = re.compile(
+    r"\b(fed|fomc|powell|rate cut|rate hike|hawkish|dovish|inflation|cpi|pce|payroll|"
+    r"jobless|unemployment|gdp|recession|tariff|treasury|jobs report)\b", re.I)
+_TIER2 = re.compile(
+    r"\b(s&p|nasdaq|dow|stocks|selloff|rally|dollar|oil|vix|volatility|yields?|bonds?)\b", re.I)
+
+# Single-name equity stories. The note above says a firehose of these is noise to
+# someone trading ES, but "earnings" and "guidance" in _RELEVANT let them through
+# anyway — "Linde's post-earnings slide is a buying opportunity" is not an index
+# headline. Demoted rather than dropped: sometimes a mega-cap IS the index story.
+_SINGLE_NAME = re.compile(
+    r"\b(shares?|stock)\s+(jump|slid|slide|fall|fell|rise|rose|drop|surg|plung|gain|sink|"
+    r"soar|tumbl|climb|slump)|post-earnings|buying opportunity|here'?s why|takeaways", re.I)
+
+_MAX_AGE_HOURS = 120       # five days — older than that is not news before a bell
 
 
 def _parse_feed(name_url: tuple[str, str], limit: int) -> list[dict]:
@@ -278,7 +303,15 @@ def _parse_feed(name_url: tuple[str, str], limit: int) -> list[dict]:
         out = []
         for raw in items:
             t = re.search(r"<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", raw, re.S | re.I)
-            d = re.search(r"<pubDate[^>]*>(.*?)</pubDate>", raw, re.S | re.I)
+            # CDATA-aware, like the title above. The Federal Reserve wraps its
+            # dates — <pubDate><![CDATA[Fri, 31 Jul 2026 14:00:00 GMT]]></pubDate>
+            # — so the bare pattern captured the wrapper, the parse failed, and
+            # EVERY Fed headline came through undated. Undated then sorted to
+            # last, which put the most index-relevant source on the page at the
+            # bottom of it, with no way to tell an FOMC statement from today
+            # apart from one three months old.
+            d = re.search(r"<pubDate[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</pubDate>",
+                          raw, re.S | re.I)
             l = re.search(r"<link[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</link>", raw, re.S | re.I)
             if not t:
                 continue
@@ -305,8 +338,15 @@ def _parse_feed(name_url: tuple[str, str], limit: int) -> list[dict]:
         return []
 
 
-def macro_news(limit_per_feed: int = 6) -> list[dict]:
-    """Macro-relevant headlines across the free feeds, newest first."""
+def macro_news(limit_per_feed: int = 6, now: pd.Timestamp | None = None) -> list[dict]:
+    """Macro-relevant headlines, ranked by how much they move the index.
+
+    Read before the bell, so the ordering question is "what matters, of what has
+    happened since I last looked" — not "what was published most recently". A
+    market-colour piece from an hour ago should not outrank an FOMC statement
+    from yesterday afternoon, which is what a pure recency sort does.
+    """
+    now = now or pd.Timestamp.now(tz=_TZ)
     with ThreadPoolExecutor(max_workers=len(_FEEDS)) as pool:
         batches = list(pool.map(lambda f: _parse_feed(f, limit_per_feed), _FEEDS))
 
@@ -320,9 +360,47 @@ def macro_news(limit_per_feed: int = 6) -> list[dict]:
             if k in seen:
                 continue
             seen.add(k)
+
+            title = item["title"]
+            tier = 1 if _TIER1.search(title) else (2 if _TIER2.search(title) else 3)
+            if _SINGLE_NAME.search(title):
+                tier = max(tier, 3)
+
+            hours = None
+            if item.get("published"):
+                try:
+                    ts = pd.to_datetime(item["published"])
+                    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+                    hours = (now - ts.tz_convert(_TZ)).total_seconds() / 3600
+                except Exception:
+                    hours = None
+            # Stale is not news. An undated item is KEPT — it is a parsing
+            # failure, not an old story, and silently dropping it is how a feed
+            # goes dark without anyone noticing.
+            if hours is not None and hours > _MAX_AGE_HOURS:
+                continue
+
+            item["tier"] = tier
+            item["hours_ago"] = round(hours, 1) if hours is not None else None
+            item["age"] = (None if hours is None else
+                           "overnight" if hours <= 18 else
+                           "yesterday" if hours <= 42 else "earlier")
             merged.append(item)
 
-    merged.sort(key=lambda x: x["published"] or "", reverse=True)
+    # A feed that contributes nothing is worth a line in the log. Both
+    # MarketWatch feeds failed this way — one filtered to zero, the other went a
+    # year stale behind an HTTP 200 — and neither announced itself.
+    contributing = {x["source"] for x in merged}
+    for source, _ in _FEEDS:
+        if source not in contributing:
+            logger.warning(f"news feed '{source}' contributed nothing — "
+                           "check whether it is stale, filtered out, or down")
+
+    # Importance first, then recency within it. An undated item sorts as if it
+    # were a day old — middling, not last — so a broken date parser can never
+    # again bury a Fed release at the bottom of the page.
+    merged.sort(key=lambda x: (x["tier"],
+                               x["hours_ago"] if x["hours_ago"] is not None else 24.0))
     return merged[:20]
 
 
