@@ -214,7 +214,16 @@ def _compute_base_rates() -> dict:
             "median_rth_range": round(float(sub["rth_range"].median()), 1),
         })
 
-    # 3. How big is the cash session, given the overnight range.
+    # 3. How big is the cash session, given the overnight range. Carried
+    #    alongside: how much of the FULL 23-hour range was already made before
+    #    the bell. A trader watching only 09:30-16:00 is watching the minority
+    #    of the day's movement, and that share climbs sharply when the overnight
+    #    was wide — which is the difference between a session with room and one
+    #    that has already spent itself.
+    s["full_range"] = (np.maximum(s["onh"], s["rth_high"])
+                       - np.minimum(s["onl"], s["rth_low"]))
+    s["on_share"] = s["on_range"] / s["full_range"] * 100
+
     by_size = []
     for lab, sub in s.groupby("onq", observed=True):
         if len(sub) < _MIN_BUCKET:
@@ -234,6 +243,7 @@ def _compute_base_rates() -> dict:
             "rth_p75": round(float(sub["rth_range"].quantile(0.75)), 1),
             "rth_over_on": round(float(sub["ratio"].median()), 2),
             "one_sided_pct": round(float((sub["broke_onh"] ^ sub["broke_onl"]).mean() * 100), 1),
+            "overnight_share_of_full_range_pct": round(float(sub["on_share"].median()), 1),
         })
 
     # 4. The real overnight move, and what the cash session does with it. Fill
@@ -360,11 +370,15 @@ def _compute_base_rates() -> dict:
         "overnight_move": gaps,
         "median_on_range": round(float(s["on_range"].median()), 1),
         "median_rth_range": round(float(s["rth_range"].median()), 1),
+        "overnight_share_of_full_range_pct": round(float(s["on_share"].median()), 1),
         "notes": [
             "Every session studied opened INSIDE its overnight range — ES trades "
             "continuously into 09:30, so it cannot gap away from it. Cash-close-to-"
             "cash-open gap statistics describe a move that already traded overnight.",
             "Read at 09:30: the overnight range is known and the cash session is not.",
+            "Most of the day's range is already made before the bell — the overnight "
+            "session accounts for the median share reported above. Watching only "
+            "09:30-16:00 means watching the minority of the movement.",
         ],
     }
 
@@ -373,7 +387,7 @@ def _compute_base_rates() -> dict:
 # the key stayed fixed, and a stale entry missing a newly-added field is not a
 # stale number — it is a different shape that downstream `.get()` calls paper
 # over. Bump this whenever a field is added or its meaning changes.
-@_result_cached("es_overnight_base_v4")
+@_result_cached("es_overnight_base_v5")
 def _cached_base_rates() -> dict:
     r = _compute_base_rates()
     # The shared cache layer only refuses to store empty dicts and ones carrying
