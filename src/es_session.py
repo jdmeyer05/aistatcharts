@@ -127,43 +127,43 @@ def current_phase(now: pd.Timestamp | None = None) -> dict:
 
 
 def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
-    """Today's scheduled releases with clock times, marked done or upcoming."""
+    """Today's scheduled releases with clock times, marked done or upcoming.
+
+    The calendar owns the event metadata — name, clock time, impact and note
+    all come back on the event now, so this only has to do the arithmetic that
+    depends on the current moment. `_match_release` stays as a fallback for any
+    event that arrives without a time attached.
+    """
     now = now or pd.Timestamp.now(tz=_TZ)
     if now.tzinfo is None:
         now = now.tz_localize(_TZ)
 
+    today = now.date()
     try:
-        # find_events_near_date is the calendar's actual entry point; it returns
-        # {name, date, ...} within a window. Window of 1 so we only get today.
-        from src.economic_calendar import find_events_near_date
-        events = find_events_near_date(now.strftime("%Y-%m-%d"), window_days=1) or []
+        from src.economic_calendar import todays_events
+        events = todays_events(today) or []
     except Exception as e:
         logger.warning(f"calendar fetch failed: {e}")
         events = []
 
     out: list[dict] = []
-    today = now.date()
     for ev in events:
-        name = ev.get("name") or ev.get("event") or ""
-        raw_date = ev.get("date")
-        if not raw_date:
-            continue
-        try:
-            d = pd.to_datetime(raw_date).date()
-        except Exception:
-            continue
-        if d != today:
-            continue
+        name = ev.get("name") or ""
+        hh, mm = ev.get("hour"), ev.get("minute")
+        if hh is None or mm is None:
+            rel = _match_release(name)
+            hh, mm = (rel.hour, rel.minute) if rel else (8, 30)
 
-        rel = _match_release(name)
-        hh, mm = (rel.hour, rel.minute) if rel else (8, 30)
-        when = pd.Timestamp.combine(pd.Timestamp(d), dtime(hh, mm)).tz_localize(_TZ)
+        when = pd.Timestamp.combine(pd.Timestamp(today), dtime(hh, mm)).tz_localize(_TZ)
         mins = int((when - now).total_seconds() // 60)
         out.append({
-            "name": rel.name if rel and rel.name else name,
-            "time_et": f"{hh:02d}:{mm:02d}",
-            "impact": rel.impact if rel else "low",
-            "note": rel.note if rel else "",
+            "name": name,
+            "time_et": ev.get("time_et") or f"{hh:02d}:{mm:02d}",
+            "impact": ev.get("impact") or "low",
+            "note": ev.get("note") or "",
+            # A rule-derived date can slip a day; a published one can't. The UI
+            # hedges the wording on these.
+            "derived": bool(ev.get("derived")),
             "minutes_away": mins,
             "status": "upcoming" if mins > 0 else "released",
             # Pre-open prints set the tone for the whole session; ones that land

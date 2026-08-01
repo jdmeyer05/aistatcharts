@@ -7068,7 +7068,10 @@ def _gather_architect_context(primary: str, tickers: list[str], account_size: fl
             if fomc:
                 days = (pd.to_datetime(fomc).date() - date.today()).days
                 parts.append(f"  FOMC: {fomc} ({days}d away)")
-            for e in (events or [])[:8]:
+            # Events come back sorted by date across the whole +/- window, so
+            # filter to the future before slicing — otherwise an "UPCOMING"
+            # header gets filled entirely with last week's releases.
+            for e in [x for x in (events or []) if x.get("days_away", -1) >= 0][:8]:
                 parts.append(f"  {e.get('date', '?')}: {e['name']} ({e.get('days_away', '?')}d)")
             if parts:
                 ctx["macro_events"] = "UPCOMING MACRO EVENTS (next 14d):\n" + "\n".join(parts)
