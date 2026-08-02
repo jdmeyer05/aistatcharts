@@ -81,6 +81,77 @@ export default function SpValuationStrip() {
           </span>
         )}
       </div>
+
+      {/* The multiples above are a slow state variable and say nothing about
+          today. This row is the part that moves daily. The two halves are
+          reported side by side but NOT joined: the obvious link between them
+          was tested and rejected — see SpRateContext in lib/api.ts. */}
+      {d?.available && d.rate_context && rc(d.rate_context)}
+    </div>
+  );
+}
+
+function rc(c: NonNullable<SpValuation["rate_context"]>) {
+  const hasErp = typeof c.erp_pct === "number";
+  const hasBeta = typeof c.move_per_10bp_pct === "number";
+  if (!hasErp && !hasBeta) return null;
+  return (
+    <div className="mt-2 pt-2 border-t border-border flex flex-wrap items-baseline gap-x-5 gap-y-1">
+      {hasErp && (
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span className="text-[0.6rem] uppercase tracking-wider text-text-muted">
+            Earnings yield vs 10y
+          </span>
+          <span className="text-sm font-semibold tabular-nums text-text">
+            {c.erp_pct! > 0 ? "+" : ""}{c.erp_pct!.toFixed(2)}pp
+          </span>
+          <span className="text-[0.6rem] text-text-muted tabular-nums">
+            {c.earnings_yield_pct?.toFixed(2)}% − {c.ten_year_pct?.toFixed(2)}%
+          </span>
+          {typeof c.erp_pctile === "number" && (
+            <span className="text-[0.6rem] text-text-muted tabular-nums">
+              · {Math.round(c.erp_pctile)}th pctile of {c.erp_n_months} months
+            </span>
+          )}
+        </div>
+      )}
+
+      {hasBeta && (
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span className="text-[0.6rem] uppercase tracking-wider text-text-muted">
+            10bp on the 10y
+          </span>
+          <span className={`text-sm font-semibold tabular-nums ${
+            c.move_per_10bp_pct! < 0 ? "text-loss" : "text-gain"}`}>
+            {c.move_per_10bp_pct! > 0 ? "+" : ""}{c.move_per_10bp_pct!.toFixed(2)}% SPX
+          </span>
+          <span className="text-[0.6rem] text-text-muted tabular-nums">
+            {c.beta_window_days}d
+            {typeof c.beta_pctile === "number" && `, ${Math.round(c.beta_pctile)}th pctile of ${c.beta_pctile_years}y`}
+            {typeof c.rates_r2 === "number" && `, R² ${c.rates_r2.toFixed(2)}`}
+          </span>
+        </div>
+      )}
+
+      {/* Caveats as text, not tooltips. */}
+      <span className="basis-full text-[0.55rem] text-text-muted leading-snug">
+        {typeof c.erp_streak_months === "number" && typeof c.erp_negative_share_pct === "number" && (
+          <>
+            The index has yielded {c.erp_streak_is_negative ? "less" : "more"} than the 10-year for{" "}
+            <span className="text-text tabular-nums">{c.erp_streak_months} straight months</span>;
+            that sign has held in {c.erp_negative_share_pct.toFixed(0)}% of months since 1986, so it is
+            the run rather than the sign that is unusual.{" "}
+          </>
+        )}
+        {typeof c.rates_r2 === "number" && (
+          <>
+            R² is how much of the index&apos;s daily move rates explain at all — a large sensitivity with a
+            low R² is not currently carrying the tape.{" "}
+          </>
+        )}
+        Measured, not predicted: the risk premium does not condition this sensitivity once the level of
+        rates is controlled for.
+      </span>
     </div>
   );
 }

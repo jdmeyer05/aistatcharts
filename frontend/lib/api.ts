@@ -2844,12 +2844,59 @@ export interface SpValuationRow {
   value: number; mean: number | null; median: number | null;
   min?: number | null; max?: number | null;
   premium_to_median_pct: number | null;
+  /** How RARE the reading is, always answering "how expensive" regardless of
+   *  which direction the metric points. Absent when history is too short. */
+  percentile?: number | null;
+  percentile_recent?: number | null;
+  recent_years?: number | null;
+  n_months?: number | null;
+  z_score?: number | null;
+  sd?: number | null;
   asof_text?: string | null;
+}
+
+/** The only part of the valuation block that moves daily, and the only part
+ *  with anything to say about a session.
+ *
+ *  The two halves are deliberately NOT joined by a causal claim. "A thin equity
+ *  risk premium makes equities more rate-sensitive" was tested and rejected:
+ *  ERP is earnings yield minus the 10-year, so sorting on it mostly sorts on
+ *  the level of rates, and in one regression with HAC errors ERP falls to
+ *  t = -0.94 while the rate level holds t = -7.66. */
+export interface SpRateContext {
+  earnings_yield_pct?: number;
+  ten_year_pct?: number;
+  /** Earnings yield minus the 10-year, in percentage points. */
+  erp_pct?: number;
+  /** Measured sensitivity of the index to rates: percent of SPX per basis
+   *  point, over `beta_window_days`. */
+  beta_pct_per_bp?: number;
+  /** The readable form — what a 10bp move in the 10-year has mapped to. */
+  move_per_10bp_pct?: number;
+  beta_window_days?: number;
+  /** Share of the index's daily variance that rates explain at all. A large
+   *  beta with a low R² means the relationship is not currently carrying the
+   *  tape. */
+  rates_r2?: number;
+  beta_pctile?: number;
+  beta_pctile_years?: number;
+  erp_pctile?: number;
+  erp_n_months?: number;
+  /** A negative ERP is NOT unusual — it was the norm from 1986 to 2003 — so
+   *  the streak is the fact worth reading, not the sign. */
+  erp_negative_share_pct?: number;
+  erp_streak_months?: number;
+  erp_streak_is_negative?: boolean;
 }
 
 export interface SpValuation {
   available: boolean; reason?: string; asof?: string; source?: string;
   median_premium_pct?: number | null;
+  median_percentile?: number | null;
+  median_percentile_recent?: number | null;
+  recent_years?: number | null;
+  distribution_note?: string;
+  rate_context?: SpRateContext;
   rows?: SpValuationRow[];
   unavailable?: string[];
 }

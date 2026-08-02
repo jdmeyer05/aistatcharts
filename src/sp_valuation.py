@@ -11,6 +11,27 @@ value against its own long-run mean and median.
 It is also not a timing signal, and the card says so. Rich valuation raises
 the consequence of a drawdown; it does not predict one.
 
+WHAT THIS BLOCK CAN SAY ABOUT A SESSION — measured 2026-08-02, and it is one
+thing only. A multiple is a slow state variable and carries nothing about today.
+The one number here that moves daily is the earnings yield against the 10-year,
+so that is computed (`rate_context`) along with the thing it is actually a
+proxy for: how much of the index's daily move rates are currently explaining.
+
+The obvious hypothesis was tested and REJECTED. "A thin equity risk premium
+makes equities more rate-sensitive" sorts beautifully — beta to the 10y runs
+-0.014 in the thin-ERP tercile against +0.080 in the wide one across 9,077 days.
+It is an artefact of collinearity: ERP is earnings yield MINUS the 10y, so
+sorting on it mostly sorts on the level of rates. Put both in one regression
+with HAC(60) errors and ERP collapses to t = -0.94 while the rate level holds
+t = -7.66, and the tercile gap flips sign by decade (+0.038 in the 2000s,
+-0.091 in the 2020s). So ERP is reported as a level with its own percentile and
+is NOT claimed to condition anything.
+
+The rate beta itself is the session-relevant number, because it is measured
+rather than inferred: on 2026-07-30 it sat at -0.108% of SPX per basis point —
+a 10bp move in the 10-year mapping to roughly 1.1% on the index — at the 4th
+percentile of five years, with rates explaining 30% of daily variance.
+
 SOURCE FRAGILITY: multpl publishes as HTML with no API, so this parses a
 specific page structure. Every field is independently optional and a failed
 metric is dropped rather than failing the set, so a layout change degrades the
@@ -75,8 +96,25 @@ _RECENT_YEARS = 30
 _MIN_HISTORY = 120        # ten years of months before a percentile means anything
 
 
-def _fetch_history(mt: Metric) -> list[float]:
-    """Monthly observations, newest first. Empty list on any failure."""
+def _clean_cell(raw: str) -> str:
+    # Order matters, painfully. Every cell is "\n&#x2002;\n40.91\n": the
+    # en-space is a LITERAL entity, not decoded, so searching for a number
+    # before stripping it returns 2002 — from the entity — for every row in the
+    # table. That parses cleanly, fills the column, and puts CAPE at the 0th
+    # percentile of a history made entirely of the number 2002. Strip entities
+    # first, THEN take the number, which is what handles the "%" the yield
+    # series carries.
+    txt = re.sub(r"<[^>]+>", "", raw)
+    return re.sub(r"&(#x?[0-9a-fA-F]+|\w+);", "", txt).replace(",", "").strip()
+
+
+def _fetch_history_dated(mt: Metric) -> list[tuple[str, float]]:
+    """(date, value) pairs, newest first. Empty on any failure.
+
+    The dates are needed by `rate_context`, which has to line the monthly
+    earnings yield up against a daily Treasury series. Percentiles never needed
+    them, which is why they used to be parsed and thrown away.
+    """
     try:
         r = requests.get(f"https://www.multpl.com/{mt.slug}/table/by-month",
                          headers={"User-Agent": _UA}, timeout=_TIMEOUT * 2)
@@ -86,24 +124,20 @@ def _fetch_history(mt: Metric) -> list[float]:
         pairs = re.findall(
             r"<tr[^>]*>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>\s*</tr>",
             r.text, re.S | re.I)
-        out = []
-        for _, raw in pairs:
-            # Order matters, painfully. Every cell is "\n&#x2002;\n40.91\n": the
-            # en-space is a LITERAL entity, not decoded, so searching for a
-            # number before stripping it returns 2002 — from the entity — for
-            # every row in the table. That parses cleanly, fills the column, and
-            # puts CAPE at the 0th percentile of a history made entirely of the
-            # number 2002. Strip entities first, THEN take the number, which is
-            # what handles the "%" the yield series carries.
-            txt = re.sub(r"<[^>]+>", "", raw)
-            txt = re.sub(r"&(#x?[0-9a-fA-F]+|\w+);", "", txt).replace(",", "")
-            m = re.search(r"-?\d+(?:\.\d+)?", txt)
+        out: list[tuple[str, float]] = []
+        for d_raw, v_raw in pairs:
+            m = re.search(r"-?\d+(?:\.\d+)?", _clean_cell(v_raw))
             if m:
-                out.append(float(m.group()))
+                out.append((_clean_cell(d_raw), float(m.group())))
         return out
     except Exception as e:
         logger.warning(f"multpl {mt.slug} history failed: {e}")
         return []
+
+
+def _fetch_history(mt: Metric) -> list[float]:
+    """Monthly observations, newest first. Empty list on any failure."""
+    return [v for _, v in _fetch_history_dated(mt)]
 
 
 def _distribution(values: list[float], current: float, high_is_expensive: bool) -> dict:
@@ -217,10 +251,119 @@ def _fetch_metric(mt: Metric) -> dict | None:
     }
 
 
+_BETA_WINDOW = 60          # trading days
+_BETA_PCTILE_YEARS = 5
+
+
+def _rate_context() -> dict:
+    """Earnings yield against the 10-year, and how much rates are explaining.
+
+    Two separate things, deliberately not joined by a causal claim — see the
+    module docstring for the regression that killed the obvious link.
+    """
+    try:
+        import numpy as np
+        import pandas as pd
+
+        from src.causality import aligned_panel
+
+        ey_rows = _fetch_history_dated(next(m for m in METRICS if m.key == "earnings_yield"))
+        if len(ey_rows) < _MIN_HISTORY:
+            return {}
+        ey = pd.Series({pd.to_datetime(d): v for d, v in ey_rows if d}).sort_index()
+        # Collapse to ONE observation per calendar month before anything counts
+        # them. multpl's by-month table carries a "current" row stamped
+        # mid-month alongside the month-start rows, so the newest month appears
+        # twice and every count expressed in months runs one long — the live
+        # streak read 31 for a Feb-2024-to-Jul-2026 run that is 30 months.
+        ey = ey.groupby(ey.index.to_period("M")).last()
+        ey.index = ey.index.to_timestamp()
+
+        panel = aligned_panel(["SPX", "UST10Y"], lookback=f"{_BETA_PCTILE_YEARS}Y")
+        if panel.empty or "SPX" not in panel or "UST10Y" not in panel:
+            return {}
+        panel.index = pd.to_datetime(panel.index)
+        # Same forward-fill trap as the RRG board: aligned_panel reindexes onto a
+        # CALENDAR business-day grid, so every market holiday is a row where
+        # nothing moved. Those (0, 0) points sit exactly on the origin of this
+        # regression and pull the slope toward zero.
+        moved = panel.diff().abs().sum(axis=1) > 0
+        moved.iloc[0] = True
+        panel = panel[moved]
+
+        ten = panel["UST10Y"].dropna()
+        d = pd.DataFrame({
+            "ret": panel["SPX"].pct_change() * 100,      # percent
+            "d10": panel["UST10Y"].diff() * 100,         # basis points
+        }).dropna()
+        if len(d) < _BETA_WINDOW * 2:
+            return {}
+
+        cov = d["ret"].rolling(_BETA_WINDOW).cov(d["d10"])
+        var = d["d10"].rolling(_BETA_WINDOW).var()
+        beta = (cov / var.replace(0, np.nan)).dropna()
+        r = d["ret"].rolling(_BETA_WINDOW).corr(d["d10"]).dropna()
+        if beta.empty:
+            return {}
+
+        cur_beta = float(beta.iloc[-1])
+        cur_ey, cur_10y = float(ey.iloc[-1]), float(ten.iloc[-1])
+        erp = cur_ey - cur_10y
+
+        # ERP history on the monthly grid the earnings yield actually lives on.
+        #
+        # The 10-year has to be re-fetched long here. `panel` is 5Y because that
+        # is all the beta needs, and reusing it left the ERP series with ~60
+        # monthly observations against a 120-month floor — so every percentile
+        # and the streak silently dropped out of the payload while the beta
+        # fields looked perfectly healthy.
+        erp_hist = pd.Series(dtype=float)
+        try:
+            from src.data_engine import _fred_history
+            f = _fred_history("DGS10", days=365 * 40)
+            if f is not None and not f.empty:
+                long_10y = pd.Series(f["Close"].values,
+                                     index=pd.to_datetime(f.index)).sort_index().dropna()
+                ten_m = (long_10y.reindex(long_10y.index.union(ey.index))
+                         .ffill().reindex(ey.index))
+                erp_hist = (ey - ten_m).dropna()
+        except Exception as e:
+            logger.warning(f"long 10y history for ERP percentile failed: {e}")
+
+        out: dict = {
+            "earnings_yield_pct": round(cur_ey, 2),
+            "ten_year_pct": round(cur_10y, 2),
+            "erp_pct": round(erp, 2),
+            "beta_pct_per_bp": round(cur_beta, 4),
+            # The readable form: what a 10bp move in the 10-year has mapped to.
+            "move_per_10bp_pct": round(cur_beta * 10, 2),
+            "beta_window_days": _BETA_WINDOW,
+            "rates_r2": round(float(r.iloc[-1] ** 2), 3),
+            "beta_pctile": round(float((beta < cur_beta).mean() * 100), 0),
+            "beta_pctile_years": _BETA_PCTILE_YEARS,
+        }
+        if len(erp_hist) >= _MIN_HISTORY:
+            out["erp_pctile"] = round(float((erp_hist < erp).mean() * 100), 1)
+            out["erp_n_months"] = int(len(erp_hist))
+            neg = erp_hist < 0
+            out["erp_negative_share_pct"] = round(float(neg.mean() * 100), 1)
+            # Length of the current unbroken run on the same side of zero. A
+            # negative ERP is NOT rare — it was the norm from 1986 to 2003 — so
+            # the streak is the fact worth stating, not the sign.
+            same = (neg != neg.iloc[-1])[::-1]
+            out["erp_streak_months"] = int(same.values.argmax() if same.any() else len(neg))
+            out["erp_streak_is_negative"] = bool(neg.iloc[-1])
+        return out
+    except Exception as e:
+        logger.warning(f"rate context failed: {e}")
+        return {}
+
+
 def sp_valuation() -> dict:
     """Current S&P valuation multiples against their own long-run history."""
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(_fetch_metric, METRICS))
+    rate_context = _rate_context()
 
     rows = [r for r in results if r]
     if not rows:
@@ -251,6 +394,10 @@ def sp_valuation() -> dict:
         "median_percentile_recent": (round(statistics.median(pcts_recent), 1)
                                      if pcts_recent else None),
         "recent_years": _RECENT_YEARS,
+        # The only part of this block that moves daily, and the only part with
+        # anything to say about a session. Empty when unavailable — never
+        # partially filled with defaults.
+        "rate_context": rate_context,
         "rows": rows,
         "unavailable": [m.key for m, r in zip(METRICS, results) if not r],
         "distribution_note": (

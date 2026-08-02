@@ -627,6 +627,49 @@ def test_heading_is_absent_when_the_dot_has_not_moved():
     assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
 
 
+# ── S&P valuation: the equity risk premium streak ────────────────────────────
+# A negative ERP is NOT unusual — it held in 52.7% of months since 1986 — so the
+# card reports the length of the current run, and that arithmetic is fiddly.
+
+def _streak(flags: list[bool]) -> int:
+    """Reproduces the expression in src/sp_valuation.py::_rate_context."""
+    import numpy as np
+    neg = pd.Series(flags)
+    same = (neg != neg.iloc[-1])[::-1]
+    return int(same.values.argmax() if same.any() else len(neg))
+
+
+@pytest.mark.parametrize("flags, expected", [
+    ([True], 1),                                   # single observation
+    ([False, False, True], 1),                     # just flipped
+    ([True, True, True], 3),                       # never flipped
+    ([True, False, False, False], 3),
+    ([False] * 10 + [True] * 30, 30),              # the live case
+    ([True] * 5 + [False] * 2 + [True] * 4, 4),    # an earlier run must not leak
+])
+def test_erp_streak_counts_only_the_current_run(flags, expected):
+    assert _streak(flags) == expected
+
+
+def test_erp_streak_is_counted_in_months_not_observations():
+    """Feb 2024 -> Jul 2026 inclusive is 30 months. The live reading was 31,
+    because multpl's by-month table carries a "current" row stamped mid-month
+    beside the month-start rows and the newest month was counted twice. The
+    series is collapsed per calendar month before anything counts it."""
+    months = pd.period_range("2024-02", "2026-07", freq="M")
+    assert len(months) == 30
+    assert _streak([False] * 200 + [True] * len(months)) == 30
+
+    # The de-duplication itself: a month-start row and a mid-month "current"
+    # row for the same month must survive as one observation.
+    raw = pd.Series(
+        [3.6, 3.55, 3.47],
+        index=pd.to_datetime(["2026-06-01", "2026-07-01", "2026-07-30"]))
+    collapsed = raw.groupby(raw.index.to_period("M")).last()
+    assert len(collapsed) == 2
+    assert collapsed.iloc[-1] == 3.47, "the newest reading must win"
+
+
 def test_environment_drops_forward_filled_holidays():
     """aligned_panel reindexes onto a CALENDAR business-day grid and ffills, so
     every market holiday becomes a row where every series is unchanged. Those
