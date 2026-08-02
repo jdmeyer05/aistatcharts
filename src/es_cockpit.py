@@ -227,7 +227,8 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
 
 def _levels_independent(reason: str, now: pd.Timestamp | None,
                         with_base_rates: bool, with_breadth: bool,
-                        with_candles: bool, with_overnight: bool = True) -> dict:
+                        with_candles: bool, with_overnight: bool = True,
+                        with_gamma: bool = True) -> dict:
     """What the cockpit can still say when the ES feed is the thing that failed.
 
     Breadth reads a Polygon snapshot; the candle context and the base rates read
@@ -240,6 +241,7 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
     from src.es_breadth import market_breadth
     from src.es_overnight import overnight_base_rates
     from src.candle_context import candle_context
+    from src.dealer_gamma import dealer_gamma
 
     def _safe(fn, label):
         try:
@@ -281,9 +283,12 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         "candles": candles,
         "overnight": overnight_ctx,
         "gap_pct": None,
-        "degraded": ["levels", "intraday", "expected_move", "gamma"]
-                    + [k for k, v in (("base_rates", rates), ("breadth", breadth),
-                                      ("candles", candles),
+        # Only what is ACTUALLY missing. Gamma used to be listed here
+        # unconditionally alongside the two that genuinely need bars, which is
+        # how it stayed on the degraded list after it started working.
+        "degraded": ["levels", "intraday", "expected_move"]
+                    + [k for k, v in (("gamma", gamma), ("base_rates", rates),
+                                      ("breadth", breadth), ("candles", candles),
                                       ("overnight", overnight_ctx)) if not v],
     }
 
@@ -314,7 +319,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
         return _levels_independent(levels.get("reason") or "levels unavailable",
                                    now=now, with_base_rates=with_base_rates,
                                    with_breadth=with_breadth, with_candles=with_candles,
-                                   with_overnight=with_overnight)
+                                   with_overnight=with_overnight, with_gamma=with_gamma)
 
     bars = frames["bars"]
     session_day = frames["session_day"]
