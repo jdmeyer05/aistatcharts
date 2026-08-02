@@ -24,11 +24,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Implied correlation from the dispersion formula: index variance against the
-# average component variance. High means sectors move together and the index
-# travels with them; low means they offset and the index chops while the parts
-# are busy. Cut from what the measure actually does, not from round numbers.
-_CORR_HIGH = 0.55
-_CORR_LOW = 0.35
+# component cross terms. High means sectors move together and the index travels
+# with them; low means they offset and the index chops while the parts are busy.
+#
+# THESE CUTS ARE NOT VALIDATED. They were first set at 0.55/0.35 while the scan
+# fed SPY's 1-DTE IV into a formula built from everyone else's monthlies, which
+# pinned the reading near 0.10 — so they were fitted to a number that was wrong,
+# under a comment claiming they were not. With the tenor bug and the Jensen bug
+# both fixed the measure prints about 0.32, which the old 0.35 cut would still
+# have called "independent".
+#
+# Widened to where the label is defensible rather than where it told a story.
+# Anything between reports as middling, and the raw index-vs-sector vol gap is
+# printed alongside so the arithmetic stays checkable without trusting the cut
+# at all. Validating these needs a stored history of the measure — see the
+# note in the correlation read.
+_CORR_HIGH = 0.60
+_CORR_LOW = 0.25
 
 # Put skew as a ratio of downside to upside IV. Below ~1.05 the smile is close
 # to symmetric; above ~1.25 the downside is being paid for in size.
@@ -63,19 +75,54 @@ def es_vol_read(metrics: list[dict], impl_corr: float | None,
     #    page provides. Sector vol can be high while the index sits still,
     #    because the moves cancel — that is a chop session with busy internals,
     #    and it looks identical to a quiet one from the ES chart alone.
-    if impl_corr is not None:
-        if impl_corr >= _CORR_HIGH:
-            verdict = ("sectors are priced to move together — index moves should carry, "
-                       "and a break is less likely to be absorbed by rotation")
-        elif impl_corr <= _CORR_LOW:
-            verdict = ("sectors are priced to move independently — their moves tend to "
-                       "cancel at the index, so ES can chop while single names run")
+    # Front_IV is a fraction here; avg_sector_iv already arrives as percent.
+    spy_iv = spy.get("Front_IV")
+    spy_iv = spy_iv * 100 if spy_iv else None
+    sec_iv = summary.get("avg_sector_iv")
+
+    # The vol GAP leads, not the correlation. The gap is arithmetic the reader
+    # can redo from two numbers on the card. The correlation is the same
+    # information pushed through a formula that needs index weights nobody here
+    # has: equal-weighting the eleven sectors prints ~0.32 on a chain where
+    # approximate cap weights print ~0.08, because XLK is a third of SPX and
+    # carries the highest IV in the group. A figure that swings fourfold on an
+    # invisible assumption cannot be the headline on a card a human has to act
+    # from, so it is reported second and labelled for what it is.
+    if spy_iv and sec_iv:
+        spread = sec_iv - spy_iv
+        if spread > 0:
+            mech = ("the index is calmer than the average of its parts, which is what "
+                    "offsetting sector moves look like when they are priced in — it is "
+                    "the normal state, and only the size of the gap carries information")
         else:
-            verdict = "sectors priced neither unusually together nor apart"
+            mech = ("the index is priced at or above the average of its parts, which is "
+                    "unusual — it takes sectors expected to move together, or an index-"
+                    "level event the sectors are not individually exposed to")
         reads.append({
             "label": "Index vs its parts",
-            "value": f"implied correlation {impl_corr:.2f}",
-            "note": verdict,
+            "value": f"SPY {spy_iv:.1f}% vs sectors {sec_iv:.1f}%",
+            "note": f"{spread:+.1f} vol points; {mech}.",
+        })
+
+    if impl_corr is not None:
+        if impl_corr >= _CORR_HIGH:
+            verdict = ("sectors priced to move together — index moves should carry, and a "
+                       "break is less likely to be absorbed by rotation")
+        elif impl_corr <= _CORR_LOW:
+            verdict = ("sectors priced to move independently — moves tend to cancel at the "
+                       "index, so ES can chop while single names run")
+        else:
+            verdict = ("neither unusually together nor apart — the middle of the range, "
+                       "which says little on its own about whether ES travels")
+        reads.append({
+            "label": "Same gap, as a correlation",
+            "value": f"~{impl_corr:.2f} equal-weighted",
+            "note": verdict + ".",
+            "caveat": ("Equal-weighted across the 11 sectors because live SPX index weights "
+                       "need a constituent feed this project does not carry. Cap-weighting "
+                       "this same chain gives roughly 0.08 against 0.32 here, so treat the "
+                       "level as indicative only — the vol gap above is the number to trust, "
+                       "and the thresholds behind this verdict are not yet validated."),
         })
 
     # 2. Is the near-term event premium in SPY, or somewhere else? The headline

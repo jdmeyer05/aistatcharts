@@ -173,3 +173,62 @@ def test_cached_panel_keeps_its_timezone(monkeypatch):
                         lambda k: (datetime.utcnow(), {"rows": _fake_panel_rows()}))
     s = eo._load_panel_cache()
     assert s.index.tz is not None and str(s.index.tz) == ET
+
+
+# ── Dispersion formula ───────────────────────────────────────────────────────
+# The implied-correlation denominator was wrong for a long time and no test
+# noticed, because every test asserted on shape rather than on value. The
+# round-trip below is the one that bites: build an index vol from a KNOWN rho
+# via the dispersion identity, then check the function recovers it. The old
+# avg(sigma^2)*(1-1/N) denominator fails this for any dispersed sigma set and
+# passes it when the sigmas are equal, which is exactly the blind spot.
+
+def _index_vol(sigmas, weights, rho):
+    """Forward direction of the dispersion identity."""
+    import numpy as np
+    s, w = np.array(sigmas, float), np.array(weights, float)
+    w = w / w.sum()
+    ws = w * s
+    own = float(np.sum(ws ** 2))
+    cross = float(ws.sum() ** 2 - np.sum(ws ** 2))
+    return float(np.sqrt(own + rho * cross))
+
+
+def test_implied_correlation_round_trips_dispersed_sigmas():
+    from src.cross_asset_vol import compute_implied_correlation
+    sigmas = [0.335, 0.148, 0.209, 0.271, 0.156, 0.209, 0.280, 0.173, 0.190, 0.226, 0.157]
+    weights = [1.0] * len(sigmas)
+    for rho in (0.10, 0.32, 0.55, 0.80):
+        idx = _index_vol(sigmas, weights, rho)
+        got = compute_implied_correlation(idx, sigmas)
+        assert abs(got - rho) < 1e-6, f"rho={rho} recovered as {got}"
+
+
+def test_implied_correlation_round_trips_under_cap_weights():
+    from src.cross_asset_vol import compute_implied_correlation
+    sigmas = [0.335, 0.148, 0.209, 0.271, 0.156, 0.209, 0.280, 0.173, 0.190, 0.226, 0.157]
+    weights = [0.32, 0.13, 0.11, 0.10, 0.09, 0.08, 0.06, 0.05, 0.03, 0.02, 0.01]
+    for rho in (0.15, 0.45):
+        idx = _index_vol(sigmas, weights, rho)
+        got = compute_implied_correlation(idx, sigmas, weights)
+        assert abs(got - rho) < 1e-6, f"rho={rho} recovered as {got}"
+
+
+def test_implied_correlation_is_scale_invariant():
+    """Percent and fraction inputs must agree — the pipeline passes fractions
+    while the payload prints percent, and the two got mixed once already."""
+    from src.cross_asset_vol import compute_implied_correlation
+    s = [0.21, 0.25, 0.335, 0.16]
+    a = compute_implied_correlation(0.1334, s)
+    b = compute_implied_correlation(13.34, [x * 100 for x in s])
+    assert a is not None and abs(a - b) < 1e-9
+
+
+def test_implied_correlation_degrades_without_raising():
+    from src.cross_asset_vol import compute_implied_correlation as f
+    assert f(0.13, []) is None
+    assert f(0.13, [0.2]) is None            # n < 2
+    assert f(0.0, [0.2, 0.3]) is None        # no index vol
+    assert f(0.13, [0.2, 0.3], [0, 0]) is None   # degenerate weights
+    assert f(0.99, [0.2, 0.2, 0.2]) == 1.0   # clamped, not >1
+    assert f(0.01, [0.2, 0.3, 0.4]) == 0.0   # clamped, not negative

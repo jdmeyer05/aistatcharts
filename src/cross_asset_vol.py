@@ -121,7 +121,27 @@ def interpolate_smile(chain, spot, moneyness_points=None):
 def compute_implied_correlation(spy_iv, sector_ivs, sector_weights=None):
     """Implied correlation from index vs sector IVs.
 
-    Formula: rho = (sigma_index^2 - weighted_avg(sigma_sector^2)/N) / (weighted_avg(sigma_sector^2) * (1 - 1/N))
+    Dispersion identity — index variance is each component's own variance plus
+    every cross term, with the cross terms scaled by the common correlation:
+
+        sigma_idx^2 = SUM_i w_i^2 sigma_i^2
+                      + rho * SUM_i SUM_{j!=i} w_i w_j sigma_i sigma_j
+
+    so rho is the leftover index variance over the total cross term.
+
+    That cross term is a sum of PRODUCTS of vols. An earlier form used
+    avg(sigma^2) * (1 - 1/N), which equals it only when every sector IV is
+    identical: by Jensen avg(sigma^2) >= avg(sigma)^2, so that denominator ran
+    large and rho came out low. The gap widens with sector dispersion — exactly
+    the regime where the number gets consulted. Today's chain reported 0.30
+    against 0.32 actual.
+
+    Equal weights are a real approximation, not a formality. The eleven SPDR
+    sectors partition the index but not evenly — XLK is about a third of SPX and
+    XLRE a fiftieth — so equal weighting misweights the cross terms, and the
+    error does not vanish with sample size. Live index weights need a
+    constituent feed this project does not carry. Read the result as roughly
+    where dispersion sits, not as a printable COR-index value.
 
     Args:
         spy_iv: ATM IV of index (SPY)
@@ -134,15 +154,22 @@ def compute_implied_correlation(spy_iv, sector_ivs, sector_weights=None):
     n = len(valid)
     if n < 2:
         return None
-    if sector_weights and len(sector_weights) == len(valid):
-        w = np.array(sector_weights)
+    sig = np.array(valid, dtype=float)
+    if sector_weights is not None and len(sector_weights) == n:
+        w = np.array(sector_weights, dtype=float)
+        if w.sum() <= 0:
+            return None
         w = w / w.sum()
-        avg_sector_var = np.sum(w * np.array([iv ** 2 for iv in valid]))
     else:
-        avg_sector_var = np.mean([iv ** 2 for iv in valid])
-    if avg_sector_var <= 0:
+        w = np.full(n, 1.0 / n)
+
+    own_var = float(np.sum(w ** 2 * sig ** 2))
+    ws = w * sig
+    # SUM_{i!=j} (w_i sig_i)(w_j sig_j) = (SUM ws)^2 - SUM ws^2
+    cross = float(ws.sum() ** 2 - np.sum(ws ** 2))
+    if cross <= 0:
         return None
-    rho = (spy_iv ** 2 - avg_sector_var / n) / (avg_sector_var * (1 - 1 / n))
+    rho = (spy_iv ** 2 - own_var) / cross
     return max(0.0, min(1.0, rho))
 
 

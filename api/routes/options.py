@@ -432,12 +432,19 @@ def _compute_vol_landscape() -> dict:
 
     # Implied correlation — guard against missing SPY or empty sector list
     impl_corr = None
+    avg_sector_iv = None
     sector_tickers = [tk for tk in ticker_data if tk in SCAN_UNIVERSE.get("Sectors", {})]
     if "SPY" in mdf["Ticker"].values:
         spy_iv = float(mdf.loc[mdf["Ticker"] == "SPY", "Front_IV"].values[0])
         sector_ivs = [float(mdf.loc[mdf["Ticker"] == tk, "Front_IV"].values[0]) for tk in sector_tickers if tk in mdf["Ticker"].values]
         if spy_iv > 0 and len(sector_ivs) >= 2:
             impl_corr = compute_implied_correlation(spy_iv, sector_ivs)
+            # Sector-only average, not the 20-name summary.avg_iv — that one
+            # includes gold, crude and bonds, which have no business anchoring
+            # an index-versus-its-parts comparison. Front_IV is a fraction;
+            # scaled here so it matches avg_iv, which the summary keeps in
+            # percent. Mixing the two silently would misprint by 100x.
+            avg_sector_iv = round(sum(sector_ivs) / len(sector_ivs) * 100, 2)
 
     # Divergences
     divergences = detect_divergences(mdf)
@@ -536,9 +543,11 @@ def _compute_vol_landscape() -> dict:
         # pairwise rows above say where vol is rich and where fear sits; none of
         # them say which name in a pair is the one ES follows.
         "es_read": _es_read_safe(metrics_records, impl_corr,
-                                 {"n_inverted": n_inverted, "n_tickers": len(mdf)}),
+                                 {"n_inverted": n_inverted, "n_tickers": len(mdf),
+                                  "avg_sector_iv": avg_sector_iv}),
         "summary": {
             "avg_iv": round(avg_iv * 100, 2),
+            "avg_sector_iv": avg_sector_iv,
             "avg_ivhv": round(avg_ivhv, 3),
             "avg_skew": round(avg_skew, 3),
             "n_inverted": n_inverted,
@@ -551,7 +560,7 @@ def _compute_vol_landscape() -> dict:
 # Wrap with the Supabase-backed result cache (12h TTL). Imported inline to
 # avoid pulling the cache util at module-import time if circular.
 from src._cache_util import result_cached as _result_cached
-_compute_vol_landscape = _result_cached("vol_landscape_v2")(_compute_vol_landscape)
+_compute_vol_landscape = _result_cached("vol_landscape_v3")(_compute_vol_landscape)
 
 
 @router.get("/vol-landscape")
