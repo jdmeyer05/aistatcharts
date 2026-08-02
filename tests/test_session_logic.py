@@ -380,3 +380,60 @@ def test_ladder_score_is_a_diagnostic_not_a_gate():
                      (107.0, -0.1378, 0.34, 1), (108.0, -0.2478, 0.51, 1)])
     assert _delta_ladder_broken(jagged, "put") > 0.0
     assert _delta_ladder_broken(pd.DataFrame(), "put") == 0.0
+
+
+# -- Divergence null safety ---------------------------------------------------
+# Making Put_Skew nullable introduced a TypeError that could only ever fire on
+# the degraded path the None was added to represent: abs(None - 1.2).
+
+def _mdf(rows):
+    import pandas as pd
+    base = {"IV_HV": 1.0, "Put_Skew": 1.2, "TS_Slope": 0.01, "Parity": 1.0,
+            "Front_IV": 0.2, "Label": "x", "Group": "Sectors"}
+    return pd.DataFrame([{**base, **r} for r in rows])
+
+
+def test_divergences_survive_a_null_skew():
+    from src.cross_asset_vol import detect_divergences, CORRELATED_PAIRS
+    a, b, _ = CORRELATED_PAIRS[0]
+    out = detect_divergences(_mdf([{"Ticker": a, "Put_Skew": None},
+                                   {"Ticker": b, "Put_Skew": 1.9}]))
+    assert not any(d["metric"] == "Skew" for d in out)
+
+
+def test_divergences_survive_a_null_term_structure():
+    from src.cross_asset_vol import detect_divergences, CORRELATED_PAIRS
+    a, b, _ = CORRELATED_PAIRS[0]
+    out = detect_divergences(_mdf([{"Ticker": a, "TS_Slope": None},
+                                   {"Ticker": b, "TS_Slope": -0.02}]))
+    assert not any(d["metric"] == "Term Structure" for d in out)
+
+
+def test_divergences_withhold_skew_when_a_chain_fails_parity():
+    """A comparison between two skews is only as good as the worse chain. HYG
+    quoted an ATM put 2.30x its ATM call and would otherwise have been published
+    as 'fear is concentrated there'."""
+    from src.cross_asset_vol import detect_divergences, CORRELATED_PAIRS
+    a, b, _ = CORRELATED_PAIRS[0]
+    stale = detect_divergences(_mdf([{"Ticker": a, "Put_Skew": 1.1, "Parity": 2.30},
+                                     {"Ticker": b, "Put_Skew": 1.9, "Parity": 1.0}]))
+    assert not any(d["metric"] == "Skew" for d in stale)
+    clean = detect_divergences(_mdf([{"Ticker": a, "Put_Skew": 1.1, "Parity": 1.02},
+                                     {"Ticker": b, "Put_Skew": 1.9, "Parity": 1.0}]))
+    assert any(d["metric"] == "Skew" for d in clean)
+
+
+def test_divergences_survive_an_all_null_skew_column():
+    """The narrow case that genuinely raises. With a mix of None and floats
+    pandas coerces the column to float64 and the None becomes NaN, so the
+    comparison is merely False. With EVERY value None the column stays object
+    dtype and `None - None` is a TypeError — so the crash needs both chains in a
+    pair to fail, which is exactly when a degraded feed would hit it."""
+    import pandas as pd
+    from src.cross_asset_vol import detect_divergences, CORRELATED_PAIRS
+    a, b, _ = CORRELATED_PAIRS[0]
+    df = _mdf([{"Ticker": a, "Put_Skew": None}, {"Ticker": b, "Put_Skew": None}])
+    df["Put_Skew"] = df["Put_Skew"].astype(object)
+    assert df["Put_Skew"].dtype == object, "fixture must reproduce object dtype"
+    out = detect_divergences(df)                      # must not raise
+    assert not any(d["metric"] == "Skew" for d in out)

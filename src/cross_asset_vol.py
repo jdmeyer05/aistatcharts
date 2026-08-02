@@ -357,7 +357,22 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
             # a placeholder, which is the failure this whole pass has been about.
             logger.debug(f"{tk}: no ATM vol on {exps[0]}, skipping")
             continue
-        back_iv = atm_iv(chains[exps[-1]], spot, "call") if len(exps) >= 2 else front_iv
+        # The SECOND expiration, not the last one.
+        #
+        # exps is up to three third-Friday monthlies, but which three depends on
+        # what each product lists. Measured live: SPY and QQQ reach only two, so
+        # their curve spanned 28 days, most names spanned 56, XLI and XLRE 91,
+        # and XLB/XLC/XLU 119 — the last three skip the October and November
+        # monthlies entirely. Dividing by the day count normalises to "per month"
+        # but a vol curve is not linear in tenor, so a slope taken over 119 days
+        # is a different quantity from one taken over 28 and the two do not
+        # belong in the same n_inverted count.
+        #
+        # Every ticker in the universe lists the front two monthlies, so the
+        # second expiry is the one tenor pair they all share. The third chain
+        # stays loaded for the term-structure matrix that displays it directly.
+        back_idx = 1 if len(exps) >= 2 else 0
+        back_iv = atm_iv(chains[exps[back_idx]], spot, "call")
         if not back_iv:
             back_iv = front_iv       # flat curve, not an invented one
 
@@ -400,8 +415,14 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
 
         # Term structure slope
         front_dte = max((pd.to_datetime(exps[0]) - pd.Timestamp.now()).days, 1)
-        back_dte = max((pd.to_datetime(exps[-1]) - pd.Timestamp.now()).days, 1) if len(exps) >= 2 else front_dte
+        # Same expiry the back IV was read from, or the slope divides a move
+        # measured over one span by the length of a different one.
+        back_dte = max((pd.to_datetime(exps[back_idx]) - pd.Timestamp.now()).days, 1)
         ts_slope = (back_iv - front_iv) / max(back_dte - front_dte, 1) * 30  # per month
+        # Published so the tenor the slope was measured over is checkable rather
+        # than assumed — the assumption that it was the same for every ticker is
+        # what made n_inverted an incoherent count.
+        ts_span_days = back_dte - front_dte
 
         # VRP & IV/HV
         iv_hv = (front_iv / hv20) if hv20 and hv20 > 0 else None
@@ -461,7 +482,7 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
             "Ticker": tk, "Label": label, "Group": group, "Spot": spot,
             "Front_IV": front_iv, "Back_IV": back_iv, "IV_HV": iv_hv,
             "Put_Skew": put_skew, "Risk_Rev": risk_rev, "Butterfly": butterfly,
-            "Parity": parity, "Ladder_Broken": ladder_broken,
+            "Parity": parity, "Ladder_Broken": ladder_broken, "TS_Span_Days": ts_span_days,
             "TS_Slope": ts_slope, "VRP": vrp, "VRP_Vol": vrp_vol,
             "Impl_Move": impl_move, "HV20": hv20,
             "PC_Ratio": pc_ratio, "IV_Pctile": iv_pctile, "Front_DTE": front_dte_val,
@@ -513,9 +534,20 @@ def detect_divergences(mdf, top_n=5):
                     "signal": f"{richer} vol is rich ({a['IV_HV'] if richer == tk_a else b['IV_HV']:.2f}x) while {cheaper} is cheap ({b['IV_HV'] if richer == tk_a else a['IV_HV']:.2f}x)",
                 })
 
-        # Check skew divergence
-        skew_spread = abs(a["Put_Skew"] - b["Put_Skew"])
-        if skew_spread > 0.08:
+        # Check skew divergence.
+        #
+        # Guarded twice. Put_Skew is None when a chain could not be measured, and
+        # `abs(None - 1.2)` is a TypeError that would only ever fire on the
+        # degraded path — the exact case the None was introduced to represent.
+        # Parity is checked for the same reason the ES credit read checks it: a
+        # comparison between two skews is only as good as the worse chain, and a
+        # stale chain would otherwise be published as "fear is concentrated
+        # there". The IV/HV block above already guards with notna; this did not.
+        _sk_ok = (pd.notna(a.get("Put_Skew")) and pd.notna(b.get("Put_Skew"))
+                  and all(pd.isna(r.get("Parity")) or (0.75 <= r["Parity"] <= 1.35)
+                          for r in (a, b)))
+        skew_spread = abs(a["Put_Skew"] - b["Put_Skew"]) if _sk_ok else 0.0
+        if _sk_ok and skew_spread > 0.08:
             steeper = tk_a if a["Put_Skew"] > b["Put_Skew"] else tk_b
             results.append({
                 "pair": f"{tk_a}/{tk_b}", "ticker_a": tk_a, "ticker_b": tk_b,
@@ -525,7 +557,8 @@ def detect_divergences(mdf, top_n=5):
             })
 
         # Check term structure divergence (one inverted, other not)
-        if a["TS_Slope"] * b["TS_Slope"] < 0:  # opposite signs
+        if (pd.notna(a.get("TS_Slope")) and pd.notna(b.get("TS_Slope"))
+                and a["TS_Slope"] * b["TS_Slope"] < 0):  # opposite signs
             inverted = tk_a if a["TS_Slope"] < 0 else tk_b
             results.append({
                 "pair": f"{tk_a}/{tk_b}", "ticker_a": tk_a, "ticker_b": tk_b,
