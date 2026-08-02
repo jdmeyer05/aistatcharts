@@ -12,12 +12,27 @@ unrelated equity that quotes in a plausible price range — which is why futures
 looked unavailable here for months. There is no continuous contract; the roll is
 ours to define.
 
-Entitlement, measured rather than assumed (Futures Basic, the free tier):
+Entitlement, measured rather than assumed (Futures STARTER since 2026-08-02):
   - daily/minute/hour aggregates  ✓, 2y history, all of CME/CBOT/NYMEX/COMEX
   - the FULL Globex session ✓ — bars in every ET hour except 17:00, which is the
     settlement break, not missing data
-  - second aggregates, trades, quotes  ✗ 403 (Starter/Developer tiers)
-  - 5 API calls per minute — the binding constraint, hence the caching below
+  - snapshot ✓, second aggregates ✓ (both 403 on the free Basic tier)
+  - trades, quotes  ✗ 403 — those need Developer ($64)
+  - NO per-minute call cap: 12 back-to-back calls returned in 4.0s, zero 429s
+
+Two API traps, both measured, both of which produce confident wrong answers:
+
+  `/futures/v1/contracts` REQUIRES a `date` parameter. Without it the response
+  is a slice stamped 2025-03-12 in which ES resolves to ESH0 — a March 2030
+  contract whose snapshot quotes 2445 while ES trades 7503. `front_month` below
+  passes it; anything new calling that endpoint must too.
+
+  `order` is IGNORED by the aggregates endpoint. `asc` and `desc` return
+  byte-identical newest-first data, so callers must sort rather than trust it.
+
+  Contract listings also mix outrights with spreads and butterflies. Filter on
+  `type == "single"`; screening by looking for ':' in the ticker makes CL, NG
+  and HO look absent when they are fully covered.
 """
 
 from __future__ import annotations
@@ -35,13 +50,23 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.massive.com"
 _TZ = "America/New_York"
 
-# Basic allows 5 requests per MINUTE — not one every twelve seconds. Enforcing a
-# fixed gap was needlessly strict in a way that showed up as fragility, not
-# safety: resolving the front contract takes three calls and so took 25s before
-# a single bar was fetched, and the ES levels card on Cloud Run went `degraded`
-# waiting for it. A rolling window allows the burst the tier actually permits
-# and only blocks once the window is genuinely full.
-_MAX_PER_WINDOW = 4       # of 5, leaving headroom for a retry
+# The rolling window exists so a burst is allowed and only a genuinely full
+# minute blocks. It was sized for Futures BASIC, which capped 5 requests per
+# MINUTE.
+#
+# Futures STARTER was bought 2026-08-02 and removes that cap — measured, not
+# assumed: 12 back-to-back calls completed in 4.0s with zero 429s, and the
+# snapshot endpoint became entitled at the same time. Leaving the window at 4
+# was actively harmful once anything needed more than a handful of calls: the
+# FOMC board reads about twelve ZQ contract months, which at 4/min is roughly
+# two minutes of deliberate sleeping against a 30-second client timeout. It
+# would have timed out on every cold cache.
+#
+# This is now a courtesy backstop against a runaway loop rather than a tier
+# limit, set far above any real path. If the subscription ever lapses the
+# vendor answers 429 and `_get` already backs off and retries, so the failure
+# mode is slow rather than wrong.
+_MAX_PER_WINDOW = 120
 _WINDOW_S = 60.0
 _RATE_LIMIT_SLEEP = 15.0
 _MAX_RETRIES = 6
