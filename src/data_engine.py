@@ -624,21 +624,42 @@ def get_expiration_dates(symbol: str):
     """
     api_key = _get_massive_key()
     if api_key:
-        # Try efficient single-page fetch first (covers most tickers)
+        # The page is capped at 1000 CONTRACTS, not 1000 expirations, and the
+        # sort is by expiration ascending — so on a name with hundreds of strikes
+        # per daily expiry the cap is exhausted inside the first fortnight. SPY
+        # returned six expirations, all dailies, and never reached a monthly,
+        # while thinner names like XLE returned twenty and did. Callers that
+        # pick "the monthly" then silently compared SPY's 1-DTE vol against
+        # everyone else's 20-DTE vol.
+        #
+        # A saturated page is the truncation signal: if the response came back
+        # full, there is more beyond it, so walk forward from the last expiry
+        # seen. Names that fit in one page cost nothing extra.
+        _LIMIT = 1000
+        _MAX_WINDOWS = 3
         try:
-            url = (
-                f"https://api.polygon.io/v3/reference/options/contracts"
-                f"?underlying_ticker={symbol}&expired=false&contract_type=call"
-                f"&limit=1000&order=asc&sort=expiration_date&apiKey={api_key}"
-            )
-            # Quick fetch — 10s timeout, max 3 pages. Falls back to yfinance if slow.
-            res = requests.get(url, timeout=10)
-            res.raise_for_status()
-            data = res.json()
-            contracts = data.get("results", [])
-            exps = sorted(set(c['expiration_date'] for c in contracts))
+            exps: list[str] = []
+            cursor = None
+            for _ in range(_MAX_WINDOWS):
+                url = (
+                    f"https://api.polygon.io/v3/reference/options/contracts"
+                    f"?underlying_ticker={symbol}&expired=false&contract_type=call"
+                    f"&limit={_LIMIT}&order=asc&sort=expiration_date"
+                )
+                if cursor:
+                    url += f"&expiration_date.gt={cursor}"
+                res = requests.get(f"{url}&apiKey={api_key}", timeout=10)
+                res.raise_for_status()
+                contracts = res.json().get("results", [])
+                if not contracts:
+                    break
+                window = sorted(set(c["expiration_date"] for c in contracts))
+                exps.extend(window)
+                if len(contracts) < _LIMIT:
+                    break          # page not full: this is genuinely the tail
+                cursor = window[-1]
             if exps:
-                return exps
+                return sorted(set(exps))
         except Exception as e:
             logger.warning(f"Massive expirations fetch failed for {symbol}: {e}")
 
