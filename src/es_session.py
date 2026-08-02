@@ -293,6 +293,22 @@ _SINGLE_NAME = re.compile(
 _MAX_AGE_HOURS = 120       # five days — older than that is not news before a bell
 
 
+def _headline_tier(title: str) -> int:
+    """1 moves the index, 2 is market-wide colour, 3 is everything else.
+
+    A named function rather than three lines inside the merge loop so the rule
+    can be tested directly. Tiering was wrong once already — a blanket demotion
+    put "Fed decision sends bank shares soaring" under a stock tip — and a test
+    that reimplements the rule instead of calling it would not have caught it.
+    """
+    tier = 1 if _TIER1.search(title) else (2 if _TIER2.search(title) else 3)
+    # Demote single-name stories, but never past a policy headline: a Fed story
+    # that happens to mention shares is still the Fed story.
+    if tier > 1 and _SINGLE_NAME.search(title):
+        tier = 3
+    return tier
+
+
 def _last_cash_close(now: pd.Timestamp) -> pd.Timestamp:
     """The most recent 16:00 ET that has already passed on a weekday.
 
@@ -382,13 +398,7 @@ def macro_news(limit_per_feed: int = 6, now: pd.Timestamp | None = None) -> list
                 continue
             seen.add(k)
 
-            title = item["title"]
-            tier = 1 if _TIER1.search(title) else (2 if _TIER2.search(title) else 3)
-            # Demote single-name stories, but never past a policy headline —
-            # "Fed decision sends bank shares soaring" trips the single-name
-            # pattern and is still the Fed story. Only tiers 2 and 3 get pushed.
-            if tier > 1 and _SINGLE_NAME.search(title):
-                tier = 3
+            tier = _headline_tier(item["title"])
 
             hours, stamped = None, None
             if item.get("published"):

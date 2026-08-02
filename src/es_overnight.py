@@ -78,12 +78,100 @@ _MIN_BUCKET = 25          # below this a conditional rate is noise; omit the row
 _SESSION_MINUTES = 390    # 09:30-16:00
 
 
+_PANEL_KEY = "es_overnight_panel_v1"
+
+
+def _load_panel_cache() -> pd.DataFrame | None:
+    """The derived session panel, straight from Supabase."""
+    try:
+        from src._cache_util import _supabase_get
+        hit = _supabase_get(_PANEL_KEY)
+        if not hit:
+            return None
+        payload = hit[1]
+        rows = payload.get("rows") if isinstance(payload, dict) else payload
+        if not rows:
+            return None
+        s = pd.DataFrame(rows)
+        # Restore the timezone. The panel is built with a tz-aware ET index and
+        # serialises to bare dates, so a naive reload compares unequal to every
+        # freshly-derived session. concat then SUCCEEDS and produces two rows per
+        # overlapping day — 493 + 53 came back as 546, not 494 — and
+        # `duplicated()` cannot see them as duplicates, so each one is counted
+        # twice in every statistic downstream.
+        s["session"] = pd.to_datetime(s["session"]).dt.tz_localize(_TZ)
+        s = s.set_index("session").sort_index()
+        # Completeness has to survive the round trip. A panel built while a
+        # contract was unreachable is missing a whole quarter, and if that fact
+        # is dropped on serialise the payload reports itself complete forever
+        # after — persisting the defect instead of the warning about it.
+        s.attrs["contracts_missing"] = (payload.get("contracts_missing") or []
+                                        if isinstance(payload, dict) else [])
+        return s
+    except Exception as e:
+        logger.warning(f"overnight panel cache load failed: {e}")
+        return None
+
+
+def _save_panel_cache(s: pd.DataFrame) -> None:
+    try:
+        from src._cache_util import _supabase_put
+        out = s.reset_index()
+        out["session"] = out["session"].dt.strftime("%Y-%m-%d")
+        # JSON has no NaN. Left as-is these serialise to the literal NaN, which
+        # is not valid JSON and would either fail the write or round-trip into
+        # something unparseable — the same trap as Infinity in the bucket edges.
+        out = out.astype(object).where(pd.notna(out), None)
+        _supabase_put(_PANEL_KEY, {
+            "rows": out.to_dict("records"),
+            "contracts_missing": list(s.attrs.get("contracts_missing") or []),
+        })
+    except Exception as e:
+        logger.warning(f"overnight panel cache save failed: {e}")
+
+
 def _panel() -> pd.DataFrame:
-    """Per-session overnight/RTH features across the available contracts."""
+    """Per-session overnight/RTH features, incrementally maintained.
+
+    Rebuilding this from nine paced contract fetches costs ~152s, and it used to
+    happen every time the 12h stats cache expired — inside `_warm_es_brief`,
+    which was already ~37s against a 20s SSR prefetch budget. The sessions
+    themselves never change once closed, so the derived panel is persisted and
+    only the missing tail is fetched: two contracts rather than nine, once a day
+    rather than twice, and nothing at all when it is already current.
+    """
+    cached = _load_panel_cache()
+    if cached is not None and len(cached) >= 100:
+        behind = (_date.today() - cached.index.max().date()).days
+        if behind <= 1:
+            return cached                       # current — no API calls at all
+        # Only the newest expiries can hold sessions we are missing. Two of them
+        # so a roll inside the gap is still covered by the volume test.
+        fresh = _panel_from(_contracts_for()[-2:])
+        if not fresh.empty:
+            merged = pd.concat([cached, fresh])
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+            # Topping up the tail says nothing about whether the HISTORY was
+            # complete, so the original gaps carry forward rather than being
+            # cleared by a successful incremental fetch.
+            merged.attrs["contracts_missing"] = list(cached.attrs.get("contracts_missing") or [])
+            _save_panel_cache(merged)
+            return merged
+        logger.warning(f"overnight panel {behind}d stale and no new sessions fetched")
+        return cached                           # stale, but real sessions
+
+    full = _panel_from(_contracts_for())
+    if not full.empty:
+        _save_panel_cache(full)
+    return full
+
+
+def _panel_from(contracts: list[str]) -> pd.DataFrame:
+    """Build session rows from the given contracts."""
     from src.futures_data import fetch_bars
 
     frames, loaded, missed = [], [], []
-    for c in _contracts_for():
+    for c in contracts:
         df = fetch_bars(c, resolution="5min", limit=50000)
         if df is None or df.empty:
             missed.append(c)

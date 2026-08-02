@@ -1,0 +1,46 @@
+name: Session Logic Tests
+
+# Regression tests for the pure session/date/classification rules — contract
+# codes, "since the last close", news tiering, Polygon symbol eligibility,
+# overnight position bands.
+#
+# These are the rules whose failures LOOK FINE: a wide overnight labelled tight,
+# the Fed sorted last, a contract list that quietly ages out. Each case in
+# tests/test_session_logic.py is a bug that actually shipped.
+#
+# Deliberately network-free and dependency-light, so it finishes in seconds and
+# has no reason to be skipped.
+
+on:
+  pull_request:
+    paths:
+      - "src/**.py"
+      - "tests/test_session_logic.py"
+      - ".github/workflows/session-logic-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**.py"
+      - "tests/test_session_logic.py"
+      - ".github/workflows/session-logic-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Only what the pure logic actually imports. Installing the full
+      # requirements.txt would pull streamlit and the plotting stack for tests
+      # that touch neither, and a slow suite is a suite that gets skipped.
+      - name: Install test dependencies
+        run: pip install --quiet pytest pandas numpy requests
+
+      - name: Run session logic tests
+        run: python -m pytest tests/test_session_logic.py -q

@@ -1,0 +1,125 @@
+"""Regression tests for the pure session/date/classification logic.
+
+Every case here is a bug that actually shipped, or a boundary that produced one.
+They are deliberately all NETWORK-FREE — the failures worth catching this way
+were never about the data being unavailable, they were about correct-looking
+output derived from a subtly wrong rule. A wide overnight labelled tight, the
+Fed sorted last, a contract list that ages out: none of those look broken.
+
+Run: python -m pytest tests/test_session_logic.py -v
+"""
+import os
+import sys
+from datetime import date
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import unittest.mock as mock
+st_mock = mock.MagicMock()
+sys.modules.setdefault("streamlit", st_mock)
+st_mock.cache_data = lambda **kw: (lambda f: f)
+
+import pandas as pd
+import pytest
+
+ET = "America/New_York"
+
+
+# ── ES contract codes ─────────────────────────────────────────────
+# Shipped hardcoded and ending at ESU6, which would have silently dropped the
+# newest quarter about six weeks later while still reporting itself complete.
+
+def test_contract_list_matches_the_hardcoded_one_it_replaced():
+    from src.es_overnight import _contracts_for
+    assert _contracts_for(date(2026, 8, 1)) == [
+        "ESU4", "ESZ4", "ESH5", "ESM5", "ESU5", "ESZ5", "ESH6", "ESM6", "ESU6"]
+
+
+def test_contract_list_rolls_forward():
+    from src.es_overnight import _contracts_for
+    assert "ESZ6" in _contracts_for(date(2026, 9, 20))
+    assert "ESH7" in _contracts_for(date(2026, 12, 1))
+    # and keeps roughly two years of depth rather than growing without bound
+    assert 8 <= len(_contracts_for(date(2028, 1, 15))) <= 11
+
+
+def test_contract_list_only_uses_quarterly_codes():
+    from src.es_overnight import _contracts_for
+    for c in _contracts_for(date(2026, 8, 1)):
+        assert c[:2] == "ES" and c[2] in "HMUZ" and c[3].isdigit()
+
+
+# ── "since the last close" ────────────────────────────────────────
+# Shipped as fixed hours-ago buckets, which called Friday's news "earlier" when
+# read on Monday morning — 65h old and also the most recent thing that happened.
+
+@pytest.mark.parametrize("now,expected", [
+    ("2026-08-01 19:55", "2026-07-31 16:00"),   # Saturday evening -> Friday
+    ("2026-08-03 09:25", "2026-07-31 16:00"),   # Monday pre-bell -> across the weekend
+    ("2026-08-03 17:00", "2026-08-03 16:00"),   # after today's close -> today
+    ("2026-08-05 09:25", "2026-08-04 16:00"),   # midweek -> yesterday
+    ("2026-08-05 15:59", "2026-08-04 16:00"),   # a minute before the bell rings out
+    ("2026-08-02 20:00", "2026-07-31 16:00"),   # Sunday Globex reopen -> Friday
+])
+def test_last_cash_close(now, expected):
+    from src.es_session import _last_cash_close
+    got = _last_cash_close(pd.Timestamp(now, tz=ET))
+    assert got == pd.Timestamp(expected, tz=ET)
+
+
+# ── news tiering ──────────────────────────────────────────────────
+# `tier = max(tier, 3)` demoted anything matching the single-name pattern, so a
+# Fed headline mentioning shares sorted below a stock tip.
+
+@pytest.mark.parametrize("title,tier", [
+    ("Fed decision sends bank shares soaring", 1),   # single-name pattern, still policy
+    ("CPI comes in hotter than expected", 1),
+    ("Powell signals rate cut in September", 1),
+    ("Jobless claims fall to lowest level since mid-May", 1),
+    ("Stocks rally as yields fall", 2),
+    ("Apple earnings takeaways: Weak forecast", 3),
+    ("Linde post-earnings slide is a buying opportunity", 3),
+])
+def test_news_tiering(title, tier):
+    # Calls the production rule, not a copy of it — a test that reimplements
+    # the logic passes happily while the shipped version is wrong.
+    from src.es_session import _headline_tier
+    assert _headline_tier(title) == tier
+
+
+def test_single_name_noise_is_filtered_before_it_is_tiered():
+    from src.es_session import _RELEVANT
+    assert not _RELEVANT.search("Nvidia shares jump 8% on AI demand")
+
+
+# ── Polygon symbol eligibility ────────────────────────────────────
+# Index/futures/FX/crypto return 200 with an EMPTY body rather than an error, and
+# a bare futures root quotes an unrelated EQUITY (ES -> Eversource).
+
+@pytest.mark.parametrize("ticker,ok", [
+    ("SPY", True), ("XLK", True), ("MTUM", True), ("BRK.B", True),
+    ("^GSPC", False), ("^VIX", False),
+    ("ES=F", False), ("EURUSD=X", False),
+    ("BTC-USD", False), ("ETH-USD", False),
+    ("", False),
+])
+def test_polygon_eligible(ticker, ok):
+    from src.ohlcv_cache import _polygon_eligible
+    assert _polygon_eligible(ticker) is ok
+
+
+# ── overnight open-position bands ─────────────────────────────────
+# The band gates which base rate the live read quotes, so a gap between bands
+# means a session silently gets no answer.
+
+def test_open_position_bands_cover_the_whole_range():
+    from src.es_overnight import _pos_band
+    for x in [0.0, 0.199, 0.2, 0.399, 0.4, 0.6, 0.799, 0.8, 1.0]:
+        assert _pos_band(x) is not None, f"{x} fell through every band"
+
+
+def test_open_position_bands_are_ordered():
+    from src.es_overnight import _pos_band
+    assert _pos_band(0.05) == "bottom 20%"
+    assert _pos_band(0.5) == "middle"
+    assert _pos_band(0.95) == "top 20%"
