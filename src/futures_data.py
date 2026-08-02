@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 import time as _time
 from datetime import date as _date
 
@@ -34,25 +35,33 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.massive.com"
 _TZ = "America/New_York"
 
-# Basic allows 5 requests/minute. Bursting and retrying loses calls: a 9-contract
-# history build dropped two contracts that way and silently produced a 450-session
-# study where 494 was available — the numbers still looked plausible, which is the
-# dangerous part. PACE the requests instead so a 429 is rare rather than routine.
-_MIN_INTERVAL = 12.5      # seconds between calls; 5/min with headroom
+# Basic allows 5 requests per MINUTE — not one every twelve seconds. Enforcing a
+# fixed gap was needlessly strict in a way that showed up as fragility, not
+# safety: resolving the front contract takes three calls and so took 25s before
+# a single bar was fetched, and the ES levels card on Cloud Run went `degraded`
+# waiting for it. A rolling window allows the burst the tier actually permits
+# and only blocks once the window is genuinely full.
+_MAX_PER_WINDOW = 4       # of 5, leaving headroom for a retry
+_WINDOW_S = 60.0
 _RATE_LIMIT_SLEEP = 15.0
 _MAX_RETRIES = 6
 
-_last_request = [0.0]
+_call_times: deque[float] = deque()
 _pace_lock = threading.Lock()
 
 
 def _pace() -> None:
-    """Serialise and space requests to stay inside the free tier's 5/min."""
+    """Block only when the last minute is genuinely full."""
     with _pace_lock:
-        wait = _MIN_INTERVAL - (_time.time() - _last_request[0])
-        if wait > 0:
-            _time.sleep(wait)
-        _last_request[0] = _time.time()
+        now = _time.time()
+        while _call_times and now - _call_times[0] >= _WINDOW_S:
+            _call_times.popleft()
+        if len(_call_times) >= _MAX_PER_WINDOW:
+            _time.sleep(max(_WINDOW_S - (now - _call_times[0]) + 0.25, 0.0))
+            now = _time.time()
+            while _call_times and now - _call_times[0] >= _WINDOW_S:
+                _call_times.popleft()
+        _call_times.append(_time.time())
 
 _bar_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
 _front_cache: dict[str, tuple[_date, str]] = {}

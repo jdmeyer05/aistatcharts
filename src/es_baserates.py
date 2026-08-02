@@ -64,6 +64,8 @@ _INTRADAY_SYMBOL = "SPY"      # Polygon carries no index entitlement; see _hourl
 _INTRADAY_YEARS = 5           # Polygon's history horizon on this plan
 _INTRADAY_BAR_MIN = 5         # 09:30 sits on the 5-minute grid, so slots are exact
 _MAX_PAGES = 60               # next_url pages; a 5y 5-minute pull takes ~20
+_PAGE_TIMEOUT_S = 60          # ~12k bars a page; 30s was tight from Cloud Run
+_PAGE_RETRIES = 3
 _PATH_MIN_SESSIONS = 200
 
 # How far past the IB edge price has to travel before it counts as a break,
@@ -333,10 +335,24 @@ def _polygon_5m(symbol: str, years: int) -> pd.DataFrame:
             params = {"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": api_key}
             out, pages = [], 0
             while url and pages < _MAX_PAGES:
-                r = requests.get(url, params=params, timeout=30)
-                if r.status_code != 200:
+                # Retry the PAGE, not the window. A single read timeout used to
+                # propagate out of the thread pool and discard all five years —
+                # Cloud Run hit exactly that and silently served the shallower
+                # yfinance fallback instead. These responses are ~12k bars each,
+                # so an occasional slow one is expected, not exceptional.
+                r = None
+                for attempt in range(_PAGE_RETRIES):
+                    try:
+                        r = requests.get(url, params=params, timeout=_PAGE_TIMEOUT_S)
+                        break
+                    except requests.RequestException as e:
+                        if attempt == _PAGE_RETRIES - 1:
+                            logger.warning(f"Polygon {_INTRADAY_BAR_MIN}m {symbol} "
+                                           f"{w_start}: {e}")
+                            return None
+                if r is None or r.status_code != 200:
                     logger.warning(f"Polygon {_INTRADAY_BAR_MIN}m {symbol} "
-                                   f"{w_start}: HTTP {r.status_code}")
+                                   f"{w_start}: HTTP {getattr(r, 'status_code', 'no response')}")
                     return None
                 j = r.json()
                 out.extend(j.get("results") or [])
