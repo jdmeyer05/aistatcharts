@@ -1661,7 +1661,25 @@ export interface VolLandscapeScan {
      *  allows — n_steep_skew is out of THIS, not out of n_tickers. */
     n_skew_rated?: number;
     avg_sector_iv?: number;
+    /** The honest version of `n_steep_skew`. The 1.10 cut behind that count
+     *  sits at the median of the cross section, so "more than half above it"
+     *  reduces to "is the median above 1.10" — readable directly from here. */
+    median_skew?: number | null;
+    impl_corr?: number | null;
   };
+  /** Where each hardcoded cut sits in TODAY's cross section. Disclosure, not
+   *  validation: `near_median` marks a cut that splits the universe in half and
+   *  therefore cannot separate a regime from its opposite. `validated` is
+   *  always false until a stored history is deep enough to judge against. */
+  thresholds?: Record<string, {
+    cut: number; column: string;
+    pctile_in_universe: number | null;
+    n?: number; near_median?: boolean; validated?: boolean;
+  }>;
+  /** Percentile of each summary measure against its own recorded history.
+   *  `pctile` is null until `n_history` clears the floor — null means "not yet
+   *  knowable", never a stand-in middle value. */
+  history?: Record<string, { pctile: number | null; n_history: number }>;
 }
 
 export async function fetchVolLandscape(): Promise<VolLandscapeScan> {

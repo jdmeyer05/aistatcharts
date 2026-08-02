@@ -627,6 +627,101 @@ def test_heading_is_absent_when_the_dot_has_not_moved():
     assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
 
 
+# ── Vol-scan threshold disclosure and history ────────────────────────────────
+# The cuts were never checked against the distribution they gate. Audited live
+# 2026-08-02: the 1.10 skew cut sat at the 50th percentile of the cross section,
+# so "Broad Fear" fired on more-than-half-above-the-median — a coin flip.
+
+def _stub_store(monkeypatch, initial=None):
+    """In-memory stand-in for the Supabase key/value row."""
+    import src.vol_history as vh
+    box = {"rows": list(initial or [])}
+    monkeypatch.setattr(vh, "_load", lambda: list(box["rows"]))
+    monkeypatch.setattr(vh, "_save", lambda rows: box.__setitem__("rows", list(rows)))
+    return box
+
+
+def test_history_keeps_one_row_per_session_day(monkeypatch):
+    """The scan runs many times a day behind a cache. Recording every run would
+    weight busy days more heavily than quiet ones for no reason."""
+    from src.vol_history import record
+    box = _stub_store(monkeypatch)
+    d = date(2026, 8, 3)
+    record({"avg_ivhv": 1.10}, session_date=d)
+    record({"avg_ivhv": 1.20}, session_date=d)
+    rows = record({"avg_ivhv": 1.30}, session_date=d)
+    assert len(rows) == 1, rows
+    assert rows[0]["avg_ivhv"] == 1.30, "latest write for a day must win"
+
+
+def test_degraded_scan_is_not_recorded(monkeypatch):
+    """A partial universe would enter as a real reading and then distort every
+    percentile computed against it afterwards."""
+    from src.vol_history import record
+    _stub_store(monkeypatch)
+    assert record({"avg_ivhv": 9.9}, healthy=False) == []
+    assert record({}, healthy=True) == [], "an empty summary is not an observation"
+
+
+def test_percentile_is_none_until_the_history_is_deep_enough(monkeypatch):
+    """None means 'not yet knowable'. A 50 would be an invented middle — the
+    same defect as every other placeholder fixed this week."""
+    from src.vol_history import record, percentiles, _MIN_HISTORY
+    _stub_store(monkeypatch)
+    rows = []
+    for i in range(_MIN_HISTORY - 1):
+        rows = record({"avg_ivhv": 1.0 + i / 1000},
+                      session_date=date(2026, 1, 1) + timedelta(days=i))
+    p = percentiles(rows, {"avg_ivhv": 1.5})
+    assert p["avg_ivhv"]["pctile"] is None
+    assert p["avg_ivhv"]["n_history"] == _MIN_HISTORY - 2, p["avg_ivhv"]
+
+    # One more than the floor, because today's own observation is excluded from
+    # the reference set: _MIN_HISTORY priors needs _MIN_HISTORY + 1 rows.
+    for i in range(_MIN_HISTORY - 1, _MIN_HISTORY + 1):
+        rows = record({"avg_ivhv": 1.0 + i / 1000},
+                      session_date=date(2026, 1, 1) + timedelta(days=i))
+    rows = record({"avg_ivhv": 1.5},
+                  session_date=date(2026, 1, 1) + timedelta(days=_MIN_HISTORY + 5))
+    p = percentiles(rows, {"avg_ivhv": 1.5})
+    assert p["avg_ivhv"]["n_history"] >= _MIN_HISTORY, p["avg_ivhv"]
+    assert p["avg_ivhv"]["pctile"] == pytest.approx(100.0), p["avg_ivhv"]
+
+
+def test_percentile_excludes_todays_own_observation(monkeypatch):
+    """Otherwise a value is partly compared against itself."""
+    from src.vol_history import record, percentiles, _MIN_HISTORY
+    _stub_store(monkeypatch)
+    rows = []
+    for i in range(_MIN_HISTORY + 10):
+        rows = record({"avg_ivhv": 1.0},
+                      session_date=date(2026, 1, 1) + timedelta(days=i))
+    p = percentiles(rows, {"avg_ivhv": 1.0})
+    assert p["avg_ivhv"]["n_history"] == len(rows) - 1
+
+
+def test_threshold_report_flags_a_cut_sitting_on_the_median():
+    """The disclosure that matters: a cut splitting the universe in half cannot
+    separate a regime from its opposite."""
+    from src.vol_history import threshold_report
+    mdf = pd.DataFrame({"Put_Skew": [0.9, 1.0, 1.05, 1.15, 1.2, 1.3]})
+    rep = threshold_report(mdf, {"steep": {"column": "Put_Skew", "cut": 1.10}})
+    assert rep["steep"]["pctile_in_universe"] == pytest.approx(50.0)
+    assert rep["steep"]["near_median"] is True
+    assert rep["steep"]["validated"] is False
+
+    # A cut out in the tail is not flagged.
+    rep2 = threshold_report(mdf, {"steep": {"column": "Put_Skew", "cut": 1.9}})
+    assert rep2["steep"]["near_median"] is False
+
+
+def test_threshold_report_survives_a_missing_column():
+    from src.vol_history import threshold_report
+    rep = threshold_report(pd.DataFrame({"Put_Skew": [1.0]}),
+                           {"parity": {"column": "Parity", "cut": 0.75}})
+    assert rep["parity"]["pctile_in_universe"] is None
+
+
 # ── Fed probabilities from ZQ ────────────────────────────────────────────────
 # Two bugs that produced confident, plausible, wrong numbers.
 

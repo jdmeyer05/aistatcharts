@@ -536,6 +536,14 @@ def _compute_vol_landscape() -> dict:
     # a 0.85-1.25 band, so "steep" here is closer to "above median" than to fear.
     n_steep = int((_skew_ok["Put_Skew"] > 1.10).sum()) if "Put_Skew" in _skew_ok.columns else 0
     n_skew_rated = int(len(_skew_ok))
+    # The median is published beside the count because it is the honest version
+    # of the same statement. Audited 2026-08-02: 1.10 sits at the 50th
+    # percentile of the cross section, so "n_steep > half the universe" reduces
+    # to "is the median above 1.10" — and a reader can check that directly
+    # instead of inferring it from a count against an invisible cut.
+    _med_skew_raw = _skew_ok["Put_Skew"].median() if "Put_Skew" in _skew_ok.columns else None
+    median_skew = (float(_med_skew_raw) if _med_skew_raw is not None
+                   and not pd.isna(_med_skew_raw) else None)
 
     # regime_action describes what the tape is PRICING, not what to do about it.
     #
@@ -570,6 +578,42 @@ def _compute_vol_landscape() -> dict:
         regime_action = ("Nothing stands out across the universe — no broad vol story "
                          "to carry into the session.")
 
+    summary = {
+        "avg_iv": round(avg_iv * 100, 2),
+        "avg_sector_iv": avg_sector_iv,
+        "avg_ivhv": round(avg_ivhv, 3),
+        "avg_skew": round(avg_skew, 3),
+        "median_skew": round(median_skew, 3) if median_skew is not None else None,
+        "n_inverted": n_inverted,
+        "n_steep_skew": n_steep,
+        # How many chains the skew stats were actually computed over — the rest
+        # were withheld for failing put-call parity. Without this the reader
+        # sees "8 steep" against an assumed 20 and silently overstates.
+        "n_skew_rated": n_skew_rated,
+        "n_tickers": len(mdf),
+        "impl_corr": round(impl_corr, 4) if impl_corr is not None else None,
+    }
+
+    # Record one observation per session day so these cuts eventually become
+    # checkable. A scan missing a chunk of its universe is NOT recorded — it
+    # would enter as a real reading and distort every later percentile.
+    hist_pctiles: dict = {}
+    thresholds: dict = {}
+    try:
+        from src.vol_history import record, percentiles, threshold_report
+        healthy = len(mdf) >= max(15, int(len(ALL_TICKERS) * 0.8))
+        rows = record(summary, healthy=healthy)
+        hist_pctiles = percentiles(rows, summary)
+        thresholds = threshold_report(mdf, {
+            "steep_skew": {"column": "Put_Skew", "cut": 1.10},
+            "ivhv_rich": {"column": "IV_HV", "cut": 1.20},
+            "ivhv_cheap": {"column": "IV_HV", "cut": 0.85},
+            "parity_low": {"column": "Parity", "cut": 0.75},
+            "parity_high": {"column": "Parity", "cut": 1.35},
+        })
+    except Exception as e:
+        logger.warning(f"vol history unavailable: {e}")
+
     return {
         "count": len(metrics_records),
         "metrics": metrics_records,
@@ -586,19 +630,14 @@ def _compute_vol_landscape() -> dict:
         "es_read": _es_read_safe(metrics_records, impl_corr,
                                  {"n_inverted": n_inverted, "n_tickers": len(mdf),
                                   "avg_sector_iv": avg_sector_iv}),
-        "summary": {
-            "avg_iv": round(avg_iv * 100, 2),
-            "avg_sector_iv": avg_sector_iv,
-            "avg_ivhv": round(avg_ivhv, 3),
-            "avg_skew": round(avg_skew, 3),
-            "n_inverted": n_inverted,
-            "n_steep_skew": n_steep,
-            # How many chains the skew stats were actually computed over — the
-            # rest were withheld for failing put-call parity. Without this the
-            # reader sees "8 steep" against an assumed 20 and silently overstates.
-            "n_skew_rated": n_skew_rated,
-            "n_tickers": len(mdf),
-        },
+        "summary": summary,
+        # Where each hardcoded cut sits in TODAY's cross section, and how much
+        # recorded history exists to judge it against. Disclosure rather than
+        # validation: a cut at the median cannot separate a regime from its
+        # opposite, and that should be visible in the payload instead of
+        # discoverable only by auditing the source.
+        "thresholds": thresholds,
+        "history": hist_pctiles,
     }
 
 
@@ -608,7 +647,10 @@ from src._cache_util import result_cached as _result_cached
 # v10: Butterfly changed value (and sign, for QQQ/SPY/XLK), Risk_Rev/Butterfly
 # and absent smile points became null instead of 0. Without the bump the 12h
 # TTL would keep serving the old payload for half a day after the deploy.
-_compute_vol_landscape = _result_cached("vol_landscape_v10")(_compute_vol_landscape)
+# v11: summary gained median_skew and impl_corr, and the payload gained the
+# `thresholds` and `history` blocks. A stale v10 entry would serve a scan with
+# no threshold disclosure on it at all.
+_compute_vol_landscape = _result_cached("vol_landscape_v11")(_compute_vol_landscape)
 
 
 @router.get("/vol-landscape")
