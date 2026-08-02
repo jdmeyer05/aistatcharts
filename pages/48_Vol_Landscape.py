@@ -181,19 +181,24 @@ avg_vrp_vol = mdf["VRP_Vol"].dropna().mean() if "VRP_Vol" in mdf.columns and mdf
 
 if avg_ivhv > 1.2 and avg_pctile > 65:
     vol_regime, regime_color = "Elevated Vol \u2014 Rich Premiums", "#ff4444"
-    regime_action = "Sell premium. Short straddles, iron condors, credit spreads."
+    regime_action = ("Options are pricing more movement than has been delivered. Moves that do "
+                     "come are more likely to be already paid for.")
 elif avg_ivhv < 0.85 and avg_pctile < 35:
     vol_regime, regime_color = "Low Vol \u2014 Cheap Protection", "#00ff96"
-    regime_action = "Buy protection. Long puts, ratio backspreads, tail hedges."
+    regime_action = ("Options are pricing less movement than has been delivered. A surprise has "
+                     "more room to travel before it is priced in.")
 elif n_inverted >= 3:
     vol_regime, regime_color = "Event-Driven \u2014 Near-Term Fear", "#ffaa00"
-    regime_action = "Calendar spreads. Sell elevated front-month, buy cheaper back-month."
+    regime_action = ("Front-dated vol sits above back-dated across several names — the risk "
+                     "being priced is near-term and dated, not structural.")
 elif n_steep_skew > len(mdf) * 0.5:
     vol_regime, regime_color = "Broad Fear \u2014 Steep Skew", "#ff4444"
-    regime_action = "Sell overpriced put wings via put spreads or risk reversals."
+    regime_action = ("Downside is bid across most of the universe. Falls are being priced to "
+                     "travel faster than rallies.")
 else:
     vol_regime, regime_color = "Normal Conditions", "#e6edf3"
-    regime_action = "No broad signal. Focus on single-name relative value."
+    regime_action = ("Nothing stands out across the universe — no broad vol story to carry into "
+                     "the session.")
 
 # Regime change detection
 _prev_regime = st.session_state.get("vl_prev_regime")
@@ -892,7 +897,7 @@ with tab5:
             def _build_context():
                 _focus_mdf = mdf if _ai_focus == "Full Landscape" else mdf[mdf["Group"] == _ai_focus.replace(" Only", "")]
                 lines = [f"CROSS-ASSET OPTIONS LANDSCAPE ({len(_focus_mdf)} tickers, {_ai_focus})", ""]
-                lines.append(f"REGIME: {vol_regime} | ACTION: {regime_action}")
+                lines.append(f"REGIME: {vol_regime} — {regime_action}")
                 lines.append(f"Avg IV: {avg_iv:.1%} | IV/HV: {avg_ivhv:.2f}x | Pctile: {avg_pctile:.0f}th | Skew: {avg_skew:.2f}x")
                 lines.append(f"Inverted: {n_inverted}/{len(mdf)} | Steep: {n_steep_skew}/{len(mdf)}")
                 if impl_corr is not None: lines.append(f"Impl Corr: {impl_corr:.2f}")

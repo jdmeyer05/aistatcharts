@@ -46,7 +46,7 @@ export default function VolLandscapePage() {
       if (!data) throw new Error("Load data first");
       const ctx = [
         `CROSS-ASSET OPTIONS LANDSCAPE (${data.count} tickers)`,
-        `REGIME: ${data.regime} | ACTION: ${data.regime_action}`,
+        `REGIME: ${data.regime} — ${data.regime_action}`,
         `Avg IV: ${data.summary.avg_iv}% | IV/HV: ${data.summary.avg_ivhv}x | Skew: ${data.summary.avg_skew}x`,
         `Inverted: ${data.summary.n_inverted}/${data.summary.n_tickers} | Steep: ${data.summary.n_steep_skew}/${data.summary.n_skew_rated ?? data.summary.n_tickers}`,
         // Equal-weighted; the caveat travels with the number so the model does

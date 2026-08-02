@@ -533,21 +533,38 @@ def _compute_vol_landscape() -> dict:
     n_steep = int((_skew_ok["Put_Skew"] > 1.10).sum()) if "Put_Skew" in _skew_ok.columns else 0
     n_skew_rated = int(len(_skew_ok))
 
+    # regime_action describes what the tape is PRICING, not what to do about it.
+    #
+    # It previously read as instructions — "Sell premium. Iron condors, credit
+    # spreads.", "Sell overpriced put wings." This page is session context, and a
+    # directive carries an implied confidence none of these inputs support: every
+    # cut below is an unvalidated round number, avg_ivhv is a mean across twenty
+    # chains of uneven quality, and n_steep is counted only over the ones that
+    # pass parity. A description that is wrong is still information; an
+    # instruction that is wrong is just wrong.
+    #
+    # Each line states the observation and what it implies about how the session
+    # may behave, and leaves the trade to the person reading it.
     if avg_ivhv > 1.2:
         regime = "Elevated Vol — Rich Premiums"
-        regime_action = "Sell premium. Iron condors, credit spreads."
+        regime_action = ("Options are pricing more movement than has been delivered. "
+                         "Moves that do come are more likely to be already paid for.")
     elif avg_ivhv < 0.85:
         regime = "Low Vol — Cheap Protection"
-        regime_action = "Buy protection. Long puts, tail hedges."
+        regime_action = ("Options are pricing less movement than has been delivered. "
+                         "A surprise has more room to travel before it is priced in.")
     elif n_inverted >= 3:
         regime = "Event-Driven — Near-Term Fear"
-        regime_action = "Calendar spreads. Sell front, buy back."
+        regime_action = ("Front-dated vol sits above back-dated across several names — "
+                         "the risk being priced is near-term and dated, not structural.")
     elif n_steep > max(n_skew_rated, 1) * 0.5:   # same denominator n_steep was counted over
         regime = "Broad Fear — Steep Skew"
-        regime_action = "Sell overpriced put wings."
+        regime_action = ("Downside is bid across most of the universe. Falls are being "
+                         "priced to travel faster than rallies.")
     else:
         regime = "Normal Conditions"
-        regime_action = "No broad signal. Single-name relative value."
+        regime_action = ("Nothing stands out across the universe — no broad vol story "
+                         "to carry into the session.")
 
     return {
         "count": len(metrics_records),
@@ -584,7 +601,7 @@ def _compute_vol_landscape() -> dict:
 # Wrap with the Supabase-backed result cache (12h TTL). Imported inline to
 # avoid pulling the cache util at module-import time if circular.
 from src._cache_util import result_cached as _result_cached
-_compute_vol_landscape = _result_cached("vol_landscape_v8")(_compute_vol_landscape)
+_compute_vol_landscape = _result_cached("vol_landscape_v9")(_compute_vol_landscape)
 
 
 @router.get("/vol-landscape")

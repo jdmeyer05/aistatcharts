@@ -422,23 +422,28 @@ _skew_n = mdf["Put Skew"].notna().sum()
 if _avg_ivhv > 1.2 and _avg_pctile > 65:
     _regime = "Elevated Vol — Rich Premiums"
     _regime_color = COLORS["danger"]
-    _regime_action = "Options are broadly expensive. Favor selling premium, iron condors, and covered calls."
+    _regime_action = ("Options are broadly expensive against what has been delivered — movement "
+                      "that arrives is more likely to be already paid for.")
 elif _avg_ivhv < 0.85 and _avg_pctile < 35:
     _regime = "Low Vol — Cheap Protection"
     _regime_color = COLORS["success"]
-    _regime_action = "Options are historically cheap. Buy protective puts and long straddles."
+    _regime_action = ("Options are historically cheap against what has been delivered — a "
+                      "surprise has room to travel before it is priced in.")
 elif _n_inverted >= 3:
     _regime = "Event-Driven — Near-Term Fear"
     _regime_color = COLORS["warning"]
-    _regime_action = "Multiple assets in backwardation. Calendar spreads and event straddles in focus."
+    _regime_action = ("Multiple assets in backwardation — the risk being priced is near-term and "
+                      "dated rather than structural.")
 elif _skew_n > 0 and _n_steep_skew > _skew_n * 0.5:
     _regime = "Broad Fear — Steep Skew"
     _regime_color = COLORS["danger"]
-    _regime_action = "Put skew elevated across sectors. Index puts are efficient hedges. Sell put spreads selectively."
+    _regime_action = ("Put skew is elevated across sectors — falls are being priced to travel "
+                      "faster than rallies.")
 else:
     _regime = "Normal Conditions"
     _regime_color = COLORS["accent"]
-    _regime_action = "No extreme signals. Standard vol selling and tactical positioning."
+    _regime_action = ("No extremes across the universe — no broad vol story to carry into the "
+                      "session.")
 
 # Write cross-page context for other pages to consume
 _inverted_tickers = mdf[mdf["TS Slope"].fillna(0) < 0]["Ticker"].tolist() if "TS Slope" in mdf.columns else []
