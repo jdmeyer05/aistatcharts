@@ -80,6 +80,18 @@ _SESSION_MINUTES = 390    # 09:30-16:00
 
 _PANEL_KEY = "es_overnight_panel_v1"
 
+# What `_compute_base_rates` reads off the panel. Validated on load so a cached
+# panel written by an older shape is treated as a MISS and rebuilt, rather than
+# reaching the statistics and either raising or — worse — being papered over by
+# a `.get()` and quietly changing a number. The stats cache key already caused
+# exactly that once today, and it relied on remembering to bump a version.
+_PANEL_COLUMNS = frozenset({
+    "onh", "onl", "on_range", "open", "rth_high", "rth_low", "rth_close",
+    "rth_range", "rth_ret", "open_pct_in_on", "broke_onh", "broke_onl",
+    "first_break", "first_break_min", "ext_high", "ext_low", "held_high",
+    "held_low", "on_range_pct", "ratio", "prior_rth_close", "true_gap",
+})
+
 
 def _load_panel_cache() -> pd.DataFrame | None:
     """The derived session panel, straight from Supabase."""
@@ -93,6 +105,11 @@ def _load_panel_cache() -> pd.DataFrame | None:
         if not rows:
             return None
         s = pd.DataFrame(rows)
+        gaps = _PANEL_COLUMNS - set(s.columns)
+        if gaps:
+            logger.warning(f"cached overnight panel is an older shape "
+                           f"(missing {sorted(gaps)}) — rebuilding")
+            return None
         # Restore the timezone. The panel is built with a tz-aware ET index and
         # serialises to bare dates, so a naive reload compares unequal to every
         # freshly-derived session. concat then SUCCEEDS and produces two rows per
@@ -142,9 +159,14 @@ def _panel() -> pd.DataFrame:
     """
     cached = _load_panel_cache()
     if cached is not None and len(cached) >= 100:
-        behind = (_date.today() - cached.index.max().date()).days
-        if behind <= 1:
+        # Measured against the last CLOSED cash session, not the calendar. A
+        # calendar gap counts the weekend as two missing days, so every Sunday
+        # spent two API calls re-deriving sessions that never happened.
+        from src.es_session import _last_cash_close
+        last_session = _last_cash_close(pd.Timestamp.now(tz=_TZ)).date()
+        if cached.index.max().date() >= last_session:
             return cached                       # current — no API calls at all
+        behind = (last_session - cached.index.max().date()).days
         # Only the newest expiries can hold sessions we are missing. Two of them
         # so a roll inside the gap is still covered by the volume test.
         fresh = _panel_from(_contracts_for()[-2:])

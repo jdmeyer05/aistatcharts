@@ -123,3 +123,53 @@ def test_open_position_bands_are_ordered():
     assert _pos_band(0.05) == "bottom 20%"
     assert _pos_band(0.5) == "middle"
     assert _pos_band(0.95) == "top 20%"
+
+
+# ── cached panel shape ────────────────────────────────────────────
+# The panel is persisted as JSON. A cache written by an older shape must be
+# treated as a miss, not fed to the statistics — where it would either raise or,
+# worse, be papered over by a `.get()` and quietly change a number.
+
+def _fake_panel_rows(n=150, drop=None):
+    from src.es_overnight import _PANEL_COLUMNS
+    row = {c: 1.0 for c in _PANEL_COLUMNS}
+    row["first_break"] = "high"
+    rows = []
+    for i in range(n):
+        r = dict(row)
+        r["session"] = f"2026-01-{(i % 28) + 1:02d}"
+        if drop:
+            r.pop(drop, None)
+        rows.append(r)
+    return rows
+
+
+def test_cached_panel_of_the_current_shape_loads(monkeypatch):
+    import src._cache_util as cu
+    from datetime import datetime
+    import src.es_overnight as eo
+    monkeypatch.setattr(cu, "_supabase_get",
+                        lambda k: (datetime.utcnow(), {"rows": _fake_panel_rows()}))
+    assert eo._load_panel_cache() is not None
+
+
+def test_cached_panel_missing_a_column_is_a_miss(monkeypatch):
+    import src._cache_util as cu
+    from datetime import datetime
+    import src.es_overnight as eo
+    monkeypatch.setattr(cu, "_supabase_get",
+                        lambda k: (datetime.utcnow(),
+                                   {"rows": _fake_panel_rows(drop="true_gap")}))
+    assert eo._load_panel_cache() is None
+
+
+def test_cached_panel_keeps_its_timezone(monkeypatch):
+    """Naive reload vs tz-aware fresh rows meant concat produced duplicates that
+    `duplicated()` could not see — 493 + 53 became 546."""
+    import src._cache_util as cu
+    from datetime import datetime
+    import src.es_overnight as eo
+    monkeypatch.setattr(cu, "_supabase_get",
+                        lambda k: (datetime.utcnow(), {"rows": _fake_panel_rows()}))
+    s = eo._load_panel_cache()
+    assert s.index.tz is not None and str(s.index.tz) == ET
