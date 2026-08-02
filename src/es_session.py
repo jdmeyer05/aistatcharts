@@ -268,19 +268,34 @@ _FEEDS: list[tuple[str, str]] = [
 ]
 
 # Headlines that actually move the index, rather than everything published.
+#
+# The geopolitical and FX terms were added after the dark-feed warning fired:
+# Investing.com was live and three minutes fresh while contributing NOTHING,
+# because "Iran threatens regional energy fields" and "Japan to announce joint
+# yen intervention with US" matched none of the original words — on a morning
+# when another feed was carrying "Exxon and Chevron profits surge on rising oil
+# prices due to Iran war". Widening is safe now in a way it was not before,
+# because the tiers rank what gets through instead of the filter deciding alone.
 _RELEVANT = re.compile(
     r"\b(fed|fomc|powell|rate cut|rate hike|inflation|cpi|pce|payroll|jobs|unemployment|"
     r"jobless|gdp|recession|tariff|treasury|yield|earnings|guidance|s&p|nasdaq|stocks|"
-    r"selloff|rally|dollar|oil|hawkish|dovish)\b", re.I)
+    r"selloff|rally|dollar|oil|hawkish|dovish|"
+    r"war|military|strike|sanction|invasion|attack|iran|russia|ukraine|china|opec|crude|"
+    r"energy|yen|euro|ecb|boj|intervention|currency|shutdown|debt ceiling|downgrade)\b", re.I)
 
 # Tier 1 moves the whole index; tier 2 is market-wide colour. RANKED rather than
 # filtered, because "key news" is an ordering problem — dropping a story to make
 # room for a fresher one is how an FOMC statement ends up under a stock tip.
 _TIER1 = re.compile(
     r"\b(fed|fomc|powell|rate cut|rate hike|hawkish|dovish|inflation|cpi|pce|payroll|"
-    r"jobless|unemployment|gdp|recession|tariff|treasury|jobs report)\b", re.I)
+    r"jobless|unemployment|gdp|recession|tariff|treasury|jobs report|"
+    # Policy shocks and geopolitics move the index the way a data print does —
+    # a currency intervention or a threat to energy supply is not colour.
+    r"war|invasion|sanction|opec|intervention|ecb|boj|shutdown|debt ceiling|downgrade)\b",
+    re.I)
 _TIER2 = re.compile(
-    r"\b(s&p|nasdaq|dow|stocks|selloff|rally|dollar|oil|vix|volatility|yields?|bonds?)\b", re.I)
+    r"\b(s&p|nasdaq|dow|stocks|selloff|rally|dollar|oil|vix|volatility|yields?|bonds?|"
+    r"crude|energy|yen|euro|currency|china|iran|russia|ukraine|military|strike)\b", re.I)
 
 # Single-name equity stories. The note above says a firehose of these is noise to
 # someone trading ES, but "earnings" and "guidance" in _RELEVANT let them through

@@ -2981,6 +2981,15 @@ def _es_brief_build() -> dict:
     cock = cock or {}
     lvl = cock.get("levels")
 
+    # Synthesis of the headlines, after the pool because it needs them. Keyed on
+    # the headline set rather than a clock, so it only regenerates when the feeds
+    # actually move — most calls are a cache read, and the brief's
+    # stale-while-revalidate absorbs the cold one on a background refresh.
+    digest = None
+    if (sess or {}).get("news"):
+        from src.news_digest import news_digest
+        digest = _safe(lambda: news_digest(sess["news"]), "news_digest")
+
     gate = None
     if cock.get("available"):
         gate = _safe(lambda: conditions_gate(
@@ -3000,6 +3009,7 @@ def _es_brief_build() -> dict:
         "next_event": (sess or {}).get("next_event"),
         "high_impact_today": (sess or {}).get("high_impact_today", []),
         "news": (sess or {}).get("news", []),
+        "news_digest": digest,
         "levels": lvl if (lvl or {}).get("available") else None,
         "intraday": cock.get("intraday"),
         "expected_move": cock.get("expected_move"),
