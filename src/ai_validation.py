@@ -65,8 +65,10 @@ use generic options commentary. Reference specific data points from the surface.
      complacent — cheap to buy crash protection.
    - FLAT skew: Dangerous complacency. Historically precedes sharp selloffs because
      downside protection is being underpriced.
-   - Butterfly metric (25D_put_IV + 25D_call_IV - 2*ATM_IV): Measures tail risk pricing.
-     Positive = fat tails priced in. Negative = thin tails, market underpricing extremes.
+   - Butterfly metric ((25D_put_IV - ATM_put_IV) + (25D_call_IV - ATM_call_IV)): each wing
+     against its own type's ATM, so a chain whose put and call ATM quotes disagree does not
+     leak that gap into the convexity read. Measures tail risk pricing: positive = fat tails
+     priced in, negative = thin tails, market underpricing extremes.
    - Risk Reversal (25D_call_IV - 25D_put_IV): Negative = normal equity skew (puts richer).
      Positive = unusual call demand (squeeze risk, speculative fervor).
 

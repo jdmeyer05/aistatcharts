@@ -410,8 +410,27 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
                             & (front_chain["implied_volatility"] > 0)]
         ladder_broken = _delta_ladder_broken(_puts, "put")
 
-        risk_rev = ((c25_iv - p25_iv) * 100) if c25_iv and p25_iv else 0.0
-        butterfly = ((p25_iv + c25_iv - 2 * front_iv) * 100) if p25_iv and c25_iv and front_iv > 0 else 0.0
+        # A risk reversal IS a call minus a put, so being cross-type is its
+        # definition rather than a defect — there is no ATM reference in it to
+        # get wrong, and it survives a chain whose ATM quotes disagree intact.
+        risk_rev = ((c25_iv - p25_iv) * 100) if c25_iv and p25_iv else None
+
+        # Butterfly measures each wing against its OWN type's ATM.
+        #
+        # The textbook form `p25 + c25 - 2*ATM` anchors BOTH wings on one ATM
+        # quote, which is right only when parity holds. Anchoring on the ATM
+        # CALL puts the whole parity gap into the put wing, and the error lands
+        # in the total as exactly (atm_put_iv - front_iv). Measured live
+        # 2026-08-02 that gap FLIPPED THE SIGN for QQQ (-4.67 -> +1.19), SPY
+        # (-0.63 -> +0.26) and XLK (+0.52 -> -1.01), and overstated TLT by 4.8x.
+        # XLF, whose two ATM quotes agree to 0.005, read 1.18 against 1.25 —
+        # the two forms coincide only where parity holds, which is the tell.
+        #
+        # Same sign convention and same scale as the textbook form: this is the
+        # sum of the two wing lifts, which is what `- 2*ATM` buys you when the
+        # single ATM anchor is legitimate. Nothing downstream needs rescaling.
+        butterfly = ((((p25_iv - atm_put_iv) + (c25_iv - front_iv)) * 100)
+                     if p25_iv and c25_iv and atm_put_iv and front_iv > 0 else None)
 
         # Term structure slope
         front_dte = max((pd.to_datetime(exps[0]) - pd.Timestamp.now()).days, 1)

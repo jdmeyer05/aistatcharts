@@ -459,7 +459,11 @@ def _compute_vol_landscape() -> dict:
         try:
             smile = interpolate_smile(td["chains"][td["expirations"][0]], td["spot"], moneyness_pts)
             if smile:
-                row = {str(m): (smile.get(m) or 0) * 100 for m in moneyness_pts}
+                # None stays None. `or 0` printed a 0% IV cell — live HYG had
+                # no strike near 110% of spot and the heatmap showed it priced
+                # at zero volatility rather than showing nothing.
+                row = {str(m): (smile[m] * 100 if smile.get(m) else None)
+                       for m in moneyness_pts}
                 row["ticker"] = tk
                 smile_data.append(row)
         except Exception:

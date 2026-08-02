@@ -1609,7 +1609,13 @@ export interface VolLandscapeMetric {
   /** Null when the chain could not be measured — the 25-delta put or the ATM
    *  put was missing. It is NOT 1.0 ("no skew"), which would be a claim. */
   Put_Skew: number | null;
-  Risk_Rev: number; Butterfly: number;
+  /** 25-delta call IV minus 25-delta put IV, in vol points. Cross-type by
+   *  definition, so no ATM anchor to get wrong. Null when either wing is
+   *  missing — not 0.0, which would say "flat". */
+  Risk_Rev: number | null;
+  /** Convexity: each 25-delta wing measured against its OWN type's ATM. Null
+   *  when a leg is missing. Not 0.0, which would say "no fat tails". */
+  Butterfly: number | null;
   /** ATM put IV over ATM call IV. Put-call parity forces this to 1.0, so the
    *  distance from 1.0 measures how stale the chain's quotes are. Null when
    *  either leg is missing — a chain with no data scores no confidence. */
@@ -1627,7 +1633,12 @@ export interface VolLandscapeMetric {
 export interface VolLandscapeScan {
   count: number;
   metrics: VolLandscapeMetric[];
-  smile_data: { ticker: string; [moneyness: string]: number | string }[];
+  /** Per-moneyness IV in percent. A point is null when no strike sits near that
+   *  moneyness — it is not 0, which would plot as zero volatility. Note the
+   *  curve is built OTM (puts below spot, calls above), so on a chain whose ATM
+   *  quotes disagree the two wings sit at different levels and the seam shows
+   *  as a kink at 1.00. `Parity` on the same ticker measures that gap. */
+  smile_data: { ticker: string; [moneyness: string]: number | string | null }[];
   ts_data: { ticker: string; term_structure: { dte: number; iv: number }[] }[];
   impl_corr: number | null;
   /** What the cross-asset scan implies for the ES session. Each read is a

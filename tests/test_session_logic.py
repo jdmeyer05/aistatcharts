@@ -437,3 +437,110 @@ def test_divergences_survive_an_all_null_skew_column():
     assert df["Put_Skew"].dtype == object, "fixture must reproduce object dtype"
     out = detect_divergences(df)                      # must not raise
     assert not any(d["metric"] == "Skew" for d in out)
+
+
+# ── Butterfly: each wing against its own type's ATM ──────────────────────────
+# The call side of the smile had never been checked against live data. It was
+# built as `p25 + c25 - 2*ATM_call`, which anchors a PUT wing on a CALL quote —
+# the same mixed-type error already fixed in Put_Skew, surviving in the
+# convexity metric because nothing rendered it.
+
+def _two_sided_chain(atm_call_iv, atm_put_iv, p25_iv, c25_iv):
+    """Spot 100. Strikes chosen so the delta ladders are monotone and the
+    25-delta selector lands on 94 (put) and 106 (call)."""
+    rows = [
+        # puts: |delta| rises with strike
+        ("put", 90.0, -0.15, 0.30, 500), ("put", 94.0, -0.25, p25_iv, 500),
+        ("put", 100.0, -0.50, atm_put_iv, 500),
+        # calls: |delta| falls with strike
+        ("call", 100.0, 0.50, atm_call_iv, 500), ("call", 106.0, 0.25, c25_iv, 500),
+        ("call", 112.0, 0.15, 0.21, 500),
+    ]
+    return pd.DataFrame([
+        {"contract_type": t, "strike_price": k, "delta": d,
+         "implied_volatility": iv, "open_interest": oi}
+        for t, k, d, iv, oi in rows
+    ])
+
+
+def _metrics_for(chain, hv20=0.20):
+    from src.cross_asset_vol import compute_cross_asset_metrics
+    exp = (pd.Timestamp.now() + pd.Timedelta(days=18)).strftime("%Y-%m-%d")
+    mdf = compute_cross_asset_metrics({"TST": {
+        "spot": 100.0, "chains": {exp: chain}, "expirations": [exp],
+        "hv20": hv20, "label": "Test",
+    }})
+    return mdf.iloc[0]
+
+
+def test_butterfly_measures_each_wing_against_its_own_atm():
+    """Live QQQ, 2026-08-02: ATM call 26.68, ATM put 20.82, 25d put 25.30,
+    25d call 23.39. Both wings lift off their own ATM, so the smile is convex
+    and the butterfly is POSITIVE. Charging the 5.86-point parity gap to the
+    put wing reported -4.67 — thin tails, the opposite claim."""
+    r = _metrics_for(_two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339))
+    assert r["Butterfly"] == pytest.approx(1.19, abs=0.01), r["Butterfly"]
+    assert r["Butterfly"] > 0, "convexity read flipped sign"
+
+
+def test_butterfly_error_was_exactly_the_parity_gap():
+    """Why the old form looked right for years: it is correct whenever the two
+    ATM quotes agree, which is what parity promises and what XLF's chain
+    actually delivers. Same wings, parity forced to 1.0 — both forms give 1.19,
+    so nothing was 'rescaled', only un-skewed."""
+    r = _metrics_for(_two_sided_chain(0.2375, 0.2375, 0.2823, 0.2046))
+    assert r["Parity"] == pytest.approx(1.0)
+    old_form = (0.2823 + 0.2046 - 2 * 0.2375) * 100
+    assert r["Butterfly"] == pytest.approx(old_form, abs=1e-6)
+    assert r["Butterfly"] == pytest.approx(1.19, abs=0.01)
+
+
+def test_butterfly_and_risk_reversal_are_none_when_a_wing_is_missing():
+    """0.0 is a reading — "flat wings", "no skew". Absence has to say absence,
+    the same rule that made atm_iv stop returning 0.25."""
+    puts_only = _two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339)
+    puts_only = puts_only[puts_only["contract_type"] == "put"].copy()
+    # An ATM call is required before any row is emitted at all.
+    from src.cross_asset_vol import compute_cross_asset_metrics
+    exp = (pd.Timestamp.now() + pd.Timedelta(days=18)).strftime("%Y-%m-%d")
+    assert compute_cross_asset_metrics({"TST": {
+        "spot": 100.0, "chains": {exp: puts_only}, "expirations": [exp],
+        "hv20": 0.20, "label": "Test"}}).empty, "no ATM call must drop the row"
+
+    # The reachable null: a live call side, an unquoted put side. The row
+    # survives on its calls and the two metrics needing a put report None.
+    #
+    # It has to be the PUT side. find_delta_strike applies no maximum distance
+    # from the target delta, so a chain holding one call still yields a
+    # "25-delta call" — the 0.50-delta ATM one. The call wing therefore cannot
+    # vanish on its own: whatever empties it also empties front_iv, and the row
+    # is dropped before any of this is reached.
+    dead_puts = _two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339)
+    dead_puts.loc[dead_puts["contract_type"] == "put", "implied_volatility"] = 0.0
+    r = _metrics_for(dead_puts)
+    assert r["Butterfly"] is None, r["Butterfly"]
+    assert r["Risk_Rev"] is None, r["Risk_Rev"]
+    assert r["Put_Skew"] is None, r["Put_Skew"]
+    assert r["Front_IV"] == pytest.approx(0.2668), "the call side still measured"
+
+
+def test_risk_reversal_is_unaffected_by_a_broken_parity():
+    """A risk reversal is a call minus a put by construction — there is no ATM
+    anchor in it to mis-assign, so the same wings give the same answer however
+    far apart the ATM quotes sit. This is the control on the butterfly fix."""
+    broken = _metrics_for(_two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339))
+    clean = _metrics_for(_two_sided_chain(0.2375, 0.2375, 0.2530, 0.2339))
+    assert broken["Risk_Rev"] == pytest.approx(clean["Risk_Rev"])
+    assert broken["Risk_Rev"] == pytest.approx((0.2339 - 0.2530) * 100)
+
+
+# ── Smile interpolation: nulls stay null ─────────────────────────────────────
+
+def test_smile_reports_nothing_where_no_strike_sits():
+    """Live HYG had no strike near 110% of spot. `smile.get(m) or 0` turned that
+    into a 0% IV cell — a claim that the wing is priced at zero volatility."""
+    from src.cross_asset_vol import interpolate_smile
+    ch = _two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339)
+    out = interpolate_smile(ch, 100.0, [0.90, 1.00, 1.10, 1.60])
+    assert out[1.60] is None, "a moneyness with no strike near it must be None"
+    assert out[0.90] == pytest.approx(0.30)

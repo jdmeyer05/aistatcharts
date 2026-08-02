@@ -908,8 +908,12 @@ with tab5:
                     parts = [f"{r['Ticker']} ({r['Label']}) [{r['Group']}] ${r['Spot']:.2f}"]
                     parts.append(f"IV={r['Front_IV']:.1%}")
                     if pd.notna(r.get('IV_HV')): parts.append(f"IV/HV={r['IV_HV']:.2f}x")
-                    parts.append(f"Skew={r['Put_Skew']:.2f}x RR={r['Risk_Rev']:+.1f}")
-                    if pd.notna(r.get('Butterfly')) and r.get('Butterfly') != 0: parts.append(f"Fly={r['Butterfly']:+.1f}")
+                    # Each of these is None when the chain could not support it.
+                    # Omitting the term says "not measurable"; a 0.0 or a 1.00x
+                    # would say "no skew" / "flat wings", which is a claim.
+                    if pd.notna(r.get('Put_Skew')): parts.append(f"Skew={r['Put_Skew']:.2f}x")
+                    if pd.notna(r.get('Risk_Rev')): parts.append(f"RR={r['Risk_Rev']:+.1f}")
+                    if pd.notna(r.get('Butterfly')): parts.append(f"Fly={r['Butterfly']:+.1f}")
                     parts.append(f"TS={r['TS_Slope']*100:+.1f}%/mo")
                     if pd.notna(r.get('VRP_Vol')): parts.append(f"VRP={r['VRP_Vol']:+.1%}")
                     if r.get('Impl_Move') and r['Impl_Move'] > 0: parts.append(f"Move={r['Impl_Move']:.1f}%")

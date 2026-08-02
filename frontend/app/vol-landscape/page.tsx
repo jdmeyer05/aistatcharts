@@ -159,6 +159,7 @@ export default function VolLandscapePage() {
             {/* Smile — small multiples (one mini curve per ticker) */}
             {data.smile_data.length > 0 && (() => {
               const smiles = data.smile_data.filter(s => filteredTickers.includes(s.ticker));
+              const metricByTicker = new Map(data.metrics.map(m => [m.Ticker, m]));
               // Clean each row: drop implausible IVs (illiquid wings routinely
               // produce 400-800% blowout values).
               const cleaned = smiles.map(s => {
@@ -170,11 +171,25 @@ export default function VolLandscapePage() {
                 const atm = pts.find(p => p.label === "ATM")?.iv ?? null;
                 const validPuts = pts.slice(0, 3).map(p => p.iv).filter((v): v is number => v != null);
                 const validCalls = pts.slice(4).map(p => p.iv).filter((v): v is number => v != null);
-                const putSkew = atm && validPuts.length
-                  ? (validPuts.reduce((a, b) => a + b, 0) / validPuts.length) / atm
+                // Each wing against its OWN type's ATM.
+                //
+                // The curve below spot is built from PUTS and above spot from
+                // CALLS, so dividing both by one ATM quote charges the parity
+                // gap to whichever wing is the other type. Live QQQ prices its
+                // ATM put 22% under its ATM call; taking the call as the
+                // denominator understated QQQ's put skew against peers whose
+                // chains agree, and this ratio is what colours the card "crash
+                // premium". Front_IV/Parity are used rather than the curve's
+                // own 1.00 point because which type wins that point is an
+                // accident of concat order upstream, not a stated contract.
+                const mm = metricByTicker.get(s.ticker as string);
+                const atmCall = mm?.Front_IV != null ? mm.Front_IV * 100 : null;
+                const atmPut = atmCall != null && mm?.Parity != null ? atmCall * mm.Parity : null;
+                const putSkew = atmPut && validPuts.length
+                  ? (validPuts.reduce((a, b) => a + b, 0) / validPuts.length) / atmPut
                   : null;
-                const callSkew = atm && validCalls.length
-                  ? (validCalls.reduce((a, b) => a + b, 0) / validCalls.length) / atm
+                const callSkew = atmCall && validCalls.length
+                  ? (validCalls.reduce((a, b) => a + b, 0) / validCalls.length) / atmCall
                   : null;
                 return {
                   ticker: s.ticker as string,
