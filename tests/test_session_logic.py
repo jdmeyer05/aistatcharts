@@ -232,3 +232,69 @@ def test_implied_correlation_degrades_without_raising():
     assert f(0.13, [0.2, 0.3], [0, 0]) is None   # degenerate weights
     assert f(0.99, [0.2, 0.2, 0.2]) == 1.0   # clamped, not >1
     assert f(0.01, [0.2, 0.3, 0.4]) == 0.0   # clamped, not negative
+
+
+# ── Skew basis and the parity gate ───────────────────────────────────────────
+
+def _mrow(tk, skew, parity, **kw):
+    r = {"Ticker": tk, "Put_Skew": skew, "Parity": parity, "Front_IV": 0.13,
+         "TS_Slope": 0.01, "IV_HV": 1.0}
+    r.update(kw)
+    return r
+
+
+def test_credit_read_suppressed_when_parity_broken():
+    """HYG printed 3.10x off a chain whose ATM put was 2.30x its ATM call. The
+    read must withhold rather than publish a fear signal off a stale quote."""
+    from src.vol_es_read import es_vol_read
+    out = es_vol_read([_mrow("SPY", 1.19, 0.94), _mrow("HYG", 3.10, 2.30)], 0.32, {})
+    credit = [r for r in out["reads"] if r["label"] == "Credit vs equity"]
+    assert len(credit) == 1
+    assert credit[0]["value"] == "not readable today"
+    assert "HYG" in credit[0]["note"]
+
+
+def test_credit_read_published_when_parity_holds():
+    from src.vol_es_read import es_vol_read
+    out = es_vol_read([_mrow("SPY", 1.19, 0.94), _mrow("HYG", 1.35, 1.05)], 0.32, {})
+    credit = [r for r in out["reads"] if r["label"] == "Credit vs equity"]
+    assert len(credit) == 1 and credit[0]["value"] != "not readable today"
+    assert "1.35" in credit[0]["value"]
+
+
+def test_credit_read_gates_on_spy_side_too():
+    from src.vol_es_read import es_vol_read
+    out = es_vol_read([_mrow("SPY", 1.19, 0.60), _mrow("HYG", 1.35, 1.05)], 0.32, {})
+    credit = [r for r in out["reads"] if r["label"] == "Credit vs equity"]
+    assert credit[0]["value"] == "not readable today" and "SPY" in credit[0]["note"]
+
+
+def test_missing_parity_does_not_suppress():
+    """Absent Parity means the field was never computed, not that it failed."""
+    from src.vol_es_read import es_vol_read
+    out = es_vol_read([_mrow("SPY", 1.19, None), _mrow("HYG", 1.35, None)], 0.32, {})
+    credit = [r for r in out["reads"] if r["label"] == "Credit vs equity"]
+    assert credit[0]["value"] != "not readable today"
+
+
+def test_vol_gap_leads_and_reports_signed_spread():
+    """Front_IV is a fraction while avg_sector_iv is already percent — the two
+    got mixed once, so this pins the scaling as well as the arithmetic."""
+    from src.vol_es_read import es_vol_read
+    out = es_vol_read([_mrow("SPY", 1.19, 0.94)], 0.32, {"avg_sector_iv": 21.41})
+    gap = [r for r in out["reads"] if r["label"] == "Index vs its parts"]
+    assert gap, "vol gap read missing"
+    assert "13.0%" in gap[0]["value"], gap[0]["value"]   # 0.13 scaled up
+    assert "21.4%" in gap[0]["value"], gap[0]["value"]   # already percent, left alone
+    assert "+8.4" in gap[0]["note"], gap[0]["note"]
+
+
+def test_vol_gap_flags_inverted_spread():
+    """Sectors calmer than the index is the unusual direction and must not be
+    narrated with the sentence written for the normal one."""
+    from src.vol_es_read import es_vol_read
+    out = es_vol_read([_mrow("SPY", 1.19, 0.94, Front_IV=0.25)], 0.32,
+                      {"avg_sector_iv": 21.41})
+    gap = [r for r in out["reads"] if r["label"] == "Index vs its parts"][0]
+    assert "-3.6" in gap["note"], gap["note"]
+    assert "unusual" in gap["note"], gap["note"]

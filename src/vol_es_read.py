@@ -50,6 +50,15 @@ _SKEW_FLAT = 1.05
 _IVHV_RICH = 1.15
 _IVHV_CHEAP = 0.90
 
+# Put-call parity forces a chain's ATM put IV and ATM call IV to agree, so the
+# ratio between them is a measured data-quality check rather than a judgement
+# call. Across this 20-name universe it runs 0.78 (QQQ) to 2.30 (HYG) — the
+# spread is a stale-quote signature, not a market one, since carry would push
+# every name the same way and it does not. The band below is deliberately loose:
+# it is meant to catch chains that are broken, not to grade them.
+_PARITY_LO = 0.75
+_PARITY_HI = 1.35
+
 
 def _row(metrics: list[dict], ticker: str) -> dict | None:
     for r in metrics or []:
@@ -149,9 +158,29 @@ def es_vol_read(metrics: list[dict], impl_corr: float | None,
     # 3. Is credit more frightened than equity? HYG leading SPY on downside skew
     #    is the classic tell, and it is visible on this card already — as a
     #    pairwise row that never says which of the two is the index.
+    #
+    #    Gated on put-call parity. Both skews are ratios off their own chain's
+    #    ATM put, so a chain whose ATM call and ATM put disagree is a chain whose
+    #    quotes are stale or wide, and the comparison between two such numbers
+    #    means nothing. HYG is the live example: its ATM put prints 2.30x its ATM
+    #    call, which parity forbids, and it is the least liquid underlying in the
+    #    pair. Suppressing the read costs one line; publishing "credit is pricing
+    #    more downside than equity" off a broken quote costs a trade.
     hyg = _row(metrics, "HYG")
     s_skew, h_skew = spy.get("Put_Skew"), (hyg or {}).get("Put_Skew")
-    if s_skew and h_skew:
+    bad = [tk for tk, r in (("SPY", spy), ("HYG", hyg)) if r
+           and r.get("Parity") is not None
+           and not (_PARITY_LO <= r["Parity"] <= _PARITY_HI)]
+    if s_skew and h_skew and bad:
+        reads.append({
+            "label": "Credit vs equity",
+            "value": "not readable today",
+            "note": (f"{' and '.join(bad)} quote{'s' if len(bad) > 1 else 's'} an ATM put and "
+                     "an ATM call that disagree by more than put-call parity allows, so the "
+                     "skew comparison would be measuring quote staleness rather than fear. "
+                     "Withheld rather than shown with a caveat."),
+        })
+    elif s_skew and h_skew:
         if h_skew > s_skew * 1.15:
             note = ("credit is pricing more downside than equity — historically a warning "
                     "that reads early rather than a confirmation")

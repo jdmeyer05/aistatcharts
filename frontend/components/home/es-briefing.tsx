@@ -787,8 +787,28 @@ export default function EsBriefing() {
                   <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
                     Macro headlines
                   </h3>
+                  {/* Synthesis above, headlines under it. The digest is written
+                      from the same ranked set rendered below, so a reader who
+                      distrusts a line can check it against the list without
+                      leaving the card. Absent when the model call fails — the
+                      headlines are the artifact, this is only the shortcut. */}
+                  {d.news_digest?.text && (
+                    <div className="border-l-2 border-accent/40 pl-2 py-0.5 space-y-0.5">
+                      <p className="text-[0.65rem] leading-snug text-text whitespace-pre-line">
+                        {d.news_digest.text}
+                      </p>
+                      <p className="text-[0.5rem] text-text-muted">
+                        synthesis of the {d.news_digest.n_headlines ?? (d.news ?? []).length} headlines below
+                        {d.news_digest.model ? ` · ${d.news_digest.model}` : ""}
+                      </p>
+                    </div>
+                  )}
                   <ul className="space-y-1">
-                    {(d.news ?? []).slice(0, 8).map((n, i) => (
+                    {/* Render at least as many as the digest read. It cites
+                        headlines by name, so a shorter list would leave claims
+                        the reader cannot check — which is the whole point of
+                        putting the list under the synthesis. */}
+                    {(d.news ?? []).slice(0, Math.max(8, d.news_digest?.n_headlines ?? 0)).map((n, i) => (
                       <li key={i} className="text-[0.65rem] leading-snug">
                         {n.url ? (
                           <a

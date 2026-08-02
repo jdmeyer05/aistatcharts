@@ -3162,6 +3162,10 @@ export interface EsBrief {
   next_event?: EsScheduleItem | null;
   high_impact_today?: EsScheduleItem[];
   news?: EsNewsItem[];
+  /** Synthesis of the headline set. Keyed on the headlines themselves, so it is
+   *  absent until the feeds return something and null when the model call
+   *  fails — the headline list below it stands on its own either way. */
+  news_digest?: { text?: string; model?: string; cached?: boolean; n_headlines?: number } | null;
   levels?: EsLevels | null;
   cta?: {
     bias_1w?: CtaBias;

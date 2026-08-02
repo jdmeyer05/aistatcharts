@@ -277,10 +277,28 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
         front_iv = atm_iv(front_chain, spot, "call")
         back_iv = atm_iv(chains[exps[-1]], spot, "call") if len(exps) >= 2 else front_iv
 
-        # Put skew
+        # Put skew. Measured against the ATM PUT, not the ATM call.
+        #
+        # Put-call parity says the two ATM IVs must agree, so dividing a 25-delta
+        # put by an ATM call looks harmless. In this universe they do not agree:
+        # the put/call ratio at the same strike and expiry runs from 0.78 (QQQ)
+        # to 2.30 (HYG). Both legs of that ratio being puts makes whatever breaks
+        # parity — carry, a stale mid, a wide spread — cancel instead of landing
+        # in the numerator alone. HYG read 3.10x against a call and 1.35x against
+        # a put; the second is a mild put skew, the first was a fear signal that
+        # was not there.
         _, p25_iv = find_delta_strike(front_chain, spot, 0.25, "put")
         _, c25_iv = find_delta_strike(front_chain, spot, 0.25, "call")
-        put_skew = (p25_iv / front_iv) if p25_iv and front_iv > 0 else 1.0
+        atm_put_iv = atm_iv(front_chain, spot, "put")
+        skew_base = atm_put_iv if atm_put_iv and atm_put_iv > 0 else front_iv
+        put_skew = (p25_iv / skew_base) if p25_iv and skew_base and skew_base > 0 else 1.0
+
+        # How far the chain's own ATM quotes disagree with each other. Parity
+        # forces this to 1.0, so the distance from 1.0 is a direct read on how
+        # much to trust anything else derived from this chain — it is measured
+        # from the data rather than assumed, and callers gate on it.
+        parity = (atm_put_iv / front_iv) if atm_put_iv and front_iv and front_iv > 0 else None
+
         risk_rev = ((c25_iv - p25_iv) * 100) if c25_iv and p25_iv else 0.0
         butterfly = ((p25_iv + c25_iv - 2 * front_iv) * 100) if p25_iv and c25_iv and front_iv > 0 else 0.0
 
@@ -347,6 +365,7 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
             "Ticker": tk, "Label": label, "Group": group, "Spot": spot,
             "Front_IV": front_iv, "Back_IV": back_iv, "IV_HV": iv_hv,
             "Put_Skew": put_skew, "Risk_Rev": risk_rev, "Butterfly": butterfly,
+            "Parity": parity,
             "TS_Slope": ts_slope, "VRP": vrp, "VRP_Vol": vrp_vol,
             "Impl_Move": impl_move, "HV20": hv20,
             "PC_Ratio": pc_ratio, "IV_Pctile": iv_pctile, "Front_DTE": front_dte_val,
