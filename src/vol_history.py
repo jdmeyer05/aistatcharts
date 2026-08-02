@@ -100,15 +100,22 @@ def record(summary: dict, session_date: date | None = None,
     return rows
 
 
-def percentiles(rows: list[dict], summary: dict) -> dict:
+def percentiles(rows: list[dict], summary: dict,
+                session_date: date | None = None) -> dict:
     """Where each tracked measure sits in its own recorded history.
 
     Excludes today's own observation from the reference set, so the answer is
     "against what came before" rather than a value being partly compared to
     itself.
+
+    The excluded date is stated rather than inferred from the last row. Reading
+    `rows[-1]` is right only when a row was actually written this run — and
+    `record` deliberately skips a degraded scan, in which case the newest row
+    belongs to an EARLIER day and would be silently dropped from its own
+    reference set, shrinking the sample and shifting every percentile.
     """
     out: dict = {}
-    today = (rows[-1].get("date") if rows else None)
+    today = (session_date or datetime.now(timezone.utc).date()).isoformat()
     prior = [r for r in rows if r.get("date") != today]
     for k in TRACKED:
         cur = summary.get(k)

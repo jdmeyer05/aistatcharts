@@ -672,7 +672,10 @@ def test_percentile_is_none_until_the_history_is_deep_enough(monkeypatch):
     for i in range(_MIN_HISTORY - 1):
         rows = record({"avg_ivhv": 1.0 + i / 1000},
                       session_date=date(2026, 1, 1) + timedelta(days=i))
-    p = percentiles(rows, {"avg_ivhv": 1.5})
+    # The excluded day is passed explicitly, the way production's `record` and
+    # `percentiles` agree on it via the same UTC default.
+    last = date(2026, 1, 1) + timedelta(days=_MIN_HISTORY - 2)
+    p = percentiles(rows, {"avg_ivhv": 1.5}, session_date=last)
     assert p["avg_ivhv"]["pctile"] is None
     assert p["avg_ivhv"]["n_history"] == _MIN_HISTORY - 2, p["avg_ivhv"]
 
@@ -681,9 +684,9 @@ def test_percentile_is_none_until_the_history_is_deep_enough(monkeypatch):
     for i in range(_MIN_HISTORY - 1, _MIN_HISTORY + 1):
         rows = record({"avg_ivhv": 1.0 + i / 1000},
                       session_date=date(2026, 1, 1) + timedelta(days=i))
-    rows = record({"avg_ivhv": 1.5},
-                  session_date=date(2026, 1, 1) + timedelta(days=_MIN_HISTORY + 5))
-    p = percentiles(rows, {"avg_ivhv": 1.5})
+    newest = date(2026, 1, 1) + timedelta(days=_MIN_HISTORY + 5)
+    rows = record({"avg_ivhv": 1.5}, session_date=newest)
+    p = percentiles(rows, {"avg_ivhv": 1.5}, session_date=newest)
     assert p["avg_ivhv"]["n_history"] >= _MIN_HISTORY, p["avg_ivhv"]
     assert p["avg_ivhv"]["pctile"] == pytest.approx(100.0), p["avg_ivhv"]
 
@@ -696,8 +699,32 @@ def test_percentile_excludes_todays_own_observation(monkeypatch):
     for i in range(_MIN_HISTORY + 10):
         rows = record({"avg_ivhv": 1.0},
                       session_date=date(2026, 1, 1) + timedelta(days=i))
-    p = percentiles(rows, {"avg_ivhv": 1.0})
+    last = date(2026, 1, 1) + timedelta(days=_MIN_HISTORY + 9)
+    p = percentiles(rows, {"avg_ivhv": 1.0}, session_date=last)
     assert p["avg_ivhv"]["n_history"] == len(rows) - 1
+
+
+def test_percentile_does_not_drop_a_prior_day_when_today_was_not_recorded(monkeypatch):
+    """`record` skips a degraded scan, so the newest stored row can belong to an
+    EARLIER day. Inferring "today" from rows[-1] then excludes a real prior
+    observation from its own reference set — shrinking the sample and shifting
+    every percentile, on exactly the runs where the data is already suspect."""
+    from src.vol_history import record, percentiles, _MIN_HISTORY
+    _stub_store(monkeypatch)
+    rows = []
+    for i in range(_MIN_HISTORY + 10):
+        rows = record({"avg_ivhv": 1.0 + i / 1000},
+                      session_date=date(2026, 1, 1) + timedelta(days=i))
+    n_rows = len(rows)
+
+    # Today's scan was degraded: nothing written, so rows[-1] is yesterday.
+    rows = record({"avg_ivhv": 9.9}, healthy=False)
+    assert len(rows) == n_rows, "a degraded scan must not add a row"
+
+    today = date(2026, 1, 1) + timedelta(days=_MIN_HISTORY + 10)
+    p = percentiles(rows, {"avg_ivhv": 1.05}, session_date=today)
+    assert p["avg_ivhv"]["n_history"] == n_rows, (
+        "every stored row is prior to today and must count")
 
 
 def test_threshold_report_flags_a_cut_sitting_on_the_median():
