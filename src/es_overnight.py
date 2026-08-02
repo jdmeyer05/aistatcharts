@@ -26,7 +26,7 @@ gap between sessions cannot contaminate a within-session measure.
 from __future__ import annotations
 
 import logging
-from datetime import time as _dtime
+from datetime import date as _date, time as _dtime, timedelta as _timedelta
 
 import numpy as np
 import pandas as pd
@@ -40,9 +40,35 @@ _RTH_OPEN = (9, 30)
 _RTH_CLOSE = (16, 0)
 _ON_OPEN_HOUR = 18
 
-# Two years of quarterly contracts. ES is H/M/U/Z; the free tier carries 2y, so
-# this list is the whole available history rather than a choice.
-_CONTRACTS = ["ESU4", "ESZ4", "ESH5", "ESM5", "ESU5", "ESZ5", "ESH6", "ESM6", "ESU6"]
+# ES is quarterly: H=Mar M=Jun U=Sep Z=Dec, suffixed with the year's last digit.
+#
+# DERIVED, never hardcoded. A fixed list ages out silently: once the front month
+# moves past its last entry the study quietly loses the most recent quarter —
+# the part that matters most — while every listed contract still loads, so
+# `contracts_missing` stays empty and the payload reports itself complete. That
+# is the same "looks whole, isn't" failure as the 1000-row cache read.
+_QUARTER_CODES = {3: "H", 6: "M", 9: "U", 12: "Z"}
+
+
+def _contracts_for(as_of: _date | None = None, years: int = 2) -> list[str]:
+    """Quarterly ES contracts whose front-month window covers the lookback.
+
+    One quarter ahead of `as_of` is included: near an expiry the next contract
+    already carries the volume, and the per-session volume test downstream picks
+    whichever was genuinely trading.
+    """
+    today = as_of or _date.today()
+    start = today - _timedelta(days=365 * years)
+    end = today + _timedelta(days=120)          # one quarter ahead
+    out: list[str] = []
+    for year in range(start.year, end.year + 1):
+        for month, code in sorted(_QUARTER_CODES.items()):
+            # Expiry is the third Friday; mid-month is close enough to decide
+            # whether a contract's window overlaps the lookback at all.
+            expiry = _date(year, month, 15)
+            if start <= expiry <= end:
+                out.append(f"ES{code}{year % 10}")
+    return out
 
 # A session needs most of its bars to be measurable at all. Half-days make every
 # range statistic small in the same direction, which is worse than dropping them.
@@ -57,7 +83,7 @@ def _panel() -> pd.DataFrame:
     from src.futures_data import fetch_bars
 
     frames, loaded, missed = [], [], []
-    for c in _CONTRACTS:
+    for c in _contracts_for():
         df = fetch_bars(c, resolution="5min", limit=50000)
         if df is None or df.empty:
             missed.append(c)
