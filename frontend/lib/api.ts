@@ -4277,3 +4277,133 @@ export async function fetchVarBasket(req: VarBasketRequest): Promise<VarBasket> 
     timeoutMs: 60_000,
   });
 }
+
+/* ─────────────────────────────────────────────────────────────
+   AI / DATA CENTER INFRASTRUCTURE
+   ───────────────────────────────────────────────────────────── */
+
+export interface GridLoadMonth {
+  month: string;
+  twh: number;
+  days: number;
+}
+
+export interface GridLoadRow {
+  ba: string;
+  name: string;
+  region: string;
+  dc_note: string | null;
+  dc_flagged: boolean;
+  trailing_12m_twh: number;
+  prior_12m_twh: number;
+  growth_pct: number | null;
+  delta_twh: number | null;
+  coverage: number;
+  monthly: GridLoadMonth[];
+}
+
+export interface GridLoad {
+  window: { recent: [string, string]; prior: [string, string] };
+  rows: GridLoadRow[];
+  excluded: { ba: string; name: string; coverage: number }[];
+  aggregate: {
+    all: number | null;
+    dc_flagged: number | null;
+    not_flagged: number | null;
+    spread_pp: number | null;
+    n_flagged: number;
+    n_not_flagged: number;
+  };
+  source: string;
+  caveat: string;
+}
+
+export async function fetchGridLoad(monthsBack = 25): Promise<GridLoad> {
+  return apiFetch(`/api/ai-infra/grid-load?months_back=${monthsBack}`, { timeoutMs: 90_000 });
+}
+
+export interface CapacityBaRow {
+  ba: string;
+  name: string;
+  region: string;
+  dc_flagged: boolean;
+  added_mw: number;
+  by_year: Record<string, number>;
+  planned_retirement_mw: number;
+  net_mw: number;
+  operating_mw: number;
+  added_pct_of_fleet: number | null;
+}
+
+export interface CapacityTechRow {
+  technology: string;
+  by_year: Record<string, number>;
+  total_mw: number;
+}
+
+export interface CapacityAdditions {
+  snapshot: string;
+  years: string[];
+  partial_final_year: boolean;
+  addition_window: string;
+  retirement_window: string;
+  by_ba: CapacityBaRow[];
+  by_technology: CapacityTechRow[];
+  source: string;
+  caveat: string;
+}
+
+export async function fetchCapacityAdditions(yearsBack = 4): Promise<CapacityAdditions> {
+  return apiFetch(`/api/ai-infra/capacity-additions?years_back=${yearsBack}`, { timeoutMs: 90_000 });
+}
+
+export interface CapexEntity {
+  entity: string;
+  basis: string;
+  low_usd_bn: number;
+  high_usd_bn: number;
+  prior_usd_bn: number | null;
+  source: string;
+  as_of: string;
+}
+
+export interface RevenueScope {
+  scope: string;
+  value_usd_bn: number;
+  detail: string;
+  source: string;
+  as_of: string;
+  double_counts: boolean;
+  preferred: boolean;
+  note: string;
+  coverage_low_pct: number;
+  coverage_high_pct: number;
+}
+
+export interface CapitalReference {
+  capex: {
+    entities: CapexEntity[];
+    non_additive: {
+      entity: string;
+      basis: string;
+      fy26_usd_bn: number;
+      fy27_guided_usd_bn: number;
+      note: string;
+      source: string;
+      as_of: string;
+    }[];
+    subtotal_low_usd_bn: number;
+    subtotal_high_usd_bn: number;
+    pct_of_us_gdp_low: number;
+    pct_of_us_gdp_high: number;
+    prior_year_partial_usd_bn: number;
+  };
+  revenue_scopes: RevenueScope[];
+  us_nominal_gdp_usd_bn: number;
+  caveat: string;
+  curated: boolean;
+}
+
+export async function fetchCapitalReference(): Promise<CapitalReference> {
+  return apiFetch("/api/ai-infra/capital-reference");
+}
