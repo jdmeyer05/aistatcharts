@@ -23,7 +23,46 @@ import { useTheme } from "next-themes";
 import { useQuery } from "@tanstack/react-query";
 import { Plot } from "@/components/plot";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
-import { fetchSectorRrg, type SectorRrg, type RrgQuadrant } from "@/lib/api";
+import { fetchSectorRrg, type SectorRrg, type RrgQuadrant, type RrgMeasure } from "@/lib/api";
+
+/** Where a reading sits in its own history, in words. An extreme is the whole
+ *  point of the measure, so 0 and 100 are named rather than printed as "0th". */
+function rankPhrase(m: RrgMeasure): string | null {
+  if (m.pctile == null) return null;
+  if (m.pctile <= 0) return `lowest of ${m.n_history} weeks`;
+  if (m.pctile >= 100) return `highest of ${m.n_history} weeks`;
+  return `${Math.round(m.pctile)}th pctile of ${m.n_history} weeks`;
+}
+
+function RegimeTile({ title, m, fmt, note }: {
+  title: string; m?: RrgMeasure; fmt: (v: number) => string; note: string;
+}) {
+  if (!m) return null;
+  const rank = rankPhrase(m);
+  const c = m.context;
+  return (
+    <div className="border border-border rounded p-2 min-w-0">
+      <div className="text-[0.55rem] uppercase tracking-wider text-text-muted">{title}</div>
+      <div className="flex items-baseline gap-1.5 mt-0.5 flex-wrap">
+        <span className="text-sm font-bold font-data tabular-nums">{fmt(m.value)}</span>
+        {m.band && <span className="text-[0.6rem] text-text">{m.band}</span>}
+      </div>
+      {rank && <div className="text-[0.55rem] text-text-muted mt-0.5">{rank}</div>}
+      <div className="text-[0.55rem] text-text-muted mt-1 leading-snug">{note}</div>
+      {/* Every stat can be null independently, and a bare "have run alongside
+          (n=58)" is worse than saying nothing. */}
+      {c && (c.realized_vol != null || c.avg_sector_corr != null || c.trend_vs_50dma != null) && (
+        <div className="text-[0.55rem] text-text-muted mt-1 leading-snug border-t border-border pt-1">
+          Weeks at this level have run alongside{" "}
+          {c.realized_vol != null && <span className="text-text tabular-nums">{c.realized_vol.toFixed(1)}% vol</span>}
+          {c.avg_sector_corr != null && <>, <span className="text-text tabular-nums">{c.avg_sector_corr.toFixed(2)} correlation</span></>}
+          {c.trend_vs_50dma != null && <>, S&amp;P <span className="text-text tabular-nums">{c.trend_vs_50dma >= 0 ? "+" : ""}{c.trend_vs_50dma.toFixed(1)}%</span> vs its 50-day</>}
+          {" "}(n={c.n}).
+        </div>
+      )}
+    </div>
+  );
+}
 
 const QUADRANTS: { key: RrgQuadrant; label: string; blurb: string }[] = [
   { key: "leading", label: "Leading", blurb: "strong and still accelerating" },
@@ -38,9 +77,11 @@ export default function SectorRrgCard() {
   const L = getBaseLayout(t);
   const isDark = resolvedTheme === "dark";
 
+  // 8 WEEKLY points. This was 4 when the board was daily and the tail meant
+  // four weeks of trading days; a 4-point weekly tail is barely a curve.
   const q = useQuery<SectorRrg>({
-    queryKey: ["sector-rrg", 4],
-    queryFn: () => fetchSectorRrg(4),
+    queryKey: ["sector-rrg", 8],
+    queryFn: () => fetchSectorRrg(8),
     refetchInterval: 30 * 60_000,
     staleTime: 25 * 60_000,
   });
@@ -60,8 +101,10 @@ export default function SectorRrgCard() {
   // Square the axes around 100. An RRG is only readable if both axes share a
   // scale — an auto-fitted range would distort the quadrant geometry and make
   // a small momentum move look like a large one.
+  // Floor is 15, not 1.5: values are scaled `100 + 10*z` to match the canonical
+  // RRG, so a quiet board spans ~10 units where it used to span ~1.
   const span = Math.max(
-    1.5,
+    15,
     ...rows.flatMap((r) => [
       Math.abs(r.ratio - 100), Math.abs(r.mom - 100),
       ...r.tail.flatMap((p) => [Math.abs(p.ratio - 100), Math.abs(p.mom - 100)]),
@@ -116,7 +159,7 @@ export default function SectorRrgCard() {
             Sector Rotation
           </h2>
           <div className="text-[0.6rem] text-text-muted mt-0.5">
-            Relative strength vs momentum against the S&amp;P 500 · {d?.tail_weeks ?? 4}-week trail
+            Weekly · relative strength vs momentum against the S&amp;P 500 · {d?.tail_weeks ?? 8}-week trail
           </div>
         </div>
         <Link href="/sectors" className="text-[0.6rem] text-text-muted hover:text-accent whitespace-nowrap">
@@ -146,6 +189,29 @@ export default function SectorRrgCard() {
 
       {d?.available && (
         <>
+          {/* Regime strip leads the card. These are the measures that persist;
+              the quadrant tally below changes far faster than the environment
+              it describes, so it is context for the chart, not the headline. */}
+          {d.regime && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <RegimeTile
+                title="Leadership tilt" m={d.regime.tilt}
+                fmt={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`}
+                note="Defensive minus cyclical relative strength. Above zero, the low-beta half leads."
+              />
+              <RegimeTile
+                title="Dispersion" m={d.regime.dispersion}
+                fmt={(v) => v.toFixed(1)}
+                note="Mean distance of the sectors from the benchmark point. Wide means leadership is spread."
+              />
+              <RegimeTile
+                title="Sector correlation" m={d.regime.correlation}
+                fmt={(v) => v.toFixed(2)}
+                note="Average pairwise, 60 daily returns. Measured directly — the rotation picture does not stand in for it."
+              />
+            </div>
+          )}
+
           <div className="space-y-3">
             {/* The wrapper owns the height and clips, the chart fills it.
                 Previously the height lived only in `layout` and the wrapper
@@ -234,17 +300,38 @@ export default function SectorRrgCard() {
                 the move is largely behind you.
               </p>
               <p>
+                <span className="text-text font-semibold">This describes the environment, it does not
+                forecast the session.</span> Rotation state was tested directly against the next
+                session&apos;s direction, range and trend-efficiency over 1,829 day-pairs. Direction is null
+                at every quintile against a 54.5% baseline; trend-efficiency is null; the one range result
+                that looked real failed a split-half with the opposite sign in the earlier period.
+                StockCharts says the same of the licensed original — it is &ldquo;not a trading system, and
+                there are no predefined trading rules or signals.&rdquo; What the quadrants and the regime
+                measures do carry is a description of the conditions you are trading in.
+              </p>
+              <p>
+                <span className="text-text font-semibold">Weekly, because daily was too fast.</span> A
+                sector held a quadrant for a median two days on the daily build against two weeks weekly,
+                and 1.99 of 11 sectors changed quadrant per day versus 0.90/day equivalent — the daily
+                board relabelled 2–5× faster than the environment it claimed to describe.
+              </p>
+              <p>
                 <span className="text-text font-semibold">Limits.</span> This reconstructs the RRG method;
-                the original JdK RS-Ratio and RS-Momentum are proprietary and unpublished. Quadrants and
+                the original JdK RS-Ratio and RS-Momentum are proprietary and unpublished, and both
+                StockCharts and relativerotationgraphs.com decline to publish the formula. Quadrants and
                 rotation behave the same, but the absolute values will not tie out against a licensed RRG
-                terminal, which is why they are shown unitless. Sectors are also relative to each other by
-                construction — in a broad selloff something still has to be Leading.
+                terminal. Sectors are also relative to each other by construction — in a broad selloff
+                something still has to be Leading. The environment figures on the tiles are
+                co-occurrences, and part of that link is definitional: defensive leadership is what a
+                falling market looks like.
               </p>
             </div>
           </details>
 
           <div className="text-[0.55rem] text-text-muted border-t border-border pt-2">
             Data through {d.data_asof} · benchmark {d.benchmark}
+            {d.week_ending && ` · week ending ${d.week_ending}`}
+            {d.week_complete === false && " (partial week — moves until Friday's close)"}
             {d.unavailable && d.unavailable.length > 0 && ` · unavailable: ${d.unavailable.join(", ")}`}
           </div>
         </>

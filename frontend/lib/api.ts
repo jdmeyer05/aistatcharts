@@ -3253,18 +3253,67 @@ export interface RrgRow {
   mom: number;
   quadrant: RrgQuadrant;
   prev_quadrant: RrgQuadrant;
-  heading: number;
+  /** Degrees, 0 = due east. Null when the dot has not meaningfully moved —
+   *  atan2(0,0) is 0.0, which would claim "due east" for no movement. */
+  heading: number | null;
   tail: RrgPoint[];
+}
+
+/** The environment that accompanied a band, averaged over the weeks that shared
+ *  it. CONTEMPORANEOUS — these co-occurred with the band, they were not
+ *  forecast by it. */
+export interface RrgContext {
+  n: number;
+  realized_vol: number | null;
+  avg_sector_corr: number | null;
+  trend_vs_50dma: number | null;
+}
+
+/** One regime measure: its current value, where that sits in its own history,
+ *  and what the environment has looked like at that level. `pctile` is null
+ *  when there is too little history to place it — never 50 ("middling"). */
+export interface RrgMeasure {
+  value: number;
+  pctile: number | null;
+  band: string | null;
+  n_history: number;
+  context: RrgContext | null;
 }
 
 export interface SectorRrg {
   available: boolean;
   reason?: string;
   benchmark?: string;
+  /** "weekly". Daily was measured to relabel 2-5x faster than the environment
+   *  it describes, so each point is now one week. */
+  frequency?: string;
   asof?: string;
   data_asof?: string;
+  /** Friday of the newest weekly point. */
+  week_ending?: string;
+  /** False means the newest point is a partial week and will move until the
+   *  Friday close. Still valid — a price ratio is observable any day. */
+  week_complete?: boolean;
+  windows?: { rs_weeks: number; mom_weeks: number; norm_weeks: number; scale: number };
+  /** Number of WEEKLY points in each tail, not trading days. */
   tail_weeks?: number;
   counts?: Partial<Record<RrgQuadrant, number>>;
+  /** Continuous regime measures. Deliberately not "which quadrant holds the
+   *  most dots" — that headline changed 29% of days with a median spell of one
+   *  period, because a hard cut on values hugging 100 relabels on noise. */
+  regime?: {
+    tilt?: RrgMeasure;
+    dispersion?: RrgMeasure;
+    /** Average pairwise sector correlation over 60 daily returns. Measured
+     *  directly, NOT proxied by the rotation picture — dispersion correlates
+     *  only +0.32 with it, and the two can point opposite ways. */
+    correlation?: RrgMeasure;
+    current?: {
+      realized_vol: number | null;
+      avg_sector_corr: number | null;
+      trend_vs_50dma: number | null;
+    };
+  };
   rows?: RrgRow[];
   unavailable?: string[];
 }

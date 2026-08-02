@@ -544,3 +544,106 @@ def test_smile_reports_nothing_where_no_strike_sits():
     out = interpolate_smile(ch, 100.0, [0.90, 1.00, 1.10, 1.60])
     assert out[1.60] is None, "a moneyness with no strike near it must be None"
     assert out[0.90] == pytest.approx(0.30)
+
+
+# ── Sector RRG ───────────────────────────────────────────────────────────────
+# The board was daily, unit-scaled, and filled an unmeasurable sector with 100 —
+# which is the quadrant origin, and _quadrant(100, 100) is "leading".
+
+def test_unmeasurable_sector_is_not_reported_as_leading():
+    """A zero-variance series and a series far shorter than the window both used
+    to normalise to exactly 100.0, placing the sector on the quadrant origin and
+    labelling it with the strongest read on the board."""
+    from src.sector_rrg import _normalise, _quadrant, _NORM_WINDOW
+    flat = pd.Series([50.0] * 300)
+    short = pd.Series([50.0 + i for i in range(10)])
+    assert pd.isna(_normalise(flat, _NORM_WINDOW).iloc[-1]), "zero variance must be NaN"
+    assert pd.isna(_normalise(short, _NORM_WINDOW).iloc[-1]), "too-short must be NaN"
+    # The trap this guards: the old fallback landed exactly here.
+    assert _quadrant(100.0, 100.0) == "leading"
+
+
+def test_normalise_uses_the_canonical_scaling():
+    """`100 + z` compressed the whole board into ~98.7-102.3, which puts the
+    quadrant boundaries inside the noise. The reconstruction of JdK is
+    `100 + 10*z`."""
+    import numpy as np
+    from src.sector_rrg import _normalise, _SCALE, _NORM_WINDOW
+    s = pd.Series(np.random.default_rng(0).normal(size=400))
+    out = _normalise(s, _NORM_WINDOW).dropna()
+    assert _SCALE == 10.0
+    assert out.std() == pytest.approx(_SCALE, rel=0.15), out.std()
+
+
+def test_normalise_demands_most_of_its_window():
+    """min_periods was window//3 — a z-score against 84 of 252 observations was
+    presented identically to one against the full window."""
+    from src.sector_rrg import _min_periods, _NORM_WINDOW, _MIN_FRAC
+    assert _MIN_FRAC >= 0.75
+    assert _min_periods(_NORM_WINDOW) == int(_NORM_WINDOW * _MIN_FRAC)
+    assert _min_periods(52) > 52 // 3
+
+
+def test_band_never_invents_a_middle():
+    """A missing percentile must stay missing. Returning 'balanced' for "we
+    could not place this" is the same class of claim as filling 100."""
+    from src.sector_rrg import _band, _pctile
+    assert _band(None, "lo", "mid", "hi") is None
+    assert _band(10.0, "lo", "mid", "hi") == "lo"
+    assert _band(90.0, "lo", "mid", "hi") == "hi"
+    assert _band(50.0, "lo", "mid", "hi") == "mid"
+    # Too little history to place a value at all.
+    assert _pctile(pd.Series([1.0, 2.0, 3.0]), 2.0) is None
+
+
+def test_band_of_the_latest_value_matches_the_band_used_for_its_context():
+    """The headline band comes from _pctile on the latest value; the context
+    averages the history sharing that band. Deriving those from two different
+    cuts — fraction-below vs quantile(1/3) — lets a boundary value be labelled
+    one band and described by another. They must agree for EVERY observation."""
+    import numpy as np
+    from src.sector_rrg import _pctile, _pct_rank, _band
+    rng = np.random.default_rng(3)
+    for trial in range(200):
+        n = int(rng.integers(20, 120))
+        # Include heavy ties, which is exactly where two rules diverge.
+        s = pd.Series(np.round(rng.normal(size=n), 1))
+        ranks = _pct_rank(s)
+        for i in range(n):
+            direct = _pctile(s, float(s.iloc[i]))
+            assert direct == pytest.approx(ranks.iloc[i], abs=0.05), (
+                f"trial {trial} obs {i}: _pctile={direct} vs _pct_rank={ranks.iloc[i]}")
+            assert (_band(direct, "lo", "mid", "hi")
+                    == _band(float(ranks.iloc[i]), "lo", "mid", "hi"))
+
+
+def test_heading_is_absent_when_the_dot_has_not_moved():
+    """atan2(0, 0) is 0.0 — "due east" — for a sector that went nowhere."""
+    import numpy as np
+    from src.sector_rrg import _SCALE
+    dx = dy = 0.0
+    assert float(np.degrees(np.arctan2(dy, dx))) == 0.0, "the trap this guards"
+    assert not np.hypot(dx, dy) > 0.01 * _SCALE
+    assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
+
+
+def test_environment_drops_forward_filled_holidays():
+    """aligned_panel reindexes onto a CALENDAR business-day grid and ffills, so
+    every market holiday becomes a row where every series is unchanged. Those
+    synthetic zero returns depress realised vol and drag correlation."""
+    import numpy as np
+    from src.sector_rrg import _environment, SECTORS, BENCHMARK
+    cols = [s for s, _ in SECTORS] + [BENCHMARK]
+    idx = pd.bdate_range("2024-01-01", periods=200)
+    rng = np.random.default_rng(1)
+    data = pd.DataFrame(100 * np.exp(np.cumsum(rng.normal(0, 0.01, (200, len(cols))), axis=0)),
+                        index=idx, columns=cols)
+    # Freeze three rows the way a ffilled holiday does.
+    for pos in (50, 100, 150):
+        data.iloc[pos] = data.iloc[pos - 1]
+    weekly_idx = data.resample("W-FRI").last().index[-6:]
+    env = _environment(data, weekly_idx)
+    assert len(env) == len(weekly_idx)
+    assert env["realized_vol"].notna().all()
+    # Correlation is bounded and real, not dragged to ~0 by the frozen rows.
+    assert env["avg_sector_corr"].between(-1, 1).all()

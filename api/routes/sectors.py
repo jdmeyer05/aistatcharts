@@ -480,7 +480,8 @@ _RRG_TTL_S = 45 * 60
 
 def _sector_rrg_cached(tail_weeks: int) -> dict:
     """RRG behind a 45-minute cache — ~4s cold across 12 yfinance series, and
-    the inputs are daily bars, so recomputing per request buys nothing."""
+    the board is computed on WEEKLY bars, so recomputing per request buys
+    nothing at all: the point only moves on a new daily close."""
     from time import time as _now
     hit = _RRG_CACHE.get(tail_weeks)
     if hit and (_now() - hit[0]) < _RRG_TTL_S:
@@ -509,9 +510,18 @@ async def sector_rotation(
 ):
     """Relative Rotation Graph — sector strength vs momentum against the S&P 500.
 
+    WEEKLY. `tail_weeks` is a count of weekly points, not of trading days.
+
     Quadrants rotate clockwise when rotation is healthy: Improving -> Leading ->
     Weakening -> Lagging. The trajectory matters more than the dot; a sector
     curling out of Lagging is an earlier read than one already in Leading.
+
+    Also returns `regime`: leadership tilt, dispersion and average pairwise
+    sector correlation, each with a percentile against its own history and the
+    average environment that has accompanied that band. Those are
+    CONTEMPORANEOUS co-occurrences — the rotation state was tested directly
+    against next-session direction, range and trend-efficiency and forecasts
+    none of them. See the module docstring in src/sector_rrg.py for the numbers.
 
     Reconstruction of the RRG method, not the licensed JdK indicators — the
     quadrant behaviour matches, the absolute values will not tie out.
