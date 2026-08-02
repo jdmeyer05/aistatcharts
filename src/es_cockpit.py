@@ -447,6 +447,13 @@ def es_cockpit(now: pd.Timestamp | None = None,
             else:
                 lv_row["reach"] = "beyond a typical session"
 
+    # The study measures the CASH INDEX and reports a bare point figure. Attach
+    # what that means for ES — index points are ES points, and the forecast is
+    # only interpretable against ES's own measured session range.
+    if candles:
+        from src.candle_es_read import candle_es_read
+        candles["es_read"] = _safe(lambda: candle_es_read(candles), "candle_es_read")
+
     # Two independent estimates of tomorrow's high-low: what options are paying
     # for, and what bars conditioned like today's have actually delivered.
     if candles and (candles.get("tomorrow_range") or {}).get("p50") and (em or {}).get("expected_range"):
