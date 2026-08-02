@@ -293,6 +293,26 @@ _SINGLE_NAME = re.compile(
 _MAX_AGE_HOURS = 120       # five days — older than that is not news before a bell
 
 
+def _last_cash_close(now: pd.Timestamp) -> pd.Timestamp:
+    """The most recent 16:00 ET that has already passed on a weekday.
+
+    "What happened since I stopped watching" is a SESSION question, not a clock
+    one. A fixed hours-ago bucket calls Friday afternoon's news 'earlier' when
+    read on Monday morning — 65 hours old, and also the single most recent thing
+    that happened. Anchoring on the prior cash close gets the weekend right.
+
+    Holidays shift this by a day, which mislabels rather than misinforms: the
+    hours-ago figure travels alongside and is exact either way.
+    """
+    t = now.tz_convert(_TZ) if now.tzinfo else now.tz_localize(_TZ)
+    day = t.normalize()
+    if t < day + pd.Timedelta(hours=16):
+        day -= pd.Timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= pd.Timedelta(days=1)
+    return day + pd.Timedelta(hours=16)
+
+
 def _parse_feed(name_url: tuple[str, str], limit: int) -> list[dict]:
     source, url = name_url
     try:
@@ -347,6 +367,7 @@ def macro_news(limit_per_feed: int = 6, now: pd.Timestamp | None = None) -> list
     from yesterday afternoon, which is what a pure recency sort does.
     """
     now = now or pd.Timestamp.now(tz=_TZ)
+    last_close = _last_cash_close(now)
     with ThreadPoolExecutor(max_workers=len(_FEEDS)) as pool:
         batches = list(pool.map(lambda f: _parse_feed(f, limit_per_feed), _FEEDS))
 
@@ -363,17 +384,21 @@ def macro_news(limit_per_feed: int = 6, now: pd.Timestamp | None = None) -> list
 
             title = item["title"]
             tier = 1 if _TIER1.search(title) else (2 if _TIER2.search(title) else 3)
-            if _SINGLE_NAME.search(title):
-                tier = max(tier, 3)
+            # Demote single-name stories, but never past a policy headline —
+            # "Fed decision sends bank shares soaring" trips the single-name
+            # pattern and is still the Fed story. Only tiers 2 and 3 get pushed.
+            if tier > 1 and _SINGLE_NAME.search(title):
+                tier = 3
 
-            hours = None
+            hours, stamped = None, None
             if item.get("published"):
                 try:
                     ts = pd.to_datetime(item["published"])
                     ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
-                    hours = (now - ts.tz_convert(_TZ)).total_seconds() / 3600
+                    stamped = ts.tz_convert(_TZ)
+                    hours = (now - stamped).total_seconds() / 3600
                 except Exception:
-                    hours = None
+                    hours, stamped = None, None
             # Stale is not news. An undated item is KEPT — it is a parsing
             # failure, not an old story, and silently dropping it is how a feed
             # goes dark without anyone noticing.
@@ -382,9 +407,11 @@ def macro_news(limit_per_feed: int = 6, now: pd.Timestamp | None = None) -> list
 
             item["tier"] = tier
             item["hours_ago"] = round(hours, 1) if hours is not None else None
-            item["age"] = (None if hours is None else
-                           "overnight" if hours <= 18 else
-                           "yesterday" if hours <= 42 else "earlier")
+            # Measured against the prior cash close, so on a Monday the whole
+            # weekend reads as "since the last close" rather than as three
+            # separate degrees of old.
+            item["age"] = (None if stamped is None else
+                           "since last close" if stamped >= last_close else "earlier")
             merged.append(item)
 
     # A feed that contributes nothing is worth a line in the log. Both
