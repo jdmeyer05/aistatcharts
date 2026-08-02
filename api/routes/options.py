@@ -392,6 +392,17 @@ RULES:
 # ─── Vol Landscape (cross-asset scan) ────────────────────────
 
 
+def _es_read_safe(metrics: list, impl_corr, summary: dict) -> dict | None:
+    """The ES translation must never take the landscape down with it — the scan
+    is 20 option chains and is worth serving on its own."""
+    try:
+        from src.vol_es_read import es_vol_read
+        return es_vol_read(metrics, impl_corr, summary)
+    except Exception as e:
+        logger.warning(f"vol landscape ES read failed: {e}")
+        return None
+
+
 def _compute_vol_landscape() -> dict:
     """Heavy scan: 20 ETFs × options chains + rolling stats. Cached via the
     shared Supabase-backed `result_cached` so Cloud Run cold starts hydrate
@@ -521,6 +532,11 @@ def _compute_vol_landscape() -> dict:
         "earnings": {k: v for k, v in (earnings or {}).items()},
         "regime": regime,
         "regime_action": regime_action,
+        # What the scan means for the index the reader actually trades. The
+        # pairwise rows above say where vol is rich and where fear sits; none of
+        # them say which name in a pair is the one ES follows.
+        "es_read": _es_read_safe(metrics_records, impl_corr,
+                                 {"n_inverted": n_inverted, "n_tickers": len(mdf)}),
         "summary": {
             "avg_iv": round(avg_iv * 100, 2),
             "avg_ivhv": round(avg_ivhv, 3),
