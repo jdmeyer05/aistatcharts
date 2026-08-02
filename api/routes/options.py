@@ -605,7 +605,10 @@ def _compute_vol_landscape() -> dict:
 # Wrap with the Supabase-backed result cache (12h TTL). Imported inline to
 # avoid pulling the cache util at module-import time if circular.
 from src._cache_util import result_cached as _result_cached
-_compute_vol_landscape = _result_cached("vol_landscape_v9")(_compute_vol_landscape)
+# v10: Butterfly changed value (and sign, for QQQ/SPY/XLK), Risk_Rev/Butterfly
+# and absent smile points became null instead of 0. Without the bump the 12h
+# TTL would keep serving the old payload for half a day after the deploy.
+_compute_vol_landscape = _result_cached("vol_landscape_v10")(_compute_vol_landscape)
 
 
 @router.get("/vol-landscape")
