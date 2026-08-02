@@ -360,11 +360,16 @@ function VolLandscapeSnapshot() {
               </span>
               <span title="Names whose term structure is inverted — front vol above back vol, which prices near-term event risk.">
                 <span className="text-text">{s.n_inverted}</span> inverted
+                <span className="text-text-muted/70"> of {s.n_tickers}</span>
               </span>
-              <span title="Names with unusually steep put skew.">
+              {/* Separate denominators on purpose. Skew is counted only over
+                  chains that pass put-call parity, so a shared "of 20" would
+                  overstate it — the two numbers are no longer out of the same
+                  pool and cannot share a label. */}
+              <span title="Names with unusually steep put skew. Counted only over chains whose ATM put and ATM call agree to within put-call parity — a chain quoting stale wings gets no vote.">
                 <span className="text-text">{s.n_steep_skew}</span> steep skew
+                <span className="text-text-muted/70"> of {s.n_skew_rated ?? s.n_tickers}</span>
               </span>
-              <span className="text-text-muted/70">of {s.n_tickers}</span>
             </div>
           )}
 

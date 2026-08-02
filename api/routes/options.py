@@ -508,10 +508,28 @@ def _compute_vol_landscape() -> dict:
     avg_iv = float(_avg_iv_raw) if not pd.isna(_avg_iv_raw) else 0.0
     _avg_ivhv_raw = mdf["IV_HV"].dropna().mean()
     avg_ivhv = float(_avg_ivhv_raw) if not pd.isna(_avg_ivhv_raw) else 1.0
-    _avg_skew_raw = mdf["Put_Skew"].mean()
+    # Skew stats over parity-clean chains only. Put-call parity forces a chain's
+    # ATM put and ATM call IV to agree, so a chain where they disagree is quoting
+    # something stale — and a stale chain should not get a vote on whether the
+    # whole tape is frightened. Today HYG, XLI and XLB fail; all three carried
+    # inflated skews before the delta-consistency filter landed.
+    _skew_ok = mdf
+    if "Parity" in mdf.columns:
+        _p = mdf["Parity"]
+        _clean = mdf[_p.isna() | ((_p >= 0.75) & (_p <= 1.35))]
+        if len(_clean) >= 5:
+            _skew_ok = _clean
+    _avg_skew_raw = _skew_ok["Put_Skew"].mean()
     avg_skew = float(_avg_skew_raw) if not pd.isna(_avg_skew_raw) else 1.0
     n_inverted = int((mdf["TS_Slope"] < 0).sum()) if "TS_Slope" in mdf.columns else 0
-    n_steep = int((mdf["Put_Skew"] > 1.10).sum()) if "Put_Skew" in mdf.columns else 0
+    # 1.10 predates the switch of Put_Skew's denominator from the ATM call to the
+    # ATM put, so it is a cut inherited from a different measurement. It is left
+    # in place because the regime it feeds is a pre-existing card the user reads,
+    # but it is not validated against the new basis and should not be treated as
+    # meaningful precision — under the corrected basis the whole universe sits in
+    # a 0.85-1.25 band, so "steep" here is closer to "above median" than to fear.
+    n_steep = int((_skew_ok["Put_Skew"] > 1.10).sum()) if "Put_Skew" in _skew_ok.columns else 0
+    n_skew_rated = int(len(_skew_ok))
 
     if avg_ivhv > 1.2:
         regime = "Elevated Vol — Rich Premiums"
@@ -522,7 +540,7 @@ def _compute_vol_landscape() -> dict:
     elif n_inverted >= 3:
         regime = "Event-Driven — Near-Term Fear"
         regime_action = "Calendar spreads. Sell front, buy back."
-    elif n_steep > len(mdf) * 0.5:
+    elif n_steep > max(n_skew_rated, 1) * 0.5:   # same denominator n_steep was counted over
         regime = "Broad Fear — Steep Skew"
         regime_action = "Sell overpriced put wings."
     else:
@@ -552,6 +570,10 @@ def _compute_vol_landscape() -> dict:
             "avg_skew": round(avg_skew, 3),
             "n_inverted": n_inverted,
             "n_steep_skew": n_steep,
+            # How many chains the skew stats were actually computed over — the
+            # rest were withheld for failing put-call parity. Without this the
+            # reader sees "8 steep" against an assumed 20 and silently overstates.
+            "n_skew_rated": n_skew_rated,
             "n_tickers": len(mdf),
         },
     }
@@ -560,7 +582,7 @@ def _compute_vol_landscape() -> dict:
 # Wrap with the Supabase-backed result cache (12h TTL). Imported inline to
 # avoid pulling the cache util at module-import time if circular.
 from src._cache_util import result_cached as _result_cached
-_compute_vol_landscape = _result_cached("vol_landscape_v4")(_compute_vol_landscape)
+_compute_vol_landscape = _result_cached("vol_landscape_v6")(_compute_vol_landscape)
 
 
 @router.get("/vol-landscape")

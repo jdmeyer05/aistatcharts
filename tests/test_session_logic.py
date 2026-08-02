@@ -298,3 +298,85 @@ def test_vol_gap_flags_inverted_spread():
     gap = [r for r in out["reads"] if r["label"] == "Index vs its parts"][0]
     assert "-3.6" in gap["note"], gap["note"]
     assert "unusual" in gap["note"], gap["note"]
+
+
+# -- Delta consistency at the selected strike --------------------------------
+# Delta is derived FROM implied vol, so a corrupt IV yields a corrupt delta that
+# lands on the 25-delta target, and the nearest-delta match then prefers the
+# single worst quote on the chain. The check is deliberately LOCAL -- see the
+# note in find_delta_strike for why a whole-ladder score was measured and
+# rejected as a gate.
+
+def _chain(rows, opt_type="put"):
+    import pandas as pd
+    return pd.DataFrame([
+        {"contract_type": opt_type, "strike_price": k, "delta": d,
+         "implied_volatility": iv, "open_interest": oi}
+        for k, d, iv, oi in rows
+    ])
+
+
+def test_selection_rejects_the_xlb_quote():
+    """Live XLB: a 43 strike at 85% of spot carrying 121% IV on one lot of volume
+    beat a 48 strike at 95% with 606 open interest, because the bogus IV gave it
+    a bogus 0.24 delta. |delta| must rise with strike, and 43 sits above 47."""
+    from src.cross_asset_vol import find_delta_strike
+    ch = _chain([(43.0, -0.2399, 1.2139, 101), (47.0, -0.1133, 0.2607, 133),
+                 (48.0, -0.2214, 0.2962, 606), (48.5, -0.3753, 0.7372, 10),
+                 (49.0, -0.3512, 0.3766, 1160), (50.0, -0.4200, 0.2800, 900),
+                 (51.0, -0.4800, 0.2750, 800), (52.0, -0.5500, 0.2700, 700)])
+    k, iv = find_delta_strike(ch, 50.43, 0.25, "put")
+    assert k == 48.0, f"selected {k}, expected the liquid 48"
+    assert iv < 0.5, f"selected a wing quote at {iv:.4f}"
+
+
+def test_selection_falls_back_when_too_few_strikes_survive():
+    """The same contradictory quotes with nothing else left standing. Three
+    survivors is the floor; below it the unfiltered pick is returned rather than
+    an answer inferred from one or two strikes. Real chains carry 45-245 strikes,
+    so this is the degenerate case and the quality flags cover it."""
+    from src.cross_asset_vol import find_delta_strike
+    ch = _chain([(43.0, -0.2399, 1.2139, 101), (47.0, -0.1133, 0.2607, 133),
+                 (48.0, -0.2214, 0.2962, 606), (48.5, -0.3753, 0.7372, 10),
+                 (49.0, -0.3512, 0.3766, 1160)])
+    assert find_delta_strike(ch, 50.43, 0.25, "put")[0] == 43.0
+
+
+def test_selection_unchanged_on_a_clean_chain():
+    """SPY's live ladder is monotone to four decimals. Anything that moves this
+    is doing something other than removing contradictions."""
+    from src.cross_asset_vol import find_delta_strike
+    ch = _chain([(729.0, -0.2294, 0.1531, 4167), (730.0, -0.2393, 0.1512, 57262),
+                 (731.0, -0.2493, 0.1490, 2701), (732.0, -0.2600, 0.1472, 2956),
+                 (733.0, -0.2713, 0.1457, 4320)])
+    assert find_delta_strike(ch, 747.03, 0.25, "put")[0] == 731.0
+
+
+def test_selection_handles_calls_in_the_other_direction():
+    from src.cross_asset_vol import find_delta_strike
+    # Call |delta| must FALL as strike rises; the 105 quote inverts it.
+    ch = _chain([(100.0, 0.60, 0.20, 500), (105.0, 0.72, 0.90, 3),
+                 (110.0, 0.30, 0.21, 400), (115.0, 0.15, 0.22, 300)], "call")
+    assert find_delta_strike(ch, 100.0, 0.25, "call")[0] != 105.0
+
+
+def test_selection_falls_back_rather_than_returning_nothing():
+    """A chain too contradictory to filter still answers. Reporting nothing is
+    worse than reporting the unfiltered pick, which the quality flags cover."""
+    from src.cross_asset_vol import find_delta_strike
+    ch = _chain([(40.0, -0.90, 2.0, 1), (41.0, -0.10, 1.9, 1), (42.0, -0.80, 1.8, 1)])
+    assert find_delta_strike(ch, 45.0, 0.25, "put")[0] is not None
+
+
+def test_ladder_score_is_a_diagnostic_not_a_gate():
+    """Measured across the live universe this flags 19 of 20 names, SPY included,
+    because deep wings are thin everywhere. Reported, never gated on."""
+    from src.cross_asset_vol import _delta_ladder_broken
+    import pandas as pd
+    clean = _chain([(729.0, -0.2294, 0.15, 1), (730.0, -0.2393, 0.15, 1),
+                    (731.0, -0.2493, 0.15, 1), (732.0, -0.2600, 0.15, 1)])
+    assert _delta_ladder_broken(clean, "put") == 0.0
+    jagged = _chain([(105.0, -0.1505, 0.44, 1), (106.0, -0.1064, 0.33, 1),
+                     (107.0, -0.1378, 0.34, 1), (108.0, -0.2478, 0.51, 1)])
+    assert _delta_ladder_broken(jagged, "put") > 0.0
+    assert _delta_ladder_broken(pd.DataFrame(), "put") == 0.0

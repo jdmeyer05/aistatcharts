@@ -48,7 +48,7 @@ export default function VolLandscapePage() {
         `CROSS-ASSET OPTIONS LANDSCAPE (${data.count} tickers)`,
         `REGIME: ${data.regime} | ACTION: ${data.regime_action}`,
         `Avg IV: ${data.summary.avg_iv}% | IV/HV: ${data.summary.avg_ivhv}x | Skew: ${data.summary.avg_skew}x`,
-        `Inverted: ${data.summary.n_inverted}/${data.summary.n_tickers} | Steep: ${data.summary.n_steep_skew}/${data.summary.n_tickers}`,
+        `Inverted: ${data.summary.n_inverted}/${data.summary.n_tickers} | Steep: ${data.summary.n_steep_skew}/${data.summary.n_skew_rated ?? data.summary.n_tickers}`,
         data.impl_corr != null ? `Impl Corr: ${data.impl_corr}` : "",
         "",
         ...data.metrics.map(m =>

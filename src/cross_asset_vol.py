@@ -55,6 +55,39 @@ def atm_iv(chain, spot, opt_type="call"):
     return iv if iv > 0 else 0.25
 
 
+def _delta_ladder_broken(sub, opt_type):
+    """Fraction of adjacent strikes whose deltas contradict no-arbitrage.
+
+    Delta is computed FROM implied vol, so a corrupt IV yields a corrupt delta �
+    and an inflated IV pushes a far-OTM strike's delta up onto the 25-delta
+    target, so the selector prefers the single worst quote on the chain. Live
+    XLB: a 43 strike at 85% of spot carrying 121% IV on one lot of volume was
+    chosen as the 25-delta put over a 48 strike at 95% with 606 open interest.
+
+    |delta| must rise with strike for puts and fall for calls, so a pair that
+    inverts is an arbitrage violation rather than a threshold anyone picked.
+    SPY's ladder is monotone to four decimals; XLB's is not.
+
+    This DETECTS the condition and does not repair it. Reconstructing the
+    surface was tried and abandoned: picking the largest self-consistent subset
+    leaves ties that the ordering cannot break, and weighting those ties by open
+    interest optimises a whole-chain sum that will happily trade away the strikes
+    near the target � on XLY it discarded a 471-lot strike and kept a 2-lot one.
+    A wrong number that has been through a repair step is harder to catch than a
+    wrong number that has been withheld, so callers withhold.
+    """
+    if "delta" not in sub.columns or len(sub) < 3:
+        return 0.0
+    s = sub.sort_values("strike_price")
+    d = s["delta"].abs().to_numpy(dtype=float)
+    d = d[~np.isnan(d)]
+    if len(d) < 3:
+        return 0.0
+    diff = np.diff(d)
+    bad = (diff < -1e-6) if opt_type == "put" else (diff > 1e-6)
+    return float(bad.sum()) / float(len(diff))
+
+
 def find_delta_strike(chain, spot, target_delta, opt_type):
     """Find the strike closest to a target delta. Prefers OI > 0."""
     sub = chain[chain["contract_type"] == opt_type].copy()
@@ -65,11 +98,39 @@ def find_delta_strike(chain, spot, target_delta, opt_type):
         sub_liquid = sub[sub["open_interest"].fillna(0) > 0]
         if len(sub_liquid) >= 3:
             sub = sub_liquid
+    sub = sub.copy()
     sub["delta_abs"] = sub["delta"].abs()
     sub["delta_dist"] = (sub["delta_abs"] - abs(target_delta)).abs()
     sub = sub.dropna(subset=["delta_dist"])
     if sub.empty:
         return None, None
+
+    # Reject a strike whose delta contradicts its IMMEDIATE neighbours.
+    #
+    # Delta is computed from implied vol, so a corrupt IV yields a corrupt delta
+    # sitting right on the target — the plain nearest-delta match then prefers
+    # the single worst quote on the chain. Live XLB: a 43 strike at 85% of spot
+    # carrying 121% IV on one lot of volume beat a 48 strike at 95% with 606
+    # open interest.
+    #
+    # The test is local on purpose. A whole-ladder monotonicity score does not
+    # discriminate — measured across these 20 names it flags 19, including SPY,
+    # because deep wings are thin everywhere and that noise is harmless. What
+    # matters is only whether the strike being SELECTED is consistent where it
+    # sits. Neighbours are taken from the full sorted ladder, so removing a bad
+    # strike cannot make its neighbours look bad in turn.
+    ladder = sub.sort_values("strike_price")
+    dv = ladder["delta_abs"].to_numpy(dtype=float)
+    lo = np.r_[-np.inf, dv[:-1]]
+    hi = np.r_[dv[1:], np.inf]
+    if opt_type == "put":                       # |delta| must rise with strike
+        good = (dv >= lo - 1e-6) & (dv <= hi + 1e-6)
+    else:                                       # and fall for calls
+        good = (dv <= lo + 1e-6) & (dv >= hi - 1e-6)
+    consistent = ladder[good | np.isnan(dv)]
+    if len(consistent) >= 3:
+        sub = consistent
+
     best = sub.loc[sub["delta_dist"].idxmin()]
     return float(best["strike_price"]), float(best.get("implied_volatility", 0))
 
@@ -299,6 +360,14 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
         # from the data rather than assumed, and callers gate on it.
         parity = (atm_put_iv / front_iv) if atm_put_iv and front_iv and front_iv > 0 else None
 
+        # Second, independent quality signal on the same chain. Parity checks one
+        # pair of quotes at the money; this checks the whole put ladder for the
+        # arbitrage violations that make a 25-delta selection meaningless. They
+        # catch different failures — XLB passes neither, XLY fails only this one.
+        _puts = front_chain[(front_chain["contract_type"] == "put")
+                            & (front_chain["implied_volatility"] > 0)]
+        ladder_broken = _delta_ladder_broken(_puts, "put")
+
         risk_rev = ((c25_iv - p25_iv) * 100) if c25_iv and p25_iv else 0.0
         butterfly = ((p25_iv + c25_iv - 2 * front_iv) * 100) if p25_iv and c25_iv and front_iv > 0 else 0.0
 
@@ -365,7 +434,7 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
             "Ticker": tk, "Label": label, "Group": group, "Spot": spot,
             "Front_IV": front_iv, "Back_IV": back_iv, "IV_HV": iv_hv,
             "Put_Skew": put_skew, "Risk_Rev": risk_rev, "Butterfly": butterfly,
-            "Parity": parity,
+            "Parity": parity, "Ladder_Broken": ladder_broken,
             "TS_Slope": ts_slope, "VRP": vrp, "VRP_Vol": vrp_vol,
             "Impl_Move": impl_move, "HV20": hv20,
             "PC_Ratio": pc_ratio, "IV_Pctile": iv_pctile, "Front_DTE": front_dte_val,

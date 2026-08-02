@@ -1623,7 +1623,15 @@ export interface VolLandscapeScan {
   earnings: Record<string, { date: string; days: number }>;
   regime: string;
   regime_action: string;
-  summary: { avg_iv: number; avg_ivhv: number; avg_skew: number; n_inverted: number; n_steep_skew: number; n_tickers: number };
+  summary: {
+    avg_iv: number; avg_ivhv: number; avg_skew: number;
+    n_inverted: number; n_steep_skew: number; n_tickers: number;
+    /** Chains the skew stats were computed over. Lower than n_tickers when a
+     *  chain's ATM put and ATM call disagree by more than put-call parity
+     *  allows — n_steep_skew is out of THIS, not out of n_tickers. */
+    n_skew_rated?: number;
+    avg_sector_iv?: number;
+  };
 }
 
 export async function fetchVolLandscape(): Promise<VolLandscapeScan> {
