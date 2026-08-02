@@ -29,6 +29,7 @@ import {
   type EsScheduleItem,
 } from "@/lib/api";
 import CandleContextBlock from "@/components/home/candle-context";
+import OvernightRead from "@/components/home/overnight-read";
 
 /* ─── formatting ──────────────────────────────────────────────── */
 
@@ -1052,6 +1053,13 @@ export default function EsBriefing() {
           </div>
 
           <CandleContextBlock d={d.candles} />
+
+          {/* The Globex range against what the cash session has done with it.
+              Computed and shipped in this payload since the study landed, but
+              never rendered — and it is the strongest measured relationship in
+              the cockpit: where the session OPENS inside the overnight range
+              predicts which side breaks. */}
+          <OvernightRead d={d.overnight} />
 
           {/* ── breadth: how many stocks are going with the index ── */}
           {d.breadth?.available && (

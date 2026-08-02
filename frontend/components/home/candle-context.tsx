@@ -160,6 +160,29 @@ export default function CandleContextBlock({ d }: { d: EsCandleContext | null | 
         </p>
       )}
 
+      {/* The study measures the CASH INDEX and reports a bare point figure.
+          This is the translation into what it means for an ES session — index
+          points and ES points are the same size, because the basis is a level
+          offset rather than a scale factor. It was computed and shipped in the
+          payload but never rendered. */}
+      {(d.es_read?.reads?.length ?? 0) > 0 && (
+        <div className="border border-border rounded p-2 space-y-1.5">
+          <div className="text-[0.55rem] uppercase tracking-wider text-text-muted">
+            For the ES session
+          </div>
+          {d.es_read!.reads!.map((r) => (
+            <div key={r.label} className="text-[0.65rem] leading-snug">
+              <span className="text-text-muted">{r.label}: </span>
+              <span className="text-text font-semibold font-data tabular-nums">{r.value}</span>
+              <span className="text-text-muted"> — {r.note}</span>
+              {r.caveat && (
+                <span className="block text-[0.55rem] text-text-muted/80 mt-0.5">{r.caveat}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-4 items-start">
         <div className="flex flex-col items-center gap-1">
           <CandleGlyph bar={bar} />

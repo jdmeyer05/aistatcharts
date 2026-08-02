@@ -3238,6 +3238,14 @@ export interface EsCandleContext {
     gap: number; gap_atr?: number | null;
     label: string; note: string; caveat: string;
   } | null;
+  /** What the study's range forecast means for an ES session specifically.
+   *  The study measures the CASH INDEX and reports a bare point figure; ES is a
+   *  future on that index, so the basis is a level offset and not a scale
+   *  factor — index points and ES points are the same size. Null until the
+   *  forecast exists. */
+  es_read?: {
+    reads?: { label: string; value: string; note: string; caveat?: string }[];
+  } | null;
   study?: Record<string, unknown>;
   disclaimer?: string;
 }
@@ -3251,6 +3259,67 @@ export interface EsConditions {
   note: string;
   reasons: Array<{ factor: string; effect: number; why: string }>;
   disclaimer?: string;
+}
+
+/** One opening-position bucket of the overnight study. */
+export interface EsOvernightBand {
+  band: string;
+  n: number;
+  breaks_on_high_pct: number;
+  breaks_on_low_pct: number;
+  both_pct: number;
+  median_rth_range: number;
+}
+
+export interface EsOvernight {
+  available: boolean;
+  reason?: string;
+  /** Stated rather than inferred: the path base rates sitting beside this are
+   *  SPY over five years, these are ES over two. A reader glancing between them
+   *  would otherwise assume one instrument. */
+  instrument?: string;
+  sessions?: number;
+  from?: string;
+  to?: string;
+  /** False when contracts were missing from the study window. A quarter of
+   *  absent sessions changes nothing about how the tables LOOK. */
+  complete?: boolean;
+  contracts_missing?: string[];
+  range_survival?: {
+    one_sided_pct: number; both_sides_pct: number; held_inside_pct: number; note?: string;
+  };
+  by_open_position?: EsOvernightBand[];
+  median_on_range?: number;
+  median_rth_range?: number;
+  /** Median share of the full 23-hour range already made before the bell. */
+  overnight_share_of_full_range_pct?: number;
+  notes?: string[];
+  /** Today's read. Null when the live session could not be read — the historical
+   *  study stands alone and is NOT blanked by a missing live frame. */
+  live?: {
+    contract?: string | null;
+    session_date?: string;
+    phase?: string;
+    overnight_high: number; overnight_low: number;
+    overnight_range: number; overnight_range_pct: number;
+    last: number;
+    /** The cash OPEN, which is what the base rates are conditioned on. Null
+     *  pre-open, where `open_is_estimated` is true and `last` stands in. */
+    open: number | null;
+    open_is_estimated: boolean;
+    position_in_range_pct: number;
+    band: string;
+    to_on_high: number; to_on_low: number;
+    /** Already resolved — a fact, not a forecast. The matching side is dropped
+     *  from `expected` rather than restated as a probability. */
+    broke_on_high: boolean; broke_on_low: boolean;
+    expected?: {
+      n: number;
+      breaks_on_high_pct?: number;
+      breaks_on_low_pct?: number;
+    } | null;
+    rth_range_expectation?: { p25: number; median: number; p75: number; n: number } | null;
+  } | null;
 }
 
 export interface EsBrief {
@@ -3293,6 +3362,10 @@ export interface EsBrief {
   base_rates?: EsBaseRates | null;
   breadth?: EsBreadth | null;
   candles?: EsCandleContext | null;
+  /** Globex range against what the cash session has historically done with it.
+   *  Measured on real ES, front contract by volume — NOT the same instrument or
+   *  window as `base_rates`, which is SPY over five years. Both are labelled. */
+  overnight?: EsOvernight | null;
   conditions?: EsConditions | null;
   /** Cash-open gap vs the prior close, in percent. Before the bell this is the
    *  gap as it currently stands, measured from the live price. */
