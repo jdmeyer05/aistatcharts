@@ -463,6 +463,12 @@ def _compute_base_rates() -> dict:
         "break_anatomy": anatomy,
         "tradeability": tradeability,
         "available": True,
+        # Stated, not inferred. The path base rates sitting beside this on the
+        # same card are measured on SPY over five years, and these are ES over
+        # two. Both are right, both are labelled, and a reader glancing between
+        # them will otherwise assume one instrument — which is the kind of
+        # quiet wrongness that produces a real decision.
+        "instrument": "ES futures, front contract by volume",
         "sessions": int(n),
         "from": str(s.index.min().date()),
         "to": str(s.index.max().date()),
@@ -501,7 +507,7 @@ def _compute_base_rates() -> dict:
 # the key stayed fixed, and a stale entry missing a newly-added field is not a
 # stale number — it is a different shape that downstream `.get()` calls paper
 # over. Bump this whenever a field is added or its meaning changes.
-@_result_cached("es_overnight_base_v5")
+@_result_cached("es_overnight_base_v6")
 def _cached_base_rates() -> dict:
     r = _compute_base_rates()
     # The shared cache layer only refuses to store empty dicts and ones carrying
