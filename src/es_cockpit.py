@@ -249,13 +249,19 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
             return None
 
     clock_et = now if now is not None else pd.Timestamp.now(tz=_TZ)
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         f_br = pool.submit(_safe, lambda: base_rates(now=None), "base_rates")             if with_base_rates else None
         f_bd = pool.submit(_safe, lambda: market_breadth(now=clock_et), "breadth")             if with_breadth else None
         f_cx = pool.submit(_safe, lambda: candle_context("^GSPC"), "candles")             if with_candles else None
+        # Gamma reads the SPX OPTION CHAIN and sources its own spot from ^SPX.
+        # `es_last` is optional and only sharpens the ES-equivalent level, so it
+        # never needed an ES bar — blanking it here repeated exactly the bug that
+        # once erased four modules over a single ES=F hiccup.
+        f_gx = pool.submit(_safe, dealer_gamma, "gamma") if with_gamma else None
         rates = f_br.result() if f_br else None
         breadth = f_bd.result() if f_bd else None
         candles = f_cx.result() if f_cx else None
+        gamma = f_gx.result() if f_gx else None
         # The overnight STUDY is two years of history and does not depend on the
         # live bars that just failed, so it still answers. Only the live read is
         # lost, and the module already reports that as `live: None`.
@@ -265,9 +271,11 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         "available": True,
         "levels_unavailable_reason": reason,
         "levels": {"available": False, "reason": reason},
+        # These two genuinely need ES bars — intraday structure and the expected
+        # move are both computed FROM them, so there is nothing to serve.
         "intraday": None,
         "expected_move": None,
-        "gamma": None,
+        "gamma": gamma,
         "base_rates": rates,
         "breadth": breadth,
         "candles": candles,
