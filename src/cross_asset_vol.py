@@ -46,13 +46,28 @@ def get_rfr():
 # ── ATM IV and Delta Helpers ─────────────────────────────────────────────────
 
 def atm_iv(chain, spot, opt_type="call"):
-    """Get ATM implied volatility from a chain DataFrame."""
+    """ATM implied volatility from a chain, or None when the chain cannot say.
+
+    Returns None rather than a placeholder. This used to hand back 0.25 for an
+    empty chain or a non-positive quote, which is a plausible ATM vol for an
+    equity ETF and therefore invisible downstream — it flowed into Front_IV,
+    IV_HV, VRP and the universe averages as though it had been measured.
+
+    The case that forced the change: parity is atm_put_iv / atm_call_iv, and
+    with both legs defaulting the ratio came out at exactly 1.00. A chain with
+    no data in it scored as perfectly consistent, so the quality gate built on
+    parity reported "clean" in precisely the situation it exists to catch.
+
+    Callers must handle None. A missing ATM vol is a fact worth propagating.
+    """
+    if chain is None or len(chain) == 0:
+        return None
     sub = chain[chain["contract_type"] == opt_type].reset_index(drop=True)
     if sub.empty:
-        return 0.25
+        return None
     atm_row = sub.loc[(sub["strike_price"] - spot).abs().idxmin()]
     iv = atm_row.get("implied_volatility", 0) or 0
-    return iv if iv > 0 else 0.25
+    return float(iv) if iv > 0 else None
 
 
 def _delta_ladder_broken(sub, opt_type):
@@ -336,7 +351,15 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
 
         front_chain = chains[exps[0]]
         front_iv = atm_iv(front_chain, spot, "call")
+        if not front_iv:
+            # Every metric below is a ratio or a slope anchored on the front ATM
+            # vol. Without it the row would be a set of numbers computed against
+            # a placeholder, which is the failure this whole pass has been about.
+            logger.debug(f"{tk}: no ATM vol on {exps[0]}, skipping")
+            continue
         back_iv = atm_iv(chains[exps[-1]], spot, "call") if len(exps) >= 2 else front_iv
+        if not back_iv:
+            back_iv = front_iv       # flat curve, not an invented one
 
         # Put skew. Measured against the ATM PUT, not the ATM call.
         #
@@ -350,9 +373,13 @@ def compute_cross_asset_metrics(ticker_data, rfr=0.045):
         # was not there.
         _, p25_iv = find_delta_strike(front_chain, spot, 0.25, "put")
         _, c25_iv = find_delta_strike(front_chain, spot, 0.25, "call")
+        # No silent fall back to the ATM CALL when the put is missing: that is
+        # the mixed-type ratio this comment block exists to describe, and doing
+        # it as a fallback would reintroduce it invisibly on exactly the thin
+        # chains where it does the most damage. None means unmeasurable, and
+        # 1.0 would have meant "no skew" — a claim, not an absence.
         atm_put_iv = atm_iv(front_chain, spot, "put")
-        skew_base = atm_put_iv if atm_put_iv and atm_put_iv > 0 else front_iv
-        put_skew = (p25_iv / skew_base) if p25_iv and skew_base and skew_base > 0 else 1.0
+        put_skew = (p25_iv / atm_put_iv) if (p25_iv and atm_put_iv) else None
 
         # How far the chain's own ATM quotes disagree with each other. Parity
         # forces this to 1.0, so the distance from 1.0 is a direct read on how

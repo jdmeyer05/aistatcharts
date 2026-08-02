@@ -49,10 +49,20 @@ export default function VolLandscapePage() {
         `REGIME: ${data.regime} | ACTION: ${data.regime_action}`,
         `Avg IV: ${data.summary.avg_iv}% | IV/HV: ${data.summary.avg_ivhv}x | Skew: ${data.summary.avg_skew}x`,
         `Inverted: ${data.summary.n_inverted}/${data.summary.n_tickers} | Steep: ${data.summary.n_steep_skew}/${data.summary.n_skew_rated ?? data.summary.n_tickers}`,
-        data.impl_corr != null ? `Impl Corr: ${data.impl_corr}` : "",
+        // Equal-weighted; the caveat travels with the number so the model does
+        // not read a precision into it that the weighting cannot support.
+        data.impl_corr != null
+          ? `Impl Corr: ${data.impl_corr} (equal-weighted across 11 sectors; cap weighting can move this by several tenths)`
+          : "",
         "",
         ...data.metrics.map(m =>
-          `${m.Ticker} (${m.Label}) [${m.Group}] $${m.Spot?.toFixed(2)} IV=${((m.Front_IV ?? 0) * 100).toFixed(1)}% IV/HV=${m.IV_HV?.toFixed(2) ?? "N/A"}x Skew=${m.Put_Skew?.toFixed(2)}x TS=${((m.TS_Slope ?? 0) * 100).toFixed(1)}%/mo`
+          // Skew is null when the chain could not be measured — "N/A", never a
+          // number, and never the string "undefined" a bare ?. would produce.
+          `${m.Ticker} (${m.Label}) [${m.Group}] $${m.Spot?.toFixed(2)} IV=${((m.Front_IV ?? 0) * 100).toFixed(1)}% IV/HV=${m.IV_HV?.toFixed(2) ?? "N/A"}x Skew=${m.Put_Skew != null ? `${m.Put_Skew.toFixed(2)}x` : "N/A"} TS=${((m.TS_Slope ?? 0) * 100).toFixed(1)}%/mo`
+        ),
+        "",
+        ...(data.es_read?.reads ?? []).map(r =>
+          `ES READ: ${r.label}: ${r.value} — ${r.note}${r.caveat ? ` [${r.caveat}]` : ""}`
         ),
         "",
         ...data.divergences.map(d => `DIVERGENCE: ${d.pair} (${d.metric}): ${d.signal}`),
@@ -467,7 +477,13 @@ export default function VolLandscapePage() {
                 <div className="text-sm font-bold mb-1">Put Skew (25Δ / ATM)</div>
                 <div className="text-xs text-text-muted mb-2">&gt;1.10x = heavy fear premium.</div>
                 {(() => {
-                  const sk = filteredMetrics.sort((a, b) => (b.Put_Skew ?? 0) - (a.Put_Skew ?? 0));
+                  // Drop unmeasurable chains rather than coercing them to 0 —
+                  // `?? 0` sorted them to the bottom AND painted them green,
+                  // which reads as "lowest skew in the universe" when it means
+                  // "no reading". Their absence from the bar chart is honest.
+                  const sk = filteredMetrics
+                    .filter(m => m.Put_Skew != null)
+                    .sort((a, b) => (b.Put_Skew ?? 0) - (a.Put_Skew ?? 0));
                   return (
                     <Plot data={[{
                       x: sk.map(m => m.Ticker), y: sk.map(m => m.Put_Skew),
@@ -534,6 +550,46 @@ export default function VolLandscapePage() {
                     </div>
                   </div>
                 </div>
+                {/* The gauge reads as more precise than the number is. Equal
+                    weighting across 11 sectors is a real approximation: XLK is
+                    about a third of SPX and XLRE a fiftieth, and on a recent
+                    chain cap weights gave 0.08 where equal weights gave 0.32.
+                    Stated here rather than in a tooltip, because the colour band
+                    invites a decision on its own. */}
+                <div className="text-[0.55rem] text-text-muted/80 mt-1.5 leading-snug">
+                  Equal-weighted across the 11 sectors — live SPX index weights need a
+                  constituent feed this project does not carry. The level can shift several
+                  tenths under cap weighting, so read movement over time rather than the
+                  absolute value, and treat the band edges as indicative.
+                </div>
+              </div>
+            )}
+
+            {/* Same reads as the home card. This is the full page for the scan,
+                so the ES translation belongs here too rather than only in the
+                summary a reader may never expand. */}
+            {(data.es_read?.reads?.length ?? 0) > 0 && (
+              <div className="card">
+                <div className="text-sm font-bold mb-1">What this says for ES</div>
+                <div className="text-xs text-text-muted mb-2">
+                  Session context, not signals. Each row shows the measured value and what it means.
+                </div>
+                <div className="space-y-2">
+                  {data.es_read!.reads!.map((r, i) => (
+                    <div key={i} className="border-l-2 border-accent/30 pl-2">
+                      <div className="flex items-baseline gap-2 flex-wrap">
+                        <span className="text-xs text-text-muted">{r.label}</span>
+                        <span className="text-xs font-bold font-data text-text">{r.value}</span>
+                      </div>
+                      <p className="text-[0.65rem] text-text-muted leading-snug mt-0.5">{r.note}</p>
+                      {r.caveat && (
+                        <p className="text-[0.6rem] text-text-muted/70 leading-snug mt-0.5 italic">
+                          {r.caveat}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -558,7 +614,12 @@ export default function VolLandscapePage() {
                       <td className={`font-data font-semibold ${(m.IV_HV ?? 0) > 1.2 ? "text-loss" : (m.IV_HV ?? 0) < 0.85 ? "text-gain" : ""}`}>
                         {m.IV_HV?.toFixed(2) ?? "—"}x
                       </td>
-                      <td className={`font-data ${m.Put_Skew > 1.10 ? "text-loss" : ""}`}>{m.Put_Skew?.toFixed(2)}x</td>
+                      {/* Skew is null when the chain could not be measured. An em
+                          dash matches every other unmeasurable cell in this row;
+                          a bare "x" would read as a rendering glitch. */}
+                      <td className={`font-data ${(m.Put_Skew ?? 0) > 1.10 ? "text-loss" : ""}`}>
+                        {m.Put_Skew != null ? `${m.Put_Skew.toFixed(2)}x` : "—"}
+                      </td>
                       <td className={`font-data ${(m.TS_Slope ?? 0) < 0 ? "text-loss" : ""}`}>{((m.TS_Slope ?? 0) * 100).toFixed(1)}</td>
                       <td className="font-data">{m.VRP_Vol != null ? `${(m.VRP_Vol * 100).toFixed(1)}%` : "—"}</td>
                       <td className="font-data">{m.Impl_Move > 0 ? `${m.Impl_Move.toFixed(1)}%` : "—"}</td>

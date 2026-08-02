@@ -373,6 +373,37 @@ function VolLandscapeSnapshot() {
             </div>
           )}
 
+          {/* What the scan above means for the instrument actually being traded.
+              Everything else on this card describes the vol universe; this is
+              the only part that answers "so what for ES". Each row is the
+              measured value on the left and the reading beside it, because a
+              reader who disagrees with the reading still needs the number. */}
+          {(d.es_read?.reads?.length ?? 0) > 0 && (
+            <div className="space-y-1 border-t border-border pt-1.5">
+              <h4 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                What this says for ES
+              </h4>
+              {d.es_read!.reads!.map((r, i) => (
+                <div key={i} className="text-[0.65rem] leading-snug">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-text-muted shrink-0 w-[8.5rem] truncate" title={r.label}>
+                      {r.label}
+                    </span>
+                    <span className="text-text font-medium tabular-nums">{r.value}</span>
+                  </div>
+                  <p className="text-text-muted pl-[9.25rem] leading-snug">{r.note}</p>
+                  {/* Rendered, not tucked into a tooltip. A caveat that only
+                      appears on hover is a caveat the reader will act without. */}
+                  {r.caveat && (
+                    <p className="text-[0.55rem] text-text-muted/70 pl-[9.25rem] leading-snug italic">
+                      {r.caveat}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {divergences.length === 0 ? (
             <div className="text-xs text-text-muted">No cross-asset dislocations right now.</div>
           ) : (

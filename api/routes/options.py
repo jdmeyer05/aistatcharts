@@ -477,6 +477,8 @@ def _compute_vol_landscape() -> dict:
             chain = td["chains"].get(exp)
             if chain is not None:
                 iv = atm_iv(chain, td["spot"])
+                if not iv:
+                    continue      # a gap in the term structure, not a 25% point
                 dte = max((pd.to_datetime(exp) - pd.Timestamp.now()).days, 1)
                 row_ivs.append({"dte": dte, "iv": round(iv * 100, 2)})
         if row_ivs:
@@ -582,7 +584,7 @@ def _compute_vol_landscape() -> dict:
 # Wrap with the Supabase-backed result cache (12h TTL). Imported inline to
 # avoid pulling the cache util at module-import time if circular.
 from src._cache_util import result_cached as _result_cached
-_compute_vol_landscape = _result_cached("vol_landscape_v6")(_compute_vol_landscape)
+_compute_vol_landscape = _result_cached("vol_landscape_v7")(_compute_vol_landscape)
 
 
 @router.get("/vol-landscape")

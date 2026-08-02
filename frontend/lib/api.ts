@@ -1606,7 +1606,18 @@ export async function fetchAITradeIdeas(params: {
 export interface VolLandscapeMetric {
   Ticker: string; Label: string; Group: string; Spot: number;
   Front_IV: number; Back_IV: number | null; IV_HV: number | null;
-  Put_Skew: number; Risk_Rev: number; Butterfly: number;
+  /** Null when the chain could not be measured — the 25-delta put or the ATM
+   *  put was missing. It is NOT 1.0 ("no skew"), which would be a claim. */
+  Put_Skew: number | null;
+  Risk_Rev: number; Butterfly: number;
+  /** ATM put IV over ATM call IV. Put-call parity forces this to 1.0, so the
+   *  distance from 1.0 measures how stale the chain's quotes are. Null when
+   *  either leg is missing — a chain with no data scores no confidence. */
+  Parity?: number | null;
+  /** Fraction of adjacent strikes whose deltas contradict no-arbitrage.
+   *  Diagnostic only: it flags 19 of 20 live names because deep wings are thin
+   *  everywhere, so it is reported and never gated on. */
+  Ladder_Broken?: number | null;
   TS_Slope: number; VRP_Vol: number | null; Impl_Move: number;
   HV20: number | null; PC_Ratio: number | null; IV_Pctile: number | null;
   Front_DTE: number;
@@ -1619,6 +1630,14 @@ export interface VolLandscapeScan {
   smile_data: { ticker: string; [moneyness: string]: number | string }[];
   ts_data: { ticker: string; term_structure: { dte: number; iv: number }[] }[];
   impl_corr: number | null;
+  /** What the cross-asset scan implies for the ES session. Each read is a
+   *  measured value plus the sentence that says what it means; `caveat` is
+   *  present only where the number rests on an assumption the reader needs.
+   *  Null when SPY is missing — every read is anchored on it. */
+  es_read?: {
+    spy?: Record<string, number | null>;
+    reads?: { label: string; value: string; note: string; caveat?: string }[];
+  } | null;
   divergences: { pair: string; metric: string; description: string; signal: string }[];
   earnings: Record<string, { date: string; days: number }>;
   regime: string;

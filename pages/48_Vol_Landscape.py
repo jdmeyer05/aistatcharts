@@ -338,6 +338,8 @@ with tab1:
                 chain = td["chains"].get(exp)
                 if chain is not None:
                     iv = atm_iv(chain, td["spot"])
+                    if not iv:
+                        continue      # leave the cell out rather than plot a default
                     dte = max((pd.to_datetime(exp) - pd.Timestamp.now()).days, 1)
                     row.append(iv * 100); dte_row.append(f"{dte}d")
             if row:
