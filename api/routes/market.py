@@ -2875,6 +2875,48 @@ def _sp_valuation_cached() -> dict:
     return board
 
 
+_FED_PROBS_CACHE: dict = {}
+_FED_PROBS_TTL_S = 30 * 60
+
+
+def _fed_probabilities_cached(n_meetings: int) -> dict:
+    """30-minute cache. The inputs are DAILY ZQ settlements, so the number only
+    moves once a session — but the strip is what a regime read is built on, so
+    this is kept shorter than the 45-minute boards to pick up a settlement
+    promptly rather than up to three quarters of an hour late."""
+    from time import time as _now
+    hit = _FED_PROBS_CACHE.get(n_meetings)
+    if hit and (_now() - hit[0]) < _FED_PROBS_TTL_S:
+        return hit[1]
+    from src.fed_probabilities import fed_probabilities
+    board = fed_probabilities(n_meetings=n_meetings)
+    # A partially-priced strip is not cached: a missing ZQ settlement drops a
+    # meeting to an `error` row, and pinning that for half an hour would hide a
+    # transient gap long after it closed.
+    if board.get("available") and not any("error" in m for m in board.get("meetings") or []):
+        _FED_PROBS_CACHE[n_meetings] = (_now(), board)
+    return board
+
+
+@router.get("/fed-probabilities")
+async def fed_probabilities_route(
+    n_meetings: int = Query(4, ge=1, le=8),
+    user: str = Depends(get_current_user),
+):
+    """FOMC outcome probabilities reconstructed from 30-Day Fed Funds futures.
+
+    SWING horizon and regime context — what the rates market has PRICED for the
+    next few decisions, not a forecast and nothing to do with today's session.
+
+    This is the CME FedWatch construction, not a licensed feed. Each meeting
+    carries the `method` and `leverage` used to produce it, because the
+    within-month solve divides by the post-meeting days remaining and multiplies
+    settlement noise by up to 30x for a late-month decision. See the module
+    docstring in src/fed_probabilities.py.
+    """
+    return await asyncio.to_thread(_fed_probabilities_cached, n_meetings)
+
+
 _ES_LEVELS_CACHE: dict = {}
 _ES_LEVELS_TTL_S = 60
 

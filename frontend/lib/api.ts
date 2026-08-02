@@ -3426,6 +3426,59 @@ export async function fetchMacroPressure(): Promise<MacroPressureBoard> {
   return apiFetch("/api/market/macro-pressure", { timeoutMs: 30_000 });
 }
 
+// ─── FOMC probabilities from 30-Day Fed Funds futures ────────────
+// SWING horizon. What the rates market has PRICED for the next few decisions —
+// regime context, never a session input.
+
+export interface FedMeeting {
+  date: string;
+  days_away?: number;
+  ticker?: string;
+  settle?: number;
+  implied_month_avg?: number;
+  r_pre?: number;
+  r_post?: number;
+  /** Priced change at THIS meeting, chained from the previous one. */
+  delta_bp?: number;
+  anchor?: string;
+  /** "next-month" | "within-month". The within-month solve divides by the
+   *  post-meeting days left in the contract month. */
+  method?: string;
+  /** Basis points of answer per basis point of settlement error. 1.0 on the
+   *  next-month route; the within-month route ran 2.1x for a mid-month meeting
+   *  and 30x for one on the 29th, where a single tick moves the answer 15bp. */
+  leverage?: number | null;
+  n_days?: number; n_pre?: number; n_post?: number;
+  probabilities?: Record<string, number>;
+  p_hike?: number; p_cut?: number; p_hold?: number;
+  /** Present instead of the above when this meeting could not be priced. */
+  error?: string;
+}
+
+export interface FedProbabilities {
+  available: boolean;
+  reason?: string;
+  asof?: string;
+  source?: string;
+  /** Always true: this is the CME FedWatch construction, not a licensed feed. */
+  reconstruction?: boolean;
+  spot_effr?: number | null;
+  anchor_rate?: number;
+  anchor?: string;
+  /** Cumulative pricing from the anchor to the last meeting shown — the regime
+   *  read, rather than any single meeting. */
+  cumulative_bp?: number | null;
+  meetings?: FedMeeting[];
+  /** The FOMC list is hardcoded. This is when it runs out. */
+  calendar_ends?: string;
+  /** True when fewer meetings came back than were asked for. */
+  calendar_exhausted?: boolean;
+}
+
+export async function fetchFedProbabilities(nMeetings = 4): Promise<FedProbabilities> {
+  return apiFetch(`/api/market/fed-probabilities?n_meetings=${nMeetings}`, { timeoutMs: 30_000 });
+}
+
 export interface CtaBiasRow {
   code: string;
   symbol: string | null;

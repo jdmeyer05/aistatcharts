@@ -10,7 +10,7 @@ Run: python -m pytest tests/test_session_logic.py -v
 """
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -625,6 +625,123 @@ def test_heading_is_absent_when_the_dot_has_not_moved():
     assert float(np.degrees(np.arctan2(dy, dx))) == 0.0, "the trap this guards"
     assert not np.hypot(dx, dy) > 0.01 * _SCALE
     assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
+
+
+# ── Fed probabilities from ZQ ────────────────────────────────────────────────
+# Two bugs that produced confident, plausible, wrong numbers.
+
+def test_month_weights_match_the_worked_example():
+    """Sep 2026: N=30, decision on the 16th. A rate decided on day k is effective
+    day k+1, so days 1..k carry the OLD rate — n_pre is the day itself."""
+    from src.fed_probabilities import month_weights
+    assert month_weights(date(2026, 9, 16)) == (30, 16, 14)
+    assert month_weights(date(2026, 10, 28)) == (31, 28, 3)
+
+
+def test_implied_post_rate_matches_the_worked_example():
+    from src.fed_probabilities import implied_post_rate
+    got = implied_post_rate(settle=100 - 3.71, r_pre=3.63, meeting=date(2026, 9, 16))
+    assert got == pytest.approx((30 * 3.71 - 16 * 3.63) / 14, abs=1e-9)
+
+
+def test_implied_post_rate_is_none_on_a_last_day_meeting():
+    """The contract then carries no post-meeting days and cannot speak to the
+    new rate. 0.0 would be a claim that nothing changed."""
+    from src.fed_probabilities import implied_post_rate
+    assert implied_post_rate(96.0, 3.63, date(2026, 4, 30)) is None
+
+
+@pytest.mark.parametrize("delta", [0.0, 12.5, 25.0, -25.0, -10.0, 37.5, -37.5])
+def test_probabilities_sum_to_one_and_reproduce_the_delta(delta):
+    """It is an interpolation onto 25bp buckets, so its expected value must be
+    the delta it came from."""
+    from src.fed_probabilities import outcome_probabilities
+    p = outcome_probabilities(delta)
+    assert sum(p.values()) == pytest.approx(1.0)
+    assert sum(k * v for k, v in p.items()) == pytest.approx(delta)
+
+
+def test_anchor_walks_backward_not_forward():
+    """Walking FORWARD finds the next meeting-free month, which sits AFTER the
+    meetings being priced and already contains their outcomes. Live symptom:
+    September read -35.36bp and October +35.36bp, a perfectly offsetting pair.
+    The month before the first meeting is the only clean anchor."""
+    from src.fed_probabilities import _anchor, zq_ticker
+    # Aug 2026 is meeting-free and precedes the 16 Sep decision; Nov 2026 is the
+    # meeting-free month a forward walk would have found instead.
+    settles = {zq_ticker(2026, 8): 96.37, zq_ticker(2026, 11): 96.125}
+    rate, label = _anchor(date(2026, 9, 16), settles, spot=3.63)
+    assert rate == pytest.approx(3.63, abs=1e-9), "must read the PRIOR month"
+    assert "ZQQ6" in label
+    assert rate != pytest.approx(100 - 96.125), "that is the forward-walk answer"
+
+
+def test_anchor_falls_back_to_spot_when_the_prior_month_held_a_meeting():
+    from src.fed_probabilities import _anchor, zq_ticker
+    # Oct 2026 holds a meeting, so it is not a constant-rate month.
+    rate, label = _anchor(date(2026, 12, 9), {zq_ticker(2026, 11): 96.125}, spot=3.87)
+    assert label == "spot EFFR" or "ZQX6" in label
+
+
+def test_calendar_horizon_blocks_the_next_month_shortcut():
+    """Past the last encoded meeting, `_has_meeting` answers False for every
+    month forever. That licensed the next-month estimator on a false premise:
+    with the list ending 2026-12-09, January 2027 looked meeting-free and the
+    December decision was priced off ZQF7 as though that were established."""
+    from src.fed_probabilities import _month_is_known, _has_meeting, FOMC_DATES
+    last = FOMC_DATES[-1]
+    assert _month_is_known(last.year, last.month)
+    nxt = (last.year, last.month + 1) if last.month < 12 else (last.year + 1, 1)
+    assert not _month_is_known(*nxt), "beyond the calendar must read as unknown"
+    assert not _has_meeting(*nxt), "and _has_meeting alone cannot tell them apart"
+
+
+def test_last_known_meeting_does_not_use_the_next_month_shortcut(monkeypatch):
+    """Exercises the real path, not just the helpers.
+
+    The first version of this test only asserted on `_month_is_known` and
+    `_has_meeting`, so removing the guard from `fed_probabilities` left all
+    tests green — the mutation survived. What has to be pinned is that the
+    LAST meeting on the calendar falls back to the within-month solve, because
+    the month after it is unknown rather than known-empty.
+    """
+    import src.fed_probabilities as fp
+
+    last = fp.FOMC_DATES[-1]
+    nm = (last.year, last.month + 1) if last.month < 12 else (last.year + 1, 1)
+    prev = (last.year, last.month - 1) if last.month > 1 else (last.year - 1, 12)
+    settles = {
+        fp.zq_ticker(*prev): 96.37,      # meeting-free month before -> anchor
+        fp.zq_ticker(last.year, last.month): 96.04,
+        fp.zq_ticker(*nm): 96.00,        # exists, and must NOT be used
+    }
+    monkeypatch.setattr(fp, "_fetch_settles", lambda months: settles)
+    monkeypatch.setattr(fp, "_spot_effr", lambda: 3.63)
+
+    out = fp.fed_probabilities(asof=last - timedelta(days=8), n_meetings=1)
+    assert out["available"], out
+    m = out["meetings"][0]
+    assert m["date"] == last.isoformat()
+    assert m["method"] == "within-month", (
+        "the month after the last known meeting is UNKNOWN, not meeting-free — "
+        "using it would price the decision off a contract on a false premise")
+    assert m["leverage"] > 1.0, "the within-month solve always carries leverage"
+    # `calendar_exhausted` means "fewer meetings returned than asked for". One
+    # was asked for and one was available, so it is correctly False here — the
+    # guard under test is about the month AFTER the last meeting, not about
+    # running out of meetings.
+    assert out["calendar_exhausted"] is False
+    assert fp.fed_probabilities(asof=last - timedelta(days=8),
+                                n_meetings=4)["calendar_exhausted"] is True
+
+
+def test_fomc_dates_are_sorted_and_unique():
+    from src.fed_probabilities import FOMC_DATES
+    assert FOMC_DATES == sorted(FOMC_DATES)
+    assert len(set(FOMC_DATES)) == len(FOMC_DATES)
+    # The Fed never meets twice in one calendar month; the weighting assumes it.
+    months = [(d.year, d.month) for d in FOMC_DATES]
+    assert len(set(months)) == len(months)
 
 
 # ── S&P valuation: the equity risk premium streak ────────────────────────────

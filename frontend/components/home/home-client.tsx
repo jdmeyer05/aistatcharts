@@ -45,6 +45,7 @@ import CtaFlows from "@/components/home/cta-flows";
 import MacroPressure from "@/components/home/macro-pressure";
 import SectorRrgCard from "@/components/home/sector-rrg";
 import SpValuationStrip from "@/components/home/sp-valuation";
+import FedProbabilitiesCard from "@/components/home/fed-probabilities";
 
 function fmtAgo(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -582,7 +583,14 @@ export default function HomeClient() {
         <SectorRrgCard />
         <CtaFlows />
       </div>
-      <MacroPressure />
+      {/* Rate pricing sits beside the macro scorecard because they answer the
+          same swing-horizon question from opposite ends: the scorecard reads
+          the z-score of recent CHANGE in financial conditions, this reads the
+          LEVEL the market expects policy to settle at. */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <MacroPressure />
+        <FedProbabilitiesCard />
+      </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <NewsPanel citations={driverQ.data?.citations} />
         <TweetWatch />
