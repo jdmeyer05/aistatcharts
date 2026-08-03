@@ -1199,19 +1199,24 @@ export default function EsBriefing() {
                 <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
                   Measured base rates
                 </h3>
-                {/* The instrument is named because the overnight study sits a
-                    few inches away on the same card measured on ES futures over
-                    two years, while this is SPY over five. Two percentages side
-                    by side read as one study unless both say what they are. */}
+                {/* This header describes the DAILY study. The intraday path
+                    rates below run on SPY 5-minute bars over a shorter window,
+                    and the overnight study elsewhere on this card is ES futures
+                    over two years — three instruments, three windows. Any one of
+                    them unlabelled and a reader merges them into one number. */}
                 <span className="text-[0.55rem] text-text-muted">
                   {d.base_rates.instrument ?? d.base_rates.source} ·{" "}
-                  {d.base_rates.sessions?.toLocaleString()} cash sessions ·{" "}
+                  {d.base_rates.sessions?.toLocaleString()} sessions ·{" "}
                   {d.base_rates.from} to {d.base_rates.to}
                 </span>
               </div>
-              {d.base_rates.instrument_note && (
+              {d.base_rates.path?.available && d.base_rates.path.instrument && (
                 <p className="text-[0.55rem] text-text-muted leading-snug">
-                  {d.base_rates.instrument_note}
+                  Intraday path rates below are measured on{" "}
+                  <span className="text-text">{d.base_rates.path.instrument}</span>,{" "}
+                  {d.base_rates.path.sessions?.toLocaleString()} sessions
+                  {d.base_rates.path.from ? ` (${d.base_rates.path.from} to ${d.base_rates.path.to})` : ""}
+                  {d.base_rates.path.instrument_note ? ` — ${d.base_rates.path.instrument_note}` : "."}
                 </p>
               )}
 

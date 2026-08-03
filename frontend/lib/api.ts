@@ -3126,12 +3126,11 @@ export interface EsIntraday {
 export interface EsBaseRates {
   available: boolean;
   source?: string;
-  /** What these percentages were measured on. SPY 5-minute bars over five
-   *  years, describing the CASH session — NOT the same instrument or window as
-   *  the overnight study sitting beside it on the card, which is ES futures
-   *  over two years. Both must be labelled or a reader assumes one study. */
+  /** What the DAILY statistics here were measured on. Distinct from
+   *  `path.instrument` (SPY 5-minute bars, a shorter window) and from the ES
+   *  overnight study elsewhere on the card. Three instruments, three windows,
+   *  all rendered as percentages; each must say which it is. */
   instrument?: string;
-  instrument_note?: string;
   window_years?: number;
   sessions?: number;
   from?: string;
@@ -3159,6 +3158,11 @@ export interface EsBaseRates {
     available: boolean;
     reason?: string;
     source?: string;
+    /** SPY 5-minute bars — NOT the daily index study above, and NOT the ES
+     *  overnight study elsewhere on the card. Three instruments, three windows,
+     *  all rendered as percentages; each must say which it is. */
+    instrument?: string;
+    instrument_note?: string;
     sessions?: number;
     from?: string;
     to?: string;

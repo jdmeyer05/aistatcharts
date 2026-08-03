@@ -706,6 +706,11 @@ def base_rates(last: float | None = None, gap_pct: float | None = None,
     return {
         "available": True,
         "source": f"{_INDEX} cash session",
+        # The DAILY study names itself too. Three sets of percentages sit on one
+        # card — these daily rates, the SPY intraday path rates under `path`,
+        # and the ES overnight study — on three different instruments over three
+        # different windows. Any of them unlabelled and a reader merges them.
+        "instrument": f"{_INDEX} daily bars, cash session",
         "window_years": years,
         "sessions": int(len(h)),
         "from": str(h.index.min().date()),
