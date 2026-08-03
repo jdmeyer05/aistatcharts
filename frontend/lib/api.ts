@@ -3053,7 +3053,21 @@ export interface EsGamma {
   available: boolean;
   reason?: string;
   spx_spot?: number;
+  /** When that SPX print is from. Outside cash hours it is a completed
+   *  session, not a live quote. */
+  spx_spot_asof?: string | null;
+  spx_cash_open?: boolean;
+  /** SPX strike + this = the ES level. Measured from two SIMULTANEOUS quotes:
+   *  live during RTH, otherwise carried from the last cash close. Using
+   *  `es_last - spx_spot` outside RTH books the whole move since the bell as
+   *  basis — on the 2026-08-02 reopen that was 26.75 handles, which put the
+   *  call wall 40 handles away when price was 13 handles under it. */
   es_basis?: number | null;
+  es_basis_asof?: string | null;
+  /** False means the basis is carried from the last simultaneous pair, so the
+   *  ES levels map the SPX strikes at THAT relationship rather than a live one.
+   *  Still the right ladder, just not fresh. */
+  es_basis_is_live?: boolean;
   regime?: "long" | "short";
   regime_note?: string;
   total_gex?: number;

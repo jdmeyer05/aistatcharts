@@ -201,15 +201,62 @@ def _gamma_flip(contracts: list[dict], spot: float, ref_day: pd.Timestamp | None
     }
 
 
+_CASH_OPEN = (9, 30)
+_CASH_CLOSE = (16, 0)
+
+
+def _cash_is_open(now: pd.Timestamp) -> bool:
+    """Is the SPX cash index printing right now?"""
+    if now.weekday() >= 5:
+        return False
+    t = (now.hour, now.minute)
+    return _CASH_OPEN <= t < _CASH_CLOSE
+
+
+def _es_at(ts: pd.Timestamp) -> tuple[float | None, pd.Timestamp | None]:
+    """ES price at the moment `ts`, from the last bar at or before it.
+
+    Used to measure the basis from two SIMULTANEOUS quotes. Bars are cached, so
+    on the cockpit path this is a dict lookup rather than a fetch.
+    """
+    try:
+        from src.futures_data import fetch_front_bars
+        bars, _ = fetch_front_bars("ES", resolution="5min", limit=3000)
+        if bars is None or bars.empty:
+            return None, None
+        bars = bars.sort_index()
+        upto = bars.loc[bars.index <= ts]
+        if upto.empty:
+            return None, None
+        return float(upto["Close"].iloc[-1]), upto.index[-1]
+    except Exception as e:
+        logger.debug(f"ES basis anchor failed: {e}")
+        return None, None
+
+
 def dealer_gamma(session_day: pd.Timestamp | None = None,
                  spot: float | None = None,
-                 es_last: float | None = None) -> dict:
-    """SPX dealer gamma: regime, flip level, and the walls that pin price."""
+                 es_last: float | None = None,
+                 spot_asof: pd.Timestamp | None = None) -> dict:
+    """SPX dealer gamma: regime, flip level, and the walls that pin price.
+
+    A caller supplying `spot` should supply `spot_asof` with it. Without the
+    timestamp there is no way to anchor the ES basis on a simultaneous quote,
+    and the conversion silently degrades to the stale subtraction this module
+    exists to avoid.
+    """
     if spot is None:
         try:
             import yfinance as yf
             h = yf.Ticker("^SPX").history(period="5d", interval="1d", auto_adjust=False)
-            spot = float(h["Close"].iloc[-1]) if len(h) else None
+            if len(h):
+                spot = float(h["Close"].iloc[-1])
+                # The DATE of that close matters as much as the value. Outside
+                # cash hours it is a completed session, and the basis below has
+                # to be measured against ES at that same moment.
+                idx = pd.Timestamp(h.index[-1])
+                spot_asof = (idx.tz_convert("America/New_York")
+                             if idx.tzinfo else idx.tz_localize("America/New_York"))
         except Exception as e:
             logger.warning(f"SPX spot failed: {e}")
     if not spot:
@@ -270,7 +317,38 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
 
     # Convert SPX levels to ES using the observed basis, so the numbers can sit
     # on an ES ladder without pretending SPX and ES print the same price.
-    basis = (es_last - spot) if (es_last and spot) else None
+    #
+    # THE BASIS MUST BE MEASURED FROM TWO SIMULTANEOUS QUOTES. `es_last - spot`
+    # is right only while cash is printing. Outside RTH the SPX close is frozen
+    # and ES keeps trading, so that subtraction silently absorbs the whole move
+    # since the bell and reports it as basis — and every ES wall shifts with it.
+    #
+    # Measured on the Sunday 2026-08-02 reopen: ES closed Friday's cash session
+    # at 7522.25 against an SPX close of 7489.72, an observed basis of 32.53. By
+    # 20:20 ET ES was 7549.00 and the old formula returned 59.28 — 26.75 handles
+    # of weekend gap booked as carry. The call wall printed at ES 7589.28 when
+    # the strike actually sits at 7562.53: the card said the wall was 40 handles
+    # away while price was 13 handles under it. That is the difference between
+    # ignoring a level and trading into it, and it fired EVERY overnight and
+    # premarket session, which is the whole window this cockpit is for.
+    now_et = pd.Timestamp.now(tz="America/New_York")
+    basis_is_live = _cash_is_open(now_et)
+    basis = basis_asof = None
+    if basis_is_live and es_last:
+        basis, basis_asof = es_last - spot, now_et
+    elif spot_asof is not None:
+        # Anchor on ES at the cash close of the session `spot` came from.
+        anchor_ts = spot_asof.normalize() + pd.Timedelta(hours=_CASH_CLOSE[0],
+                                                         minutes=_CASH_CLOSE[1])
+        es_then, used_ts = _es_at(anchor_ts)
+        if es_then:
+            basis, basis_asof = es_then - spot, used_ts
+    if basis is None and es_last:
+        # Nothing better available. Still convert — a level on the wrong ladder
+        # is worse than one with a stated caveat — but say the basis is not a
+        # simultaneous measurement so the card can carry the warning.
+        basis, basis_asof, basis_is_live = es_last - spot, None, False
+        logger.info("gamma basis fell back to a non-simultaneous quote pair")
 
     def to_es(x: float | None) -> float | None:
         return round(x + basis, 2) if (x is not None and basis is not None) else None
@@ -279,8 +357,19 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
         "available": True,
         "session_date": str(session_day.date()),
         "spx_spot": round(spot, 2),
+        # When the SPX print is from. Outside cash hours this is a completed
+        # session and the card must say so rather than implying a live quote.
+        "spx_spot_asof": spot_asof.isoformat() if spot_asof is not None else None,
+        "spx_cash_open": basis_is_live,
         "es_last": round(es_last, 2) if es_last else None,
         "es_basis": round(basis, 2) if basis is not None else None,
+        # The moment the two legs of the basis were read. Equal to now while
+        # cash trades; the prior cash close otherwise.
+        "es_basis_asof": basis_asof.isoformat() if basis_asof is not None else None,
+        # False means the basis is carried from the last simultaneous pair, so
+        # the ES levels are the SPX strikes mapped at THAT relationship, not a
+        # live one. They are still the right ladder; they are just not fresh.
+        "es_basis_is_live": bool(basis_is_live and basis is not None),
         "expiries": sorted(per_expiry.keys()),
         "regime": regime,
         "regime_note": regime_note,

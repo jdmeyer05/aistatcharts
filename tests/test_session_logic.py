@@ -627,6 +627,107 @@ def test_heading_is_absent_when_the_dot_has_not_moved():
     assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
 
 
+# ── Dealer gamma: the basis needs two SIMULTANEOUS quotes ────────────────────
+# `es_last - spot` is right only while cash prints. Outside RTH the SPX close is
+# frozen and ES keeps trading, so that subtraction books the whole move since
+# the bell as basis and shifts every ES wall with it.
+
+@pytest.mark.parametrize("ts, is_open", [
+    ("2026-08-03 09:29", False),   # one minute before the bell
+    ("2026-08-03 09:30", True),
+    ("2026-08-03 12:00", True),
+    ("2026-08-03 15:59", True),
+    ("2026-08-03 16:00", False),   # the close itself is not open
+    ("2026-08-03 20:30", False),   # Globex, cash long shut
+    ("2026-08-01 12:00", False),   # Saturday
+    ("2026-08-02 19:00", False),   # Sunday reopen
+])
+def test_cash_open_window(ts, is_open):
+    from src.dealer_gamma import _cash_is_open
+    assert _cash_is_open(pd.Timestamp(ts, tz="America/New_York")) is is_open
+
+
+def test_basis_uses_the_prior_cash_close_when_cash_is_shut(monkeypatch):
+    """Measured on the Sunday 2026-08-02 reopen: ES closed Friday's cash session
+    at 7522.25 against SPX 7489.72, an observed basis of 32.53. By 20:20 ET ES
+    was 7549.00 and the old formula returned 59.28 — 26.75 handles of weekend
+    gap booked as carry, moving every wall by that much."""
+    import src.dealer_gamma as dg
+
+    spx_close, es_at_close, es_now = 7489.72, 7522.25, 7549.00
+    anchor = pd.Timestamp("2026-07-31 16:00", tz="America/New_York")
+    monkeypatch.setattr(dg, "_cash_is_open", lambda now: False)
+    monkeypatch.setattr(dg, "_es_at", lambda ts: (es_at_close, anchor))
+
+    # The selection logic, exercised exactly as dealer_gamma runs it.
+    spot_asof = pd.Timestamp("2026-07-31", tz="America/New_York")
+    basis_is_live = dg._cash_is_open(pd.Timestamp.now(tz="America/New_York"))
+    assert basis_is_live is False
+    es_then, used = dg._es_at(spot_asof.normalize() + pd.Timedelta(hours=16))
+    basis = es_then - spx_close
+    assert basis == pytest.approx(32.53, abs=0.01)
+    assert basis != pytest.approx(es_now - spx_close), "that is the stale formula"
+    assert (es_now - spx_close) - basis == pytest.approx(26.75, abs=0.01)
+    assert used == anchor
+
+
+def _stub_gamma_chain(monkeypatch):
+    """Stub the chain so dealer_gamma runs end to end without a network call."""
+    import src.dealer_gamma as dg
+    monkeypatch.setattr(dg, "_upcoming_expiries", lambda d: ["2026-08-03"])
+    monkeypatch.setattr(dg, "_fetch_chain", lambda e, s: [{"stub": True}])
+    monkeypatch.setattr(dg, "_gex_by_strike",
+                        lambda c, s: {"2026-08-03": {7400.0: -2e9, 7530.0: 8e9}})
+    return dg
+
+
+def test_dealer_gamma_anchors_the_basis_when_cash_is_shut(monkeypatch):
+    """End to end, not just the helper. The first version of this test patched
+    _cash_is_open and asserted on the arithmetic, so forcing basis_is_live=True
+    inside dealer_gamma left every test green — the mutation survived."""
+    dg = _stub_gamma_chain(monkeypatch)
+    anchor = pd.Timestamp("2026-07-31 16:00", tz="America/New_York")
+    monkeypatch.setattr(dg, "_cash_is_open", lambda now: False)
+    monkeypatch.setattr(dg, "_es_at", lambda ts: (7522.25, anchor))
+
+    out = dg.dealer_gamma(
+        session_day=pd.Timestamp("2026-08-03", tz="America/New_York"),
+        spot=7489.72, spot_asof=pd.Timestamp("2026-07-31", tz="America/New_York"),
+        es_last=7549.00)
+
+    assert out["available"], out
+    assert out["es_basis"] == pytest.approx(32.53, abs=0.01), (
+        "must use ES at the cash close, not the live Globex price")
+    assert out["es_basis"] != pytest.approx(7549.00 - 7489.72, abs=0.01)
+    assert out["es_basis_is_live"] is False
+    assert out["spx_cash_open"] is False
+    assert out["es_basis_asof"] == anchor.isoformat()
+    # And the walls must move with it.
+    assert out["call_wall_es"] == pytest.approx(out["call_wall_spx"] + 32.53, abs=0.01)
+
+
+def test_dealer_gamma_uses_the_live_basis_during_the_cash_session(monkeypatch):
+    dg = _stub_gamma_chain(monkeypatch)
+    monkeypatch.setattr(dg, "_cash_is_open", lambda now: True)
+    monkeypatch.setattr(dg, "_es_at", lambda ts: (7522.25, None))
+    out = dg.dealer_gamma(
+        session_day=pd.Timestamp("2026-08-03", tz="America/New_York"),
+        spot=7500.0, spot_asof=pd.Timestamp("2026-08-03", tz="America/New_York"),
+        es_last=7530.0)
+    assert out["es_basis"] == pytest.approx(30.0), "both legs print together"
+    assert out["es_basis_is_live"] is True
+    assert out["spx_cash_open"] is True
+
+
+def test_basis_stays_live_during_the_cash_session():
+    """During RTH both legs print together, so the plain subtraction is right
+    and must not be replaced by a carried one."""
+    from src.dealer_gamma import _cash_is_open
+    assert _cash_is_open(pd.Timestamp("2026-08-03 11:00", tz="America/New_York"))
+    spot, es_last = 7500.0, 7530.0
+    assert es_last - spot == pytest.approx(30.0)
+
+
 # ── Futures contract lookup: server clock vs exchange clock ──────────────────
 # Cloud Run runs in UTC. From 20:00 ET until midnight ET the container already
 # believes it is tomorrow, and the vendor's contracts endpoint returns an EMPTY

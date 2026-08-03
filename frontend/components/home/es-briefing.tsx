@@ -926,6 +926,18 @@ export default function EsBriefing() {
                     )}
                   </div>
                   <p className="text-[0.6rem] text-text leading-snug">{d.gamma.regime_note}</p>
+                  {/* The ES levels below are SPX strikes plus a basis. While
+                      cash is shut that basis is carried from the last close, so
+                      say so — an undated conversion reads as live. */}
+                  {d.gamma.es_basis != null && d.gamma.es_basis_is_live === false && (
+                    <p className="text-[0.58rem] text-text-muted leading-snug">
+                      ES levels use a {d.gamma.es_basis.toFixed(2)} basis carried from the last cash
+                      close{d.gamma.spx_spot_asof
+                        ? ` (${new Date(d.gamma.spx_spot_asof).toLocaleDateString("en-US", { month: "short", day: "numeric" })})`
+                        : ""} — SPX is not printing now, so the strikes are mapped at that
+                      relationship rather than a live one.
+                    </p>
+                  )}
                   <div className="space-y-0.5 text-[0.62rem] tabular-nums pt-0.5">
                     {d.gamma.call_wall_es != null && (
                       <div className="flex justify-between gap-2" title="Heaviest call gamma above spot — a magnet and a level price struggles through.">
