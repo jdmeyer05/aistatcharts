@@ -8,16 +8,19 @@ import { ChartCard } from "@/components/ui/chart-card";
 import { AIInterpretation } from "@/components/ai-interpretation";
 import {
   fetchCapacityAdditions,
+  fetchCapitalFinancing,
   fetchCapitalReference,
   fetchGridLoad,
   type CapacityAdditions,
+  type CapitalFinancing,
+  type CapitalIssuer,
   type CapitalReference,
   type GridLoad,
   type GridLoadRow,
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout, getPlotConfig, useIsMobile, CHART_HEIGHT } from "@/lib/chart-theme";
 
-const TABS = ["Chain Overview", "Grid Reality", "Capacity Additions"] as const;
+const TABS = ["Chain Overview", "Grid Reality", "Capacity Additions", "Capital & Financing"] as const;
 type Tab = (typeof TABS)[number];
 
 const STALE = 60 * 60_000; // these series move monthly at best
@@ -28,6 +31,14 @@ export default function AiInfrastructurePage() {
   const gridQ = useQuery({ queryKey: ["ai-infra-grid"], queryFn: () => fetchGridLoad(), staleTime: STALE });
   const capQ = useQuery({ queryKey: ["ai-infra-capacity"], queryFn: () => fetchCapacityAdditions(), staleTime: STALE });
   const refQ = useQuery({ queryKey: ["ai-infra-capital"], queryFn: () => fetchCapitalReference(), staleTime: STALE });
+  // Only fetched once the tab is opened — ~30 EDGAR calls cold, and the other
+  // three tabs have no use for it.
+  const finQ = useQuery({
+    queryKey: ["ai-infra-financing"],
+    queryFn: () => fetchCapitalFinancing(),
+    staleTime: STALE,
+    enabled: tab === "Capital & Financing",
+  });
 
   return (
     <div className="space-y-5">
@@ -70,6 +81,7 @@ export default function AiInfrastructurePage() {
       {tab === "Chain Overview" && <ChainOverview gridQ={gridQ} capQ={capQ} refQ={refQ} />}
       {tab === "Grid Reality" && <GridReality query={gridQ} />}
       {tab === "Capacity Additions" && <CapacityTab query={capQ} />}
+      {tab === "Capital & Financing" && <CapitalTab query={finQ} />}
     </div>
   );
 }
@@ -856,6 +868,197 @@ function CapacityTab({ query }: { query: ReturnType<typeof useQuery<CapacityAddi
       <Provenance source={d.source} caveat={d.caveat} />
       <AIInterpretation page="ai-infra-capacity" subject="realised generation additions" data={d} />
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────
+   TAB 4 — Capital & Financing
+
+   Tab 1 carries what these companies SAY they will spend. This carries what
+   they have actually paid and how it was funded, from 10-K line items. The gap
+   between the two is the same announced-versus-realised gap the physical tabs
+   measure, applied to the financial chain.
+   ───────────────────────────────────────────────────────────── */
+
+/** Dollars in billions. `null` renders blank, never zero — an untagged concept
+ *  is an unknown, and "$0.0bn" is a claim the filing does not make. */
+const bn = (v: number | null | undefined, d = 1) =>
+  v == null ? "—" : `$${v.toFixed(d)}bn`;
+
+function CapitalTab({ query }: { query: ReturnType<typeof useQuery<CapitalFinancing, Error>> }) {
+  const { data, isPending, error } = query;
+
+  const derived = useMemo(() => {
+    if (!data?.issuers?.length) return null;
+    const rows = data.issuers;
+    const sub = data.calendar_year_subtotal;
+    const selfFunded =
+      sub.capex_usd_bn && sub.operating_cash_flow_usd_bn
+        ? (sub.capex_usd_bn / sub.operating_cash_flow_usd_bn) * 100
+        : null;
+    // Issuers whose plant spending exceeded the cash the business generated.
+    // The difference has to be financed, which is what the balance-sheet
+    // columns are there to show.
+    const outspending = rows.filter(
+      (r) => r.capex_to_ocf_pct != null && r.capex_to_ocf_pct > 100
+    );
+    const obligations = rows
+      .filter((r) => r.purchase_obligations_tagged && r.purchase_obligations_usd_bn != null)
+      .reduce((a, r) => a + (r.purchase_obligations_usd_bn ?? 0), 0);
+    const filers = rows.filter((r) => r.purchase_obligations_tagged).length;
+    return { rows, sub, selfFunded, outspending, obligations, filers };
+  }, [data]);
+
+  if (error) return <ErrorBox msg={`Capital and financing failed to load: ${error.message}`} />;
+  if (isPending || !derived) return <Loading h={520} />;
+
+  const { rows, sub, selfFunded, outspending, obligations, filers } = derived;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <Kpi
+          label={`Filed capex — ${sub.entities.length} filers`}
+          value={bn(sub.capex_usd_bn)}
+          sub={`${sub.entities.join(" · ")}, same fiscal year. Cash actually paid for property and equipment, not guidance.`}
+          tone="accent"
+        />
+        <Kpi
+          label="Funded from operations"
+          value={selfFunded == null ? "—" : `${selfFunded.toFixed(0)}%`}
+          sub="Capex as a share of operating cash flow. Under 100% the build is paid for out of what the business generates."
+          tone={selfFunded != null && selfFunded > 100 ? "loss" : "neutral"}
+        />
+        <Kpi
+          label="Outspending cash generated"
+          value={`${outspending.length} of ${rows.length}`}
+          sub={
+            outspending.length
+              ? `${outspending.map((r) => `${r.entity} ${r.capex_to_ocf_pct?.toFixed(0)}%`).join(", ")} — the excess is financed, not funded.`
+              : "Every issuer covered its capex from operating cash flow."
+          }
+          tone={outspending.length ? "loss" : "gain"}
+        />
+        {/* With no filer tagging the concept the sum is 0, and "$0.0bn" would
+            assert that none of them has any such obligation. Blank instead. */}
+        <Kpi
+          label="Committed, unrecorded"
+          value={filers ? bn(obligations) : "—"}
+          sub={
+            filers
+              ? `Unconditional purchase obligations disclosed by ${filers} of ${rows.length} filers — contracted spending that is not yet a balance-sheet liability.`
+              : "No filer in this set tags unconditional purchase obligations, so the total is unknown rather than zero."
+          }
+        />
+      </div>
+
+      <div className="card p-4 space-y-2">
+        <div className="text-[0.65rem] font-bold uppercase tracking-wider text-text-muted">
+          What ties out, and what does not
+        </div>
+        <p className="text-sm text-accent font-semibold">
+          Capex here is filed rather than guided, and it has risen sharply at every issuer.
+        </p>
+        <p className="text-sm text-accent font-semibold">
+          The build is still mostly funded from operations, with the balance sheet carrying the rest.
+        </p>
+        <p className="text-sm text-accent font-semibold">
+          Contracted spending not yet recorded is large against a single year of capex.
+        </p>
+        <p className="text-xs text-text-muted leading-relaxed pt-2 border-t border-border">
+          These are total property and equipment purchases. No filer breaks out an AI or
+          data-centre line, so each figure includes whatever else that company is building.
+          A blank is a concept the filer does not tag, which is an unknown rather than a zero
+          {data.untagged_entities.length > 0
+            ? ` — ${data.untagged_entities.join(", ")} ${data.untagged_entities.length === 1 ? "does" : "do"} not tag every concept shown.`
+            : "."}
+        </p>
+      </div>
+
+      <div className="card p-3 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-text-muted border-b border-border">
+              <th className="text-left font-semibold py-2 pr-3">Issuer</th>
+              <th className="text-left font-semibold py-2 pr-3">Fiscal year</th>
+              <th className="text-right font-semibold py-2 px-2">Capex</th>
+              <th className="text-right font-semibold py-2 px-2">YoY</th>
+              <th className="text-right font-semibold py-2 px-2">Op. cash flow</th>
+              <th className="text-right font-semibold py-2 px-2">Capex / OCF</th>
+              <th className="text-right font-semibold py-2 px-2">Free cash flow</th>
+              <th className="text-right font-semibold py-2 px-2">LT debt</th>
+              <th className="text-right font-semibold py-2 px-2">Finance leases</th>
+              <th className="text-right font-semibold py-2 px-2">Op. leases</th>
+              <th className="text-right font-semibold py-2 pl-2">Purchase oblig.</th>
+            </tr>
+          </thead>
+          <tbody className="font-data">
+            {rows.map((r) => (
+              <CapitalRow key={r.cik} r={r} />
+            ))}
+          </tbody>
+        </table>
+        <p className="text-[0.65rem] text-text-muted mt-3 leading-relaxed">
+          {sub.note} Each row covers that issuer&apos;s own fiscal year, shown beside it. Figures
+          are as filed; where a period has been restated the latest filed version is used.
+        </p>
+      </div>
+
+      <Provenance source={data.source} caveat={data.caveat} />
+    </div>
+  );
+}
+
+function CapitalRow({ r }: { r: CapitalIssuer }) {
+  const ratio = r.capex_to_ocf_pct;
+  // Only the crossing is coloured. Spending more than the business generated is
+  // a different financing question, not a worse company.
+  const ratioTone = ratio == null ? "text-text-muted" : ratio > 100 ? "text-loss" : "text-text";
+  const fcfTone =
+    r.free_cash_flow_usd_bn == null
+      ? "text-text-muted"
+      : r.free_cash_flow_usd_bn < 0
+        ? "text-loss"
+        : "text-text";
+
+  /** Untagged renders as words, not a dash, so a blank cell can never be read
+   *  as a zero balance. */
+  const cell = (value: number | null, tagged: boolean) =>
+    tagged && value != null ? (
+      bn(value)
+    ) : (
+      <span
+        className="text-text-muted/50 text-[0.65rem]"
+        title={`${r.entity} does not tag this concept in its filings — unknown, not zero.`}
+      >
+        not tagged
+      </span>
+    );
+
+  return (
+    <tr className="border-b border-border/50 last:border-0">
+      <td className="py-2 pr-3 font-sans">
+        <span className="font-semibold">{r.entity}</span>{" "}
+        <span className="text-text-muted text-[0.65rem]">{r.ticker}</span>
+      </td>
+      <td className="py-2 pr-3 text-text-muted text-[0.65rem] whitespace-nowrap">
+        {r.period_start?.slice(0, 7)} → {r.period_end?.slice(0, 7)}
+        <span className="ml-1 opacity-70">{r.form}</span>
+      </td>
+      <td className="py-2 px-2 text-right font-semibold">{bn(r.capex_usd_bn)}</td>
+      <td className="py-2 px-2 text-right">{pct(r.capex_growth_pct, 0)}</td>
+      <td className="py-2 px-2 text-right">{bn(r.operating_cash_flow_usd_bn)}</td>
+      <td className={`py-2 px-2 text-right font-semibold ${ratioTone}`}>
+        {ratio == null ? "—" : `${ratio.toFixed(0)}%`}
+      </td>
+      <td className={`py-2 px-2 text-right ${fcfTone}`}>{bn(r.free_cash_flow_usd_bn)}</td>
+      <td className="py-2 px-2 text-right">{cell(r.long_term_debt_usd_bn, r.long_term_debt_tagged)}</td>
+      <td className="py-2 px-2 text-right">{cell(r.finance_lease_usd_bn, r.finance_lease_tagged)}</td>
+      <td className="py-2 px-2 text-right">{cell(r.operating_lease_usd_bn, r.operating_lease_tagged)}</td>
+      <td className="py-2 pl-2 text-right">
+        {cell(r.purchase_obligations_usd_bn, r.purchase_obligations_tagged)}
+      </td>
+    </tr>
   );
 }
 
