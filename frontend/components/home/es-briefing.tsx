@@ -915,6 +915,78 @@ export default function EsBriefing() {
                       </div>
                     ))}
                   </div>
+
+                  {/* SESSION CHARACTER. Every estimate above is fixed at the
+                      open and cannot move once an unscheduled event starts —
+                      2026-08-03 ran 79 handles against a VIX1D-implied 54 with
+                      nothing on the card able to say so mid-session. This one
+                      is measured from the range actually delivered. It carries
+                      its own out-of-sample error rather than a confidence word. */}
+                  {d.regime?.path_implied?.available && (
+                    <div className="pt-1.5 mt-1.5 border-t border-border space-y-0.5">
+                      <div className="flex items-baseline gap-1.5">
+                        <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                          Session character
+                        </span>
+                        <span
+                          className={`text-[0.6rem] font-bold uppercase ${
+                            d.regime.character === "wide" ? "text-loss"
+                              : d.regime.character === "compressed" ? "text-accent" : "text-text"
+                          }`}
+                        >
+                          {d.regime.character}
+                        </span>
+                        {d.regime.path_implied.multiplier != null && (
+                          <span className="text-[0.6rem] tabular-nums text-text font-semibold">
+                            {d.regime.path_implied.multiplier.toFixed(2)}× normal
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[0.6rem] text-text-muted tabular-nums">
+                        {d.regime.path_implied.range_so_far?.toFixed(0)} handles in by{" "}
+                        {d.regime.path_implied.slot} · a typical session has{" "}
+                        {d.regime.path_implied.typical_pct_covered?.toFixed(0)}% of its range by
+                        then · implies {d.regime.path_implied.implied_range?.toFixed(0)} for the
+                        session against a normal {d.regime.path_implied.normal_range?.toFixed(0)}
+                      </div>
+                      <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                        Measured from this session&apos;s own range, not priced at the open —
+                        the estimates above cannot move once the day is underway. Median error
+                        at this hour is {d.regime.path_implied.oos_mae_pct?.toFixed(0)}% out of
+                        sample.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Dispersion speaks only before the first bucket closes —
+                      the one window the path estimate cannot cover. Shown with
+                      its own base rate attached because the lift is modest and
+                      the sample is small; it never sets an expected range. */}
+                  {d.regime?.dispersion?.available &&
+                    !d.regime.path_implied?.available &&
+                    (d.regime.dispersion.outliers?.length ?? 0) > 0 && (
+                      <div className="pt-1.5 mt-1.5 border-t border-border space-y-0.5">
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                            Overnight dispersion
+                          </span>
+                          <span className="text-[0.6rem] font-bold uppercase text-text">
+                            {d.regime.dispersion.band}
+                          </span>
+                        </div>
+                        <div className="text-[0.6rem] text-text-muted">
+                          {d.regime.dispersion.outliers?.slice(0, 3).map((o) => (
+                            <span key={o.symbol} className="mr-2 tabular-nums">
+                              {o.label} {o.z > 0 ? "+" : ""}
+                              {o.z.toFixed(1)}σ
+                            </span>
+                          ))}
+                        </div>
+                        <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                          {d.regime.dispersion.note} {d.regime.dispersion.caveat}
+                        </p>
+                      </div>
+                    )}
                   {d.expected_move.vol_regime && (
                     <p className="text-[0.58rem] text-text-muted leading-snug" title={d.expected_move.vol_regime.note}>
                       IV {d.expected_move.vol_regime.implied.toFixed(1)} vs RV{" "}
