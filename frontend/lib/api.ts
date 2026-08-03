@@ -3301,7 +3301,13 @@ export interface EsConditions {
   score: number | null;
   verdict: string;
   note: string;
-  reasons: Array<{ factor: string; effect: number; why: string }>;
+  /** `surface` marks a factor that scored 0 for a stated REASON rather than
+   *  because it agreed — the card renders those as text, not a tooltip. */
+  reasons: Array<{ factor: string; effect: number; why: string; surface?: boolean }>;
+  /** How much of the gate was readable. A -2 from two factors and a -2 from six
+   *  are not the same statement. */
+  factors_scored?: number | null;
+  factors_zero_effect?: number | null;
   disclaimer?: string;
 }
 
@@ -3397,6 +3403,9 @@ export interface EsBrief {
    *  fails — the headline list below it stands on its own either way. */
   news_digest?: { text?: string; model?: string; cached?: boolean; n_headlines?: number } | null;
   levels?: EsLevels | null;
+  /** Why `levels` is null, when it is. A feed outage and an empty session read
+   *  identically on the card without this. */
+  levels_reason?: string | null;
   cta?: {
     bias_1w?: CtaBias;
     current_exposure?: number;
@@ -4464,4 +4473,52 @@ export interface CapitalReference {
 
 export async function fetchCapitalReference(): Promise<CapitalReference> {
   return apiFetch("/api/ai-infra/capital-reference");
+}
+
+/** One issuer's filed capital position. Every `*_tagged` flag false means the
+ *  filer does not tag that concept — render a blank, never a zero. */
+export interface CapitalIssuer {
+  entity: string;
+  ticker: string;
+  cik: number;
+  fiscal_year_end: string;
+  period_start: string | null;
+  period_end: string | null;
+  filed: string | null;
+  form: string | null;
+  period_is_stale: boolean;
+  concepts: Record<string, string | null>;
+  capex_usd_bn: number | null;
+  capex_prior_usd_bn: number | null;
+  capex_growth_pct: number | null;
+  operating_cash_flow_usd_bn: number | null;
+  /** Above 100% the build outruns the cash the business generates. */
+  capex_to_ocf_pct: number | null;
+  free_cash_flow_usd_bn: number | null;
+  long_term_debt_usd_bn: number | null;
+  long_term_debt_tagged: boolean;
+  finance_lease_usd_bn: number | null;
+  finance_lease_tagged: boolean;
+  operating_lease_usd_bn: number | null;
+  operating_lease_tagged: boolean;
+  purchase_obligations_usd_bn: number | null;
+  purchase_obligations_tagged: boolean;
+}
+
+export interface CapitalFinancing {
+  available: boolean;
+  issuers: CapitalIssuer[];
+  calendar_year_subtotal: {
+    entities: string[];
+    capex_usd_bn: number | null;
+    operating_cash_flow_usd_bn: number | null;
+    note: string;
+  };
+  untagged_entities: string[];
+  source: string;
+  caveat: string;
+}
+
+export async function fetchCapitalFinancing(): Promise<CapitalFinancing> {
+  return apiFetch("/api/ai-infra/capital-financing");
 }

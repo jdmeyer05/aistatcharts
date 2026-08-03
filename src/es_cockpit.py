@@ -34,7 +34,7 @@ def _level(levels: list[dict], key: str) -> dict | None:
 
 def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
                     session: dict, schedule: list[dict],
-                    breadth: dict | None = None) -> dict:
+                    breadth: dict | None = None, candles: dict | None = None) -> dict:
     """Is this session worth trading, on conditions alone?
 
     Scored from independent factors, each of which can only ever ADD or SUBTRACT
@@ -76,10 +76,44 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
         reasons.append({"factor": "Market closed", "effect": 0,
                         "why": "Nothing to trade — this is preparation for the next session."})
 
+    # THE TWO EXPECTED-MOVE FACTORS SHARE ONE INPUT, so they can charge the
+    # session twice for a single observation. `consumed.pct` is the realised
+    # range divided by the same implied range that "narrow expected move" tests:
+    # an implied figure that is too small makes the day look both airless AND
+    # already spent. Observed 2026-08-03 — VIX1D priced 54 handles, the
+    # bar-conditioned study priced 71, and the pair supplied -4 of a -7 that
+    # tripped the stand-aside band on a session the second estimator called
+    # ordinary (63 of 71 handles, 89% spent).
+    #
+    # `range_divergence` is the check. It is a second estimate of the SAME
+    # quantity — the session's high-low — built from unrelated inputs: what
+    # options are paying versus how bars conditioned like today's actually
+    # resolved. Neither is the truth, and this module has no claim to which is
+    # the better forecast. So when they disagree materially the shared input is
+    # CONTESTED, and the factors resting on it abstain rather than score. That is
+    # the call the card already makes for credit-vs-equity and NYSE TICK: an
+    # honest abstention beats a confident -4 built on whichever estimator happens
+    # to be wired in as the headline.
+    div = ((candles or {}).get("vs_implied") or {})
+    empirical_range = div.get("empirical_p50")
+    contested = div.get("label") in ("implied cheap", "implied rich")
+    contest_why = (
+        f"Options price {div.get('implied_range', 0):.0f} handles for the session; bars "
+        f"conditioned like today's have delivered {div.get('empirical_p50', 0):.0f} "
+        f"({div.get('ratio', 0):.2f}x, {div.get('label')}). Both room-to-run factors rest on "
+        "this one number, so they abstain rather than score a contested input."
+    ) if contested else None
+
     # Expected move. A day priced for nothing rarely delivers a trend.
     headline = (em or {}).get("headline") or {}
     em_pct = headline.get("pct")
-    if em_pct is not None:
+    if contested and em_pct is not None:
+        # `surface` — an abstention that changes the verdict has to be readable on
+        # the card, not parked in a tooltip. A factor scoring 0 for a REASON is
+        # different information from one scoring 0 because it agreed.
+        reasons.append({"factor": "Expected move contested", "effect": 0,
+                        "why": contest_why, "surface": True})
+    elif em_pct is not None:
         if em_pct >= 1.0:
             score += 2
             reasons.append({"factor": "Wide expected move", "effect": +2,
@@ -89,21 +123,52 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
             reasons.append({"factor": "Narrow expected move", "effect": -2,
                             "why": f"Priced for only {em_pct:.2f}% — little room before the day is done."})
 
-    # How much of it is already spent.
+    # How much of it is already spent — measured against BOTH estimators, and
+    # scored only where they agree. Against the implied range alone this fires
+    # whenever the implied range is small, which is the coupling described above.
     consumed = (em or {}).get("consumed") or {}
     cpct = consumed.get("pct")
+    realised = consumed.get("range")
+    cpct_emp = (realised / empirical_range * 100) if (realised and empirical_range) else None
     if cpct is not None and phase.startswith("rth"):
-        if cpct >= 110:
+        both = [p for p in (cpct, cpct_emp) if p is not None]
+        emp_note = (f" (against the bar-conditioned {empirical_range:.0f}-handle estimate it is "
+                    f"{cpct_emp:.0f}%)") if cpct_emp is not None else ""
+        if min(both) >= 110:
             score -= 2
             reasons.append({"factor": "Range spent", "effect": -2,
-                            "why": f"{cpct:.0f}% of the expected range already covered — chasing here pays up."})
-        elif cpct <= 40:
+                            "why": f"{cpct:.0f}% of the expected range already covered{emp_note} — "
+                                   "chasing here pays up."})
+        elif max(both) <= 40:
             score += 1
             reasons.append({"factor": "Range still available", "effect": +1,
-                            "why": f"Only {cpct:.0f}% of the expected range used."})
+                            "why": f"Only {cpct:.0f}% of the expected range used{emp_note}."})
+        elif cpct_emp is not None and (cpct >= 110 or cpct <= 40):
+            # One estimator clears the threshold and the other does not. The
+            # session is only "spent" or "coiled" if both say so.
+            # Wording stays direction-neutral: this branch fires both when the
+            # implied range is the smaller estimate and when it is the larger,
+            # and "but only 130%" reads as nonsense in the second case.
+            reasons.append({"factor": "Range spent — estimators disagree", "effect": 0,
+                            "why": f"{cpct:.0f}% of the options-implied range is covered against "
+                                   f"{cpct_emp:.0f}% of the range bars like today's have delivered. "
+                                   "The two estimators disagree, and one reading is not enough to "
+                                   "score the session on.",
+                            "surface": True})
 
-    # Dealer gamma regime.
-    if (gamma or {}).get("available"):
+    # Dealer gamma regime. The layer that actually drives intraday hedging is the
+    # 0DTE book, and on a weekend or holiday reopen it is not populated yet —
+    # observed 2026-08-02, where the block read "LONG GAMMA · 0DTE 0%" off Friday's
+    # later expiries and still paid -1 into a score with only two readable factors.
+    # The profile is worth SHOWING; it is not worth SCORING an intraday session on
+    # when the dominant layer is absent from it.
+    if (gamma or {}).get("available") and not (gamma or {}).get("zero_dte_share"):
+        reasons.append({"factor": "Dealer gamma — no 0DTE book", "effect": 0,
+                        "why": "The chain carries no 0DTE open interest for this session, so the "
+                               "layer that dominates intraday hedging is missing. The regime shown "
+                               "is built on later expiries and does not score the session.",
+                        "surface": True})
+    elif (gamma or {}).get("available"):
         if gamma.get("regime") == "short":
             score += 2
             reasons.append({"factor": "Short gamma", "effect": +2,
@@ -191,6 +256,11 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
             "note": ("Nothing to trade. The factors below are what the next session is "
                      "setting up with, as it stands now."),
             "reasons": sorted(reasons, key=lambda r: r["effect"]),
+            # Same shape as the live return below — the card reads these fields
+            # unconditionally, and an early return that omits them makes a
+            # closed session look like an older API build.
+            "factors_scored": sum(1 for r in reasons if r["effect"] != 0),
+            "factors_zero_effect": sum(1 for r in reasons if r["effect"] == 0),
             "disclaimer": ("Conditions only — this says whether the session suits intraday "
                            "trading, never which way to lean."),
         }
@@ -202,12 +272,24 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
     # more common regime and midday is a third of the session, so the strongest
     # warning is reserved for -5 or worse, where several factors are hostile at
     # once, rather than firing on an ordinary quiet afternoon.
+    n_scored = sum(1 for r in reasons if r["effect"] != 0)
+
     if score >= 4:
         verdict, note = "favourable", ("Conditions line up for intraday work. This is when to take "
                                        "the setups you actually wait for.")
     elif score >= -1:
         verdict, note = "workable", "Nothing exceptional either way. Be selective."
-    elif score >= -4:
+    # "Several conditions are hostile at once" is a statement about a CONJUNCTION,
+    # so it needs several conditions to have been readable. A Sunday reopen scores
+    # two factors and a live midday session scores five or six, and they should
+    # not be able to reach the same verdict off the same number.
+    #
+    # THIS FLOOR CANNOT CURRENTLY BIND, and that is deliberate rather than an
+    # oversight: no single factor is worth more than 2, so two factors bottom out
+    # at -4, which lands in "poor" on the score alone. It is here so that adding a
+    # factor worth -3 later cannot silently let a two-reading card issue the
+    # strongest warning on the page. Do not delete it as dead code.
+    elif score >= -4 or n_scored < 3:
         verdict, note = "poor", ("Conditions are working against you. Smaller size, or wait for "
                                  "a specific level rather than trading the middle.")
     else:
@@ -220,6 +302,13 @@ def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
         "verdict": verdict,
         "note": note,
         "reasons": sorted(reasons, key=lambda r: r["effect"]),
+        # How much of the gate was actually readable. A -2 from two factors and a
+        # -2 from six are not the same statement, and the card should be able to
+        # say which one it is showing. The zero-effect count mixes true
+        # abstentions with neutral confirmations ("breadth confirms") — it counts
+        # factors that did not move the score, not factors that could not be read.
+        "factors_scored": n_scored,
+        "factors_zero_effect": sum(1 for r in reasons if r["effect"] == 0),
         "disclaimer": ("Conditions only — this says whether the session suits intraday trading, "
                        "never which way to lean."),
     }
