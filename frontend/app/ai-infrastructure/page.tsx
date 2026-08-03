@@ -41,6 +41,16 @@ export default function AiInfrastructurePage() {
         </p>
       </header>
 
+      {/* Says loading / failed / refreshing before any tile is read. Three
+          queries feed this page and they fail independently. */}
+      <PageStatus
+        queries={[
+          { name: "grid load", q: gridQ },
+          { name: "capacity additions", q: capQ },
+          { name: "capital reference", q: refQ },
+        ]}
+      />
+
       <nav className="flex flex-wrap gap-1 border-b border-border">
         {TABS.map((tb) => (
           <button
@@ -69,22 +79,91 @@ export default function AiInfrastructurePage() {
    ───────────────────────────────────────────────────────────── */
 
 function Kpi({
-  label, value, sub, tone = "neutral",
+  label, value, sub, tone = "neutral", pending = false, error,
 }: {
   label: string;
   value: string;
   sub?: string;
   tone?: "gain" | "loss" | "neutral" | "accent";
+  /** Still fetching. A tile MUST NOT show "—" while loading: an em-dash is a
+   *  statement that the number is absent, and it reads identically to a failed
+   *  request and to a genuinely empty result. */
+  pending?: boolean;
+  error?: string | null;
 }) {
   const color =
     tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : tone === "accent" ? "text-accent" : "text-text";
   return (
     <div className="card p-3">
       <div className="text-[0.65rem] font-bold uppercase tracking-wider text-text-muted mb-1">{label}</div>
-      <div className={`text-xl font-bold font-data ${color}`}>{value}</div>
-      {sub && <div className="text-[0.65rem] text-text-muted mt-1 leading-snug">{sub}</div>}
+      {pending ? (
+        <>
+          <div className="h-7 w-24 rounded animate-pulse bg-text-muted/20" />
+          <div className="text-[0.6rem] text-text-muted mt-1">loading…</div>
+        </>
+      ) : error ? (
+        <>
+          <div className="text-xl font-bold font-data text-loss">—</div>
+          <div className="text-[0.6rem] text-loss mt-1 leading-snug">couldn&apos;t load: {error}</div>
+        </>
+      ) : (
+        <>
+          <div className={`text-xl font-bold font-data ${color}`}>{value}</div>
+          {sub && <div className="text-[0.65rem] text-text-muted mt-1 leading-snug">{sub}</div>}
+        </>
+      )}
     </div>
   );
+}
+
+/** One line saying whether the page is loading, broken, or showing real data.
+ *  Three independent queries feed it and they can fail separately, so a single
+ *  "—" on a tile never told a reader which of those they were looking at. */
+function PageStatus({ queries }: { queries: { name: string; q: { isPending: boolean; isFetching: boolean; error: Error | null; refetch: () => void } }[] }) {
+  const pending = queries.filter((x) => x.q.isPending);
+  const failed = queries.filter((x) => x.q.error);
+  const refreshing = queries.filter((x) => !x.q.isPending && x.q.isFetching);
+
+  if (failed.length) {
+    return (
+      <div className="card p-3 border-l-4 border-l-loss space-y-1">
+        <div className="text-xs font-bold text-loss">
+          {failed.length} of {queries.length} data sources failed to load
+        </div>
+        {failed.map(({ name, q }) => (
+          <div key={name} className="text-[0.7rem] text-text-muted">
+            <span className="text-text">{name}</span>: {q.error?.message}
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => failed.forEach(({ q }) => q.refetch())}
+          className="text-[0.7rem] text-accent hover:underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (pending.length) {
+    return (
+      <div className="card p-3 flex items-center gap-2">
+        <span className="inline-block w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        <span className="text-xs text-text-muted">
+          Loading {pending.map((x) => x.name).join(", ")}… these series are fetched live from EIA and
+          can take a few seconds on a cold start.
+        </span>
+      </div>
+    );
+  }
+  if (refreshing.length) {
+    return (
+      <div className="card p-3 text-xs text-text-muted">
+        Refreshing {refreshing.map((x) => x.name).join(", ")}… showing the last values meanwhile.
+      </div>
+    );
+  }
+  return null;
 }
 
 /** Provenance strip. Every number on this page states where it came from and
@@ -165,20 +244,29 @@ function ChainOverview({
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Each tile carries the state of the query that actually feeds it, so
+            a capital-reference failure does not make the grid tiles look empty
+            and vice versa. */}
         <Kpi
           label="Capex committed, 2026"
+          pending={refQ.isPending}
+          error={refQ.error?.message ?? null}
           value={r ? `$${r.capex.subtotal_low_usd_bn.toFixed(0)}–${r.capex.subtotal_high_usd_bn.toFixed(0)}bn` : "—"}
           sub={r ? `${r.capex.pct_of_us_gdp_low.toFixed(2)}–${r.capex.pct_of_us_gdp_high.toFixed(2)}% of US GDP · four calendar-year reporters` : undefined}
           tone="accent"
         />
         <Kpi
           label="Coverage — end demand"
+          pending={refQ.isPending}
+          error={refQ.error?.message ?? null}
           value={preferred ? range(preferred.coverage_low_pct, preferred.coverage_high_pct, 1, "%") : "—"}
           sub={preferred ? `${preferred.scope} ÷ capex. Run-rate vs annual flow.` : undefined}
           tone="neutral"
         />
         <Kpi
           label="Metered load growth"
+          pending={gridQ.isPending}
+          error={gridQ.error?.message ?? null}
           value={pct(g?.aggregate.dc_flagged)}
           sub={
             g
@@ -189,6 +277,8 @@ function ChainOverview({
         />
         <Kpi
           label="Build less attrition"
+          pending={capQ.isPending || gridQ.isPending}
+          error={capQ.error?.message ?? gridQ.error?.message ?? null}
           value={flaggedNet ? gw(flaggedNet.net) : "—"}
           sub={
             flaggedNet && c
@@ -240,7 +330,11 @@ function ChainOverview({
       )}
 
       {(gridQ.isPending || capQ.isPending || refQ.isPending) && <Loading h={160} />}
-      {refQ.error && <ErrorBox msg={refQ.error.message} />}
+      {/* All three, not just the capital one. A grid or capacity failure used
+          to be silent here while its tiles showed a bare em-dash. */}
+      {gridQ.error && <ErrorBox msg={`Grid load: ${gridQ.error.message}`} />}
+      {capQ.error && <ErrorBox msg={`Capacity additions: ${capQ.error.message}`} />}
+      {refQ.error && <ErrorBox msg={`Capital reference: ${refQ.error.message}`} />}
     </div>
   );
 }
@@ -532,6 +626,7 @@ function GridReality({ query }: { query: ReturnType<typeof useQuery<GridLoad, Er
           excluded: d.excluded,
           // Drop the 24-point monthly series per BA — the payload is for
           // interpretation, and the aggregates plus per-BA totals carry the story.
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructured to OMIT
           rows: d.rows.map(({ monthly, ...rest }) => rest),
         }}
       />
@@ -623,7 +718,7 @@ function CapacityTab({ query }: { query: ReturnType<typeof useQuery<CapacityAddi
     // snapshot makes that year complete, and dropping it would throw away a
     // full year of data for no reason.
     const completeYears = d.partial_final_year ? d.years.slice(0, -1) : d.years;
-    return d.by_technology.map((tech, i) => ({
+    return d.by_technology.map((tech) => ({
       type: "bar" as const,
       name: tech.technology,
       x: completeYears,
