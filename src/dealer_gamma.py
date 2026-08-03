@@ -280,6 +280,19 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
     # on the ES price the trader is watching, on the same ladder as the walls.
     now_et = pd.Timestamp.now(tz="America/New_York")
     basis_is_live = _cash_is_open(now_et)
+    # The clock alone cannot see a market holiday. On Thanksgiving at 11:00 the
+    # weekday-and-hours test says cash is printing, and the basis would go back
+    # to subtracting a live ES price from a stale close — the exact defect this
+    # module was fixed for, ~9 days a year plus every early close.
+    #
+    # The DATA settles it: if the newest SPX print is from an earlier session,
+    # cash is not trading today whatever the clock says. This also errs the safe
+    # way in the first minutes of a normal session, before the daily bar for
+    # today appears — it carries the prior basis briefly and self-corrects.
+    if basis_is_live and spot_asof is not None and spot_asof.date() < now_et.date():
+        logger.info("cash hours by the clock but SPX last printed "
+                    f"{spot_asof.date()} — treating cash as shut")
+        basis_is_live = False
     basis = basis_asof = None
     if basis_is_live and es_last:
         basis, basis_asof = es_last - spot, now_et

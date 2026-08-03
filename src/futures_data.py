@@ -147,6 +147,47 @@ def exchange_today() -> _date:
         return pd.Timestamp.now(tz=_TZ).date()
 
 
+def front_snapshot(product_code: str = "ES") -> dict | None:
+    """Last trade and quote for the front contract, or None.
+
+    A 5-minute bar is behind the market by up to five minutes BY CONSTRUCTION,
+    on top of the tier's delay — it cannot exist until its window closes.
+    Measured 2026-08-02 22:18 ET: the newest bar was 13.2 minutes old while the
+    snapshot's last trade was 10.0, which is the tier's actual delay. Three
+    minutes is not much, but the bar is also a window close rather than a trade,
+    and every level distance on the ES card is measured from this number.
+
+    Entitled on Futures Starter; 403 on the free tier, where this returns None
+    and callers keep using the bar close.
+    """
+    tkr = front_month(product_code)
+    if not tkr:
+        return None
+    j = _get("/futures/v1/snapshot", ticker=tkr)
+    rows = (j or {}).get("results") or []
+    if not rows:
+        return None
+    s = rows[0] or {}
+    trade, quote = s.get("last_trade") or {}, s.get("last_quote") or {}
+    px, stamp = trade.get("price"), trade.get("last_updated")
+    if px is None or stamp is None:
+        return None
+    try:
+        ts = pd.Timestamp(int(stamp), unit="ns", tz="UTC").tz_convert(_TZ)
+    except Exception:
+        return None
+    return {
+        "ticker": tkr,
+        "price": float(px),
+        "asof": ts,
+        "bid": quote.get("bid"),
+        "ask": quote.get("ask"),
+        # The vendor labels its own freshness. "DELAYED" is the Starter tier;
+        # real time is a higher one, and the card should not imply otherwise.
+        "delayed": (trade.get("timeframe") or "").upper() != "REAL-TIME",
+    }
+
+
 def front_month(product_code: str = "ES", as_of: _date | None = None) -> str | None:
     """The contract that is actually trading, by volume — not by expiry alone.
 

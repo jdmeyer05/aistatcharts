@@ -254,10 +254,28 @@ def fed_probabilities(asof: date | None = None, n_meetings: int = _DEFAULT_MEETI
 
     anchor_rate = r_pre
     rows: list[dict] = []
+    broken_at: str | None = None
     for i, mt in enumerate(upcoming):
         tk = zq_ticker(mt.year, mt.month)
         settle = settles.get(tk)
+
+        # A GAP BREAKS THE CHAIN, AND EVERYTHING AFTER IT.
+        #
+        # Each meeting's r_pre is the rate solved after the previous one. Skip a
+        # meeting and r_pre still holds the rate from BEFORE it, so the next
+        # meeting's delta quietly contains both moves and is attributed entirely
+        # to the later date. That is the same misattribution as anchoring on
+        # spot EFFR, which reported +180.83bp for a meeting pricing +3.69bp —
+        # except it arrives on a row that looks perfectly healthy.
+        #
+        # Downstream meetings are reported as unpriceable rather than dropped,
+        # so the board shows the gap instead of quietly shortening.
+        if broken_at:
+            rows.append({"date": mt.isoformat(), "ticker": tk,
+                         "error": f"not priceable — the chain breaks at {broken_at}"})
+            continue
         if settle is None:
+            broken_at = mt.isoformat()
             rows.append({"date": mt.isoformat(), "ticker": tk,
                          "error": f"no settlement for {tk}"})
             continue
@@ -278,6 +296,9 @@ def fed_probabilities(asof: date | None = None, n_meetings: int = _DEFAULT_MEETI
             r_post = implied_post_rate(settle, r_pre, mt)
             method = "within-month"
         if r_post is None:
+            # Same chain break as a missing settlement: without r_post there is
+            # no rate to carry forward, so nothing after this can be trusted.
+            broken_at = mt.isoformat()
             rows.append({"date": mt.isoformat(), "ticker": tk,
                          "error": "meeting on the last day of its month; "
                                   "no post-meeting days in the contract"})

@@ -298,6 +298,27 @@ def es_levels(profile_sessions: int = 1, now: pd.Timestamp | None = None,
     last_bar_ts = bars.index[-1]
     bar_age_min = int((now - last_bar_ts).total_seconds() // 60)
 
+    # A 5-minute bar trails the market by up to five minutes BY CONSTRUCTION —
+    # it cannot exist until its window closes — on top of the tier's delay. The
+    # snapshot carries the actual last trade, so prefer it when it is genuinely
+    # newer. Every level distance below is measured from this number.
+    #
+    # Guarded on both sides: it must be NEWER than the bar, and within 2% of the
+    # bar close. A snapshot that disagrees with the bars by more than that is a
+    # bad quote, not a fresh one, and the bars are the thing with a sanity
+    # record. See feedback_polygon_traps for what a bad vendor quote looks like.
+    quote_ts, quote_source, quote_delayed = last_bar_ts, "5m bar close", None
+    try:
+        from src.futures_data import front_snapshot
+        snap = front_snapshot(SYMBOL)
+        if (snap and snap["asof"] > last_bar_ts
+                and abs(snap["price"] - last) / max(last, 1e-9) < 0.02):
+            last, quote_ts = snap["price"], snap["asof"]
+            quote_source, quote_delayed = "last trade", snap.get("delayed")
+    except Exception as e:
+        logger.debug(f"snapshot quote unavailable, using the bar close: {e}")
+    quote_age_min = int((now - quote_ts).total_seconds() // 60)
+
     levels: list[dict] = []
 
     def add(key: str, label: str, value: float | None, group: str, note: str) -> None:
@@ -390,9 +411,21 @@ def es_levels(profile_sessions: int = 1, now: pd.Timestamp | None = None,
         # difference between a level a trader can act on and one they can't.
         "contract": _CONTRACT.get("ticker"),
         "last": round(last, 2),
-        "asof": last_bar_ts.isoformat(),
+        # `asof` is the QUOTE this price came from, which is what a reader is
+        # really asking about; the bar timestamp is kept separately so the two
+        # cannot be confused.
+        "asof": quote_ts.isoformat(),
+        "quote_source": quote_source,
+        "quote_age_min": quote_age_min,
+        # True when the vendor labels its own feed delayed — the Starter tier
+        # does. Naming it stops the card implying a real-time print.
+        "quote_delayed": quote_delayed,
+        "bar_asof": last_bar_ts.isoformat(),
         "bar_age_min": bar_age_min,
-        "stale": bool(market_live and bar_age_min > 15),
+        # Staleness is about the QUOTE, and only against a session that is
+        # actually trading — a three-hour-old print on a Saturday is the last
+        # print, not a data problem.
+        "stale": bool(market_live and quote_age_min > 15),
         "mode": mode,
         "session_date": str(pd.Timestamp(anchor).date()),
         "prior_session_date": str(pd.Timestamp(prior).date()) if prior is not None else None,

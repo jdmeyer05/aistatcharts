@@ -511,12 +511,24 @@ export default function EsBriefing() {
         <>
           {/* A stale feed makes every distance on this card wrong by the same
               amount, so it outranks the read rather than sitting beside it. */}
+          {/* Three different things add to this number and only one of them is
+              the vendor. Saying "the feed is behind" blames a delay the tier
+              guarantees for staleness our own cache created, and leaves a
+              reader with nothing to do about it. */}
           {isStale && (
             <div className="border-l-2 border-l-loss bg-loss/10 px-3 py-2 rounded-r text-[0.68rem] leading-snug">
-              <span className="font-semibold text-loss">Quote is {barAgeMin} minutes stale.</span>{" "}
+              <span className="font-semibold text-loss">Quote is {barAgeMin} minutes old.</span>{" "}
               <span className="text-text">
-                The session is trading but the bar feed is behind, so every level distance below is
-                measured from an old price. Check a live quote before acting on this.
+                Every level distance below is measured from it. Check a live quote before acting.
+              </span>
+              <span className="text-text-muted">
+                {lv?.quote_delayed
+                  ? " The futures feed is a delayed tier (~10 min by measurement), which is the floor"
+                  : " Part of this is the feed"}
+                {typeof lv?.bar_age_min === "number" && typeof lv?.quote_age_min === "number"
+                  ? `; the quote itself was ${lv.quote_age_min}m old when this card was built and the last 5-minute bar ${lv.bar_age_min}m`
+                  : ""}
+                . The rest is this page holding a cached payload — reload to clear that part.
               </span>
             </div>
           )}

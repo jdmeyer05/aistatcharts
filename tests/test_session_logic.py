@@ -722,6 +722,36 @@ def test_overnight_elapsed_is_a_share_of_the_globex_window():
     assert round(15.5 / span_h * 100, 1) == pytest.approx(100.0)
 
 
+# ── The quote a trader sizes off ─────────────────────────────────────────────
+
+def test_snapshot_quote_is_preferred_only_when_newer_and_sane():
+    """A 5-minute bar trails the market by up to five minutes BY CONSTRUCTION,
+    on top of the tier's delay — measured 2026-08-02 22:18 ET, the newest bar
+    was 13.2 minutes old while the last trade was 10.0. But a snapshot that
+    disagrees with the bars by a lot is a bad quote, not a fresh one, so it is
+    guarded on both age AND agreement."""
+    bar_ts = pd.Timestamp("2026-08-02 22:05", tz="America/New_York")
+    bar_close = 7557.5
+
+    def accept(snap_px, snap_ts):
+        return (snap_ts > bar_ts
+                and abs(snap_px - bar_close) / max(bar_close, 1e-9) < 0.02)
+
+    newer = bar_ts + pd.Timedelta(minutes=3)
+    older = bar_ts - pd.Timedelta(minutes=3)
+    assert accept(7558.75, newer), "newer and in line — take it"
+    assert not accept(7558.75, older), "older than the bar — keep the bar"
+    assert not accept(7557.5 * 1.05, newer), "5% away is a bad quote, not a fresh one"
+    assert not accept(0.0, newer), "a zero print must never become `last`"
+
+
+def test_stale_is_measured_on_the_quote_not_the_bar():
+    """They differ by the bar's granularity, and the card warns off the quote."""
+    for quote_age, market_live, want in [(10, True, False), (16, True, True),
+                                         (200, False, False), (16, False, False)]:
+        assert bool(market_live and quote_age > 15) is want
+
+
 # ── Dealer gamma: the basis needs two SIMULTANEOUS quotes ────────────────────
 # `es_last - spot` is right only while cash prints. Outside RTH the SPX close is
 # frozen and ES keeps trading, so that subtraction books the whole move since
@@ -869,6 +899,31 @@ def test_gamma_effective_spot_is_the_cash_print_during_rth(monkeypatch):
     assert out["spot_source"] == "cash"
     assert out["spx_spot_effective"] == pytest.approx(out["spx_spot"])
     assert out["spx_spot_effective"] + out["es_basis"] == pytest.approx(7530.0, abs=0.02)
+
+
+def test_gamma_treats_a_market_holiday_as_cash_shut(monkeypatch):
+    """The clock cannot see a holiday. On Thanksgiving at 11:00 the
+    weekday-and-hours test says cash is printing, and the basis would go back to
+    subtracting a live ES price from a stale close — ~9 days a year. The DATA
+    settles it: if the newest SPX print is from an earlier session, cash is not
+    trading today whatever the clock says."""
+    dg = _stub_gamma_chain(monkeypatch)
+    anchor = pd.Timestamp("2026-11-25 16:00", tz="America/New_York")
+    # Clock says open; the SPX print is yesterday's.
+    monkeypatch.setattr(dg, "_cash_is_open", lambda now: True)
+    monkeypatch.setattr(dg, "_es_at", lambda ts: (7522.25, anchor))
+    monkeypatch.setattr(dg.pd.Timestamp, "now",
+                        classmethod(lambda cls, tz=None: pd.Timestamp("2026-11-26 11:00", tz=tz)))
+
+    out = dg.dealer_gamma(
+        session_day=pd.Timestamp("2026-11-26", tz="America/New_York"),
+        spot=7489.72, spot_asof=pd.Timestamp("2026-11-25", tz="America/New_York"),
+        es_last=7555.25)
+
+    assert out["spx_cash_open"] is False, "a stale SPX print means cash is shut"
+    assert out["es_basis"] == pytest.approx(32.53, abs=0.01), (
+        "must carry the basis, not subtract a live ES from a stale close")
+    assert out["spot_source"] == "es_implied"
 
 
 def test_base_rates_name_their_instrument():
@@ -1228,6 +1283,53 @@ def test_last_known_meeting_does_not_use_the_next_month_shortcut(monkeypatch):
     assert out["calendar_exhausted"] is False
     assert fp.fed_probabilities(asof=last - timedelta(days=8),
                                 n_meetings=4)["calendar_exhausted"] is True
+
+
+def test_a_missing_settlement_breaks_the_chain_and_everything_after_it(monkeypatch):
+    """Each meeting's r_pre is the rate solved after the previous one. Skipping
+    a meeting leaves r_pre holding the rate from BEFORE it, so the next
+    meeting's delta quietly contains both moves and attributes them all to the
+    later date — the same misattribution that reported +180.83bp for a meeting
+    pricing +3.69bp, except it lands on a row that looks perfectly healthy."""
+    import src.fed_probabilities as fp
+
+    upcoming = [d for d in fp.FOMC_DATES if d > date(2026, 8, 1)][:3]
+    assert len(upcoming) >= 3, "fixture needs three meetings"
+    skip = fp.zq_ticker(upcoming[0].year, upcoming[0].month)
+
+    full = {fp.zq_ticker(y, m): 96.0
+            for (y, m) in [(d.year, d.month) for d in upcoming]
+            + [fp._next_month(d.year, d.month) for d in upcoming]
+            + [fp._prev_month(upcoming[0].year, upcoming[0].month)]}
+    holed = {k: v for k, v in full.items() if k != skip}
+
+    monkeypatch.setattr(fp, "_spot_effr", lambda: 3.63)
+    monkeypatch.setattr(fp, "_fetch_settles", lambda months: holed)
+    out = fp.fed_probabilities(asof=date(2026, 8, 1), n_meetings=3)
+
+    rows = out["meetings"]
+    assert "error" in rows[0], rows[0]
+    for r in rows[1:]:
+        assert "error" in r, (
+            f"{r['date']} was priced off a broken chain: its delta would absorb "
+            f"the move priced at {rows[0]['date']} and report it as its own")
+        assert "chain" in r["error"]
+    assert out["available"] is False, "no meeting could be priced"
+
+
+def test_an_intact_chain_still_prices_every_meeting(monkeypatch):
+    """The guard must not fire when nothing is missing."""
+    import src.fed_probabilities as fp
+    upcoming = [d for d in fp.FOMC_DATES if d > date(2026, 8, 1)][:3]
+    full = {fp.zq_ticker(y, m): 96.0
+            for (y, m) in [(d.year, d.month) for d in upcoming]
+            + [fp._next_month(d.year, d.month) for d in upcoming]
+            + [fp._prev_month(upcoming[0].year, upcoming[0].month)]}
+    monkeypatch.setattr(fp, "_spot_effr", lambda: 3.63)
+    monkeypatch.setattr(fp, "_fetch_settles", lambda months: full)
+    out = fp.fed_probabilities(asof=date(2026, 8, 1), n_meetings=3)
+    assert out["available"]
+    assert all("error" not in r for r in out["meetings"]), out["meetings"]
 
 
 def test_fomc_dates_are_sorted_and_unique():

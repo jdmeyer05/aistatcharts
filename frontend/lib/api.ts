@@ -2985,10 +2985,23 @@ export interface EsLevels {
   reason?: string;
   symbol: string;
   last: number;
+  /** Timestamp of the QUOTE `last` came from — the snapshot's last trade when
+   *  one is available and newer than the bar, otherwise the bar close. */
   asof: string;
-  /** Age of the last bar in minutes — a quote you might size off declares its age. */
+  /** "last trade" | "5m bar close". A 5-minute bar trails the market by up to
+   *  five minutes by construction, on top of the tier's delay. */
+  quote_source?: string;
+  quote_age_min?: number;
+  /** True when the vendor labels its own feed delayed — the Starter futures
+   *  tier does, measured at ~10 minutes. Naming it stops the card implying a
+   *  real-time print, and it is the FLOOR on how fresh anything here can be. */
+  quote_delayed?: boolean | null;
+  bar_asof?: string;
+  /** Age of the last 5-minute bar. Kept beside `quote_age_min` so the two
+   *  cannot be confused — they differ by the bar's own granularity. */
   bar_age_min: number;
-  /** Bars lagging a session that is actually trading. False when simply closed. */
+  /** The QUOTE lagging a session that is actually trading. False when the
+   *  market is simply closed. */
   stale: boolean;
   mode: EsLevelsMode;
   session_date: string;
