@@ -21,6 +21,7 @@ from src.ai_infra import (
     capital_reference,
     grid_load_growth,
 )
+from src.ai_infra_capital import capital_financing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,6 +39,11 @@ def _cached_grid_load(months_back: int) -> dict:
 @result_cached("ai_infra_capacity_additions_v2")
 def _cached_capacity_additions(years_back: int) -> dict:
     return capacity_additions(years_back=years_back)
+
+
+@result_cached("ai_infra_capital_financing_v1")
+def _cached_capital_financing() -> dict:
+    return capital_financing()
 
 
 @router.get("/balancing-authorities")
@@ -92,3 +98,16 @@ async def get_capital_reference(user: str = Depends(get_current_user)):
     source and as-of date. Flagged `curated: true` so the UI labels them.
     """
     return capital_reference()
+
+
+@router.get("/capital-financing")
+async def get_capital_financing(user: str = Depends(get_current_user)):
+    """Filed capital spending and its financing, from SEC EDGAR.
+
+    The counterpart to `/capital-reference`: that endpoint carries what these
+    companies SAY they will spend, this one carries what they have actually
+    paid and how it was funded. Roughly 30 EDGAR calls cold, so it leans on the
+    cache — 10-K and 10-Q figures change on an earnings cadence, which makes a
+    12h TTL conservative by a wide margin.
+    """
+    return _cached_capital_financing()
