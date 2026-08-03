@@ -931,11 +931,16 @@ export default function EsBriefing() {
                       say so — an undated conversion reads as live. */}
                   {d.gamma.es_basis != null && d.gamma.es_basis_is_live === false && (
                     <p className="text-[0.58rem] text-text-muted leading-snug">
-                      ES levels use a {d.gamma.es_basis.toFixed(2)} basis carried from the last cash
-                      close{d.gamma.spx_spot_asof
-                        ? ` (${new Date(d.gamma.spx_spot_asof).toLocaleDateString("en-US", { month: "short", day: "numeric" })})`
-                        : ""} — SPX is not printing now, so the strikes are mapped at that
-                      relationship rather than a live one.
+                      SPX cash is shut
+                      {d.gamma.spx_spot_asof
+                        ? ` (last printed ${new Date(d.gamma.spx_spot_asof).toLocaleDateString("en-US", { month: "short", day: "numeric" })} at ${d.gamma.spx_spot?.toFixed(2)})`
+                        : ""}
+                      {d.gamma.spx_spot_effective != null && (
+                        <> , so the book is read at <span className="text-text tabular-nums">
+                          {d.gamma.spx_spot_effective.toFixed(2)}</span> — where ES is implying SPX
+                          sits, on a {d.gamma.es_basis.toFixed(2)} basis carried from the last cash
+                          close. Walls and the flip are relative to THAT, not to the frozen print</>
+                      )}.
                     </p>
                   )}
                   <div className="space-y-0.5 text-[0.62rem] tabular-nums pt-0.5">
@@ -1194,11 +1199,21 @@ export default function EsBriefing() {
                 <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
                   Measured base rates
                 </h3>
+                {/* The instrument is named because the overnight study sits a
+                    few inches away on the same card measured on ES futures over
+                    two years, while this is SPY over five. Two percentages side
+                    by side read as one study unless both say what they are. */}
                 <span className="text-[0.55rem] text-text-muted">
-                  {d.base_rates.source} · {d.base_rates.sessions?.toLocaleString()} sessions ·{" "}
+                  {d.base_rates.instrument ?? d.base_rates.source} ·{" "}
+                  {d.base_rates.sessions?.toLocaleString()} cash sessions ·{" "}
                   {d.base_rates.from} to {d.base_rates.to}
                 </span>
               </div>
+              {d.base_rates.instrument_note && (
+                <p className="text-[0.55rem] text-text-muted leading-snug">
+                  {d.base_rates.instrument_note}
+                </p>
+              )}
 
               {d.base_rates.gaps?.today && (
                 <p className="text-[0.65rem] text-text border-l-2 border-l-accent pl-2">

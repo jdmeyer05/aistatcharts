@@ -3057,6 +3057,13 @@ export interface EsGamma {
    *  session, not a live quote. */
   spx_spot_asof?: string | null;
   spx_cash_open?: boolean;
+  /** Where the book was actually evaluated — the cash print while cash trades,
+   *  `es_last - basis` otherwise. Every above/below question (both walls, the
+   *  nearest flip crossing, the sign of gamma at price) is answered here.
+   *  Asking them at a frozen close can return a wall "above" that price has
+   *  already traded through. `spx_spot_effective + es_basis == es_last`. */
+  spx_spot_effective?: number;
+  spot_source?: "cash" | "es_implied";
   /** SPX strike + this = the ES level. Measured from two SIMULTANEOUS quotes:
    *  live during RTH, otherwise carried from the last cash close. Using
    *  `es_last - spx_spot` outside RTH books the whole move since the bell as
@@ -3119,6 +3126,12 @@ export interface EsIntraday {
 export interface EsBaseRates {
   available: boolean;
   source?: string;
+  /** What these percentages were measured on. SPY 5-minute bars over five
+   *  years, describing the CASH session — NOT the same instrument or window as
+   *  the overnight study sitting beside it on the card, which is ES futures
+   *  over two years. Both must be labelled or a reader assumes one study. */
+  instrument?: string;
+  instrument_note?: string;
   window_years?: number;
   sessions?: number;
   from?: string;

@@ -262,13 +262,48 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
     if not spot:
         return {"available": False, "reason": "no SPX spot"}
 
+    # ── WHERE IS SPX RIGHT NOW? ──────────────────────────────────────────────
+    #
+    # `spot` is the CASH print, and cash is shut for most of the day. Every
+    # question this module answers is "where is price relative to the book":
+    # which strikes sit above it (the call wall), which below (the put wall),
+    # which flip crossing is the nearest one, and what the sign of gamma is at
+    # price. Answering all of those at Friday's close while ES trades 60 handles
+    # higher does not merely mislabel the regime — it can hand back a call wall
+    # that price has ALREADY traded through, which is the most dangerous kind of
+    # wrong on this card: a level a trader would lean on that is behind them.
+    #
+    # So the basis is resolved FIRST, and the book is evaluated at the SPX level
+    # ES is implying. During cash hours that is the live print and nothing
+    # changes. Outside them it is `es_last - basis`, which by construction makes
+    # `effective_spot + basis == es_last`: the "you are here" point lands exactly
+    # on the ES price the trader is watching, on the same ladder as the walls.
+    now_et = pd.Timestamp.now(tz="America/New_York")
+    basis_is_live = _cash_is_open(now_et)
+    basis = basis_asof = None
+    if basis_is_live and es_last:
+        basis, basis_asof = es_last - spot, now_et
+    elif spot_asof is not None:
+        anchor_ts = spot_asof.normalize() + pd.Timedelta(hours=_CASH_CLOSE[0],
+                                                         minutes=_CASH_CLOSE[1])
+        es_then, used_ts = _es_at(anchor_ts)
+        if es_then:
+            basis, basis_asof = es_then - spot, used_ts
+    if basis is None and es_last:
+        basis, basis_asof, basis_is_live = es_last - spot, None, False
+        logger.info("gamma basis fell back to a non-simultaneous quote pair")
+
+    effective_spot, spot_source = spot, "cash"
+    if not basis_is_live and basis is not None and es_last:
+        effective_spot, spot_source = es_last - basis, "es_implied"
+
     session_day = pd.Timestamp(session_day or pd.Timestamp.now(tz="America/New_York")).normalize()
     expiries = _upcoming_expiries(session_day)
-    contracts = _fetch_chain(expiries, spot)
+    contracts = _fetch_chain(expiries, effective_spot)
     if not contracts:
         return {"available": False, "reason": "no SPX chain data"}
 
-    per_expiry = _gex_by_strike(contracts, spot)
+    per_expiry = _gex_by_strike(contracts, effective_spot)
     if not per_expiry:
         return {"available": False, "reason": "chain had no gamma or open interest"}
 
@@ -284,14 +319,19 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
     gross_zero = float(sum(abs(v) for v in per_expiry.get(zero_dte, {}).values()))
     gross_total = float(sum(abs(v) for strikes in per_expiry.values() for v in strikes.values()))
 
-    flip_info = _gamma_flip(contracts, spot, ref_day=session_day) or {}
+    flip_info = _gamma_flip(contracts, effective_spot, ref_day=session_day) or {}
     flip = flip_info.get("flip")
 
     # Walls: the heaviest positive (call) gamma above spot and the heaviest
     # negative (put) gamma below. These are where hedging concentrates, so they
     # act as magnets into an expiry and as the levels price struggles through.
-    above = {k: v for k, v in total_by_strike.items() if k >= spot and v > 0}
-    below = {k: v for k, v in total_by_strike.items() if k <= spot and v < 0}
+    #
+    # ABOVE AND BELOW ARE RELATIVE TO WHERE PRICE IS, not to a stale cash print.
+    # Using the frozen close would let a strike that price has already passed
+    # still qualify as the wall "above" — a level presented as resistance that
+    # is in fact behind you.
+    above = {k: v for k, v in total_by_strike.items() if k >= effective_spot and v > 0}
+    below = {k: v for k, v in total_by_strike.items() if k <= effective_spot and v < 0}
     call_wall = max(above, key=lambda k: above[k]) if above else None
     put_wall = min(below, key=lambda k: below[k]) if below else None
 
@@ -303,9 +343,11 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
     # says "long gamma" while also saying price is below the flip contradicts
     # itself on the one field that decides the playbook. Falls back to the
     # Polygon total only when the profile could not be built.
+    # NOT named `basis` — that is the PRICE basis resolved above, and reusing
+    # the name here silently overwrote it once this block moved.
     gex_at_spot = flip_info.get("gex_at_spot")
-    basis = gex_at_spot if gex_at_spot is not None else total_gex
-    regime = "long" if basis > 0 else "short"
+    regime_gex = gex_at_spot if gex_at_spot is not None else total_gex
+    regime = "long" if regime_gex > 0 else "short"
     if regime == "long":
         regime_note = ("Dealers are net long gamma, so their hedging LEANS AGAINST moves — "
                        "selling rallies, buying dips. Expect suppressed realised vol, rotation "
@@ -315,52 +357,32 @@ def dealer_gamma(session_day: pd.Timestamp | None = None,
                        "weakness and buying strength. Expect range expansion, faster trends and "
                        "stop cascades. Fading extremes is the losing side of this regime.")
 
-    # Convert SPX levels to ES using the observed basis, so the numbers can sit
-    # on an ES ladder without pretending SPX and ES print the same price.
-    #
-    # THE BASIS MUST BE MEASURED FROM TWO SIMULTANEOUS QUOTES. `es_last - spot`
-    # is right only while cash is printing. Outside RTH the SPX close is frozen
-    # and ES keeps trading, so that subtraction silently absorbs the whole move
-    # since the bell and reports it as basis — and every ES wall shifts with it.
-    #
-    # Measured on the Sunday 2026-08-02 reopen: ES closed Friday's cash session
-    # at 7522.25 against an SPX close of 7489.72, an observed basis of 32.53. By
-    # 20:20 ET ES was 7549.00 and the old formula returned 59.28 — 26.75 handles
-    # of weekend gap booked as carry. The call wall printed at ES 7589.28 when
-    # the strike actually sits at 7562.53: the card said the wall was 40 handles
-    # away while price was 13 handles under it. That is the difference between
-    # ignoring a level and trading into it, and it fired EVERY overnight and
-    # premarket session, which is the whole window this cockpit is for.
-    now_et = pd.Timestamp.now(tz="America/New_York")
-    basis_is_live = _cash_is_open(now_et)
-    basis = basis_asof = None
-    if basis_is_live and es_last:
-        basis, basis_asof = es_last - spot, now_et
-    elif spot_asof is not None:
-        # Anchor on ES at the cash close of the session `spot` came from.
-        anchor_ts = spot_asof.normalize() + pd.Timedelta(hours=_CASH_CLOSE[0],
-                                                         minutes=_CASH_CLOSE[1])
-        es_then, used_ts = _es_at(anchor_ts)
-        if es_then:
-            basis, basis_asof = es_then - spot, used_ts
-    if basis is None and es_last:
-        # Nothing better available. Still convert — a level on the wrong ladder
-        # is worse than one with a stated caveat — but say the basis is not a
-        # simultaneous measurement so the card can carry the warning.
-        basis, basis_asof, basis_is_live = es_last - spot, None, False
-        logger.info("gamma basis fell back to a non-simultaneous quote pair")
-
+    # Convert SPX levels to ES using the basis resolved at the top of this
+    # function, so the numbers sit on an ES ladder without pretending SPX and ES
+    # print the same price. Measured on the Sunday 2026-08-02 reopen: ES closed
+    # Friday's cash session at 7522.25 against SPX 7489.72, an observed basis of
+    # 32.53, while `es_last - spot` returned 59.28 — 26.75 handles of weekend gap
+    # booked as carry, putting the call wall 40 handles away when price was 13
+    # handles under it.
     def to_es(x: float | None) -> float | None:
         return round(x + basis, 2) if (x is not None and basis is not None) else None
 
     return {
         "available": True,
         "session_date": str(session_day.date()),
+        # The raw CASH print, kept for transparency.
         "spx_spot": round(spot, 2),
         # When the SPX print is from. Outside cash hours this is a completed
         # session and the card must say so rather than implying a live quote.
         "spx_spot_asof": spot_asof.isoformat() if spot_asof is not None else None,
         "spx_cash_open": basis_is_live,
+        # WHERE THE BOOK WAS ACTUALLY EVALUATED. Equal to the cash print while
+        # cash trades; `es_last - basis` otherwise. Every above/below question —
+        # both walls, the nearest flip crossing, and the sign of gamma at price —
+        # is answered here, because asking them at a frozen close can return a
+        # "wall above" that price has already traded through.
+        "spx_spot_effective": round(effective_spot, 2),
+        "spot_source": spot_source,          # "cash" | "es_implied"
         "es_last": round(es_last, 2) if es_last else None,
         "es_basis": round(basis, 2) if basis is not None else None,
         # The moment the two legs of the basis were read. Equal to now while

@@ -629,6 +629,19 @@ def path_base_rates(last: float | None = None,
     return {
         "available": True,
         "source": h.attrs.get("source") or f"{_INDEX} cash session, hourly",
+        # STATED, NOT INFERRED. These path statistics sit inches from the
+        # overnight study on the same card, and that one is ES futures over two
+        # years while this is SPY over five. A reader glancing between "72.4%"
+        # and "58.1%" will assume one instrument and one window unless both say
+        # otherwise. The overnight module already names itself for exactly this
+        # reason; this side was the half of the guard that was missing.
+        "instrument": (h.attrs.get("instrument")
+                       or f"{_INTRADAY_SYMBOL}, {_INTRADAY_BAR_MIN}-minute bars"),
+        "instrument_note": (
+            f"{_INTRADAY_SYMBOL} is the tradeable proxy for the cash index — Polygon "
+            f"carries no index entitlement. Percentages describe the CASH session; "
+            f"ES trades around the clock and its own overnight statistics are a "
+            f"different study on a different instrument."),
         "sessions": n,
         "from": str(s.index.min().date()),
         "to": str(s.index.max().date()),

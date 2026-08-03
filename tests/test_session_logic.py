@@ -766,13 +766,29 @@ def test_basis_uses_the_prior_cash_close_when_cash_is_shut(monkeypatch):
     assert used == anchor
 
 
-def _stub_gamma_chain(monkeypatch):
-    """Stub the chain so dealer_gamma runs end to end without a network call."""
+def _stub_gamma_chain(monkeypatch, seen: dict | None = None):
+    """Stub the chain so dealer_gamma runs end to end without a network call.
+
+    7500 carries the HEAVIEST positive gamma and sits BETWEEN the stale cash
+    print (7489.72) and where ES implies SPX is (7522.72). That is the whole
+    hazard in one strike: evaluated at the stale spot it is "above" and wins the
+    call wall, so the card would hand back resistance that price has already
+    traded through. A fixture whose strikes straddle nothing cannot tell the two
+    behaviours apart — the first version of this one could not, and two
+    mutations walked straight through it.
+    """
     import src.dealer_gamma as dg
     monkeypatch.setattr(dg, "_upcoming_expiries", lambda d: ["2026-08-03"])
     monkeypatch.setattr(dg, "_fetch_chain", lambda e, s: [{"stub": True}])
     monkeypatch.setattr(dg, "_gex_by_strike",
-                        lambda c, s: {"2026-08-03": {7400.0: -2e9, 7530.0: 8e9}})
+                        lambda c, s: {"2026-08-03": {7400.0: -2e9, 7500.0: 9e9, 7530.0: 8e9}})
+
+    def _flip(contracts, spot, ref_day=None, **kw):
+        if seen is not None:
+            seen["flip_spot"] = spot
+        return {"flip": 7455.0, "gex_at_spot": 1.0e9, "profile": []}
+
+    monkeypatch.setattr(dg, "_gamma_flip", _flip)
     return dg
 
 
@@ -799,6 +815,69 @@ def test_dealer_gamma_anchors_the_basis_when_cash_is_shut(monkeypatch):
     assert out["es_basis_asof"] == anchor.isoformat()
     # And the walls must move with it.
     assert out["call_wall_es"] == pytest.approx(out["call_wall_spx"] + 32.53, abs=0.01)
+
+
+def test_gamma_evaluates_the_book_where_price_actually_is(monkeypatch):
+    """`spot` is the CASH print and cash is shut most of the day. Every
+    above/below question — both walls, the nearest flip crossing, the sign of
+    gamma at price — was answered at a frozen close while ES traded on. The
+    dangerous case is not the regime label: it is a "wall above" that price has
+    already traded through, a level a trader leans on that is behind them."""
+    seen: dict = {}
+    dg = _stub_gamma_chain(monkeypatch, seen)
+    anchor = pd.Timestamp("2026-07-31 16:00", tz="America/New_York")
+    monkeypatch.setattr(dg, "_cash_is_open", lambda now: False)
+    monkeypatch.setattr(dg, "_es_at", lambda ts: (7522.25, anchor))
+
+    out = dg.dealer_gamma(
+        session_day=pd.Timestamp("2026-08-03", tz="America/New_York"),
+        spot=7489.72, spot_asof=pd.Timestamp("2026-07-31", tz="America/New_York"),
+        es_last=7555.25)
+
+    assert out["spot_source"] == "es_implied"
+    # The 7500 strike carries the heaviest positive gamma but price is already
+    # through it. Evaluated at the stale close it would be the call wall.
+    assert out["call_wall_spx"] == pytest.approx(7530.0), (
+        f"call wall {out['call_wall_spx']} is behind price — evaluated at the "
+        "stale cash print rather than where ES says SPX is")
+    # And the flip search must be centred on price, not on the frozen close.
+    assert seen["flip_spot"] == pytest.approx(7555.25 - 32.53, abs=0.01)
+    assert out["spx_spot"] == pytest.approx(7489.72), "the raw cash print is still reported"
+    assert out["spx_spot_effective"] == pytest.approx(7555.25 - 32.53, abs=0.01)
+    assert out["spx_spot_effective"] > out["spx_spot"], "ES has moved up since the close"
+
+    # THE INVARIANT a trader can check by eye: the you-are-here point lands
+    # exactly on the ES price, so the walls sit on the ladder being watched.
+    assert out["spx_spot_effective"] + out["es_basis"] == pytest.approx(7555.25, abs=0.02)
+
+    # And the walls must be on the correct side of price, in ES terms.
+    if out.get("call_wall_es") is not None:
+        assert out["call_wall_es"] >= 7555.25 - 0.01, "a wall 'above' must be above price"
+    if out.get("put_wall_es") is not None:
+        assert out["put_wall_es"] <= 7555.25 + 0.01, "a wall 'below' must be below price"
+
+
+def test_gamma_effective_spot_is_the_cash_print_during_rth(monkeypatch):
+    """During cash hours the two are the same and nothing may change."""
+    dg = _stub_gamma_chain(monkeypatch)
+    monkeypatch.setattr(dg, "_cash_is_open", lambda now: True)
+    monkeypatch.setattr(dg, "_es_at", lambda ts: (None, None))
+    out = dg.dealer_gamma(
+        session_day=pd.Timestamp("2026-08-03", tz="America/New_York"),
+        spot=7500.0, spot_asof=pd.Timestamp("2026-08-03", tz="America/New_York"),
+        es_last=7530.0)
+    assert out["spot_source"] == "cash"
+    assert out["spx_spot_effective"] == pytest.approx(out["spx_spot"])
+    assert out["spx_spot_effective"] + out["es_basis"] == pytest.approx(7530.0, abs=0.02)
+
+
+def test_base_rates_name_their_instrument():
+    """The overnight study is ES futures over two years; these are SPY over
+    five, and they sit inches apart on the same card. Both must say so."""
+    from src.es_baserates import _INTRADAY_SYMBOL, _INTRADAY_BAR_MIN
+    assert _INTRADAY_SYMBOL == "SPY"
+    label = f"{_INTRADAY_SYMBOL}, {_INTRADAY_BAR_MIN}-minute bars"
+    assert "SPY" in label and "minute" in label
 
 
 def test_dealer_gamma_uses_the_live_basis_during_the_cash_session(monkeypatch):
