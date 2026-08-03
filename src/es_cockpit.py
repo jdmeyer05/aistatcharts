@@ -485,6 +485,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
     from src.es_rest_of_session import rest_of_session
     from src.es_attribution import price_attribution
     from src.es_macro_setup import macro_setup
+    from src.es_level_clusters import cluster_levels
 
     # The expected move is always computed for the SESSION AHEAD. So a range
     # already in the books may belong to a different session than the estimate,
@@ -583,6 +584,18 @@ def es_cockpit(now: pd.Timestamp | None = None,
         attribution = f_at.result() if f_at else None
         setup = f_ms.result()
 
+    # Levels that price cannot tell apart are ONE reference. Computed after the
+    # pool because it needs the gamma walls, and it is pure arithmetic over
+    # numbers already in hand — no fetch, so no reason to occupy a worker.
+    _bar = None
+    try:
+        _b = (cur_rth["High"] - cur_rth["Low"]).median() if not cur_rth.empty else None
+        _bar = float(_b) if _b and _b > 0 else None
+    except Exception:
+        _bar = None
+    clusters = _safe(lambda: cluster_levels(lv, gamma, median_bar=_bar,
+                                            normal_range=_normal), "level_clusters")
+
     # REACHABILITY. The ladder quotes every level as a distance in handles, which
     # answers "how far" but not the question actually being asked at the open:
     # can price even GET there in a session? Thirty handles is a routine walk on
@@ -640,6 +653,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
         "rest_of_session": ros,
         "attribution": attribution,
         "macro_setup": setup,
+        "level_clusters": clusters,
         "gap_pct": round(gap_pct, 3) if gap_pct is not None else None,
         "degraded": [k for k, v in (("intraday", intraday), ("expected_move", em),
                                     ("gamma", gamma), ("base_rates", rates),

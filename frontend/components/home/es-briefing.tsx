@@ -23,7 +23,9 @@ import { useMemo, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchEsBrief,
+  fetchEsCardAudit,
   type EsBrief,
+  type EsCardAudit,
   type EsImpact,
   type EsLevel,
   type EsScheduleItem,
@@ -365,6 +367,16 @@ export default function EsBriefing() {
     staleTime: 2 * 60_000,
   });
 
+  // Separate and slower on purpose: the auditor reads the FINISHED brief, so
+  // it cannot be assembled alongside it, and a model call has no business on
+  // the card's critical path.
+  const auditQ = useQuery<EsCardAudit>({
+    queryKey: ["es-card-audit"],
+    queryFn: fetchEsCardAudit,
+    refetchInterval: 10 * 60_000,
+    staleTime: 9 * 60_000,
+  });
+
   const d = q.data;
 
   const nowMin = useSyncExternalStore(
@@ -620,6 +632,52 @@ export default function EsBriefing() {
             </div>
           )}
 
+          {/* THE CARD, AUDITED AGAINST ITSELF. Every other AI block here
+              narrates numbers the reader is going through anyway; this one does
+              the thing nothing else does — notices when two parts of the page
+              cannot both be right. Rendered only when something was found:
+              silence is the common case and printing "no contradictions" on
+              every load would train the reader to stop seeing the block. */}
+          {auditQ.data?.available && (auditQ.data.findings?.length ?? 0) > 0 && (
+            <div className="border border-amber-500/40 bg-amber-500/5 rounded px-3 py-2">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[0.6rem] font-bold uppercase tracking-wider text-amber-400">
+                  This card disagrees with itself
+                </span>
+                <span className="text-[0.55rem] text-text-muted">
+                  {auditQ.data.n_rule ?? 0} checked · {auditQ.data.n_model ?? 0} read
+                  {auditQ.data.model ? ` · ${auditQ.data.model}` : ""}
+                </span>
+              </div>
+              <div className="mt-1.5 space-y-1">
+                {auditQ.data.findings?.map((f, i) => (
+                  <div key={i} className="text-[0.65rem] leading-snug">
+                    <span
+                      className={`font-semibold ${
+                        f.severity === "high" ? "text-loss"
+                          : f.severity === "medium" ? "text-amber-400" : "text-text-muted"
+                      }`}
+                    >
+                      {f.where}
+                    </span>
+                    <span className="text-text-muted"> — {f.finding}</span>
+                    {f.source === "model" && (
+                      <span
+                        className="ml-1 text-[0.5rem] uppercase text-text-muted/60"
+                        title="Read from the payload by a model rather than checked by a rule — this one can be wrong."
+                      >
+                        read
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
+                {auditQ.data.caveat}
+              </p>
+            </div>
+          )}
+
           {/* THE REST OF THE SESSION. The gate above answers "should I engage";
               this is the only block addressed to somebody already positioned.
               On 2026-08-03 the card shouted STAND ASIDE at a reader who was
@@ -682,6 +740,45 @@ export default function EsBriefing() {
 
               <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
                 {d.rest_of_session.caveat}
+              </p>
+            </div>
+          )}
+
+          {/* CO-LOCATED LEVELS. The ladder lists every level separately and
+              sorts by distance, so a reader counting rows counts confirmations
+              — which is how the call wall at 7619.28 and the chart resistance
+              at 7620.00 were described here as "two independent methods
+              agreeing" when they are two views of one strike concentration. */}
+          {d.level_clusters?.available && (d.level_clusters.n_cross_method ?? 0) > 0 && (
+            <div className="border border-border rounded px-3 py-2">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                  One reference, several reasons
+                </span>
+                <span className="text-[0.55rem] text-text-muted">
+                  within {d.level_clusters.tolerance?.toFixed(2)} handles ·{" "}
+                  {d.level_clusters.tolerance_basis}
+                </span>
+              </div>
+              <div className="mt-1.5 space-y-1">
+                {d.level_clusters.clusters
+                  ?.filter((c) => c.cross_method)
+                  .map((c, i) => (
+                    <div key={i} className="flex items-baseline gap-2 text-[0.65rem]">
+                      <span className="tabular-nums font-semibold text-text w-[4.75rem] shrink-0">
+                        {c.center.toFixed(2)}
+                      </span>
+                      <span className="tabular-nums text-text-muted w-[3.25rem] shrink-0">
+                        ±{(c.span / 2).toFixed(2)}
+                      </span>
+                      <span className="flex-1 min-w-0 text-text-muted">
+                        {c.members.map((m) => m.label).join(" · ")}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+              <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
+                {d.level_clusters.caveat}
               </p>
             </div>
           )}

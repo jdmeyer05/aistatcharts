@@ -3294,6 +3294,79 @@ export interface EsCandleContext {
   disclaimer?: string;
 }
 
+/** How the character read has actually done, replayed over the full history.
+ *  Describes the MODULE, not today. */
+export interface EsTrackRecord {
+  available: boolean;
+  reason?: string;
+  sessions?: number;
+  mark?: string;
+  base_wide_pct?: number;
+  base_up_pct?: number;
+  median_abs_err_pct?: number;
+  buckets?: Array<{
+    band: string; n: number; said_x: number; actual_x: number;
+    delivered_wide_pct: number; median_abs_err_pct: number;
+    median_err_pct: number; closed_up_pct: number;
+  }>;
+  headline?: string | null;
+  /** Calibration is not uniform — the compressed end runs ~30% low. */
+  bias_note?: string | null;
+  direction_note?: string;
+  method?: string;
+}
+
+export async function fetchEsTrackRecord(): Promise<EsTrackRecord> {
+  return apiFetch("/api/market/es-track-record");
+}
+
+/** Internal contradictions on the card. Claims about THIS PAGE, never about the
+ *  market — whether two blocks can both be right, not which one is. */
+export interface EsCardAudit {
+  available: boolean;
+  reason?: string;
+  findings?: Array<{
+    severity: "high" | "medium" | "low";
+    where: string;
+    finding: string;
+    /** "rule" is deterministic; "model" is a reading of the payload and can be wrong. */
+    source: "rule" | "model";
+  }>;
+  n_rule?: number;
+  n_model?: number;
+  model?: string | null;
+  /** True is the common case and a success, not an empty result. */
+  clean?: boolean;
+  note?: string;
+  caveat?: string;
+}
+
+export async function fetchEsCardAudit(): Promise<EsCardAudit> {
+  return apiFetch("/api/market/es-card-audit");
+}
+
+/** Levels price cannot tell apart are ONE reference, not several. Counting rows
+ *  on the ladder counts confirmations that are not there. */
+export interface EsLevelClusters {
+  available: boolean;
+  reason?: string;
+  clusters?: Array<{
+    low: number; high: number; center: number; span: number; n: number;
+    members: Array<{ key: string; label: string; value: number }>;
+    families: string[];
+    /** Same-family co-location is arithmetic; cross-method is several
+     *  mechanisms landing on one price. Only the latter is confluence. */
+    cross_method: boolean;
+    note: string;
+  }>;
+  n_clusters?: number;
+  n_cross_method?: number;
+  tolerance?: number;
+  tolerance_basis?: string;
+  note?: string | null;
+  caveat?: string;
+}
+
 /** The macro setup: named drivers with their MEASURED range lift, the direction
  *  stated as an explicit null, and the transmission chain checked against the
  *  tape. The mechanisms explain what is moving; they never forecast direction,
@@ -3558,6 +3631,7 @@ export interface EsBrief {
   rest_of_session?: EsRestOfSession | null;
   attribution?: EsAttribution | null;
   macro_setup?: EsMacroSetup | null;
+  level_clusters?: EsLevelClusters | null;
   cta?: {
     bias_1w?: CtaBias;
     current_exposure?: number;
