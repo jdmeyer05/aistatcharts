@@ -24,8 +24,10 @@ import { useQuery } from "@tanstack/react-query";
 import {
   fetchEsBrief,
   fetchEsCardAudit,
+  fetchEsTrackRecord,
   type EsBrief,
   type EsCardAudit,
+  type EsTrackRecord,
   type EsImpact,
   type EsLevel,
   type EsScheduleItem,
@@ -375,6 +377,15 @@ export default function EsBriefing() {
     queryFn: fetchEsCardAudit,
     refetchInterval: 10 * 60_000,
     staleTime: 9 * 60_000,
+  });
+
+  // Describes the MODULE rather than today, so it moves once a day at most and
+  // is fetched on its own long cadence.
+  const trackQ = useQuery<EsTrackRecord>({
+    queryKey: ["es-track-record"],
+    queryFn: fetchEsTrackRecord,
+    staleTime: 6 * 60 * 60_000,
+    refetchInterval: false,
   });
 
   const d = q.data;
@@ -1329,6 +1340,44 @@ export default function EsBriefing() {
                         at this hour is {d.regime.path_implied.oos_mae_pct?.toFixed(0)}% out of
                         sample.
                       </p>
+
+                      {/* HOW THIS READ HAS ACTUALLY DONE. Sits against the number
+                          it scores rather than on a separate page — a track
+                          record a reader has to go and find is a track record
+                          nobody checks. Replayed over the full history, so it is
+                          available today rather than accumulating forward. */}
+                      {trackQ.data?.available && (
+                        <div className="mt-1 pt-1 border-t border-border/60">
+                          {(() => {
+                            const band =
+                              d.regime?.character === "compressed" ? "compressed"
+                                : d.regime?.character === "wide" ? "wide" : "normal";
+                            const b = trackQ.data.buckets?.find((x) => x.band === band);
+                            if (!b) return null;
+                            return (
+                              <p className="text-[0.55rem] text-text-muted leading-snug">
+                                <span className="uppercase tracking-wider">Its record: </span>
+                                when this read said{" "}
+                                <span className="text-text">{band}</span>, the session ran 1.3×
+                                or wider{" "}
+                                <span className="text-text tabular-nums">
+                                  {b.delivered_wide_pct.toFixed(0)}%
+                                </span>{" "}
+                                of the time against a{" "}
+                                {trackQ.data.base_wide_pct?.toFixed(0)}% base, and the forecast
+                                ran{" "}
+                                <span className={Math.abs(b.median_err_pct) >= 10 ? "text-amber-400" : "text-text"}>
+                                  {Math.abs(b.median_err_pct).toFixed(0)}%{" "}
+                                  {b.median_err_pct < 0 ? "low" : "high"}
+                                </span>{" "}
+                                (n={b.n}). It closed up {b.closed_up_pct.toFixed(0)}% against a{" "}
+                                {trackQ.data.base_up_pct?.toFixed(0)}% base — this read carries
+                                no directional information, and that is the number showing it.
+                              </p>
+                            );
+                          })()}
+                        </div>
+                      )}
                     </div>
                   )}
 
