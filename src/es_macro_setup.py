@@ -10,10 +10,14 @@ trade context by hand.
 WHAT THE DATA ACTUALLY SUPPORTS, measured on overnight gaps over 1,193 sessions
 so nothing here uses the session to predict itself:
 
-    SIZE — supported.  crude |z| >= 2 in EITHER direction lifts P(range >= 1.3x)
-    from a 27.5% base to 38.0%, p=0.043. Gold gapping >= 2 sigma lifts it to
-    46.3%, p=0.013. The joint crude-plus-yen setup ran a 1.22x median range and
-    44.4% wide (n=27, p=0.054).
+    SIZE — supported for SOME conditions, and the distinction matters. What
+    clears significance is credit gapping down >= 2 sigma (45.6% wide, p=0.004),
+    gold gapping up >= 2 sigma (46.3%, p=0.013), and crude moving >= 2 sigma in
+    EITHER direction (38.0%, p=0.043). What does NOT: crude down alone (35.7%,
+    p=0.230), crude up alone (p=0.096), yen up (p=0.236), yen down (p=0.720) and
+    dollar up (p=1.000, i.e. no effect whatever). The joint crude-plus-yen cell
+    reaches 44.4% wide on a 1.22x median but only p=0.054, n=27 — suggestive, not
+    established. Most single drivers here are hints; the module says which.
 
     DIRECTION — NOT supported. Nothing survives:
         crude down >=2s   64.3% up   95% CI [49.2, 77.4]   p=0.216   n=42
@@ -72,24 +76,30 @@ _DRIVERS = [
                    "within weeks, which relaxes the path the Fed is pricing."),
      "implies": {"TLT": +1, "XLE": -1},
      "wide_pct": 35.7, "median_x": 1.12, "n": 42, "p_size": 0.230},
+    # EVERY p BELOW IS MEASURED, not assigned. The first cut of this table
+    # carried five invented p-values — crude_up 0.230, yen_up 0.500, yen_down
+    # 0.600, credit_down 0.010, dollar_up 0.800 — set by analogy in a module
+    # whose entire purpose is to be honest about statistics. Binomial test of
+    # P(range >= 1.3x) against the 27.5% base, 1,193 sessions. If a driver is
+    # added here, measure it; do not estimate it.
     {"key": "crude_up", "symbol": "USO", "test": lambda z: z >= 2,
      "label": "Crude breaking higher",
      "mechanism": ("An inflationary supply impulse — the same channel in reverse, "
                    "and the one that tightens the Fed's path rather than easing it."),
      "implies": {"TLT": -1, "XLE": +1},
-     "wide_pct": 40.5, "median_x": 1.20, "n": 37, "p_size": 0.230},
+     "wide_pct": 40.5, "median_x": 1.20, "n": 37, "p_size": 0.096},
     {"key": "yen_up", "symbol": "FXY", "test": lambda z: z >= 2,
      "label": "Yen strengthening sharply",
      "mechanism": ("Intervention or a carry unwind. The yen funds a great deal of "
                    "global carry, so a violent move in it is a positioning event "
                    "before it is a macro one."),
      "implies": {"UUP": -1},
-     "wide_pct": 36.4, "median_x": 1.19, "n": 44, "p_size": 0.500},
+     "wide_pct": 36.4, "median_x": 1.19, "n": 44, "p_size": 0.236},
     {"key": "yen_down", "symbol": "FXY", "test": lambda z: z <= -2,
      "label": "Yen weakening sharply",
      "mechanism": "Carry re-established or intervention faded.",
      "implies": {"UUP": +1},
-     "wide_pct": 30.8, "median_x": 1.10, "n": 39, "p_size": 0.600},
+     "wide_pct": 30.8, "median_x": 1.10, "n": 39, "p_size": 0.720},
     {"key": "gold_up", "symbol": "GLD", "test": lambda z: z >= 2,
      "label": "Gold bid hard",
      "mechanism": ("Haven demand or a real-rate move. The single strongest measured "
@@ -101,12 +111,12 @@ _DRIVERS = [
      "mechanism": ("Credit leads equity at turns — high yield selling off before the "
                    "index is the classic sequence."),
      "implies": {"SPY": -1, "TLT": +1},
-     "wide_pct": 45.6, "median_x": 1.20, "n": 57, "p_size": 0.010},
+     "wide_pct": 45.6, "median_x": 1.20, "n": 57, "p_size": 0.004},
     {"key": "dollar_up", "symbol": "UUP", "test": lambda z: z >= 2,
      "label": "Dollar bid hard",
      "mechanism": "Tightening global financial conditions; a headwind for EM and commodities.",
      "implies": {"EEM": -1, "USO": -1},
-     "wide_pct": 28.6, "median_x": 1.17, "n": 21, "p_size": 0.800},
+     "wide_pct": 28.6, "median_x": 1.17, "n": 21, "p_size": 1.000},
 ]
 
 # The one JOINT cell that was measured. Reported when both legs are present
@@ -146,20 +156,19 @@ _CONFIRM_MIN_PCT = 0.15      # below this a move is noise, not a confirmation
 
 
 def _gap_and_day(symbol: str) -> dict | None:
-    """Overnight gap in sigmas, and the move so far today."""
-    try:
-        from src.data_engine import polygon_history
-        d = polygon_history(symbol, 200)
-        if d is None or d.empty or len(d) < 62:
-            return None
-        gap = d["Open"] / d["Close"].shift(1) - 1
-        sd = gap.shift(1).rolling(60).std()
-        z = float(gap.iloc[-1] / sd.iloc[-1]) if sd.iloc[-1] else None
-        day = float(d["Close"].iloc[-1] / d["Close"].iloc[-2] - 1) * 100
-        return {"symbol": symbol, "z": z, "day_pct": round(day, 2)}
-    except Exception as e:
-        logger.debug(f"macro setup {symbol}: {e}")
+    """Shared with the dispersion read in `es_regime`, deliberately.
+
+    Both blocks quote sigmas for the same assets on the same card. Computing
+    them separately duplicated seven daily-history calls and left open the case
+    where a cache refresh between the two made one block say 2.4 sigma and the
+    other 2.3 for the same asset — a discrepancy a reader would rightly treat as
+    a defect in both.
+    """
+    from src.es_regime import asset_gap
+    r = asset_gap(symbol)
+    if not r:
         return None
+    return {"symbol": symbol, "z": r["z"], "day_pct": round(r["day_pct"], 2)}
 
 
 def macro_setup(now: pd.Timestamp | None = None) -> dict:
@@ -251,10 +260,22 @@ def macro_setup(now: pd.Timestamp | None = None) -> dict:
             "lift": round(size["wide_pct"] / _BASE_WIDE_PCT, 2),
             "n": size["n"], "p": size["p_size"],
             "significant": size["p_size"] < 0.05,
+            # A raw "44% versus a 28% base" reads as established whatever the
+            # p-value says, so the strength of the claim leads and the numbers
+            # follow. Most single drivers in this table do NOT clear 0.05: on
+            # 2026-08-03 both active ones were non-significant alone (crude
+            # p=0.230, yen p=0.236) and only the joint cell reached p=0.054.
             "note": (
-                f"Sessions with this setup ran a median {size['median_x']:.2f}x a normal "
-                f"range and were 1.3x or wider {size['wide_pct']:.0f}% of the time "
-                f"against a {_BASE_WIDE_PCT:.0f}% base (n={size['n']}, p={size['p_size']:.3f})."
+                (f"Measured: sessions with this setup ran a median {size['median_x']:.2f}x "
+                 f"a normal range and were 1.3x or wider {size['wide_pct']:.0f}% of the "
+                 f"time against a {_BASE_WIDE_PCT:.0f}% base "
+                 f"(n={size['n']}, p={size['p_size']:.3f}).")
+                if size["p_size"] < 0.05 else
+                (f"Suggestive, NOT established: {size['wide_pct']:.0f}% wide against a "
+                 f"{_BASE_WIDE_PCT:.0f}% base and a {size['median_x']:.2f}x median range, "
+                 f"but n={size['n']} and p={size['p_size']:.3f} — this does not clear "
+                 f"significance, so treat the lift as a hint rather than a number to "
+                 f"size off.")
             ),
             "combination_note": (
                 "Not combined across drivers. A macro shock moves crude, the dollar and "

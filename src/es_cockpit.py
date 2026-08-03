@@ -495,7 +495,12 @@ def es_cockpit(now: pd.Timestamp | None = None,
     live = levels.get("mode") == "rth"
     developing = levels.get("mode") in ("rth", "premarket")
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    # Sized to the number of submissions below, which grew from seven to
+    # eleven as session character, rest-of-session, attribution and the macro
+    # setup were added. Every one of them is network-bound rather than CPU-
+    # bound, so leaving the cap at 4 simply queued the new work behind the old
+    # and serialised what was meant to be parallel.
+    with ThreadPoolExecutor(max_workers=11) as pool:
         f_intra = pool.submit(_safe, lambda: es_intraday(
             bars.drop(columns=[c for c in ("session", "rth") if c in bars.columns]),
             anchor, last, overnight=overnight,

@@ -220,23 +220,49 @@ def path_implied_range(range_so_far: float | None,
     }
 
 
-def _gap_z(symbol: str) -> tuple[float | None, float | None]:
-    """Overnight gap in sigmas — prior close to today's open. Known at 09:30."""
+# Shared across every cross-asset consumer. `es_macro_setup` needs the same
+# gaps for the same symbols, and fetching them twice cost seven redundant daily
+# history calls on an already-heavy cold path — and, worse, let two blocks on
+# one card quote different sigmas for the same asset if a cache refreshed
+# between them. One fetch, one answer.
+_GAP_CACHE: dict = {}
+_GAP_TTL_S = 300
+
+
+def asset_gap(symbol: str) -> dict | None:
+    """Overnight gap in sigmas (prior close -> today's open, known at 09:30),
+    plus the move so far today. Cached briefly and shared."""
+    from time import time as _t
+    hit = _GAP_CACHE.get(symbol)
+    if hit and (_t() - hit[0]) < _GAP_TTL_S:
+        return hit[1]
+    out = None
     try:
         from src.data_engine import polygon_history
         d = polygon_history(symbol, 200)
-        if d is None or d.empty or len(d) < _Z_LOOKBACK + 2:
-            return None, None
-        move = d["Open"] / d["Close"].shift(1) - 1
-        sd = move.shift(1).rolling(_Z_LOOKBACK).std()
-        z, m = move.iloc[-1], move.iloc[-1]
-        s = sd.iloc[-1]
-        if not np.isfinite(s) or s <= 0 or not np.isfinite(z):
-            return None, None
-        return float(m / s), float(m * 100)
+        if d is not None and not d.empty and len(d) >= _Z_LOOKBACK + 2:
+            move = d["Open"] / d["Close"].shift(1) - 1
+            sd = move.shift(1).rolling(_Z_LOOKBACK).std()
+            m, s = move.iloc[-1], sd.iloc[-1]
+            if np.isfinite(s) and s > 0 and np.isfinite(m):
+                out = {
+                    "symbol": symbol,
+                    "z": float(m / s),
+                    "gap_pct": float(m * 100),
+                    # Prior close to last, so it includes the gap. The chain
+                    # check asks whether an asset moved TODAY, which is the
+                    # whole day, not the session alone.
+                    "day_pct": float(d["Close"].iloc[-1] / d["Close"].iloc[-2] - 1) * 100,
+                }
     except Exception as e:
-        logger.debug(f"gap z {symbol}: {e}")
-        return None, None
+        logger.debug(f"gap {symbol}: {e}")
+    _GAP_CACHE[symbol] = (_t(), out)
+    return out
+
+
+def _gap_z(symbol: str) -> tuple[float | None, float | None]:
+    r = asset_gap(symbol)
+    return (r["z"], r["gap_pct"]) if r else (None, None)
 
 
 def cross_asset_dispersion() -> dict:

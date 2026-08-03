@@ -223,8 +223,16 @@ def price_attribution(frames: dict | None = None,
     for e in ev:
         if e["when"] > now:
             continue
+        # A release BEFORE the cash open has no comparable window: slicing from
+        # 09:15 yields 09:30-09:45, fifteen minutes measured against a
+        # thirty-minute median, which understates it by construction and reads
+        # as the release having done nothing. The 08:30 prints are the common
+        # case and they are exactly the ones worth not lying about.
+        if e["when"] < session_open:
+            continue
         seg = cur.loc[e["when"]:e["when"] + win]
-        if seg.empty:
+        # Equally, a release inside the last half hour has a partial window.
+        if len(seg) < 4:
             continue
         r = float(seg["High"].max() - seg["Low"].min())
         impacts.append({
