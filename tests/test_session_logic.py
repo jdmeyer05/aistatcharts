@@ -724,25 +724,68 @@ def test_overnight_elapsed_is_a_share_of_the_globex_window():
 
 # ── The quote a trader sizes off ─────────────────────────────────────────────
 
-def test_snapshot_quote_is_preferred_only_when_newer_and_sane():
-    """A 5-minute bar trails the market by up to five minutes BY CONSTRUCTION,
-    on top of the tier's delay — measured 2026-08-02 22:18 ET, the newest bar
-    was 13.2 minutes old while the last trade was 10.0. But a snapshot that
-    disagrees with the bars by a lot is a bad quote, not a fresh one, so it is
-    guarded on both age AND agreement."""
-    bar_ts = pd.Timestamp("2026-08-02 22:05", tz="America/New_York")
-    bar_close = 7557.5
-
-    def accept(snap_px, snap_ts):
-        return (snap_ts > bar_ts
-                and abs(snap_px - bar_close) / max(bar_close, 1e-9) < 0.02)
-
+def test_snapshot_quote_guard_rejects_the_wrong_contract():
+    """A 2% band is not a sanity check. Live within the hour of shipping it, the
+    quote came back 7626.00 while ES traded 7561 — the snapshot had resolved
+    ESZ6, the DECEMBER contract, which carries a quarter's carry and prints ~65
+    handles higher. That is 0.86%, waved straight through a 151-handle band,
+    and every level distance was measured from it."""
+    from src.es_levels import accept_snapshot
+    bar_close, bar_ticker, span = 7561.0, "ESU6", 18.0
+    bar_ts = pd.Timestamp("2026-08-02 22:15", tz="America/New_York")
     newer = bar_ts + pd.Timedelta(minutes=3)
-    older = bar_ts - pd.Timedelta(minutes=3)
-    assert accept(7558.75, newer), "newer and in line — take it"
-    assert not accept(7558.75, older), "older than the bar — keep the bar"
-    assert not accept(7557.5 * 1.05, newer), "5% away is a bad quote, not a fresh one"
-    assert not accept(0.0, newer), "a zero print must never become `last`"
+
+    def accept(px, ticker, ts=newer):
+        return accept_snapshot({"ticker": ticker, "price": px, "asof": ts},
+                               bar_ticker, bar_close, span, bar_ts)[0]
+
+    assert accept(7560.25, "ESU6"), "same contract, newer, in line — take it"
+    assert not accept(7626.0, "ESZ6"), "the December contract is not this instrument"
+    assert not accept(7626.0, "ESU6"), (
+        "even labelled correctly, 65 handles between consecutive 5-minute "
+        "prints is a different thing wearing the same units")
+    assert not accept(0.0, "ESU6"), "a zero print must never become `last`"
+    assert not accept(7560.25, "ESU6", bar_ts - pd.Timedelta(minutes=3)), "older than the bar"
+    assert accept_snapshot(None, bar_ticker, bar_close, span, bar_ts) == (False, None)
+    # And the rejection says WHY, so a silent fallback is distinguishable.
+    ok, why = accept_snapshot({"ticker": "ESZ6", "price": 7626.0, "asof": newer},
+                              bar_ticker, bar_close, span, bar_ts)
+    assert ok is False and "ESZ6" in why and "ESU6" in why
+
+
+def test_front_month_does_not_flip_on_a_transient_empty_fetch(monkeypatch):
+    """"Busiest wins" treats a failed fetch as zero volume. If the front month's
+    daily bars come back empty for one call while the back month returns a
+    single lot, the back month wins and is CACHED FOR THE DAY. A genuine roll
+    never looks like this — on 2026-07-31 the front turned over 1,736,589 lots
+    against the next one's 901."""
+    import src.futures_data as fd
+
+    def contracts(path, **params):
+        return {"results": [
+            {"ticker": "ESU6", "type": "single", "days_to_maturity": 47},
+            {"ticker": "ESZ6", "type": "single", "days_to_maturity": 138},
+        ]}
+
+    monkeypatch.setattr(fd, "_get", contracts)
+
+    # Front month fetch fails transiently; back month returns one lot.
+    def bars(tkr, **kw):
+        return pd.DataFrame() if tkr == "ESU6" else pd.DataFrame({"Volume": [1.0]})
+
+    monkeypatch.setattr(fd, "fetch_bars", bars)
+    fd._front_cache.clear()
+    got = fd.front_month("ES", as_of=date(2026, 8, 2))
+    assert got == "ESU6", f"flipped to {got} on a transient empty fetch"
+    assert "ES" not in fd._front_cache, "a zero-volume guess must not be cached for the day"
+
+    # A REAL roll still works: both report volume, the back month is heavier.
+    def rolled(tkr, **kw):
+        return pd.DataFrame({"Volume": [900.0]}) if tkr == "ESU6" else pd.DataFrame({"Volume": [1_700_000.0]})
+
+    monkeypatch.setattr(fd, "fetch_bars", rolled)
+    fd._front_cache.clear()
+    assert fd.front_month("ES", as_of=date(2026, 8, 2)) == "ESZ6", "a real roll must still switch"
 
 
 def test_stale_is_measured_on_the_quote_not_the_bar():

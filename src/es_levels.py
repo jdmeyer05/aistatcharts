@@ -68,6 +68,43 @@ def _fetch_bars(days: int = 5, interval: str = "5m") -> pd.DataFrame:
     return bars
 
 
+def accept_snapshot(snap: dict | None, bar_ticker: str | None, bar_close: float,
+                    bar_span: float, last_bar_ts) -> tuple[bool, str | None]:
+    """May this snapshot replace the bar close as `last`? Returns (ok, why-not).
+
+    Extracted so the rule is TESTED rather than described. The first version of
+    this lived inline and its test asserted on a reconstruction, so removing the
+    contract check left every test green — the mutation survived on the very
+    guard that had just failed in production.
+
+    Three conditions, in the order they actually go wrong:
+
+    1. SAME CONTRACT. Live 2026-08-02 the snapshot resolved ESZ6 — the December
+       expiry, a quarter's carry higher — while the bars were ESU6. It printed
+       7626.00 against a market at 7561 and every level distance was measured
+       from it.
+    2. NEWER than the bar, or there is nothing to gain.
+    3. Within the bars' OWN recent range, not a percentage of price. The 65-
+       handle error above is 0.86%, which a 2% band waves straight through.
+       Between consecutive 5-minute prints ES does not travel a quarter's carry.
+    """
+    if not snap:
+        return False, None
+    if snap.get("ticker") != bar_ticker:
+        return False, (f"snapshot is {snap.get('ticker')} but the bars are "
+                       f"{bar_ticker} — not the same instrument")
+    if not snap.get("asof") or snap["asof"] <= last_bar_ts:
+        return False, None                      # nothing to gain, not a fault
+    px = snap.get("price")
+    if px is None or px <= 0:
+        return False, f"snapshot price {px!r} is not a tradeable print"
+    tol = max(bar_span * 2.0, 5.0)
+    if abs(px - bar_close) > tol:
+        return False, (f"{px} is {abs(px - bar_close):.2f} from the bar close "
+                       f"{bar_close} (tolerance {tol:.2f})")
+    return True, None
+
+
 def _is_rth(ts: pd.Timestamp) -> bool:
     t = (ts.hour, ts.minute)
     return _RTH_OPEN <= t < _RTH_CLOSE
@@ -303,18 +340,32 @@ def es_levels(profile_sessions: int = 1, now: pd.Timestamp | None = None,
     # snapshot carries the actual last trade, so prefer it when it is genuinely
     # newer. Every level distance below is measured from this number.
     #
-    # Guarded on both sides: it must be NEWER than the bar, and within 2% of the
-    # bar close. A snapshot that disagrees with the bars by more than that is a
-    # bad quote, not a fresh one, and the bars are the thing with a sanity
-    # record. See feedback_polygon_traps for what a bad vendor quote looks like.
+    # THE CONTRACT MUST MATCH, and a 2% band is not a sanity check.
+    #
+    # The first version of this took any snapshot within 2% of the bar close.
+    # Live within the hour: it returned 7626.00 while ES traded 7561 — the
+    # snapshot had resolved ESZ6, the DECEMBER contract, which carries a
+    # quarter's carry and prints ~65 handles higher. That is 0.86%, waved
+    # straight through a 151-handle band, and every level distance on the card
+    # was measured from it.
+    #
+    # So: same ticker as the bars, or the quote is not about this instrument at
+    # all. And the band is now the bar's own recent range plus a small buffer
+    # rather than a percentage — between two consecutive 5-minute prints ES does
+    # not travel a quarter's carry, and a number that does is a different thing
+    # wearing the same units. See feedback_polygon_traps.
     quote_ts, quote_source, quote_delayed = last_bar_ts, "5m bar close", None
     try:
         from src.futures_data import front_snapshot
         snap = front_snapshot(SYMBOL)
-        if (snap and snap["asof"] > last_bar_ts
-                and abs(snap["price"] - last) / max(last, 1e-9) < 0.02):
+        recent = bars.tail(12)
+        span = float(recent["High"].max() - recent["Low"].min()) if len(recent) else 0.0
+        ok, why = accept_snapshot(snap, _CONTRACT.get("ticker"), last, span, last_bar_ts)
+        if ok:
             last, quote_ts = snap["price"], snap["asof"]
             quote_source, quote_delayed = "last trade", snap.get("delayed")
+        elif why:
+            logger.warning(f"ignoring snapshot quote: {why}")
     except Exception as e:
         logger.debug(f"snapshot quote unavailable, using the bar close: {e}")
     quote_age_min = int((now - quote_ts).total_seconds() // 60)

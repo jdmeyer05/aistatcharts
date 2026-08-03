@@ -227,14 +227,32 @@ def front_month(product_code: str = "ES", as_of: _date | None = None) -> str | N
     singles.sort(key=lambda c: c["days_to_maturity"])
     candidates = [c["ticker"] for c in singles[:2]]
 
-    best, best_vol = None, -1.0
+    # A TRANSIENT EMPTY RESPONSE MUST NOT FLIP THE CONTRACT.
+    #
+    # "Busiest of the two nearest expiries wins" reproduces the real roll, but
+    # it treats a failed fetch as zero volume. If the front month's daily bars
+    # come back empty for one call while the back month returns even a single
+    # lot, the back month wins and gets CACHED FOR THE DAY — and the whole
+    # cockpit then runs on a contract trading a quarter's carry away. Seen live
+    # 2026-08-02: the quote resolved to ESZ6 at 7626 while ES traded 7561.
+    #
+    # A genuine roll never looks like this. The front month still trades heavily
+    # right up to it; on 2026-07-31 the front turned over 1,736,589 lots against
+    # the next one's 901. So the back month only wins on MORE volume than a
+    # front month that actually reported some, and a zero-volume read is treated
+    # as unknown: keep the nearest expiry and do not cache the guess.
+    vols: dict[str, float] = {}
     for tkr in candidates:
         df = fetch_bars(tkr, resolution="1day", limit=3)
-        vol = float(df["Volume"].sum()) if df is not None and not df.empty else 0.0
-        if vol > best_vol:
-            best, best_vol = tkr, vol
-    if best is None:
-        best = candidates[0]
+        vols[tkr] = float(df["Volume"].sum()) if df is not None and not df.empty else 0.0
+
+    near = candidates[0]
+    if vols.get(near, 0.0) <= 0:
+        logger.warning(f"{product_code}: no volume for the nearest expiry {near} — "
+                       "keeping it and not caching the answer")
+        return near
+    best = max(candidates, key=lambda t: vols[t])
+    best_vol = vols[best]
 
     _front_cache[product_code] = (today, best)
     logger.info(f"{product_code} front month: {best} (volume {best_vol:,.0f})")
