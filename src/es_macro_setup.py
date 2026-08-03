@@ -74,7 +74,7 @@ _DRIVERS = [
      "label": "Crude breaking lower",
      "mechanism": ("A disinflationary impulse. Lower energy feeds headline inflation "
                    "within weeks, which relaxes the path the Fed is pricing."),
-     "implies": {"TLT": +1, "XLE": -1},
+     "implies": {"TLT": (+1, 71.4, 43.6, 0.000), "XLE": (-1, 90.5, 40.7, 0.000)},
      "wide_pct": 35.7, "median_x": 1.12, "n": 42, "p_size": 0.230},
     # EVERY p BELOW IS MEASURED, not assigned. The first cut of this table
     # carried five invented p-values — crude_up 0.230, yen_up 0.500, yen_down
@@ -86,36 +86,47 @@ _DRIVERS = [
      "label": "Crude breaking higher",
      "mechanism": ("An inflationary supply impulse — the same channel in reverse, "
                    "and the one that tightens the Fed's path rather than easing it."),
-     "implies": {"TLT": -1, "XLE": +1},
+     # `TLT down` DROPPED: 56.8% against a 45.3% base, p=0.187. The symmetric
+     # inflationary story is intuitive and the tape does not carry it.
+     "implies": {"XLE": (+1, 81.1, 50.5, 0.000)},
      "wide_pct": 40.5, "median_x": 1.20, "n": 37, "p_size": 0.096},
     {"key": "yen_up", "symbol": "FXY", "test": lambda z: z >= 2,
      "label": "Yen strengthening sharply",
      "mechanism": ("Intervention or a carry unwind. The yen funds a great deal of "
                    "global carry, so a violent move in it is a positioning event "
                    "before it is a macro one."),
-     "implies": {"UUP": -1},
+     "implies": {"UUP": (-1, 84.1, 30.9, 0.000)},
      "wide_pct": 36.4, "median_x": 1.19, "n": 44, "p_size": 0.236},
     {"key": "yen_down", "symbol": "FXY", "test": lambda z: z <= -2,
      "label": "Yen weakening sharply",
      "mechanism": "Carry re-established or intervention faded.",
-     "implies": {"UUP": +1},
+     "implies": {"UUP": (+1, 74.4, 38.1, 0.000)},
      "wide_pct": 30.8, "median_x": 1.10, "n": 39, "p_size": 0.720},
     {"key": "gold_up", "symbol": "GLD", "test": lambda z: z >= 2,
      "label": "Gold bid hard",
      "mechanism": ("Haven demand or a real-rate move. The single strongest measured "
                    "range signal in the basket."),
-     "implies": {"TLT": +1},
+     # `TLT up` DROPPED: 46.3% against a 43.6% base — a 1.06x lift at p=0.754,
+     # which is no relationship at all. Gold is the strongest RANGE signal in
+     # the basket and carries no duration implication whatsoever.
+     "implies": {},
      "wide_pct": 46.3, "median_x": 1.23, "n": 41, "p_size": 0.013},
     {"key": "credit_down", "symbol": "HYG", "test": lambda z: z <= -2,
      "label": "Credit under pressure",
      "mechanism": ("Credit leads equity at turns — high yield selling off before the "
                    "index is the classic sequence."),
-     "implies": {"SPY": -1, "TLT": +1},
+     # `TLT up` DROPPED, and it ran BACKWARDS: 35.1% against a 43.6% base, a
+     # 0.80x lift. Credit stress bidding duration is the textbook flight to
+     # quality and this tape does the opposite.
+     "implies": {"SPY": (-1, 70.2, 38.9, 0.000)},
      "wide_pct": 45.6, "median_x": 1.20, "n": 57, "p_size": 0.004},
     {"key": "dollar_up", "symbol": "UUP", "test": lambda z: z >= 2,
      "label": "Dollar bid hard",
      "mechanism": "Tightening global financial conditions; a headwind for EM and commodities.",
-     "implies": {"EEM": -1, "USO": -1},
+     # `USO down` DROPPED, also BACKWARDS: 33.3% against a 44.0% base, 0.76x.
+     # The inverse dollar-commodity relationship is the most quoted link here
+     # and the least supported.
+     "implies": {"EEM": (-1, 66.7, 42.8, 0.044)},
      "wide_pct": 28.6, "median_x": 1.17, "n": 21, "p_size": 1.000},
 ]
 
@@ -152,7 +163,18 @@ _DIRECTION_NULL = {
 }
 
 _CHECK_SYMBOLS = ["TLT", "XLE", "UUP", "EEM", "SPY", "USO"]
-_CONFIRM_MIN_PCT = 0.15      # below this a move is noise, not a confirmation
+
+# "HAS NOT MOVED" IS PER-ASSET, because one threshold means different things to
+# different instruments. At a flat 0.15% the dollar reads as not having moved on
+# 31% of ALL days — its median absolute move is only 0.29% — while TLT does so on
+# 11% and XLE on 9%. A single constant therefore fired the "chain is broken"
+# warning on UUP about three times as often as on anything else, for no reason
+# but the asset's volatility. These are ~25% of each asset's own median daily
+# move, measured over 1,193 sessions.
+_FLAT_PCT = {
+    "TLT": 0.15, "XLE": 0.23, "UUP": 0.07, "EEM": 0.17, "SPY": 0.15, "USO": 0.25,
+}
+_FLAT_DEFAULT = 0.15
 
 
 def _gap_and_day(symbol: str) -> dict | None:
@@ -192,12 +214,14 @@ def macro_setup(now: pd.Timestamp | None = None) -> dict:
         # a failed one is the informative case — it means the mechanism everyone
         # is narrating is not the one the market is trading.
         checks = []
-        for sym, sign in d["implies"].items():
+        for sym, spec in d["implies"].items():
             c = by.get(sym)
             if not c:
                 continue
+            sign, holds_pct, base_pct, link_p = spec
             moved = c["day_pct"]
-            if abs(moved) < _CONFIRM_MIN_PCT:
+            flat_at = _FLAT_PCT.get(sym, _FLAT_DEFAULT)
+            if abs(moved) < flat_at:
                 state = "flat"
             elif (moved > 0) == (sign > 0):
                 state = "confirms"
@@ -206,6 +230,13 @@ def macro_setup(now: pd.Timestamp | None = None) -> dict:
             checks.append({
                 "symbol": sym, "expected": "up" if sign > 0 else "down",
                 "actual_pct": moved, "state": state,
+                # EVERY LINK CARRIES ITS OWN MEASURED HOLD RATE. Without it a
+                # broken link is unreadable: "TLT did not bid" means something
+                # very different for a link that holds 71% of the time than for
+                # one that holds 46%. Links that did not beat their base rate
+                # are not in the table at all — see the notes above.
+                "holds_pct": holds_pct, "base_pct": base_pct, "link_p": link_p,
+                "unusual": state != "confirms" and link_p < 0.05,
             })
 
         active.append({
@@ -221,7 +252,12 @@ def macro_setup(now: pd.Timestamp | None = None) -> dict:
             # most informative reading of 2026-08-03 — crude fell 5% and duration
             # sat at -0.04%, so bonds simply refused to price the disinflation the
             # equity market was celebrating, and the card said nothing.
-            "broken_links": [c for c in checks if c["state"] in ("contradicts", "flat")],
+            # A link only counts as BROKEN if it is one that measurably holds.
+            # Flagging a failure on a link that holds 46% of the time would be
+            # reporting a coin flip as an anomaly — which is why the links that
+            # did not beat their base rate were removed rather than kept with a
+            # caveat. `unusual` carries that test per link.
+            "broken_links": [c for c in checks if c["unusual"]],
         })
 
     if not active:
@@ -294,8 +330,13 @@ def macro_setup(now: pd.Timestamp | None = None) -> dict:
                 (f"{b['symbol']} was expected {b['expected']} and is "
                  f"{b['actual_pct']:+.2f}%")
                 for b in broken[:3])
-            + ". The mechanism being narrated is not the one the tape is trading, "
-              "which is worth more than a confirmation would be."
+            + ". These links hold "
+            + "/".join(f"{b['holds_pct']:.0f}%" for b in broken[:3])
+            + " of the time against base rates of "
+            + "/".join(f"{b['base_pct']:.0f}%" for b in broken[:3])
+            + ", so this is the unusual case rather than the ordinary one. The "
+              "mechanism being narrated is not the one the tape is trading, which "
+              "is worth more than a confirmation would be."
         ),
         "caveat": (
             "Drivers are detected from overnight gaps, so nothing here uses the session "
