@@ -441,7 +441,7 @@ async def _cache_control_middleware(request, call_next):
     return response
 
 # Register route modules
-from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts, ai, cftc, wsb, causality
+from api.routes import market, signals, positions, options, scanner, energy, edgar, tracking, trump, meta_analysis, scenario, quant_lab, fed_macro, sectors, alerts, ai, cftc, wsb, causality, ai_infra
 
 app.include_router(market.router, prefix="/api/market", tags=["Market Data"])
 app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
@@ -462,6 +462,7 @@ app.include_router(ai.router, prefix="/api/ai", tags=["AI Interpretation"])
 app.include_router(cftc.router, prefix="/api/cftc", tags=["CFTC Positioning"])
 app.include_router(wsb.router, prefix="/api/wsb", tags=["WallStreetBets"])
 app.include_router(causality.router, prefix="/api/causality", tags=["Causality"])
+app.include_router(ai_infra.router, prefix="/api/ai-infra", tags=["AI Infrastructure"])
 
 
 @app.get("/api/health")

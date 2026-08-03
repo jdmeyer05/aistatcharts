@@ -638,6 +638,41 @@ PAGE_CONTEXT: dict[str, str] = {
         "- Contrarian read: if WSB is unanimously bullish on an already-run-up name, it's usually near the local top. If unanimously bearish and the stock has been dumped, often near a local bottom.\n"
         "What to produce: 1-2 tickers the WSB crowd is most bullish on with supporting confluence; 1 ticker where WSB is bearish AND options flow agrees; optionally 1 contrarian read where the crowd is over-concentrated. Skip indices / ETFs in the main call-outs."
     ),
+    "ai-infra-grid": (
+        "AI Infrastructure → Grid Reality payload. The single question: is electricity demand ACTUALLY growing where data centers are being announced? Payload: window{recent[start,end], prior[start,end]}, aggregate{all, dc_flagged, not_flagged, spread_pp, n_flagged, n_not_flagged} (all demand-weighted % growth), rows[] each {ba, name, region, dc_note, dc_flagged, trailing_12m_twh, prior_12m_twh, growth_pct, delta_twh, coverage}, excluded[].\n"
+        "Data: EIA-930 metered daily demand per balancing authority, complete calendar months only, trailing 12m vs prior 12m.\n"
+        "Interpretation rules:\n"
+        "- This is REALISED metered demand. It is the ground truth against which announced and queued data center load should be judged. Announced GW is not demand; a queue position is not a generator.\n"
+        "- `dc_flagged` is EDITORIAL — EIA-930 does not separately meter data center load. NEVER describe the flagged aggregate as 'data center demand'. It is total demand in balancing authorities where data center activity is publicly concentrated. Say this plainly if you cite the split.\n"
+        "- `spread_pp` (flagged minus not-flagged growth) is the headline. A LARGE positive spread supports the thesis that data center load is showing up in metered demand. A SMALL spread is a genuine finding and must be stated as one — it means the announcements are not yet visible in aggregate metered load. Do not manufacture significance from a small spread.\n"
+        "- Absolute TWh matters more than percentage for the large BAs: 2% on PJM is a bigger physical event than 11% on a small BA. Always pair a growth rate with delta_twh.\n"
+        "- `coverage` below ~0.98 means gaps in the EIA feed; treat that BA's growth as low confidence and say so.\n"
+        "- Total system demand growth is normally ~0-1%/yr. Anything sustained above ~3% is historically unusual and worth naming.\n"
+        "What to produce: (a) the aggregate picture in one sentence, including the flagged-vs-unflagged spread and whether it is large enough to mean anything; (b) the 2-3 BAs carrying the most absolute TWh growth, named with both % and TWh; (c) any BA that is flagged but SHRINKING, which is evidence against the flag. End with a 'Bottom line:' stating what the metered data does and does not yet confirm about the build-out."
+    ),
+    "ai-infra-capacity": (
+        "AI Infrastructure → Capacity Additions payload. The supply-side counterpart to Grid Reality: is generation actually being built where load is growing? Payload: snapshot (YYYY-MM), years[], by_ba[] each {ba, name, region, dc_flagged, added_mw, by_year{}, planned_retirement_mw, net_mw, operating_mw}, by_technology[] each {technology, by_year{}, total_mw}.\n"
+        "Data: EIA operable-generator inventory (Form EIA-860M), each unit bucketed on the month it entered service.\n"
+        "Interpretation rules:\n"
+        "- BACKWARD-LOOKING ONLY. EIA's API exposes operable units; planned and under-construction units are NOT included. Never describe these numbers as a pipeline, forecast, or anything forward-looking.\n"
+        "- `net_mw` = added minus planned retirements, and it is the number that matters. A BA adding 20GW while retiring 12GW is not adding 20GW of headroom. Lead with net, not gross.\n"
+        "- Cross-reference the load side when the user has it: a BA with strong load growth and weak NET additions is the tightening case; strong additions against flat load is the opposite. This gap is the point of the page.\n"
+        "- Technology mix is diagnostic. Solar and storage interconnect fastest but are not firm capacity; gas combined-cycle is firm but slow to build. A mix dominated by solar against firm-load growth is a reliability story worth naming.\n"
+        "- Survivorship: units retired before the snapshot are absent, which slightly understates older years. Do not over-read year-on-year changes in the earliest year shown.\n"
+        "- The final year in `years` is partial (the snapshot is mid-year). Never annualise it or compare it like-for-like against complete years.\n"
+        "What to produce: (a) which BAs are adding real NET capacity and which are treading water; (b) the technology mix and what it implies for firm capacity; (c) the sharpest add-versus-retire divergence in the data. End with a 'Bottom line:' naming where the supply response is and is not keeping up."
+    ),
+    "ai-infra-capital": (
+        "AI Infrastructure → Capital Commitment payload. Curated, not computed — disclosed capex guidance against observable AI revenue at explicitly stated scopes. Payload: capex{entities[], non_additive[], subtotal_low_usd_bn, subtotal_high_usd_bn, pct_of_us_gdp_low/high, prior_year_partial_usd_bn}, revenue_scopes[] each {scope, value_usd_bn, detail, source, as_of, double_counts, preferred, coverage_low_pct, coverage_high_pct}, us_nominal_gdp_usd_bn.\n"
+        "Interpretation rules:\n"
+        "- The coverage ratio (revenue ÷ capex) ranges roughly 5% to 58% ACROSS SCOPES. There is no single correct number and you must not present one. Always name the scope with the ratio.\n"
+        "- The scope marked `preferred: true` (frontier laboratory run-rates) is the cleanest test of END DEMAND. The scope marked `double_counts: true` includes purchases of the very infrastructure being capitalised and is not a valid coverage measure — say so if you cite it.\n"
+        "- Capex is an annual FLOW; laboratory revenue is a RUN-RATE. This flatters the capital side. State the mismatch.\n"
+        "- Low coverage during a build-out is NOT by itself evidence of mispricing — every infrastructure cycle runs negative coverage while building. What matters is the DIRECTION over time and how much of the gap is debt-funded. Be explicit about this; do not treat a low ratio as a verdict.\n"
+        "- Entities report on different bases. Oracle is in `non_additive` because it uses a May fiscal year and must never be summed into the calendar-year subtotal.\n"
+        "- Gross capex as a share of GDP includes foreign spending and imported content, so it is NOT comparable to AI investment as measured in the US national accounts (~0.8-1.4% of GDP). Do not conflate them.\n"
+        "What to produce: (a) the coverage ratio at the preferred scope, with the scope named and the run-rate-vs-flow caveat; (b) how much the answer moves across scopes, as evidence that the headline is a definitional choice; (c) what would have to be true for coverage to improve. End with a 'Bottom line:' on what the capital-versus-revenue gap does and does not tell you today."
+    ),
     "causality-ccf": (
         "Causality → Tab 1 (CCF Lead/Lag) payload. The user is exploring whether one macro series leads another at the daily frequency. The page is macro-only — no single-name equities. Two modes:\n"
         "(A) PAIR mode payload: x{symbol, transform, adf_p}, y{symbol, transform, adf_p}, lookback ('1Y'|'3Y'|'5Y'|'10Y'), max_lag, result{lags[], ccf[], conf_band, n, peak{lag, rho}, x_leads{lag, rho}, y_leads{lag, rho}, contemp_rho}.\n"

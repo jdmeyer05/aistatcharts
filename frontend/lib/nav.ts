@@ -70,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Fed & Macro", href: "/fed-macro", description: "8-tab: signal matrix, FOMC, inflation, labor, yield curve", status: "live" },
       { label: "Sector Analysis", href: "/sector-analysis", description: "All 11 SPDR sectors: revenue, CapEx, valuation, alpha", status: "live" },
       { label: "Positioning (CFTC)", href: "/positioning", description: "45-contract COT: managed money / leveraged funds, divergence Z, regime composites, CTA unwind risk", status: "live" },
+      { label: "AI Infrastructure", href: "/ai-infrastructure", description: "AI build-out monitor: realised grid load growth vs generation additions by balancing authority, capital committed vs revenue earned", status: "live" },
       { label: "Polymarket", href: "/polymarket", description: "Crowd-priced odds: Fed decisions, recession, geopolitics, elections — sorted by actionability", status: "live" },
       { label: "WallStreetBets", href: "/wsb", description: "Reddit ticker-mention surface: bull/bear sentiment, options lean, DD post count across r/wsb + r/options + r/stocks", status: "live" },
     ],
