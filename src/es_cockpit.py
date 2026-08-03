@@ -587,12 +587,23 @@ def es_cockpit(now: pd.Timestamp | None = None,
     # Levels that price cannot tell apart are ONE reference. Computed after the
     # pool because it needs the gamma walls, and it is pure arithmetic over
     # numbers already in hand — no fetch, so no reason to occupy a worker.
+    #
+    # `cur_rth` lives on `frames`, not in this scope. Reading it as a bare name
+    # raised NameError, a blanket `except Exception` swallowed it, and the
+    # clustering quietly fell back to 4% of the normal range — the tolerance
+    # still worked, so nothing looked broken, and the median-bar basis this was
+    # argued on was simply never in effect. Caught only because the live payload
+    # reported `tolerance_basis` and it read the wrong one. A blanket catch
+    # around a name lookup hides typos rather than data problems, so the lookup
+    # is now explicit and only the numeric work is guarded.
+    _rth = (frames or {}).get("cur_rth")
     _bar = None
-    try:
-        _b = (cur_rth["High"] - cur_rth["Low"]).median() if not cur_rth.empty else None
-        _bar = float(_b) if _b and _b > 0 else None
-    except Exception:
-        _bar = None
+    if _rth is not None and not _rth.empty:
+        try:
+            _b = (_rth["High"] - _rth["Low"]).median()
+            _bar = float(_b) if _b and _b > 0 else None
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning(f"es-cockpit: median bar failed: {e}")
     clusters = _safe(lambda: cluster_levels(lv, gamma, median_bar=_bar,
                                             normal_range=_normal), "level_clusters")
 
