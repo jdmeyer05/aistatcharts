@@ -3109,6 +3109,9 @@ def _es_brief_build() -> dict:
         # What is driving today, how much room it implies, and — stated as an
         # explicit null with its p-value — what it does not tell you.
         "macro_setup": cock.get("macro_setup"),
+        # Which levels on the ladder are actually the same reference. Counting
+        # rows on the ladder counts confirmations that are not there.
+        "level_clusters": cock.get("level_clusters"),
         "gamma": cock.get("gamma"),
         "base_rates": cock.get("base_rates"),
         "breadth": cock.get("breadth"),
@@ -3147,6 +3150,57 @@ def _es_brief_build() -> dict:
 async def es_brief_endpoint(user: str = Depends(get_current_user)):
     """Everything needed for the top-of-page ES session briefing, in one call."""
     return await asyncio.to_thread(_es_brief_cached)
+
+
+_CARD_AUDIT_CACHE: dict = {}
+_CARD_AUDIT_TTL_S = 600
+
+
+def _es_card_audit_cached() -> dict:
+    """Audit the assembled brief against itself.
+
+    Cached hard and fetched separately from the brief. A model call on the
+    card's critical path would add ten seconds or more to a cold build, and the
+    finding set only changes when the underlying blocks do — which is far slower
+    than the 90-second brief cache.
+    """
+    from time import time as _t
+    hit = _CARD_AUDIT_CACHE.get("audit")
+    if hit and (_t() - hit[0]) < _CARD_AUDIT_TTL_S:
+        return hit[1]
+    from src.es_auditor import audit_card
+    try:
+        out = audit_card(_es_brief_cached())
+    except Exception as e:
+        logger.warning(f"card audit failed: {e}")
+        out = {"available": False, "reason": str(e)[:200]}
+    _CARD_AUDIT_CACHE["audit"] = (_t(), out)
+    return out
+
+
+_TRACK_CACHE: dict = {}
+
+
+@router.get("/es-track-record")
+async def es_track_record(user: str = Depends(get_current_user)):
+    """Calibration of the session-character read, replayed over the full history.
+
+    Separate from the brief because it describes the MODULE rather than today,
+    and it moves once a day at most.
+    """
+    from src.es_track_record import character_track_record
+    return await asyncio.to_thread(character_track_record)
+
+
+@router.get("/es-card-audit")
+async def es_card_audit(user: str = Depends(get_current_user)):
+    """Internal contradictions on the ES card.
+
+    Deliberately a SEPARATE call rather than a field on `/es-brief`: this is the
+    one block whose job is to disagree with the others, so it has to read the
+    finished payload rather than be assembled alongside it.
+    """
+    return await asyncio.to_thread(_es_card_audit_cached)
 
 
 @router.get("/es-levels")
