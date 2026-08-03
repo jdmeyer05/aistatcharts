@@ -116,19 +116,42 @@ export default function OvernightRead({ d }: { d?: EsOvernight | null }) {
               <div className="text-[0.55rem] uppercase tracking-wider text-text-muted">
                 From this opening position (n={live.expected.n})
               </div>
-              {typeof live.expected.breaks_on_high_pct === "number" && (
-                <div className="text-[0.68rem]">
-                  Overnight high has been taken out <Pct v={live.expected.breaks_on_high_pct} /> of the time
+              {/* Withheld while the range is still being built. Saying why beats
+                  showing a frequency about a session that does not exist yet. */}
+              {live.expected.withheld ? (
+                <div className="text-[0.62rem] text-text-muted leading-snug">
+                  Withheld — {live.expected.withheld}
+                  {typeof d.live?.overnight_elapsed_pct === "number" &&
+                    ` (${d.live.overnight_elapsed_pct.toFixed(0)}% of the 18:00–09:30 window elapsed)`}
+                  . {live.expected.note}
                 </div>
+              ) : (
+                <>
+                  {typeof live.expected.breaks_on_high_pct === "number" && (
+                    <div className="text-[0.68rem]">
+                      Overnight high has been taken out <Pct v={live.expected.breaks_on_high_pct} /> of the time
+                    </div>
+                  )}
+                  {typeof live.expected.breaks_on_low_pct === "number" && (
+                    <div className="text-[0.68rem]">
+                      Overnight low has been taken out <Pct v={live.expected.breaks_on_low_pct} /> of the time
+                    </div>
+                  )}
+                  {live.expected.breaks_on_high_pct == null && live.expected.breaks_on_low_pct == null && (
+                    <div className="text-[0.62rem] text-text-muted">Both sides already resolved.</div>
+                  )}
+                </>
               )}
-              {typeof live.expected.breaks_on_low_pct === "number" && (
-                <div className="text-[0.68rem]">
-                  Overnight low has been taken out <Pct v={live.expected.breaks_on_low_pct} /> of the time
-                </div>
-              )}
-              {live.expected.breaks_on_high_pct == null && live.expected.breaks_on_low_pct == null && (
-                <div className="text-[0.62rem] text-text-muted">Both sides already resolved.</div>
-              )}
+            </div>
+          )}
+
+          {live.overnight_complete === false && (
+            <div className="text-[0.6rem] text-text-muted border border-border rounded p-2 leading-snug">
+              The range is still forming
+              {typeof live.overnight_elapsed_pct === "number" &&
+                ` — ${live.overnight_elapsed_pct.toFixed(0)}% of the Globex window has elapsed`}
+              . The session-range expectation is bucketed on the FINISHED overnight range, so it is
+              held back rather than drawn from a bucket the range has not settled into yet.
             </div>
           )}
 

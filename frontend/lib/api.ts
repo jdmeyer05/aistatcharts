@@ -3331,7 +3331,21 @@ export interface EsOvernight {
       n: number;
       breaks_on_high_pct?: number;
       breaks_on_low_pct?: number;
+      /** Present when the frequencies are withheld because the overnight range
+       *  is still forming. They describe where the cash session OPENS inside a
+       *  FINISHED range, so they do not apply until 09:30. */
+      withheld?: string;
+      note?: string;
     } | null;
+    /** Share of the 18:00–09:30 window that has elapsed. */
+    overnight_elapsed_pct?: number | null;
+    /** True once the cash session has opened and the range is final. Every
+     *  conditioned table here is keyed on the finished range. */
+    overnight_complete?: boolean;
+    /** Null until the overnight completes — it is bucketed on the range SIZE,
+     *  and a half-built range lands in the wrong bucket. Measured 2026-08-02:
+     *  15.5 pts three hours in against a 43.0 median for a finished one, which
+     *  read as the smallest bucket and forecast a quiet session. */
     rth_range_expectation?: { p25: number; median: number; p75: number; n: number } | null;
   } | null;
 }

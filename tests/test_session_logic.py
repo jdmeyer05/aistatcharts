@@ -627,6 +627,101 @@ def test_heading_is_absent_when_the_dot_has_not_moved():
     assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
 
 
+# ── Overnight base rates apply to a FINISHED range ───────────────────────────
+
+def test_overnight_conditioned_tables_are_withheld_until_the_range_is_final():
+    """Every table in the study is keyed on the overnight range AS IT STANDS AT
+    09:30. Measured 2026-08-02 21:18 ET, three hours into a 15.5-hour Globex
+    session: the range was 15.50 points against a 43.0 median for a finished
+    one, and the module reported a 74.0% chance of the high going plus an RTH
+    range drawn from the SMALLEST size bucket. By the bell the range typically
+    triples into a different bucket, so both numbers described a session that
+    did not exist yet."""
+    partial, finished_median = 15.5, 43.0
+    assert partial < finished_median * 0.5, "the case that motivated the gate"
+
+    # The gate is `overnight_complete`, which is "has the cash session opened".
+    for complete, expect_probs, expect_rth in [(False, False, False), (True, True, True)]:
+        match = {"n": 123, "breaks_on_high_pct": 74.0, "breaks_on_low_pct": 52.0}
+        size = {"rth_p25": 35.4, "rth_median": 44.9, "rth_p75": 57.7, "n": 124}
+        expected = ({"n": match["n"], **{k: v for k, v in match.items() if k != "n"}}
+                    if complete else {"n": match["n"], "withheld": "overnight still forming"})
+        rth = size if (size and complete) else None
+        assert ("breaks_on_high_pct" in expected) is expect_probs
+        assert (rth is not None) is expect_rth
+        if not complete:
+            assert expected["withheld"], "must say WHY it is missing, not just omit"
+
+
+def _on_frames(complete: bool):
+    """A Globex session three hours old, optionally with the cash open."""
+    import numpy as np
+    start = pd.Timestamp("2026-08-02 18:00", tz="America/New_York")
+    idx = pd.date_range(start, periods=38, freq="5min")
+    rng = np.linspace(7543.5, 7559.0, len(idx))
+    on = pd.DataFrame({"Open": rng, "High": rng + 0.5, "Low": rng - 0.5,
+                       "Close": rng, "Volume": 1000}, index=idx)
+    on.loc[on.index[-1], "Close"] = 7554.0
+    if complete:
+        ridx = pd.date_range(pd.Timestamp("2026-08-03 09:30", tz="America/New_York"),
+                             periods=12, freq="5min")
+        r = pd.DataFrame({"Open": 7550.0, "High": 7552.0, "Low": 7548.0,
+                          "Close": 7551.0, "Volume": 5000}, index=ridx)
+        bars = pd.concat([on, r])
+    else:
+        r, bars = pd.DataFrame(), on
+    return {"overnight": on, "cur_rth": r, "bars": bars,
+            "anchor": pd.Timestamp("2026-08-03", tz="America/New_York"),
+            "mode": "rth" if complete else "premarket"}
+
+
+_ON_BASE = {
+    "available": True,
+    # Every band, so the fixture does not depend on where _pos_band happens to
+    # cut — the test is about the GATE, not about bucket boundaries.
+    "by_open_position": [{"band": b, "n": 123, "breaks_on_high_pct": 74.0,
+                          "breaks_on_low_pct": 52.0, "both_pct": 20.0,
+                          "median_rth_range": 60.0}
+                         for b in ("bottom 20%", "lower", "middle", "upper", "top 20%")],
+    "by_overnight_size": [{"on_range_pct_lo": 0.0, "on_range_pct_hi": 5.0,
+                           "rth_p25": 35.4, "rth_median": 44.9, "rth_p75": 57.7, "n": 124}],
+    "median_on_range": 43.0, "median_rth_range": 59.8,
+}
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_overnight_read_gates_the_conditioned_tables_end_to_end(complete):
+    """Drives overnight_read itself. The first version of this test asserted on
+    reconstructed logic, so removing the gate from the module left every test
+    green — the mutation survived, for the third time in one session."""
+    from src.es_overnight import overnight_read
+    out = overnight_read(base=dict(_ON_BASE), frames=_on_frames(complete))
+    live = out.get("live")
+    assert live, out
+    assert live["overnight_complete"] is complete
+    if complete:
+        assert live["rth_range_expectation"] is not None
+        assert "withheld" not in (live.get("expected") or {})
+    else:
+        assert live["rth_range_expectation"] is None, (
+            "bucketed on the FINISHED range size; a half-built range lands in "
+            "the wrong bucket")
+        assert (live.get("expected") or {}).get("withheld"), (
+            "must say why the frequencies are missing, not merely omit them")
+        assert "breaks_on_high_pct" not in (live.get("expected") or {})
+        assert 0 < live["overnight_elapsed_pct"] < 100
+
+
+def test_overnight_elapsed_is_a_share_of_the_globex_window():
+    """18:00 -> 09:30 is 15.5 hours, and the share is what tells a reader how
+    provisional the range is."""
+    from src.es_overnight import _ON_OPEN_HOUR, _RTH_OPEN
+    span_h = (24 - _ON_OPEN_HOUR) + _RTH_OPEN[0] + _RTH_OPEN[1] / 60.0
+    assert span_h == pytest.approx(15.5)
+    assert round(3.2 / span_h * 100, 1) == pytest.approx(20.6, abs=0.5)
+    assert round(15.5 / span_h * 100, 1) == pytest.approx(100.0)
+
+
 # ── Dealer gamma: the basis needs two SIMULTANEOUS quotes ────────────────────
 # `es_last - spot` is right only while cash prints. Outside RTH the SPX close is
 # frozen and ES keeps trading, so that subtraction books the whole move since

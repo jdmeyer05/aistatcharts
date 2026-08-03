@@ -636,8 +636,34 @@ def overnight_read(base: dict | None = None, frames: dict | None = None) -> dict
     broke_high = bool(not rth.empty and float(rth["High"].max()) > onh)
     broke_low = bool(not rth.empty and float(rth["Low"].min()) < onl)
 
+    # IS THE OVERNIGHT RANGE EVEN FORMED YET?
+    #
+    # Every table in `base` is conditioned on the COMPLETE overnight range as it
+    # stands at 09:30. Applying them to a range that is still being built asks a
+    # different question and answers it confidently. Measured 2026-08-02 21:18
+    # ET, three hours into a fifteen-and-a-half hour Globex session: the range
+    # was 15.50 points against a 43.0 median for a finished one, and the module
+    # was reporting a 74.0% chance of the high going and an RTH range drawn from
+    # the SMALLEST size bucket. By the bell the range will typically have
+    # tripled and landed in a different bucket entirely, so both numbers were
+    # about a session that does not exist yet.
+    #
+    # Position has the same problem: 67.7% of a third-formed range says nothing
+    # about where price will sit in the range that actually opens.
+    # 18:00 -> 09:30 is 15.5 hours. Measured from the frame's own first and last
+    # bar rather than from a constructed timestamp, so it cannot drift from the
+    # session split the rest of the cockpit is using.
+    elapsed_pct = None
+    try:
+        span_h = (24 - _ON_OPEN_HOUR) + _RTH_OPEN[0] + _RTH_OPEN[1] / 60.0
+        elapsed_h = (on.index[-1] - on.index[0]).total_seconds() / 3600.0
+        elapsed_pct = round(min(max(elapsed_h / span_h, 0.0), 1.0) * 100, 1)
+    except Exception:
+        elapsed_pct = None
+    overnight_complete = not (rth is None or rth.empty)
+
     expected = None
-    if match:
+    if match and overnight_complete:
         expected = {"n": match["n"]}
         # Omit the side that has already resolved rather than restating its
         # prior — the trader's question about that side is now "does it hold",
@@ -646,6 +672,14 @@ def overnight_read(base: dict | None = None, frames: dict | None = None) -> dict
             expected["breaks_on_high_pct"] = match["breaks_on_high_pct"]
         if not broke_low:
             expected["breaks_on_low_pct"] = match["breaks_on_low_pct"]
+    elif match:
+        # The band is still reported, because "price is in the upper third of
+        # the range so far" is a true statement about now. The PROBABILITIES are
+        # withheld, because they are a statement about 09:30.
+        expected = {"n": match["n"], "withheld": "overnight still forming",
+                    "note": ("These frequencies are measured from where the cash session "
+                             "OPENS inside the FINISHED overnight range. The range is "
+                             "still being built, so they are not applicable yet.")}
 
     # Bucket edges must be PRESENT to match. The permissive version of this —
     # `.get(lo, -1) <= x <= .get(hi, 1e9)` — quietly matched every bucket when a
@@ -678,11 +712,22 @@ def overnight_read(base: dict | None = None, frames: dict | None = None) -> dict
             "broke_on_high": broke_high,
             "broke_on_low": broke_low,
             "expected": expected,
+            # How much of the 18:00-09:30 window has actually happened, and
+            # whether the range is final. Both gate the conditioned tables above
+            # and below, and both are published so the card can say why a number
+            # is missing instead of just missing it.
+            "overnight_elapsed_pct": elapsed_pct,
+            "overnight_complete": overnight_complete,
             "extension_if_it_breaks_now": _extension_now(
                 base, pd.Timestamp(session_day), last_ts=bars.index[-1]),
+            # Bucketed on the overnight range SIZE, so it is wrong twice over
+            # while the range is still growing: the wrong bucket, and a bucket
+            # whose own definition is "the finished range". A 15.5-point range
+            # three hours in reads as the smallest bucket and forecasts a quiet
+            # session; by the bell it has typically tripled into another one.
             "rth_range_expectation": ({
                 "p25": size["rth_p25"], "median": size["rth_median"], "p75": size["rth_p75"],
                 "n": size["n"],
-            } if size else None),
+            } if (size and overnight_complete) else None),
         },
     }
