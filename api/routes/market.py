@@ -3095,6 +3095,10 @@ def _es_brief_build() -> dict:
         "levels_reason": None if (lvl or {}).get("available") else (lvl or {}).get("reason"),
         "intraday": cock.get("intraday"),
         "expected_move": cock.get("expected_move"),
+        # Whether this session is behaving like an ordinary one. The only
+        # estimator here that is not fixed at the open, so it is the only one
+        # that can see an UNSCHEDULED event while it is still running.
+        "regime": cock.get("regime"),
         "gamma": cock.get("gamma"),
         "base_rates": cock.get("base_rates"),
         "breadth": cock.get("breadth"),

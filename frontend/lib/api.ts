@@ -3294,6 +3294,49 @@ export interface EsCandleContext {
   disclaimer?: string;
 }
 
+/** Is this session ordinary, and by how much? The only range estimator on the
+ *  card not fixed at the open — measured from the range actually delivered, so
+ *  it can see an unscheduled event while that event is still running. */
+export interface EsRegime {
+  available: boolean;
+  /** "wide" | "normal" | "compressed" | "possibly wide" | "unknown" */
+  character: string;
+  /** Which instrument produced the headline: "path" | "dispersion" | null. */
+  basis: string | null;
+  path_implied: {
+    available: boolean;
+    reason?: string;
+    slot?: string;
+    implied_range?: number;
+    range_so_far?: number;
+    normal_range?: number | null;
+    multiplier?: number | null;
+    note?: string;
+    typical_pct_covered?: number;
+    /** Measured out-of-sample error at this slot, so the reader can weigh the
+     *  estimate rather than trust it. */
+    oos_mae_pct?: number;
+    method?: string;
+  };
+  dispersion: {
+    available: boolean;
+    count?: number;
+    sum_z?: number;
+    band?: string;
+    assets?: Array<{ symbol: string; label: string; z: number; pct: number }>;
+    outliers?: Array<{ symbol: string; label: string; z: number; pct: number }>;
+    median_multiplier?: number;
+    p_wide_pct?: number;
+    base_rate_pct?: number;
+    lift?: number;
+    sample?: number;
+    note?: string;
+    caveat?: string;
+    method?: string;
+  } | null;
+  disclaimer?: string;
+}
+
 /** Whether the session suits intraday trading at all — conditions, never
  *  direction. Each reason states the points it contributed. */
 export interface EsConditions {
@@ -3406,6 +3449,7 @@ export interface EsBrief {
   /** Why `levels` is null, when it is. A feed outage and an empty session read
    *  identically on the card without this. */
   levels_reason?: string | null;
+  regime?: EsRegime | null;
   cta?: {
     bias_1w?: CtaBias;
     current_exposure?: number;

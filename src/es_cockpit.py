@@ -32,6 +32,29 @@ def _level(levels: list[dict], key: str) -> dict | None:
     return next((l for l in levels if l.get("key") == key), None)
 
 
+def _normal_range(frames: dict) -> float | None:
+    """ES's own trailing median RTH session range, excluding the live one.
+
+    The denominator for the session-character multiplier. Computed on ES rather
+    than borrowed from the SPY study because the multiplier only transfers
+    between instruments if each is measured against ITSELF — the point of a
+    unit-free ratio is that neither the basis nor the contract size enters it.
+    """
+    try:
+        rth = frames.get("rth")
+        if rth is None or rth.empty:
+            return None
+        g = rth.groupby("session").agg(hi=("High", "max"), lo=("Low", "min"))
+        rng = (g["hi"] - g["lo"]).dropna()
+        # Drop the developing session — a half-formed range would drag the
+        # median down and inflate every multiplier measured against it.
+        prior = rng.iloc[-21:-1]
+        return float(prior.median()) if len(prior) >= 5 else None
+    except Exception as e:
+        logger.warning(f"es-cockpit: normal range failed: {e}")
+        return None
+
+
 def conditions_gate(levels: dict, intraday: dict, em: dict, gamma: dict,
                     session: dict, schedule: list[dict],
                     breadth: dict | None = None, candles: dict | None = None) -> dict:
@@ -358,6 +381,14 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         # lost, and the module already reports that as `live: None`.
         overnight_ctx = _safe(overnight_base_rates, "overnight") if with_overnight else None
 
+    # The dispersion half of session character is cross-asset DAILY data and
+    # touches no ES bar, so it survives a levels outage intact. The path half
+    # cannot — it is measured from the developing range that just went missing —
+    # and reports itself unavailable rather than being faked.
+    from src.es_regime import session_character
+    regime = _safe(lambda: session_character(range_so_far=None, normal_range=None),
+                   "regime")
+
     return {
         "available": True,
         "levels_unavailable_reason": reason,
@@ -371,6 +402,7 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         "breadth": breadth,
         "candles": candles,
         "overnight": overnight_ctx,
+        "regime": regime,
         "gap_pct": None,
         # Only what is ACTUALLY missing. Gamma used to be listed here
         # unconditionally alongside the two that genuinely need bars, which is
@@ -378,7 +410,8 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         "degraded": ["levels", "intraday", "expected_move"]
                     + [k for k, v in (("gamma", gamma), ("base_rates", rates),
                                       ("breadth", breadth), ("candles", candles),
-                                      ("overnight", overnight_ctx)) if not v],
+                                      ("overnight", overnight_ctx),
+                                      ("regime", regime)) if not v],
     }
 
 
@@ -498,6 +531,17 @@ def es_cockpit(now: pd.Timestamp | None = None,
         # extra bar fetch against the futures tier's 5 calls a minute.
         f_on = pool.submit(_safe, lambda: overnight_read(frames=frames), "overnight") \
             if with_overnight else None
+        # SESSION CHARACTER. Every other range estimator here is fixed at the
+        # open — this one is measured from the range the session has actually
+        # delivered, which is the only way an UNSCHEDULED event shows up while
+        # it is still running. Handed ES's own trailing median so the multiplier
+        # is unit-free; see the module docstring for the measured error.
+        from src.es_regime import session_character
+        dev_range = (s_high - s_low) if (live and s_high is not None
+                                         and s_low is not None) else None
+        f_rg = pool.submit(_safe, lambda: session_character(
+            range_so_far=dev_range, normal_range=_normal_range(frames),
+            now=now), "regime")
 
         intraday = f_intra.result()
         em = f_em.result()
@@ -506,6 +550,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
         breadth = f_bd.result() if f_bd else None
         candles = f_cx.result() if f_cx else None
         overnight_ctx = f_on.result() if f_on else None
+        regime = f_rg.result()
 
     # REACHABILITY. The ladder quotes every level as a distance in handles, which
     # answers "how far" but not the question actually being asked at the open:
@@ -560,9 +605,11 @@ def es_cockpit(now: pd.Timestamp | None = None,
         "breadth": breadth,
         "candles": candles,
         "overnight": overnight_ctx,
+        "regime": regime,
         "gap_pct": round(gap_pct, 3) if gap_pct is not None else None,
         "degraded": [k for k, v in (("intraday", intraday), ("expected_move", em),
                                     ("gamma", gamma), ("base_rates", rates),
                                     ("breadth", breadth), ("candles", candles),
-                                    ("overnight", overnight_ctx)) if not v],
+                                    ("overnight", overnight_ctx),
+                                    ("regime", regime)) if not v],
     }
