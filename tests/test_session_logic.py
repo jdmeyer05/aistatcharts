@@ -1,7 +1,7 @@
-"""Regression tests for the pure session/date/classification logic.
+﻿"""Regression tests for the pure session/date/classification logic.
 
 Every case here is a bug that actually shipped, or a boundary that produced one.
-They are deliberately all NETWORK-FREE — the failures worth catching this way
+They are deliberately all NETWORK-FREE â€” the failures worth catching this way
 were never about the data being unavailable, they were about correct-looking
 output derived from a subtly wrong rule. A wide overnight labelled tight, the
 Fed sorted last, a contract list that ages out: none of those look broken.
@@ -25,7 +25,7 @@ import pytest
 ET = "America/New_York"
 
 
-# ── ES contract codes ─────────────────────────────────────────────
+# â”€â”€ ES contract codes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Shipped hardcoded and ending at ESU6, which would have silently dropped the
 # newest quarter about six weeks later while still reporting itself complete.
 
@@ -49,9 +49,9 @@ def test_contract_list_only_uses_quarterly_codes():
         assert c[:2] == "ES" and c[2] in "HMUZ" and c[3].isdigit()
 
 
-# ── "since the last close" ────────────────────────────────────────
+# â”€â”€ "since the last close" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Shipped as fixed hours-ago buckets, which called Friday's news "earlier" when
-# read on Monday morning — 65h old and also the most recent thing that happened.
+# read on Monday morning â€” 65h old and also the most recent thing that happened.
 
 @pytest.mark.parametrize("now,expected", [
     ("2026-08-01 19:55", "2026-07-31 16:00"),   # Saturday evening -> Friday
@@ -67,7 +67,7 @@ def test_last_cash_close(now, expected):
     assert got == pd.Timestamp(expected, tz=ET)
 
 
-# ── news tiering ──────────────────────────────────────────────────
+# â”€â”€ news tiering â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # `tier = max(tier, 3)` demoted anything matching the single-name pattern, so a
 # Fed headline mentioning shares sorted below a stock tip.
 
@@ -81,7 +81,7 @@ def test_last_cash_close(now, expected):
     ("Linde post-earnings slide is a buying opportunity", 3),
 ])
 def test_news_tiering(title, tier):
-    # Calls the production rule, not a copy of it — a test that reimplements
+    # Calls the production rule, not a copy of it â€” a test that reimplements
     # the logic passes happily while the shipped version is wrong.
     from src.es_session import _headline_tier
     assert _headline_tier(title) == tier
@@ -92,7 +92,7 @@ def test_single_name_noise_is_filtered_before_it_is_tiered():
     assert not _RELEVANT.search("Nvidia shares jump 8% on AI demand")
 
 
-# ── Polygon symbol eligibility ────────────────────────────────────
+# â”€â”€ Polygon symbol eligibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Index/futures/FX/crypto return 200 with an EMPTY body rather than an error, and
 # a bare futures root quotes an unrelated EQUITY (ES -> Eversource).
 
@@ -108,7 +108,7 @@ def test_polygon_eligible(ticker, ok):
     assert _polygon_eligible(ticker) is ok
 
 
-# ── overnight open-position bands ─────────────────────────────────
+# â”€â”€ overnight open-position bands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # The band gates which base rate the live read quotes, so a gap between bands
 # means a session silently gets no answer.
 
@@ -125,9 +125,9 @@ def test_open_position_bands_are_ordered():
     assert _pos_band(0.95) == "top 20%"
 
 
-# ── cached panel shape ────────────────────────────────────────────
+# â”€â”€ cached panel shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # The panel is persisted as JSON. A cache written by an older shape must be
-# treated as a miss, not fed to the statistics — where it would either raise or,
+# treated as a miss, not fed to the statistics â€” where it would either raise or,
 # worse, be papered over by a `.get()` and quietly change a number.
 
 def _fake_panel_rows(n=150, drop=None):
@@ -165,7 +165,7 @@ def test_cached_panel_missing_a_column_is_a_miss(monkeypatch):
 
 def test_cached_panel_keeps_its_timezone(monkeypatch):
     """Naive reload vs tz-aware fresh rows meant concat produced duplicates that
-    `duplicated()` could not see — 493 + 53 became 546."""
+    `duplicated()` could not see â€” 493 + 53 became 546."""
     import src._cache_util as cu
     from datetime import datetime
     import src.es_overnight as eo
@@ -175,7 +175,7 @@ def test_cached_panel_keeps_its_timezone(monkeypatch):
     assert s.index.tz is not None and str(s.index.tz) == ET
 
 
-# ── Dispersion formula ───────────────────────────────────────────────────────
+# â”€â”€ Dispersion formula â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # The implied-correlation denominator was wrong for a long time and no test
 # noticed, because every test asserted on shape rather than on value. The
 # round-trip below is the one that bites: build an index vol from a KNOWN rho
@@ -215,7 +215,7 @@ def test_implied_correlation_round_trips_under_cap_weights():
 
 
 def test_implied_correlation_is_scale_invariant():
-    """Percent and fraction inputs must agree — the pipeline passes fractions
+    """Percent and fraction inputs must agree â€” the pipeline passes fractions
     while the payload prints percent, and the two got mixed once already."""
     from src.cross_asset_vol import compute_implied_correlation
     s = [0.21, 0.25, 0.335, 0.16]
@@ -234,7 +234,7 @@ def test_implied_correlation_degrades_without_raising():
     assert f(0.01, [0.2, 0.3, 0.4]) == 0.0   # clamped, not negative
 
 
-# ── Skew basis and the parity gate ───────────────────────────────────────────
+# â”€â”€ Skew basis and the parity gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _mrow(tk, skew, parity, **kw):
     r = {"Ticker": tk, "Put_Skew": skew, "Parity": parity, "Front_IV": 0.13,
@@ -278,7 +278,7 @@ def test_missing_parity_does_not_suppress():
 
 
 def test_vol_gap_leads_and_reports_signed_spread():
-    """Front_IV is a fraction while avg_sector_iv is already percent — the two
+    """Front_IV is a fraction while avg_sector_iv is already percent â€” the two
     got mixed once, so this pins the scaling as well as the arithmetic."""
     from src.vol_es_read import es_vol_read
     out = es_vol_read([_mrow("SPY", 1.19, 0.94)], 0.32, {"avg_sector_iv": 21.41})
@@ -427,7 +427,7 @@ def test_divergences_survive_an_all_null_skew_column():
     """The narrow case that genuinely raises. With a mix of None and floats
     pandas coerces the column to float64 and the None becomes NaN, so the
     comparison is merely False. With EVERY value None the column stays object
-    dtype and `None - None` is a TypeError — so the crash needs both chains in a
+    dtype and `None - None` is a TypeError â€” so the crash needs both chains in a
     pair to fail, which is exactly when a degraded feed would hit it."""
     import pandas as pd
     from src.cross_asset_vol import detect_divergences, CORRELATED_PAIRS
@@ -439,9 +439,9 @@ def test_divergences_survive_an_all_null_skew_column():
     assert not any(d["metric"] == "Skew" for d in out)
 
 
-# ── Butterfly: each wing against its own type's ATM ──────────────────────────
+# â”€â”€ Butterfly: each wing against its own type's ATM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # The call side of the smile had never been checked against live data. It was
-# built as `p25 + c25 - 2*ATM_call`, which anchors a PUT wing on a CALL quote —
+# built as `p25 + c25 - 2*ATM_call`, which anchors a PUT wing on a CALL quote â€”
 # the same mixed-type error already fixed in Put_Skew, surviving in the
 # convexity metric because nothing rendered it.
 
@@ -477,7 +477,7 @@ def test_butterfly_measures_each_wing_against_its_own_atm():
     """Live QQQ, 2026-08-02: ATM call 26.68, ATM put 20.82, 25d put 25.30,
     25d call 23.39. Both wings lift off their own ATM, so the smile is convex
     and the butterfly is POSITIVE. Charging the 5.86-point parity gap to the
-    put wing reported -4.67 — thin tails, the opposite claim."""
+    put wing reported -4.67 â€” thin tails, the opposite claim."""
     r = _metrics_for(_two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339))
     assert r["Butterfly"] == pytest.approx(1.19, abs=0.01), r["Butterfly"]
     assert r["Butterfly"] > 0, "convexity read flipped sign"
@@ -486,7 +486,7 @@ def test_butterfly_measures_each_wing_against_its_own_atm():
 def test_butterfly_error_was_exactly_the_parity_gap():
     """Why the old form looked right for years: it is correct whenever the two
     ATM quotes agree, which is what parity promises and what XLF's chain
-    actually delivers. Same wings, parity forced to 1.0 — both forms give 1.19,
+    actually delivers. Same wings, parity forced to 1.0 â€” both forms give 1.19,
     so nothing was 'rescaled', only un-skewed."""
     r = _metrics_for(_two_sided_chain(0.2375, 0.2375, 0.2823, 0.2046))
     assert r["Parity"] == pytest.approx(1.0)
@@ -496,7 +496,7 @@ def test_butterfly_error_was_exactly_the_parity_gap():
 
 
 def test_butterfly_and_risk_reversal_are_none_when_a_wing_is_missing():
-    """0.0 is a reading — "flat wings", "no skew". Absence has to say absence,
+    """0.0 is a reading â€” "flat wings", "no skew". Absence has to say absence,
     the same rule that made atm_iv stop returning 0.25."""
     puts_only = _two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339)
     puts_only = puts_only[puts_only["contract_type"] == "put"].copy()
@@ -512,7 +512,7 @@ def test_butterfly_and_risk_reversal_are_none_when_a_wing_is_missing():
     #
     # It has to be the PUT side. find_delta_strike applies no maximum distance
     # from the target delta, so a chain holding one call still yields a
-    # "25-delta call" — the 0.50-delta ATM one. The call wing therefore cannot
+    # "25-delta call" â€” the 0.50-delta ATM one. The call wing therefore cannot
     # vanish on its own: whatever empties it also empties front_iv, and the row
     # is dropped before any of this is reached.
     dead_puts = _two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339)
@@ -525,7 +525,7 @@ def test_butterfly_and_risk_reversal_are_none_when_a_wing_is_missing():
 
 
 def test_risk_reversal_is_unaffected_by_a_broken_parity():
-    """A risk reversal is a call minus a put by construction — there is no ATM
+    """A risk reversal is a call minus a put by construction â€” there is no ATM
     anchor in it to mis-assign, so the same wings give the same answer however
     far apart the ATM quotes sit. This is the control on the butterfly fix."""
     broken = _metrics_for(_two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339))
@@ -534,11 +534,11 @@ def test_risk_reversal_is_unaffected_by_a_broken_parity():
     assert broken["Risk_Rev"] == pytest.approx((0.2339 - 0.2530) * 100)
 
 
-# ── Smile interpolation: nulls stay null ─────────────────────────────────────
+# â”€â”€ Smile interpolation: nulls stay null â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_smile_reports_nothing_where_no_strike_sits():
     """Live HYG had no strike near 110% of spot. `smile.get(m) or 0` turned that
-    into a 0% IV cell — a claim that the wing is priced at zero volatility."""
+    into a 0% IV cell â€” a claim that the wing is priced at zero volatility."""
     from src.cross_asset_vol import interpolate_smile
     ch = _two_sided_chain(0.2668, 0.2082, 0.2530, 0.2339)
     out = interpolate_smile(ch, 100.0, [0.90, 1.00, 1.10, 1.60])
@@ -546,8 +546,8 @@ def test_smile_reports_nothing_where_no_strike_sits():
     assert out[0.90] == pytest.approx(0.30)
 
 
-# ── Sector RRG ───────────────────────────────────────────────────────────────
-# The board was daily, unit-scaled, and filled an unmeasurable sector with 100 —
+# â”€â”€ Sector RRG â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# The board was daily, unit-scaled, and filled an unmeasurable sector with 100 â€”
 # which is the quadrant origin, and _quadrant(100, 100) is "leading".
 
 def test_unmeasurable_sector_is_not_reported_as_leading():
@@ -576,7 +576,7 @@ def test_normalise_uses_the_canonical_scaling():
 
 
 def test_normalise_demands_most_of_its_window():
-    """min_periods was window//3 — a z-score against 84 of 252 observations was
+    """min_periods was window//3 â€” a z-score against 84 of 252 observations was
     presented identically to one against the full window."""
     from src.sector_rrg import _min_periods, _NORM_WINDOW, _MIN_FRAC
     assert _MIN_FRAC >= 0.75
@@ -599,7 +599,7 @@ def test_band_never_invents_a_middle():
 def test_band_of_the_latest_value_matches_the_band_used_for_its_context():
     """The headline band comes from _pctile on the latest value; the context
     averages the history sharing that band. Deriving those from two different
-    cuts — fraction-below vs quantile(1/3) — lets a boundary value be labelled
+    cuts â€” fraction-below vs quantile(1/3) â€” lets a boundary value be labelled
     one band and described by another. They must agree for EVERY observation."""
     import numpy as np
     from src.sector_rrg import _pctile, _pct_rank, _band
@@ -618,7 +618,7 @@ def test_band_of_the_latest_value_matches_the_band_used_for_its_context():
 
 
 def test_heading_is_absent_when_the_dot_has_not_moved():
-    """atan2(0, 0) is 0.0 — "due east" — for a sector that went nowhere."""
+    """atan2(0, 0) is 0.0 â€” "due east" â€” for a sector that went nowhere."""
     import numpy as np
     from src.sector_rrg import _SCALE
     dx = dy = 0.0
@@ -627,7 +627,7 @@ def test_heading_is_absent_when_the_dot_has_not_moved():
     assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
 
 
-# ── Overnight base rates apply to a FINISHED range ───────────────────────────
+# â”€â”€ Overnight base rates apply to a FINISHED range â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_overnight_conditioned_tables_are_withheld_until_the_range_is_final():
     """Every table in the study is keyed on the overnight range AS IT STANDS AT
@@ -678,7 +678,7 @@ def _on_frames(complete: bool):
 _ON_BASE = {
     "available": True,
     # Every band, so the fixture does not depend on where _pos_band happens to
-    # cut — the test is about the GATE, not about bucket boundaries.
+    # cut â€” the test is about the GATE, not about bucket boundaries.
     "by_open_position": [{"band": b, "n": 123, "breaks_on_high_pct": 74.0,
                           "breaks_on_low_pct": 52.0, "both_pct": 20.0,
                           "median_rth_range": 60.0}
@@ -693,7 +693,7 @@ _ON_BASE = {
 def test_overnight_read_gates_the_conditioned_tables_end_to_end(complete):
     """Drives overnight_read itself. The first version of this test asserted on
     reconstructed logic, so removing the gate from the module left every test
-    green — the mutation survived, for the third time in one session."""
+    green â€” the mutation survived, for the third time in one session."""
     from src.es_overnight import overnight_read
     out = overnight_read(base=dict(_ON_BASE), frames=_on_frames(complete))
     live = out.get("live")
@@ -722,11 +722,11 @@ def test_overnight_elapsed_is_a_share_of_the_globex_window():
     assert round(15.5 / span_h * 100, 1) == pytest.approx(100.0)
 
 
-# ── The quote a trader sizes off ─────────────────────────────────────────────
+# â”€â”€ The quote a trader sizes off â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_snapshot_quote_guard_rejects_the_wrong_contract():
     """A 2% band is not a sanity check. Live within the hour of shipping it, the
-    quote came back 7626.00 while ES traded 7561 — the snapshot had resolved
+    quote came back 7626.00 while ES traded 7561 â€” the snapshot had resolved
     ESZ6, the DECEMBER contract, which carries a quarter's carry and prints ~65
     handles higher. That is 0.86%, waved straight through a 151-handle band,
     and every level distance was measured from it."""
@@ -739,7 +739,7 @@ def test_snapshot_quote_guard_rejects_the_wrong_contract():
         return accept_snapshot({"ticker": ticker, "price": px, "asof": ts},
                                bar_ticker, bar_close, span, bar_ts)[0]
 
-    assert accept(7560.25, "ESU6"), "same contract, newer, in line — take it"
+    assert accept(7560.25, "ESU6"), "same contract, newer, in line â€” take it"
     assert not accept(7626.0, "ESZ6"), "the December contract is not this instrument"
     assert not accept(7626.0, "ESU6"), (
         "even labelled correctly, 65 handles between consecutive 5-minute "
@@ -757,7 +757,7 @@ def test_front_month_does_not_flip_on_a_transient_empty_fetch(monkeypatch):
     """"Busiest wins" treats a failed fetch as zero volume. If the front month's
     daily bars come back empty for one call while the back month returns a
     single lot, the back month wins and is CACHED FOR THE DAY. A genuine roll
-    never looks like this — on 2026-07-31 the front turned over 1,736,589 lots
+    never looks like this â€” on 2026-07-31 the front turned over 1,736,589 lots
     against the next one's 901."""
     import src.futures_data as fd
 
@@ -795,7 +795,7 @@ def test_stale_is_measured_on_the_quote_not_the_bar():
         assert bool(market_live and quote_age > 15) is want
 
 
-# ── Dealer gamma: the basis needs two SIMULTANEOUS quotes ────────────────────
+# â”€â”€ Dealer gamma: the basis needs two SIMULTANEOUS quotes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # `es_last - spot` is right only while cash prints. Outside RTH the SPX close is
 # frozen and ES keeps trading, so that subtraction books the whole move since
 # the bell as basis and shifts every ES wall with it.
@@ -818,7 +818,7 @@ def test_cash_open_window(ts, is_open):
 def test_basis_uses_the_prior_cash_close_when_cash_is_shut(monkeypatch):
     """Measured on the Sunday 2026-08-02 reopen: ES closed Friday's cash session
     at 7522.25 against SPX 7489.72, an observed basis of 32.53. By 20:20 ET ES
-    was 7549.00 and the old formula returned 59.28 — 26.75 handles of weekend
+    was 7549.00 and the old formula returned 59.28 â€” 26.75 handles of weekend
     gap booked as carry, moving every wall by that much."""
     import src.dealer_gamma as dg
 
@@ -847,7 +847,7 @@ def _stub_gamma_chain(monkeypatch, seen: dict | None = None):
     hazard in one strike: evaluated at the stale spot it is "above" and wins the
     call wall, so the card would hand back resistance that price has already
     traded through. A fixture whose strikes straddle nothing cannot tell the two
-    behaviours apart — the first version of this one could not, and two
+    behaviours apart â€” the first version of this one could not, and two
     mutations walked straight through it.
     """
     import src.dealer_gamma as dg
@@ -868,7 +868,7 @@ def _stub_gamma_chain(monkeypatch, seen: dict | None = None):
 def test_dealer_gamma_anchors_the_basis_when_cash_is_shut(monkeypatch):
     """End to end, not just the helper. The first version of this test patched
     _cash_is_open and asserted on the arithmetic, so forcing basis_is_live=True
-    inside dealer_gamma left every test green — the mutation survived."""
+    inside dealer_gamma left every test green â€” the mutation survived."""
     dg = _stub_gamma_chain(monkeypatch)
     anchor = pd.Timestamp("2026-07-31 16:00", tz="America/New_York")
     monkeypatch.setattr(dg, "_cash_is_open", lambda now: False)
@@ -892,8 +892,8 @@ def test_dealer_gamma_anchors_the_basis_when_cash_is_shut(monkeypatch):
 
 def test_gamma_evaluates_the_book_where_price_actually_is(monkeypatch):
     """`spot` is the CASH print and cash is shut most of the day. Every
-    above/below question — both walls, the nearest flip crossing, the sign of
-    gamma at price — was answered at a frozen close while ES traded on. The
+    above/below question â€” both walls, the nearest flip crossing, the sign of
+    gamma at price â€” was answered at a frozen close while ES traded on. The
     dangerous case is not the regime label: it is a "wall above" that price has
     already traded through, a level a trader leans on that is behind them."""
     seen: dict = {}
@@ -911,7 +911,7 @@ def test_gamma_evaluates_the_book_where_price_actually_is(monkeypatch):
     # The 7500 strike carries the heaviest positive gamma but price is already
     # through it. Evaluated at the stale close it would be the call wall.
     assert out["call_wall_spx"] == pytest.approx(7530.0), (
-        f"call wall {out['call_wall_spx']} is behind price — evaluated at the "
+        f"call wall {out['call_wall_spx']} is behind price â€” evaluated at the "
         "stale cash print rather than where ES says SPX is")
     # And the flip search must be centred on price, not on the frozen close.
     assert seen["flip_spot"] == pytest.approx(7555.25 - 32.53, abs=0.01)
@@ -947,7 +947,7 @@ def test_gamma_effective_spot_is_the_cash_print_during_rth(monkeypatch):
 def test_gamma_treats_a_market_holiday_as_cash_shut(monkeypatch):
     """The clock cannot see a holiday. On Thanksgiving at 11:00 the
     weekday-and-hours test says cash is printing, and the basis would go back to
-    subtracting a live ES price from a stale close — ~9 days a year. The DATA
+    subtracting a live ES price from a stale close â€” ~9 days a year. The DATA
     settles it: if the newest SPX print is from an earlier session, cash is not
     trading today whatever the clock says."""
     dg = _stub_gamma_chain(monkeypatch)
@@ -1000,7 +1000,7 @@ def test_basis_stays_live_during_the_cash_session():
     assert es_last - spot == pytest.approx(30.0)
 
 
-# ── Futures contract lookup: server clock vs exchange clock ──────────────────
+# â”€â”€ Futures contract lookup: server clock vs exchange clock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Cloud Run runs in UTC. From 20:00 ET until midnight ET the container already
 # believes it is tomorrow, and the vendor's contracts endpoint returns an EMPTY
 # set for any future date. front_month therefore resolved to None and every ES
@@ -1057,7 +1057,7 @@ def test_front_month_walks_back_when_a_date_carries_no_contracts(monkeypatch):
 def test_front_month_probes_the_exchange_date_first_not_the_container_date(monkeypatch):
     """Pins the actual defect. On an ET developer machine `date.today()` and the
     exchange date agree, so reverting the call site passes every other test here
-    — it only bites on a UTC container, which is exactly where it shipped."""
+    â€” it only bites on a UTC container, which is exactly where it shipped."""
     import src.futures_data as fd
 
     class _UtcRolledOver(date):
@@ -1098,10 +1098,10 @@ def test_front_month_gives_up_after_the_lookback(monkeypatch):
     assert len(calls) == fd._CONTRACT_DATE_LOOKBACK + 1, calls
 
 
-# ── Vol-scan threshold disclosure and history ────────────────────────────────
+# â”€â”€ Vol-scan threshold disclosure and history â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # The cuts were never checked against the distribution they gate. Audited live
 # 2026-08-02: the 1.10 skew cut sat at the 50th percentile of the cross section,
-# so "Broad Fear" fired on more-than-half-above-the-median — a coin flip.
+# so "Broad Fear" fired on more-than-half-above-the-median â€” a coin flip.
 
 def _stub_store(monkeypatch, initial=None):
     """In-memory stand-in for the Supabase key/value row."""
@@ -1135,7 +1135,7 @@ def test_degraded_scan_is_not_recorded(monkeypatch):
 
 
 def test_percentile_is_none_until_the_history_is_deep_enough(monkeypatch):
-    """None means 'not yet knowable'. A 50 would be an invented middle — the
+    """None means 'not yet knowable'. A 50 would be an invented middle â€” the
     same defect as every other placeholder fixed this week."""
     from src.vol_history import record, percentiles, _MIN_HISTORY
     _stub_store(monkeypatch)
@@ -1178,7 +1178,7 @@ def test_percentile_excludes_todays_own_observation(monkeypatch):
 def test_percentile_does_not_drop_a_prior_day_when_today_was_not_recorded(monkeypatch):
     """`record` skips a degraded scan, so the newest stored row can belong to an
     EARLIER day. Inferring "today" from rows[-1] then excludes a real prior
-    observation from its own reference set — shrinking the sample and shifting
+    observation from its own reference set â€” shrinking the sample and shifting
     every percentile, on exactly the runs where the data is already suspect."""
     from src.vol_history import record, percentiles, _MIN_HISTORY
     _stub_store(monkeypatch)
@@ -1220,12 +1220,12 @@ def test_threshold_report_survives_a_missing_column():
     assert rep["parity"]["pctile_in_universe"] is None
 
 
-# ── Fed probabilities from ZQ ────────────────────────────────────────────────
+# â”€â”€ Fed probabilities from ZQ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Two bugs that produced confident, plausible, wrong numbers.
 
 def test_month_weights_match_the_worked_example():
     """Sep 2026: N=30, decision on the 16th. A rate decided on day k is effective
-    day k+1, so days 1..k carry the OLD rate — n_pre is the day itself."""
+    day k+1, so days 1..k carry the OLD rate â€” n_pre is the day itself."""
     from src.fed_probabilities import month_weights
     assert month_weights(date(2026, 9, 16)) == (30, 16, 14)
     assert month_weights(date(2026, 10, 28)) == (31, 28, 3)
@@ -1294,7 +1294,7 @@ def test_last_known_meeting_does_not_use_the_next_month_shortcut(monkeypatch):
 
     The first version of this test only asserted on `_month_is_known` and
     `_has_meeting`, so removing the guard from `fed_probabilities` left all
-    tests green — the mutation survived. What has to be pinned is that the
+    tests green â€” the mutation survived. What has to be pinned is that the
     LAST meeting on the calendar falls back to the within-month solve, because
     the month after it is unknown rather than known-empty.
     """
@@ -1316,11 +1316,11 @@ def test_last_known_meeting_does_not_use_the_next_month_shortcut(monkeypatch):
     m = out["meetings"][0]
     assert m["date"] == last.isoformat()
     assert m["method"] == "within-month", (
-        "the month after the last known meeting is UNKNOWN, not meeting-free — "
+        "the month after the last known meeting is UNKNOWN, not meeting-free â€” "
         "using it would price the decision off a contract on a false premise")
     assert m["leverage"] > 1.0, "the within-month solve always carries leverage"
     # `calendar_exhausted` means "fewer meetings returned than asked for". One
-    # was asked for and one was available, so it is correctly False here — the
+    # was asked for and one was available, so it is correctly False here â€” the
     # guard under test is about the month AFTER the last meeting, not about
     # running out of meetings.
     assert out["calendar_exhausted"] is False
@@ -1332,7 +1332,7 @@ def test_a_missing_settlement_breaks_the_chain_and_everything_after_it(monkeypat
     """Each meeting's r_pre is the rate solved after the previous one. Skipping
     a meeting leaves r_pre holding the rate from BEFORE it, so the next
     meeting's delta quietly contains both moves and attributes them all to the
-    later date — the same misattribution that reported +180.83bp for a meeting
+    later date â€” the same misattribution that reported +180.83bp for a meeting
     pricing +3.69bp, except it lands on a row that looks perfectly healthy."""
     import src.fed_probabilities as fp
 
@@ -1375,6 +1375,46 @@ def test_an_intact_chain_still_prices_every_meeting(monkeypatch):
     assert all("error" not in r for r in out["meetings"]), out["meetings"]
 
 
+def test_an_unsettled_session_does_not_become_a_zero_price(monkeypatch):
+    """A ZQ price is ~96 and can never be zero. An UNSETTLED session returns
+    settlement_price = 0.0 â€” falsy but NOT None â€” so an `is None` check let it
+    through. Live 2026-08-03 00:03 ET, minutes after the session rolled, every
+    contract came back 0.0 and the board read an implied rate of 100.0% with
+    every meeting pricing exactly 0bp. It had been correct two hours earlier
+    because the newest daily bar was still Friday's."""
+    import src.fed_probabilities as fp
+    import src.futures_data as fd            # _fetch_settles imports _get from here
+
+    def fake_get(path, **params):
+        return {"results": [
+            {"session_end_date": "2026-07-31", "settlement_price": 96.29, "close": 96.30},
+            # The new, unsettled session.
+            {"session_end_date": "2026-08-03", "settlement_price": 0.0, "close": 0.0},
+        ]}
+
+    monkeypatch.setattr(fd, "_get", fake_get)
+    out = fp._fetch_settles([(2026, 9)])
+    tk = fp.zq_ticker(2026, 9)
+    assert out[tk] == pytest.approx(96.29), (
+        f"took {out.get(tk)} â€” an unsettled 0.0 is not a price")
+
+    # And when the settlement is absent but a real close exists, use the close.
+    def close_only(path, **params):
+        return {"results": [{"session_end_date": "2026-08-03",
+                             "settlement_price": 0.0, "close": 96.11}]}
+
+    monkeypatch.setattr(fd, "_get", close_only)
+    assert fp._fetch_settles([(2026, 9)])[tk] == pytest.approx(96.11)
+
+    # Nothing usable at all: leave the contract out rather than invent a price.
+    def all_zero(path, **params):
+        return {"results": [{"session_end_date": "2026-08-03",
+                             "settlement_price": 0.0, "close": 0.0}]}
+
+    monkeypatch.setattr(fd, "_get", all_zero)
+    assert fp._fetch_settles([(2026, 9)]) == {}
+
+
 def test_fomc_dates_are_sorted_and_unique():
     from src.fed_probabilities import FOMC_DATES
     assert FOMC_DATES == sorted(FOMC_DATES)
@@ -1384,8 +1424,8 @@ def test_fomc_dates_are_sorted_and_unique():
     assert len(set(months)) == len(months)
 
 
-# ── S&P valuation: the equity risk premium streak ────────────────────────────
-# A negative ERP is NOT unusual — it held in 52.7% of months since 1986 — so the
+# â”€â”€ S&P valuation: the equity risk premium streak â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# A negative ERP is NOT unusual â€” it held in 52.7% of months since 1986 â€” so the
 # card reports the length of the current run, and that arithmetic is fiddly.
 
 def _streak(flags: list[bool]) -> int:

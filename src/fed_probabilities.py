@@ -167,12 +167,25 @@ def _fetch_settles(months: list[tuple[int, int]]) -> dict[str, float]:
         # `order` is IGNORED by this endpoint — asc and desc return identical
         # newest-first data — so the caller sorts rather than trusting it.
         rows.sort(key=lambda r: r.get("session_end_date") or "")
-        last = rows[-1]
-        px = last.get("settlement_price")
-        if px is None:
-            px = last.get("close")
-        if px is not None:
-            out[tk] = float(px)
+        # A ZQ price is ~96 and can never be zero. An UNSETTLED session returns
+        # settlement_price = 0.0 — falsy but NOT None — so `if px is None` let it
+        # through and every contract came back at 0.0. Live 2026-08-03 00:03 ET,
+        # minutes after the session rolled: the whole board read an implied rate
+        # of 100.0% with every meeting pricing exactly 0bp. It had been correct
+        # two hours earlier because the newest daily bar was still Friday's.
+        #
+        # So: walk back from the newest bar to the first one carrying a real
+        # price, preferring the settlement and falling back to the close.
+        for r in reversed(rows):
+            px = r.get("settlement_price")
+            if px is None or float(px) <= 0:
+                px = r.get("close")
+            if px is not None and float(px) > 0:
+                out[tk] = float(px)
+                break
+        else:
+            logger.warning(f"{tk}: no positive settlement or close in "
+                           f"{len(rows)} bars — leaving it out of the strip")
     return out
 
 
