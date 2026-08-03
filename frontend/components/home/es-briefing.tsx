@@ -588,6 +588,15 @@ export default function EsBriefing() {
                   ))}
                 </div>
               )}
+              {/* An abstention that moved the verdict is readable on the card.
+                  A factor scoring 0 because two estimators disagree is a caveat,
+                  and caveats belong in text where they are read, not in a title
+                  attribute that a trader never hovers. */}
+              {d.conditions.reasons.filter((r) => r.surface).map((r, i) => (
+                <p key={i} className="text-[0.6rem] text-text-muted mt-1 leading-snug">
+                  {r.why}
+                </p>
+              ))}
               <p className="text-[0.55rem] text-text-muted mt-1">{d.conditions.disclaimer}</p>
             </div>
           )}
@@ -619,7 +628,12 @@ export default function EsBriefing() {
               </div>
 
               {ladder.length === 0 ? (
-                <p className="text-xs text-text-muted">Intraday levels unavailable.</p>
+                <p className="text-xs text-text-muted">
+                  Intraday levels unavailable.
+                  {d.levels_reason && (
+                    <span className="text-text-muted/70"> {d.levels_reason}.</span>
+                  )}
+                </p>
               ) : (
                 <div className="text-[0.65rem]">
                   {ladder.map((row, i) =>

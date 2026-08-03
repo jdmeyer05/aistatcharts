@@ -63,7 +63,15 @@ def _fetch_bars(days: int = 5, interval: str = "5m") -> pd.DataFrame:
                                     limit=min(int(per_day * days * 1.1) + 50, 50000))
     _CONTRACT["ticker"] = ticker
     if bars is None or bars.empty:
-        logger.warning("ES bar fetch returned nothing")
+        # TWO DIFFERENT OUTAGES, fixed in different places. No ticker means
+        # CONTRACT RESOLUTION failed — the vendor serves no contract set for the
+        # date, the weekend/holiday case `front_month` walks backwards to
+        # survive. A ticker with no bars means the contract resolved and the BAR
+        # endpoint came back empty: latency or throttling. Both logged as one
+        # line, so the Sunday 2026-08-02 blank could be attributed to neither.
+        logger.warning("ES bar fetch returned nothing: "
+                       + ("no front contract resolved" if not ticker
+                          else f"contract {ticker} resolved but served no bars"))
         return pd.DataFrame()
     return bars
 

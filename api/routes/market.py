@@ -2723,8 +2723,31 @@ def _assemble_market_driver_context() -> dict:
         except Exception as e:
             logger.warning(f"market-driver breadth failed: {e}")
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = [pool.submit(fn) for fn in (_pulse, _news, _events, _vol, _cftc, _breadth)]
+    def _macro_news() -> None:
+        """The ES card's macro feed — four no-key RSS sources, ranked by how much
+        a headline moves the index rather than by recency.
+
+        `_news` above reads Polygon's general wire, which is unfiltered: on
+        2026-08-03 it returned four law-firm class-action notices (WSE, BTU,
+        FSLR, GDDY) and nothing else, so the synthesis reported "no matching
+        macro headline" for a 6.5% crude break while this feed was carrying the
+        Hormuz de-escalation story that caused it. Both are kept — the wire
+        occasionally has a single-name story this one filters out — but the
+        prompt is told which is which.
+        """
+        try:
+            from src.es_session import macro_news
+            items = macro_news() or []
+            ctx["macro_news"] = [
+                {"title": h.get("title"), "source": h.get("source"), "age": h.get("age")}
+                for h in items[:12] if h.get("title")
+            ]
+        except Exception as e:
+            logger.warning(f"market-driver macro news failed: {e}")
+
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        futures = [pool.submit(fn) for fn in (_pulse, _news, _events, _vol, _cftc,
+                                              _breadth, _macro_news)]
         for f in futures:
             try:
                 f.result(timeout=15)
@@ -2796,6 +2819,14 @@ narrow, narrow moves retrace, and `equal_vs_cap_spread_pct` is the independent c
 breadth CONFIRMS, say so in three words and move on — it is only the story when it disagrees.
 Never present these as NYSE figures; they are a liquid-universe reconstruction and will not tie
 out against a terminal.
+
+TWO HEADLINE FEEDS, AND THEY ARE NOT EQUAL. `macro_headlines` is the curated macro feed, ranked by
+how much a story moves the index. `news_headlines` is an unfiltered wire that on a quiet tape fills
+with law-firm class-action notices and single-name press releases. Look in `macro_headlines` FIRST
+when attributing a move, and never conclude "no catalyst" or "no matching headline" from
+`news_headlines` alone — that sentence is only available to you when BOTH lists are empty of
+anything relevant. Either feed may be cited; say which kind of story it is, not which feed it came
+from.
 
 VIX REGIME CALIBRATION — use the `vix_level_band` field, not the 1D % change:
 - `complacent` (VIX < 15): "muted vol", "complacent", "carry-friendly". NEVER call this elevated.
@@ -3039,6 +3070,10 @@ def _es_brief_build() -> dict:
             cock.get("gamma") or {}, (sess or {}).get("session") or {},
             (sess or {}).get("schedule") or [],
             breadth=cock.get("breadth"),
+            # Carries `vs_implied` — the second estimate of the session's range.
+            # The gate needs it to tell a genuinely airless day from one where
+            # the implied number is simply cheap against the tape.
+            candles=cock.get("candles"),
         ), "conditions")
 
     out = {
@@ -3053,6 +3088,11 @@ def _es_brief_build() -> dict:
         "news": (sess or {}).get("news", []),
         "news_digest": digest,
         "levels": lvl if (lvl or {}).get("available") else None,
+        # WHY they are missing, which the line above throws away. A bare
+        # "Intraday levels unavailable" is the same string for a feed outage, a
+        # contract that would not resolve and a genuinely empty session, so the
+        # Sunday 2026-08-02 blank could not be diagnosed from the card at all.
+        "levels_reason": None if (lvl or {}).get("available") else (lvl or {}).get("reason"),
         "intraday": cock.get("intraday"),
         "expected_move": cock.get("expected_move"),
         "gamma": cock.get("gamma"),
@@ -3220,9 +3260,21 @@ async def market_driver(
         "quotes": ctx.get("quotes", {}),
         "vix_level_band": vix_band,
         "news_headlines": ctx.get("news", []),
+        # The curated macro feed the ES card reads, ranked by index relevance
+        # rather than recency. `news_headlines` above comes from Polygon's
+        # unfiltered wire, which on a quiet tape is mostly law-firm
+        # class-action boilerplate — observed 2026-08-03, where the model
+        # correctly reported "no matching macro headline" for a 6.5% crude
+        # break while the Hormuz de-escalation story sat in THIS feed.
+        "macro_headlines": ctx.get("macro_news", []),
         "upcoming_events_next_3d": ctx.get("events", []),
         "vol_regime": ctx.get("vol", ""),
         "cftc_positioning": ctx.get("cftc", ""),
+        # `_breadth` has gathered this since it was added, but the payload never
+        # read it back — so the model was told nothing about breadth and said so
+        # on a page that renders 3,403 names right below the paragraph. The
+        # gatherer was fine; the handoff to the prompt was the missing wire.
+        "breadth": ctx.get("breadth"),
     }
     user_message = (
         "Context (cite from here only):\n"
