@@ -481,6 +481,8 @@ def es_cockpit(now: pd.Timestamp | None = None,
     from src.es_breadth import market_breadth
     from src.candle_context import candle_context, range_divergence
     from src.es_overnight import overnight_read
+    from src.es_regime import path_implied_range
+    from src.es_rest_of_session import rest_of_session
 
     # The expected move is always computed for the SESSION AHEAD. So a range
     # already in the books may belong to a different session than the estimate,
@@ -539,9 +541,18 @@ def es_cockpit(now: pd.Timestamp | None = None,
         from src.es_regime import session_character
         dev_range = (s_high - s_low) if (live and s_high is not None
                                          and s_low is not None) else None
+        _normal = _normal_range(frames)
         f_rg = pool.submit(_safe, lambda: session_character(
-            range_so_far=dev_range, normal_range=_normal_range(frames),
-            now=now), "regime")
+            range_so_far=dev_range, normal_range=_normal, now=now), "regime")
+        # WHAT THE REST OF THE SESSION LOOKED LIKE from a state like this one.
+        # Every other module answers "should I engage"; once a position is on,
+        # the card had nothing. Conditioned on the half-hour mark, where price
+        # sits in the range built so far, and the character read.
+        _pos = ((last - s_low) / dev_range
+                if (dev_range and dev_range > 0 and s_low is not None) else None)
+        f_ros = pool.submit(_safe, lambda: rest_of_session(
+            _pos, (path_implied_range(dev_range, _normal, now) or {}).get("multiplier"),
+            _normal, now), "rest_of_session")
 
         intraday = f_intra.result()
         em = f_em.result()
@@ -551,6 +562,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
         candles = f_cx.result() if f_cx else None
         overnight_ctx = f_on.result() if f_on else None
         regime = f_rg.result()
+        ros = f_ros.result()
 
     # REACHABILITY. The ladder quotes every level as a distance in handles, which
     # answers "how far" but not the question actually being asked at the open:
@@ -606,10 +618,12 @@ def es_cockpit(now: pd.Timestamp | None = None,
         "candles": candles,
         "overnight": overnight_ctx,
         "regime": regime,
+        "rest_of_session": ros,
         "gap_pct": round(gap_pct, 3) if gap_pct is not None else None,
         "degraded": [k for k, v in (("intraday", intraday), ("expected_move", em),
                                     ("gamma", gamma), ("base_rates", rates),
                                     ("breadth", breadth), ("candles", candles),
                                     ("overnight", overnight_ctx),
-                                    ("regime", regime)) if not v],
+                                    ("regime", regime),
+                                    ("rest_of_session", ros)) if not v],
     }

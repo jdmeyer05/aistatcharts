@@ -80,6 +80,25 @@ const CLOCK = {
   getServerSnapshot: (): number | null => null,
 };
 
+/** One measured figure with its label. Deliberately plain — these are readings,
+ *  not verdicts, and styling them like alerts would imply a call the numbers do
+ *  not make. */
+function Stat({ label, value, tone = "neutral" }: {
+  label: string;
+  value: string;
+  tone?: "gain" | "loss" | "neutral";
+}) {
+  const color = tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : "text-text";
+  return (
+    <div className="border border-border/60 rounded px-2 py-1">
+      <div className="text-[0.5rem] uppercase tracking-wider text-text-muted leading-tight">
+        {label}
+      </div>
+      <div className={`text-sm font-bold font-data tabular-nums ${color}`}>{value}</div>
+    </div>
+  );
+}
+
 function impactClass(i: EsImpact): string {
   if (i === "high") return "bg-loss/15 text-loss";
   if (i === "medium") return "bg-amber-500/15 text-amber-400";
@@ -598,6 +617,72 @@ export default function EsBriefing() {
                 </p>
               ))}
               <p className="text-[0.55rem] text-text-muted mt-1">{d.conditions.disclaimer}</p>
+            </div>
+          )}
+
+          {/* THE REST OF THE SESSION. The gate above answers "should I engage";
+              this is the only block addressed to somebody already positioned.
+              On 2026-08-03 the card shouted STAND ASIDE at a reader who was
+              already long, while the number that spoke to holding sat collapsed
+              in a table three screens down. */}
+          {d.rest_of_session?.available && (
+            <div className="border border-border rounded px-3 py-2">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                  From here to the close
+                </span>
+                <span className="text-[0.6rem] text-text-muted">
+                  {d.rest_of_session.mark} · {d.rest_of_session.band} of the range ·{" "}
+                  {d.rest_of_session.regime} · n={d.rest_of_session.n}
+                </span>
+                {d.rest_of_session.exact_cell === false && (
+                  <span
+                    className="text-[0.5rem] uppercase text-amber-400"
+                    title="The exact cell for this mark, position and regime was too thin to report, so the other regime at the same time of day is shown instead."
+                  >
+                    nearest cell
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mt-1.5">
+                <Stat
+                  label="Takes the high"
+                  value={`${d.rest_of_session.p_new_high?.toFixed(0)}%`}
+                  tone="gain"
+                />
+                <Stat
+                  label="Takes the low"
+                  value={`${d.rest_of_session.p_new_low?.toFixed(0)}%`}
+                  tone="loss"
+                />
+                <Stat
+                  label="Closes above here"
+                  value={`${d.rest_of_session.p_close_above?.toFixed(0)}%`}
+                />
+              </div>
+
+              <div className="text-[0.6rem] text-text-muted tabular-nums mt-1.5">
+                Median further up{" "}
+                <span className="text-gain">
+                  +{d.rest_of_session.median_max_up_units?.toFixed(0)}
+                </span>
+                {" · "}median give-back{" "}
+                <span className="text-loss">
+                  −{d.rest_of_session.median_max_dn_units?.toFixed(0)}
+                </span>
+                {" · "}close lands between{" "}
+                {d.rest_of_session.to_close?.p25_units?.toFixed(0)} and{" "}
+                {d.rest_of_session.to_close?.p75_units != null &&
+                d.rest_of_session.to_close.p75_units > 0
+                  ? `+${d.rest_of_session.to_close.p75_units.toFixed(0)}`
+                  : d.rest_of_session.to_close?.p75_units?.toFixed(0)}{" "}
+                handles half the time
+              </div>
+
+              <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
+                {d.rest_of_session.caveat}
+              </p>
             </div>
           )}
 
