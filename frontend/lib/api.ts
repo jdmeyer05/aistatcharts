@@ -3337,6 +3337,36 @@ export interface EsRegime {
   disclaimer?: string;
 }
 
+/** What comparable sessions did between this state and their close. Addressed
+ *  to somebody already positioned, which no other block on the card is. */
+export interface EsRestOfSession {
+  available: boolean;
+  reason?: string;
+  mark?: string;
+  band?: string;
+  regime?: string;
+  /** False means the exact (mark, band, regime) cell was too thin and the other
+   *  regime at the same mark was used instead. Surfaced, never silent. */
+  exact_cell?: boolean;
+  n?: number;
+  sessions?: number;
+  p_new_high?: number;
+  p_new_low?: number;
+  /** Sits near 55% from every position band — read it as a coin flip. */
+  p_close_above?: number;
+  to_close?: {
+    p25: number; median: number; p75: number;
+    p25_units: number | null; median_units: number | null; p75_units: number | null;
+  };
+  median_max_up?: number;
+  median_max_up_units?: number | null;
+  median_max_dn?: number;
+  median_max_dn_units?: number | null;
+  note?: string;
+  caveat?: string;
+  method?: string;
+}
+
 /** Whether the session suits intraday trading at all — conditions, never
  *  direction. Each reason states the points it contributed. */
 export interface EsConditions {
@@ -3450,6 +3480,7 @@ export interface EsBrief {
    *  identically on the card without this. */
   levels_reason?: string | null;
   regime?: EsRegime | null;
+  rest_of_session?: EsRestOfSession | null;
   cta?: {
     bias_1w?: CtaBias;
     current_exposure?: number;
