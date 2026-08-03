@@ -74,7 +74,14 @@ def _deterministic(brief: dict) -> list[dict]:
                         f"Any statement about room to run depends on which one it used."),
         })
 
-    # A directional word anywhere in a card that documents a direction null.
+    # A significance FLAG that disagrees with the p-value beside it.
+    #
+    # CANNOT CURRENTLY FIRE, and that is deliberate rather than an oversight:
+    # `es_macro_setup` derives `size_significant` as `p_size < 0.05`, so the two
+    # agree by construction today. It is here because they are computed in one
+    # place and READ in another, and the p-values in that table were wrong once
+    # already — if the threshold is ever changed on one side, or a driver is
+    # added with the flag set by hand, this catches it. Do not delete as dead.
     if setup.get("drivers") and setup.get("direction"):
         for d in setup.get("drivers", []):
             if d.get("size_significant") is False and d.get("p_size", 1) < 0.05:
