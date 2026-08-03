@@ -627,6 +627,104 @@ def test_heading_is_absent_when_the_dot_has_not_moved():
     assert np.hypot(0.5, 0.5) > 0.01 * _SCALE      # a real move still reports
 
 
+# ── Futures contract lookup: server clock vs exchange clock ──────────────────
+# Cloud Run runs in UTC. From 20:00 ET until midnight ET the container already
+# believes it is tomorrow, and the vendor's contracts endpoint returns an EMPTY
+# set for any future date. front_month therefore resolved to None and every ES
+# card went dark for four hours a night, reporting "no usable intraday ES data"
+# while the feed was perfectly healthy.
+
+def test_exchange_today_tracks_the_exchange_not_the_container():
+    from src.futures_data import exchange_today
+    assert exchange_today() == pd.Timestamp.now(tz="America/New_York").date()
+
+
+def test_exchange_today_differs_from_utc_in_the_evening():
+    """The window where the bug lived. After 20:00 ET (EDT = UTC-4) the UTC date
+    has already rolled over, so a UTC-based `date.today()` asks for tomorrow."""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+    et = _dt.datetime(2026, 8, 2, 20, 30, tzinfo=ZoneInfo("America/New_York"))
+    assert et.date() == date(2026, 8, 2)
+    assert et.astimezone(_dt.timezone.utc).date() == date(2026, 8, 3), (
+        "this is the divergence that produced the outage")
+
+
+def test_front_month_walks_back_when_a_date_carries_no_contracts(monkeypatch):
+    """A future date returns empty, and so does a holiday the vendor has no
+    reference file for. Asking once and giving up turns a calendar quirk into a
+    total outage of every card built on these bars."""
+    import src.futures_data as fd
+    asked: list[str] = []
+    GOOD = date(2026, 8, 2)
+
+    def fake_get(path, **params):
+        if "contracts" in path:
+            d = params.get("date")
+            asked.append(d)
+            if d != GOOD.isoformat():
+                return {"results": []}          # exactly what a future date gives
+            return {"results": [
+                {"ticker": "ESU6", "type": "single", "days_to_maturity": 47},
+                {"ticker": "ESZ6", "type": "single", "days_to_maturity": 138},
+            ]}
+        return {"results": []}
+
+    monkeypatch.setattr(fd, "_get", fake_get)
+    monkeypatch.setattr(fd, "fetch_bars", lambda *a, **k: pd.DataFrame())
+    fd._front_cache.clear()
+
+    # Ask as UTC would have: one day ahead of the exchange.
+    got = fd.front_month("ES", as_of=GOOD + timedelta(days=1))
+    assert got == "ESU6", f"got {got!r}; the backward walk did not recover"
+    assert asked[0] == (GOOD + timedelta(days=1)).isoformat(), "tries the asked date first"
+    assert GOOD.isoformat() in asked, "and walks back to a date that answers"
+
+
+def test_front_month_probes_the_exchange_date_first_not_the_container_date(monkeypatch):
+    """Pins the actual defect. On an ET developer machine `date.today()` and the
+    exchange date agree, so reverting the call site passes every other test here
+    — it only bites on a UTC container, which is exactly where it shipped."""
+    import src.futures_data as fd
+
+    class _UtcRolledOver(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 8, 3)          # what a UTC box reports at 20:30 ET
+
+    asked: list[str] = []
+
+    def fake_get(path, **params):
+        asked.append(params.get("date"))
+        return {"results": [{"ticker": "ESU6", "type": "single", "days_to_maturity": 47}]}
+
+    monkeypatch.setattr(fd, "_date", _UtcRolledOver)
+    monkeypatch.setattr(fd, "_get", fake_get)
+    monkeypatch.setattr(fd, "fetch_bars", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(fd, "exchange_today", lambda: date(2026, 8, 2))
+    fd._front_cache.clear()
+
+    fd.front_month("ES")
+    assert asked[0] == "2026-08-02", (
+        f"first probe was {asked[0]!r}; it must use the exchange date, not the "
+        "container's rolled-over one, which returns an empty contract set")
+
+
+def test_front_month_gives_up_after_the_lookback(monkeypatch):
+    """It must not walk backwards forever looking for a contract set."""
+    import src.futures_data as fd
+    calls = []
+
+    def fake_get(path, **params):
+        calls.append(params.get("date"))
+        return {"results": []}
+
+    monkeypatch.setattr(fd, "_get", fake_get)
+    fd._front_cache.clear()
+    assert fd.front_month("ES", as_of=date(2026, 8, 2)) is None
+    assert len(calls) == fd._CONTRACT_DATE_LOOKBACK + 1, calls
+
+
 # ── Vol-scan threshold disclosure and history ────────────────────────────────
 # The cuts were never checked against the distribution they gate. Audited live
 # 2026-08-02: the 1.10 skew cut sat at the 50th percentile of the cross section,

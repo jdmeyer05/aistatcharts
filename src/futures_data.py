@@ -41,7 +41,7 @@ import logging
 import threading
 from collections import deque
 import time as _time
-from datetime import date as _date
+from datetime import date as _date, timedelta as _timedelta
 
 import pandas as pd
 
@@ -123,6 +123,30 @@ def _get(path: str, **params) -> dict | None:
         return None
 
 
+# How many days back to walk when a date returns no contract set. Covers a
+# weekend plus a long holiday.
+_CONTRACT_DATE_LOOKBACK = 5
+
+
+def exchange_today() -> _date:
+    """Today at the EXCHANGE, not on the server.
+
+    `date.today()` is the container's local date and Cloud Run runs in UTC, so
+    from 20:00 ET until midnight ET the server already believes it is tomorrow.
+    The contracts endpoint returns an EMPTY set for any future date — measured
+    2026-08-02: `date=2026-08-02` gave 42 rows and `date=2026-08-03` gave 0 —
+    so `front_month` resolved to None and every ES card went dark for those four
+    hours, every single night. It presents as "no usable intraday ES data" while
+    the feed is perfectly healthy, which is why it read as a vendor problem.
+    """
+    from datetime import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+        return _dt.now(ZoneInfo(_TZ)).date()
+    except Exception:
+        return pd.Timestamp.now(tz=_TZ).date()
+
+
 def front_month(product_code: str = "ES", as_of: _date | None = None) -> str | None:
     """The contract that is actually trading, by volume — not by expiry alone.
 
@@ -134,18 +158,30 @@ def front_month(product_code: str = "ES", as_of: _date | None = None) -> str | N
 
     Cached per day — the answer changes four times a year.
     """
-    today = as_of or _date.today()
+    today = as_of or exchange_today()
     hit = _front_cache.get(product_code)
     if hit and hit[0] == today:
         return hit[1]
 
-    j = _get("/futures/v1/contracts", product_code=product_code,
-             date=today.isoformat(), limit=1000)
-    if not j:
-        return None
-    singles = [c for c in (j.get("results") or [])
-               if c.get("type") == "single" and (c.get("days_to_maturity") or -1) >= 0]
+    # Walk backwards until a date actually carries a contract set. A future date
+    # returns empty, and so does any date the vendor has no reference file for —
+    # a holiday, or a weekend in some products. Asking once and giving up turns a
+    # calendar quirk into a total outage of every card built on these bars.
+    singles: list[dict] = []
+    for back in range(_CONTRACT_DATE_LOOKBACK + 1):
+        probe = today - _timedelta(days=back)
+        j = _get("/futures/v1/contracts", product_code=product_code,
+                 date=probe.isoformat(), limit=1000)
+        singles = [c for c in ((j or {}).get("results") or [])
+                   if c.get("type") == "single" and (c.get("days_to_maturity") or -1) >= 0]
+        if singles:
+            if back:
+                logger.info(f"{product_code} contracts: {today} was empty, "
+                            f"used {probe} ({back}d back)")
+            break
     if not singles:
+        logger.warning(f"{product_code}: no contract set within "
+                       f"{_CONTRACT_DATE_LOOKBACK}d of {today}")
         return None
     singles.sort(key=lambda c: c["days_to_maturity"])
     candidates = [c["ticker"] for c in singles[:2]]
