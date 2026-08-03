@@ -3294,6 +3294,39 @@ export interface EsCandleContext {
   disclaimer?: string;
 }
 
+/** What actually moved the tape, ranked from the TAPE and annotated from the
+ *  feed — never the other way round. What sits beside a move is coincidence in
+ *  the clock, not demonstrated causation. */
+export interface EsAttribution {
+  available: boolean;
+  reason?: string;
+  headline?: string | null;
+  moves?: Array<{
+    start: string;
+    end: string;
+    range: number;
+    net: number;
+    x_normal_bar: number | null;
+    bars: number;
+    is_open?: boolean;
+    event: { name: string; impact: string; at: string } | null;
+    headlines: Array<{ title: string; source: string; at: string }>;
+    attributed: boolean;
+  }>;
+  n_moves?: number;
+  /** Moves with nothing in either feed. A session whose expansions carry no
+   *  catalyst is a different kind of day — information, not a gap. */
+  n_unattributed?: number;
+  event_impacts?: Array<{
+    name: string; at: string; impact: string;
+    range: number; net: number; x_normal_window: number | null;
+  }>;
+  median_bar?: number;
+  median_30min?: number | null;
+  unattributed_note?: string | null;
+  caveat?: string;
+}
+
 /** Is this session ordinary, and by how much? The only range estimator on the
  *  card not fixed at the open — measured from the range actually delivered, so
  *  it can see an unscheduled event while that event is still running. */
@@ -3481,6 +3514,7 @@ export interface EsBrief {
   levels_reason?: string | null;
   regime?: EsRegime | null;
   rest_of_session?: EsRestOfSession | null;
+  attribution?: EsAttribution | null;
   cta?: {
     bias_1w?: CtaBias;
     current_exposure?: number;

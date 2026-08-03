@@ -3102,6 +3102,10 @@ def _es_brief_build() -> dict:
         # The only block on the card addressed to somebody already positioned
         # rather than deciding whether to engage.
         "rest_of_session": cock.get("rest_of_session"),
+        # Where the day's unusualness actually happened, and what was on the
+        # clock at the time. Ranked from the TAPE, annotated from the feed —
+        # never the other way round.
+        "attribution": cock.get("attribution"),
         "gamma": cock.get("gamma"),
         "base_rates": cock.get("base_rates"),
         "breadth": cock.get("breadth"),

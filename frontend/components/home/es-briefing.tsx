@@ -686,6 +686,79 @@ export default function EsBriefing() {
             </div>
           )}
 
+          {/* WHAT MOVED THE TAPE. Ranked from the tape and annotated from the
+              feed, never the reverse — starting from the news means deciding in
+              advance which stories matter, which is how the page once narrated a
+              6.5% crude break as having "no matching headline" while the story
+              sat two modules away. A move with nothing attached prints as such,
+              because that is information about the day rather than a gap. */}
+          {d.attribution?.available && (d.attribution.moves?.length ?? 0) > 0 && (
+            <div className="border border-border rounded px-3 py-2">
+              <div className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                What moved the tape
+              </div>
+
+              <div className="mt-1.5 space-y-1">
+                {d.attribution.moves?.map((m, i) => (
+                  <div key={i} className="flex items-baseline gap-2 text-[0.65rem]">
+                    <span className="tabular-nums text-text-muted w-[4.75rem] shrink-0">
+                      {m.start}–{m.end}
+                    </span>
+                    <span className="tabular-nums font-semibold w-[3rem] shrink-0 text-right">
+                      {m.range.toFixed(1)}
+                    </span>
+                    <span className="tabular-nums text-text-muted w-[2.75rem] shrink-0 text-right">
+                      {m.x_normal_bar?.toFixed(1)}×
+                    </span>
+                    <span
+                      className={`tabular-nums w-[3.5rem] shrink-0 text-right ${pctClass(m.net)}`}
+                    >
+                      {m.net > 0 ? "+" : ""}
+                      {m.net.toFixed(2)}
+                    </span>
+                    <span className="flex-1 min-w-0 truncate">
+                      {m.event ? (
+                        <span className="text-text">{m.event.name}</span>
+                      ) : m.headlines.length > 0 ? (
+                        <span className="text-text-muted" title={m.headlines[0].title}>
+                          {m.headlines[0].at} · {m.headlines[0].title}
+                        </span>
+                      ) : (
+                        <span className="text-amber-400">nothing in either feed</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {(d.attribution.event_impacts?.length ?? 0) > 0 && (
+                <div className="mt-2 pt-1.5 border-t border-border space-y-0.5">
+                  {d.attribution.event_impacts?.map((e, i) => (
+                    <div key={i} className="flex items-baseline gap-2 text-[0.6rem]">
+                      <span className="tabular-nums text-text-muted w-[3rem] shrink-0">
+                        {e.at}
+                      </span>
+                      <span className="flex-1 min-w-0 truncate text-text">{e.name}</span>
+                      <span className="tabular-nums text-text-muted shrink-0">
+                        {e.range.toFixed(1)} in 30m ={" "}
+                        <span className="text-text">{e.x_normal_window?.toFixed(2)}×</span> normal
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {d.attribution.unattributed_note && (
+                <p className="text-[0.6rem] text-amber-400/90 mt-1.5 leading-snug">
+                  {d.attribution.unattributed_note}
+                </p>
+              )}
+              <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
+                {d.attribution.caveat}
+              </p>
+            </div>
+          )}
+
           {/* the read */}
           {read && (
             <div className="border-l-2 border-l-accent bg-accent/5 px-3 py-2 rounded-r text-[0.7rem] leading-relaxed space-y-1">
