@@ -3146,10 +3146,37 @@ def _es_brief_build() -> dict:
     return out
 
 
+def _log_gate_snapshot(brief: dict) -> None:
+    """Bookkeeping only. The gate cannot be replayed (no historical option chain
+    or index-level VIX1D on this plan), so scoring it needs a forward log — but a
+    log that can break the card is worse than no log."""
+    try:
+        from src.es_gate_log import log_gate
+        log_gate(brief)
+    except Exception as e:
+        logger.debug(f"gate snapshot skipped: {e}")
+
+
+@router.get("/es-track-record-gate")
+async def es_gate_track_record(user: str = Depends(get_current_user)):
+    """The conditions gate scored against completed sessions.
+
+    Reports `available: false` with a count until enough sessions have
+    accumulated — a record computed on five days would be quoted as though it
+    meant something.
+    """
+    from src.es_gate_log import gate_track_record
+    return await asyncio.to_thread(gate_track_record)
+
+
 @router.get("/es-brief")
 async def es_brief_endpoint(user: str = Depends(get_current_user)):
     """Everything needed for the top-of-page ES session briefing, in one call."""
-    return await asyncio.to_thread(_es_brief_cached)
+    brief = await asyncio.to_thread(_es_brief_cached)
+    # Fire-and-forget: the snapshot is bookkeeping and must never delay or fail
+    # the response the card is waiting on.
+    asyncio.get_running_loop().run_in_executor(None, _log_gate_snapshot, brief)
+    return brief
 
 
 _CARD_AUDIT_CACHE: dict = {}
