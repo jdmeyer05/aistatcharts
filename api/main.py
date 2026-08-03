@@ -147,7 +147,8 @@ async def _warm_caches() -> None:
 
         The heaviest first-call on the instance: intraday bars, the SPX option
         chain for dealer gamma, and a decade of index history for the base
-        rates. Measured at ~37s on a brand-new revision against 0.17s warm, and
+        rates, plus the rest-of-session table over 1,222 sessions. Measured at ~47s
+        on a brand-new revision against 0.2s warm, and
         the home page's server-side prefetch gives up at 20s — so without this
         the first visitor after a deploy loses the SSR seed for the one card
         the page is built around and falls back to a client fetch.
