@@ -35,7 +35,15 @@ jobs:
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Was `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`.
+          # That secret was written 2026-03-17 and the action authenticated fine
+          # until 375e586 (2026-05-21); every run since effb0e4 (2026-08-02) has
+          # died ~21s in with "Claude result reported subtype success with
+          # is_error:true" and posted no review — an auth failure at the API, not
+          # a finding. The token reaches the action, so this is the credential
+          # going bad rather than the workflow losing it. ANTHROPIC_API_KEY was
+          # already set on the repo and simply was not referenced here.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
