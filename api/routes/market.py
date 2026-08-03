@@ -3106,6 +3106,9 @@ def _es_brief_build() -> dict:
         # clock at the time. Ranked from the TAPE, annotated from the feed —
         # never the other way round.
         "attribution": cock.get("attribution"),
+        # What is driving today, how much room it implies, and — stated as an
+        # explicit null with its p-value — what it does not tell you.
+        "macro_setup": cock.get("macro_setup"),
         "gamma": cock.get("gamma"),
         "base_rates": cock.get("base_rates"),
         "breadth": cock.get("breadth"),

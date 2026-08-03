@@ -917,6 +917,125 @@ export default function EsBriefing() {
                 )}
               </div>
 
+              {/* THE SETUP. Sits in the swing-horizon section because that is the
+                  one place on this card already labelled lean-not-trigger.
+                  Mechanisms are named to explain what is MOVING and are checked
+                  against the tape; the size expectation carries measured numbers;
+                  and the direction is printed as an explicit null with its
+                  p-value, because acting on a narrative that feels directional
+                  when the data says it is only about size is the specific error
+                  this block exists to prevent. */}
+              {d.macro_setup?.available && (d.macro_setup.n_drivers ?? 0) > 0 && (
+                <div className="space-y-1.5">
+                  <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                    Today&apos;s setup
+                  </h3>
+
+                  <div className="space-y-1.5">
+                    {d.macro_setup.drivers?.map((dr) => (
+                      <div key={dr.key} className="border border-border rounded px-2 py-1.5">
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <span className="text-[0.65rem] font-semibold text-text">{dr.label}</span>
+                          <span className="text-[0.6rem] tabular-nums text-text-muted">
+                            {dr.symbol} {dr.z > 0 ? "+" : ""}
+                            {dr.z.toFixed(1)}σ overnight · {dr.day_pct > 0 ? "+" : ""}
+                            {dr.day_pct.toFixed(2)}% today
+                          </span>
+                        </div>
+                        <p className="text-[0.6rem] text-text-muted leading-snug mt-0.5">
+                          {dr.mechanism}
+                        </p>
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+                          {dr.chain.map((c) => (
+                            <span key={c.symbol} className="text-[0.6rem] tabular-nums">
+                              <span className="text-text-muted">{c.symbol} </span>
+                              <span
+                                className={
+                                  c.state === "confirms" ? "text-gain"
+                                    : c.state === "contradicts" ? "text-loss" : "text-amber-400"
+                                }
+                              >
+                                {c.state}
+                              </span>
+                              <span className="text-text-muted">
+                                {" "}
+                                ({c.actual_pct > 0 ? "+" : ""}
+                                {c.actual_pct.toFixed(2)}%)
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {d.macro_setup.chain_note && (
+                    <p className="text-[0.6rem] text-amber-400/90 leading-snug">
+                      {d.macro_setup.chain_note}
+                    </p>
+                  )}
+
+                  {d.macro_setup.size && (
+                    <div className="border border-border rounded px-2 py-1.5">
+                      <div className="flex items-baseline gap-2 flex-wrap">
+                        <span className="text-[0.55rem] uppercase tracking-wider text-text-muted">
+                          Room this setup implies
+                        </span>
+                        <span className="text-[0.7rem] font-bold tabular-nums text-text">
+                          {d.macro_setup.size.median_x.toFixed(2)}× normal
+                        </span>
+                        <span className="text-[0.6rem] tabular-nums text-text-muted">
+                          wide {d.macro_setup.size.wide_pct.toFixed(0)}% vs{" "}
+                          {d.macro_setup.size.base_wide_pct.toFixed(0)}% base ·{" "}
+                          {d.macro_setup.size.lift.toFixed(2)}× lift
+                        </span>
+                      </div>
+                      <p className="text-[0.55rem] text-text-muted leading-snug mt-0.5">
+                        {d.macro_setup.size.combination_note}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* The null, printed in full. This is the load-bearing part. */}
+                  {d.macro_setup.direction && (
+                    <div className="border border-border rounded px-2 py-1.5">
+                      <div className="text-[0.55rem] uppercase tracking-wider text-text-muted">
+                        Direction — not conditioned by the setup
+                      </div>
+                      <div className="mt-1 space-y-0.5">
+                        {d.macro_setup.direction.tests.map((t, i) => (
+                          <div key={i} className="flex items-baseline gap-2 text-[0.6rem]">
+                            <span className="flex-1 min-w-0 truncate text-text-muted">
+                              {t.label}
+                            </span>
+                            <span className="tabular-nums text-text">
+                              {t.up_pct.toFixed(1)}%
+                            </span>
+                            <span className="tabular-nums text-text-muted w-[6.5rem] text-right">
+                              [{t.ci[0].toFixed(0)}–{t.ci[1].toFixed(0)}] p={t.p.toFixed(2)}
+                            </span>
+                          </div>
+                        ))}
+                        <div className="flex items-baseline gap-2 text-[0.6rem] pt-0.5 border-t border-border/60">
+                          <span className="flex-1 text-text-muted">base rate</span>
+                          <span className="tabular-nums text-text">
+                            {d.macro_setup.direction.base_up_pct.toFixed(1)}%
+                          </span>
+                          <span className="w-[6.5rem]" />
+                        </div>
+                      </div>
+                      <p className="text-[0.55rem] text-text-muted leading-snug mt-1">
+                        {d.macro_setup.direction.verdict}
+                      </p>
+                    </div>
+                  )}
+
+                  <p className="text-[0.55rem] text-text-muted leading-snug">
+                    {d.macro_setup.caveat}
+                  </p>
+                </div>
+              )}
+
               {/* lean */}
               {(d.cta || d.macro) && (
                 <div className="space-y-1.5">

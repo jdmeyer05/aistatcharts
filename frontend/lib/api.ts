@@ -3294,6 +3294,48 @@ export interface EsCandleContext {
   disclaimer?: string;
 }
 
+/** The macro setup: named drivers with their MEASURED range lift, the direction
+ *  stated as an explicit null, and the transmission chain checked against the
+ *  tape. The mechanisms explain what is moving; they never forecast direction,
+ *  which the measured tests do not support. */
+export interface EsMacroSetup {
+  available: boolean;
+  reason?: string;
+  character?: string;
+  note?: string;
+  n_drivers?: number;
+  drivers?: Array<{
+    key: string;
+    label: string;
+    symbol: string;
+    mechanism: string;
+    z: number;
+    day_pct: number;
+    median_x: number;
+    wide_pct: number;
+    n: number;
+    p_size: number;
+    size_significant: boolean;
+    /** Each implication of the mechanism, measured. "flat" is a failure of the
+     *  chain too — it predicts a move, and no move does not corroborate it. */
+    chain: Array<{ symbol: string; expected: string; actual_pct: number; state: string }>;
+    broken_links: Array<{ symbol: string; expected: string; actual_pct: number; state: string }>;
+  }>;
+  size?: {
+    source: string; median_x: number; wide_pct: number; base_wide_pct: number;
+    lift: number; n: number; p: number; significant: boolean;
+    note: string; combination_note: string;
+  };
+  direction?: {
+    base_up_pct: number;
+    tests: Array<{ label: string; up_pct: number; ci: [number, number]; p: number; n: number }>;
+    verdict: string;
+  };
+  broken_links?: Array<{ symbol: string; expected: string; actual_pct: number; state: string }>;
+  chain_note?: string | null;
+  caveat?: string;
+}
+
 /** What actually moved the tape, ranked from the TAPE and annotated from the
  *  feed — never the other way round. What sits beside a move is coincidence in
  *  the clock, not demonstrated causation. */
@@ -3515,6 +3557,7 @@ export interface EsBrief {
   regime?: EsRegime | null;
   rest_of_session?: EsRestOfSession | null;
   attribution?: EsAttribution | null;
+  macro_setup?: EsMacroSetup | null;
   cta?: {
     bias_1w?: CtaBias;
     current_exposure?: number;
