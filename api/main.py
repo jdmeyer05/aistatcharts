@@ -17,6 +17,25 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 logger = logging.getLogger(__name__)
 
+# Nothing in this project ever configured logging, so the root logger sat at its
+# WARNING default with no handler. Application warnings still reached Cloud Run
+# through `logging.lastResort`, which is why the gap went unnoticed — but every
+# `logger.info` in api/ and src/ was discarded, including the six "pre-warmed"
+# lines that are the ONLY evidence the startup warm-up did anything. Adding a
+# pre-warm you cannot observe is not much better than not adding one.
+#
+# The handler goes on the root at WARNING and the level is raised only for the
+# `api` and `src` trees: INFO on the root would switch on urllib3 and every
+# other dependency, and Cloud Run bills by log volume. There are 26 info calls
+# across the whole project and exactly one of them sits in a request path, so
+# this is startup diagnostics, not per-request chatter.
+logging.basicConfig(level=logging.WARNING,
+                    format="%(levelname)s:%(name)s:%(message)s",
+                    stream=sys.stdout)
+for _tree in ("api", "src"):
+    logging.getLogger(_tree).setLevel(
+        os.environ.get("APP_LOG_LEVEL", "INFO").upper())
+
 # Ensure project root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
