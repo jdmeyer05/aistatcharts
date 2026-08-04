@@ -164,20 +164,267 @@ def gap_base_rates(h: pd.DataFrame, gap_pct: float | None = None) -> dict:
         match = next((r for r in rows if r["bucket"] == b), None)
         if match:
             direction = "up" if gap_pct > 0 else "down"
-            rate = match["up_fill_rate"] if direction == "up" else match["down_fill_rate"]
+            # POOLED across direction, deliberately. This used to quote the
+            # direction-specific rate, which halves the sample to buy a split
+            # the data does not support: tested per bucket on both windows —
+            # ^GSPC daily 10y and SPY 5-minute 5y — every one of the eight
+            # comparisons is a null (smallest p = 0.111, pooled p = 0.35). The
+            # per-direction rates stay in `buckets` because they are what was
+            # measured, but nothing is conditioned on them.
+            rate = match["fill_rate"]
             today = {
                 "gap_pct": round(float(gap_pct), 3),
                 "direction": direction,
                 "bucket": b,
-                "fill_rate": rate if rate is not None else match["fill_rate"],
+                "fill_rate": rate,
                 "n": match["n"],
                 "note": (f"{'An' if direction == 'up' else 'A'} {direction} gap this size has "
                          f"traded back to the prior close in the same session "
-                         f"{rate if rate is not None else match['fill_rate']:.0f}% of "
-                         f"{match['n']} occurrences."),
+                         f"{rate:.0f}% of {match['n']} occurrences, over the whole "
+                         f"session and without regard to the clock."),
             }
 
-    return {"available": bool(rows), "buckets": rows, "today": today}
+    return {
+        "available": bool(rows),
+        "buckets": rows,
+        "today": today,
+        "direction_note": ("Up and down gaps fill at rates that are not "
+                           "distinguishable in this sample, so the rate quoted "
+                           "pools them."),
+    }
+
+
+# ── Gap fill, conditioned on the clock and on distance ────────────
+#
+# The table above is unconditional: it asks whether a session EVER traded back
+# to the prior close. Quoted at 11:45 with price sitting at the session high,
+# that number is an overstatement of what is still available, and by a lot —
+# a moderate gap fills 45.9% of the time over the whole session but 11.3% of
+# the time given it is still open at 11:45 with price holding its distance.
+# Reading the unconditional figure as a live probability is the same defect the
+# conditions gate had: a plausible value standing in for the unknown one.
+#
+# Measured on the same 5-minute SPY series as the path statistics — five years,
+# 1,252 sessions — NOT on the ten-year daily window above. Both are reported
+# and labelled; they are different studies.
+#
+# TWO CONDITIONS, NOT THREE. The clock and the distance to the prior close both
+# carry information, and the distance one survives inside every gap bucket at
+# every hour tested (p < 0.001 throughout), so it is not gap size measured
+# twice. DIRECTION DOES NOT: conditioned on the gap still being open at 11:30,
+# up and down fill at indistinguishable rates in every bucket (p = 0.16 to
+# 0.82), and unconditionally too. It is left out on purpose — adding it back
+# would split the sample to buy nothing.
+
+_FILL_MIN_N = 30          # a cell below this is not reported, it is fallen back from
+_DIST_SPLIT = 1.0         # distance to the prior close in units of the gap
+_FILL_MARKS = list(range(0, 375, 15))   # 09:30 → 15:45, on the 5-minute grid
+
+
+def _mark_label(m: int) -> str:
+    h, mm = divmod((_OPEN_T.hour * 60 + _OPEN_T.minute) + m, 60)
+    return f"{h:02d}:{mm:02d}"
+
+
+def _gap_sessions() -> pd.DataFrame:
+    """One row per session: the gap, and the MINUTE it first filled.
+
+    The prior close comes from the previous session in the same 5-minute series
+    rather than from a daily frame, so it is on one adjustment basis with the
+    bars that test the fill — an unadjusted dividend drop would otherwise show
+    up as a 0.4% down gap four times a year. Sessions whose predecessor is more
+    than five calendar days back are dropped: that is a hole in the data, not a
+    weekend, and it would pair a gap with the wrong close.
+
+    Half-days are KEPT here, unlike in `_hourly`. The path study needs a full
+    session to be comparable; this one only needs the first touch, and a short
+    session that filled at 10:05 filled at 10:05.
+    """
+    from time import time as _now
+    hit = _CACHE.get("gapfill")
+    if hit and (_now() - hit[0]) < _TTL_S:
+        return hit[1]
+
+    fine = _fine()
+    if fine.empty:
+        return pd.DataFrame()
+
+    f = fine.assign(day=fine.index.normalize(),
+                    mins=(fine.index.hour * 60 + fine.index.minute)
+                    - (_OPEN_T.hour * 60 + _OPEN_T.minute))
+    g = f.groupby("day")
+    s = pd.DataFrame({"open": g["Open"].first(), "close": g["Close"].last()})
+    # A session must at least start at the bell. One that begins at 11:00 is a
+    # data hole, and its "gap" would be an eleven-thirty print against yesterday.
+    s = s[g["mins"].min() == 0]
+    s["prev_close"] = s["close"].shift(1)
+    s["step_days"] = pd.Series(s.index, index=s.index).diff().dt.days
+    s = s[(s["step_days"] <= 5) & s["prev_close"].notna()]
+    s["gap_pct"] = (s["open"] - s["prev_close"]) / s["prev_close"] * 100
+
+    j = f.join(s[["prev_close", "gap_pct"]], on="day", how="inner")
+    up = j["gap_pct"].values > 0
+    touch = np.where(up, j["Low"].values <= j["prev_close"].values,
+                     j["High"].values >= j["prev_close"].values)
+    s["fill_min"] = j[touch].groupby("day")["mins"].min()
+
+    # Distance to the prior close at each mark, in units of the gap. r = 1 is
+    # price sitting where it opened; r = 0 is the fill itself. Carried as one
+    # column per mark so the live lookup is a dict read, not a regroup.
+    # One pivot rather than a groupby per mark. Not a performance fix — the
+    # whole build measures 0.04s either way, and the two seconds it first
+    # looked like were variance in the Polygon fetch above.
+    dist = (j["Close"] - j["prev_close"]) / j["prev_close"] * 100 / j["gap_pct"]
+    j = j.assign(r=dist)
+    piv = j[j["mins"].isin(_FILL_MARKS)].pivot_table(
+        index="day", columns="mins", values="r", aggfunc="last")
+    for m in _FILL_MARKS:
+        s[f"r_{m}"] = piv[m] if m in piv.columns else np.nan
+    s = s.drop(columns=["close", "step_days"])
+    _CACHE["gapfill"] = (_now(), s)
+    return s
+
+
+def _fill_cell(s: pd.DataFrame, lo: float, hi: float, m: int,
+               r: float | None) -> tuple[float, int, str] | None:
+    """Fill rate for sessions of this gap size still open at minute `m`.
+
+    Falls back from the three-way cell to the two-way one rather than reporting
+    a rate off eleven sessions. Returns None when even the two-way cell is thin.
+    """
+    at_risk = s[(s["gap_pct"].abs() >= lo) & (s["gap_pct"].abs() < hi)
+                & (s["fill_min"].isna() | (s["fill_min"] >= m))]
+    if r is not None and lo >= _GAP_BUCKETS[0][1] and f"r_{m}" in at_risk.columns:
+        # Distance is only meaningful once the gap is big enough to divide by.
+        # Inside the flat bucket the denominator is under 0.15%, so r is mostly
+        # noise and the split is skipped rather than dressed up.
+        side = at_risk[at_risk[f"r_{m}"] < _DIST_SPLIT] if r < _DIST_SPLIT \
+            else at_risk[at_risk[f"r_{m}"] >= _DIST_SPLIT]
+        side = side[side[f"r_{m}"].notna()]
+        if len(side) >= _FILL_MIN_N:
+            return (round(float(side["fill_min"].notna().mean() * 100), 1),
+                    int(len(side)), "clock and distance")
+    if len(at_risk) >= _FILL_MIN_N:
+        return (round(float(at_risk["fill_min"].notna().mean() * 100), 1),
+                int(len(at_risk)), "clock")
+    return None
+
+
+def gap_fill_conditional(gap_pct: float | None, last: float | None,
+                         prev_close: float | None,
+                         session_high: float | None, session_low: float | None,
+                         now: pd.Timestamp | None) -> dict:
+    """How often a gap this size, still open at this hour, fills by the close.
+
+    This is the number a trader can act on at 11:45; the unconditional rate is
+    the one that is true of the whole session before it starts. They are not
+    interchangeable and both are returned.
+    """
+    if gap_pct is None:
+        return {"available": False, "reason": "no gap to condition on"}
+    if prev_close is None:
+        return {"available": False, "reason": "no prior cash close to measure the fill against"}
+    bucket = _bucket(gap_pct)
+    if bucket is None:
+        return {"available": False, "reason": "gap outside the measured buckets"}
+    lo, hi = next((a, b) for a, b, lab in _GAP_BUCKETS if lab == bucket)
+
+    s = _gap_sessions()
+    if s.empty:
+        return {"available": False, "reason": "no intraday history"}
+
+    direction = "up" if gap_pct > 0 else "down"
+    sel = s[(s["gap_pct"].abs() >= lo) & (s["gap_pct"].abs() < hi)]
+    if len(sel) < _FILL_MIN_N:
+        return {"available": False, "reason": "not enough sessions in this gap bucket"}
+
+    out = {
+        "available": True,
+        "bucket": bucket,
+        "direction": direction,
+        "gap_pct": round(float(gap_pct), 3),
+        "unconditional": round(float(sel["fill_min"].notna().mean() * 100), 1),
+        "unconditional_n": int(len(sel)),
+        # The whole point of the block, said plainly, because the two numbers
+        # beside each other invite being read as a disagreement.
+        "note": ("The unconditional rate describes the session before it opens. "
+                 "The conditional one describes what is left of it."),
+        "instrument": f"{_INTRADAY_SYMBOL} 5-minute bars, cash session",
+        "window_years": _INTRADAY_YEARS,
+        "sessions": int(len(s)),
+        "from": str(s.index.min().date()),
+        "to": str(s.index.max().date()),
+    }
+
+    # The curve is useful before the bell too — it is the shape of the day, not
+    # a live reading — so it is built whether or not there is a clock.
+    curve = []
+    for m in _FILL_MARKS:
+        cell = _fill_cell(sel, lo, hi, m, None)
+        if cell:
+            curve.append({"time": _mark_label(m), "minutes": m,
+                          "fill_rate": cell[0], "n": cell[1]})
+    out["curve"] = curve
+
+    # Already filled? Then there is no probability left to quote.
+    if session_high is not None and session_low is not None:
+        hit = session_low <= prev_close if direction == "up" else session_high >= prev_close
+        if hit:
+            out["state"] = "filled"
+            out["reason"] = "the gap has already filled today"
+            return out
+    out["state"] = "open"
+
+    slot_min = _current_slot_minutes(now)
+    if slot_min is None:
+        out["as_of"] = None
+        out["reason"] = "outside the cash session — the curve is the whole-day shape"
+        return out
+
+    r = None
+    if last is not None and gap_pct:
+        r = ((last - prev_close) / prev_close * 100) / gap_pct
+    cell = _fill_cell(sel, lo, hi, slot_min, r)
+    if cell is None:
+        out["as_of"] = _mark_label(slot_min)
+        out["reason"] = "too few comparable sessions still open at this hour"
+        return out
+
+    rate, n, basis = cell
+    out.update({
+        "as_of": _mark_label(slot_min),
+        "minutes_in": slot_min,
+        "fill_rate": rate,
+        "n": n,
+        "conditioned_on": basis,
+        # Only reported when it was actually used. A ratio sitting in the
+        # payload of a clock-only cell reads as though the split had been
+        # applied, which is the whole failure mode this module keeps hitting.
+        "distance_r": (round(float(r), 2)
+                       if r is not None and basis != "clock" else None),
+        "distance": (None if r is None or basis == "clock"
+                     else ("retraced" if r < _DIST_SPLIT else "holding")),
+        "pct_closed": (round(float((1 - r) * 100), 1)
+                       if r is not None and basis != "clock" and r <= 1 else None),
+    })
+    return out
+
+
+def _current_slot_minutes(now: pd.Timestamp | None) -> int | None:
+    """Minutes since the open, rounded DOWN to the last completed mark.
+
+    Down rather than to-nearest on purpose: the at-risk set is "sessions still
+    open at minute m", and rounding up would quote a cell conditioned on
+    information the session has not produced yet.
+    """
+    if now is None:
+        return None
+    t = now.tz_convert(_TZ_NY) if now.tzinfo else now.tz_localize(_TZ_NY)
+    if t.weekday() >= 5 or not (_OPEN_T <= t.time() < _CLOSE_T):
+        return None
+    mins = (t.hour * 60 + t.minute) - (_OPEN_T.hour * 60 + _OPEN_T.minute)
+    done = [m for m in _FILL_MARKS if m <= mins]
+    return done[-1] if done else 0
 
 
 def range_base_rates(h: pd.DataFrame, last: float | None = None) -> dict:
@@ -391,6 +638,24 @@ def _polygon_5m(symbol: str, years: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _fine() -> pd.DataFrame:
+    """The 5-minute series, fetched once and shared.
+
+    Two studies need it now — the hourly path buckets and the gap-fill survival
+    curve — and the fetch is ~20 paged requests over five years. `_polygon_5m`
+    itself is deliberately uncached so the yfinance fallback in `_hourly` can
+    still tell a failure from an empty cache; the caching belongs here.
+    """
+    from time import time as _now
+    hit = _CACHE.get("fine5m")
+    if hit and (_now() - hit[0]) < _TTL_S:
+        return hit[1]
+    f = _polygon_5m(_INTRADAY_SYMBOL, _INTRADAY_YEARS)
+    if not f.empty:
+        _CACHE["fine5m"] = (_now(), f)
+    return f
+
+
 def _to_slots(fine: pd.DataFrame) -> pd.DataFrame:
     """Collapse intra-hour bars into the 09:30-anchored hourly buckets.
 
@@ -434,7 +699,7 @@ def _hourly() -> pd.DataFrame:
 
     h = pd.DataFrame()
     source = ""
-    fine = _polygon_5m(_INTRADAY_SYMBOL, _INTRADAY_YEARS)
+    fine = _fine()
     if not fine.empty:
         h = _to_slots(fine)
         source = f"{_INTRADAY_SYMBOL} cash session, hourly buckets from 5-minute bars"
@@ -689,10 +954,23 @@ def _safe_path(last: float | None, now: pd.Timestamp | None) -> dict:
         return {"available": False, "reason": "path statistics unavailable"}
 
 
+def _safe_gap_fill(gap_pct, last, prev_close, session_high, session_low, now) -> dict:
+    """Contained for the same reason `_safe_path` is — see the note below."""
+    try:
+        return gap_fill_conditional(gap_pct, last, prev_close,
+                                    session_high, session_low, now)
+    except Exception as e:
+        logger.warning(f"conditional gap fill failed: {e}")
+        return {"available": False, "reason": "conditional gap statistics unavailable"}
+
+
 def base_rates(last: float | None = None, gap_pct: float | None = None,
                years: int = _DEFAULT_YEARS,
                now: pd.Timestamp | None = None,
-               with_path: bool = True) -> dict:
+               with_path: bool = True,
+               prev_close: float | None = None,
+               session_high: float | None = None,
+               session_low: float | None = None) -> dict:
     """All measured base rates, optionally conditioned on today's gap and clock."""
     h = _daily(years)
     if h.empty:
@@ -716,6 +994,13 @@ def base_rates(last: float | None = None, gap_pct: float | None = None,
         "from": str(h.index.min().date()),
         "to": str(h.index.max().date()),
         "gaps": gap_base_rates(h, gap_pct),
+        # The same question asked of the session that is actually running. It
+        # lives beside `gaps` rather than inside it because it is a different
+        # study on a different instrument and window, and burying it would
+        # invite the two rates being read as one.
+        "gap_fill_live": _safe_gap_fill(gap_pct, last, prev_close,
+                                        session_high, session_low, now)
+        if with_path else None,
         "range": range_base_rates(h, last),
         "events": event_base_rates(h, years),
         # The path study runs on its own, much shorter window, so it carries its

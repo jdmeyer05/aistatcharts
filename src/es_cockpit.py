@@ -521,8 +521,13 @@ def es_cockpit(now: pd.Timestamp | None = None,
         # the frame in exactly the way the levels bug was.
         clock_et = now if now is not None else pd.Timestamp.now(tz=_TZ)
         clock = clock_et if live else None
-        f_br = pool.submit(_safe, lambda: base_rates(last=last, gap_pct=gap_pct, now=clock),
-                           "base_rates") if with_base_rates else None
+        # `session_high`/`session_low` are handed over only when the session is
+        # actually trading — they answer "has today's gap already filled", and a
+        # completed Friday range would answer it about the wrong day.
+        f_br = pool.submit(_safe, lambda: base_rates(
+            last=last, gap_pct=gap_pct, now=clock, prev_close=py_close,
+            session_high=s_high if live else None,
+            session_low=s_low if live else None), "base_rates") if with_base_rates else None
         # Breadth derives its own index comparison so it always describes the
         # same window as its counts — see the note in `market_breadth`. It is
         # handed an EXCHANGE-LOCAL clock, never `now` as passed: Cloud Run is

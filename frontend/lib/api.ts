@@ -3151,8 +3151,43 @@ export interface EsBaseRates {
   gaps?: {
     available: boolean;
     buckets?: Array<{ bucket: string; n: number; fill_rate: number; up_fill_rate: number | null; down_fill_rate: number | null; close_above_open_rate: number }>;
+    /** `fill_rate` POOLS up and down gaps — the split is a null in every bucket
+     *  on both measured windows, so quoting the direction-specific rate would
+     *  halve the sample for nothing. `up_fill_rate`/`down_fill_rate` remain in
+     *  `buckets` as measurements, but nothing is conditioned on them. */
     today?: { gap_pct: number; direction: string; bucket: string; fill_rate: number; n: number; note: string } | null;
+    direction_note?: string;
   };
+  /** The same question asked of the session actually running: how often a gap
+   *  this size, STILL OPEN at this hour and this far from the prior close, ends
+   *  up filling. A different study from `gaps` — SPY 5-minute bars over five
+   *  years, not ^GSPC dailies over ten — so it carries its own window and must
+   *  never be rendered as though it were the same series. */
+  gap_fill_live?: {
+    available: boolean;
+    reason?: string;
+    state?: "open" | "filled";
+    bucket?: string;
+    direction?: string;
+    gap_pct?: number;
+    unconditional?: number;
+    unconditional_n?: number;
+    as_of?: string | null;
+    minutes_in?: number;
+    fill_rate?: number;
+    n?: number;
+    conditioned_on?: "clock" | "clock and distance";
+    distance_r?: number | null;
+    distance?: "retraced" | "holding" | null;
+    pct_closed?: number | null;
+    note?: string;
+    instrument?: string;
+    window_years?: number;
+    sessions?: number;
+    from?: string;
+    to?: string;
+    curve?: Array<{ time: string; minutes: number; fill_rate: number; n: number }>;
+  } | null;
   range?: {
     available: boolean; n?: number;
     median_range_pct?: number; median_range_handles?: number | null;

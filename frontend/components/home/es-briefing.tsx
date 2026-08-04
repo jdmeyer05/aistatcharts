@@ -1747,6 +1747,54 @@ export default function EsBriefing() {
                 </p>
               )}
 
+              {/* The unconditional rate above describes the session before it
+                  opens. This one describes what is left of it, and the two
+                  diverge sharply by midday — so it sits directly beneath,
+                  labelled with its own instrument and window. */}
+              {d.base_rates.gap_fill_live?.available && (() => {
+                const g = d.base_rates.gap_fill_live!;
+                if (g.state === "filled") {
+                  return (
+                    <p className="text-[0.65rem] text-text-muted border-l-2 border-l-border pl-2">
+                      Today&apos;s gap has already traded back to the prior close, so the rate
+                      above no longer describes anything outstanding.
+                    </p>
+                  );
+                }
+                if (g.fill_rate == null) {
+                  return g.reason ? (
+                    <p className="text-[0.6rem] text-text-muted border-l-2 border-l-border pl-2">
+                      Still-open gap-fill rate: {g.reason}.
+                    </p>
+                  ) : null;
+                }
+                return (
+                  <div className="border-l-2 border-l-accent pl-2 space-y-0.5">
+                    <p className="text-[0.65rem] text-text">
+                      Still open at {g.as_of}
+                      {g.distance === "holding"
+                        ? " with price holding its distance from the prior close"
+                        : g.distance === "retraced"
+                          ? " with part of the gap already retraced"
+                          : ""}
+                      , a gap this size has gone on to fill by the close{" "}
+                      <span className="text-accent font-medium tabular-nums">
+                        {g.fill_rate.toFixed(0)}%
+                      </span>{" "}
+                      of {g.n} times — against{" "}
+                      <span className="tabular-nums">{g.unconditional?.toFixed(0)}%</span>{" "}
+                      measured over the whole session.
+                    </p>
+                    <p className="text-[0.55rem] text-text-muted leading-snug">
+                      Conditioned on the {g.conditioned_on}. Measured on{" "}
+                      <span className="text-text">{g.instrument}</span>,{" "}
+                      {g.sessions?.toLocaleString()} sessions ({g.from} to {g.to}) — a
+                      different series and a shorter window than the daily rates above.
+                    </p>
+                  </div>
+                );
+              })()}
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-5 gap-y-2 text-[0.6rem]">
                 <div>
                   <div className="text-[0.55rem] uppercase tracking-wider text-text-muted mb-0.5">

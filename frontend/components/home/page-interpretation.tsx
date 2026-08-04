@@ -147,6 +147,20 @@ export default function PageInterpretation() {
             source: br.source, sessions: br.sessions, window_years: br.window_years,
             todays_gap: br.gaps?.today,
             gap_fill_by_bucket: br.gaps?.buckets?.map((b) => ({ bucket: b.bucket, fill_rate: b.fill_rate, n: b.n })),
+            // The unconditional rate above is a whole-session frequency. This is
+            // the live one, and the narrator was quoting the former as though it
+            // were the latter — they diverge by 30 points or more by midday.
+            gap_fill_still_open: br.gap_fill_live?.available
+              ? {
+                  state: br.gap_fill_live.state, as_of: br.gap_fill_live.as_of,
+                  fill_rate: br.gap_fill_live.fill_rate, n: br.gap_fill_live.n,
+                  conditioned_on: br.gap_fill_live.conditioned_on,
+                  distance: br.gap_fill_live.distance,
+                  unconditional: br.gap_fill_live.unconditional,
+                  instrument: br.gap_fill_live.instrument,
+                  sessions: br.gap_fill_live.sessions,
+                }
+              : null,
             typical_session: br.range,
             release_days_vs_normal: br.events?.events?.map((e) => ({
               name: e.name, range_vs_normal: e.range_vs_normal, n: e.n,
