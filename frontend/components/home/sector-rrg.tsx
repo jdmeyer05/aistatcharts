@@ -24,6 +24,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Plot } from "@/components/plot";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { fetchSectorRrg, type SectorRrg, type RrgQuadrant, type RrgMeasure } from "@/lib/api";
+import { ordinal } from "@/lib/home-constants";
 
 /** Where a reading sits in its own history, in words. An extreme is the whole
  *  point of the measure, so 0 and 100 are named rather than printed as "0th". */
@@ -31,7 +32,7 @@ function rankPhrase(m: RrgMeasure): string | null {
   if (m.pctile == null) return null;
   if (m.pctile <= 0) return `lowest of ${m.n_history} weeks`;
   if (m.pctile >= 100) return `highest of ${m.n_history} weeks`;
-  return `${Math.round(m.pctile)}th pctile of ${m.n_history} weeks`;
+  return `${ordinal(m.pctile)} pctile of ${m.n_history} weeks`;
 }
 
 function RegimeTile({ title, m, fmt, note }: {

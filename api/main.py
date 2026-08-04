@@ -159,6 +159,30 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"ES brief pre-warm failed: {e}")
 
+    def _warm_es_track_record() -> None:
+        """Prefill the session-character calibration.
+
+        8.3s cold — it replays the character read over the full session history
+        — and it was left out of this list when it shipped, so the first
+        visitor after a scale-up wore the whole thing. It is lazy-fetched on the
+        card with a 6h staleTime so it never blocked the brief, but that made it
+        a rough edge rather than a harmless one.
+
+        It shares the ES brief's underlying bar caches, so it is warmed AFTER
+        the brief rather than beside it — run concurrently the two would fetch
+        the same history twice on a cold instance.
+        """
+        try:
+            from src.es_track_record import character_track_record
+            character_track_record()
+            logger.info("ES track record pre-warmed")
+        except Exception as e:
+            logger.warning(f"ES track record pre-warm failed: {e}")
+
+    def _warm_es() -> None:
+        _warm_es_brief()
+        _warm_es_track_record()
+
     def _warm_energy() -> None:
         """Prefill the oil + natgas bundle caches. Each bundle does ~10
         parallel EIA fetches the first time; on a cold instance that's the
@@ -316,7 +340,7 @@ async def _warm_caches() -> None:
         loop.run_in_executor(None, _warm_macro_pressure),
         loop.run_in_executor(None, _warm_sector_rrg),
         loop.run_in_executor(None, _warm_sp_valuation),
-        loop.run_in_executor(None, _warm_es_brief),
+        loop.run_in_executor(None, _warm_es),
         loop.run_in_executor(None, _warm_energy),
         loop.run_in_executor(None, _warm_ercot),
     )

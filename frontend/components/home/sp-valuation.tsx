@@ -15,6 +15,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { fetchSpValuation, type SpValuation } from "@/lib/api";
+import { ordinal } from "@/lib/home-constants";
 
 function fmt(v: number, unit: string): string {
   return unit === "pct" ? `${v.toFixed(2)}%` : `${v.toFixed(1)}×`;
@@ -110,7 +111,7 @@ function rc(c: NonNullable<SpValuation["rate_context"]>) {
           </span>
           {typeof c.erp_pctile === "number" && (
             <span className="text-[0.6rem] text-text-muted tabular-nums">
-              · {Math.round(c.erp_pctile)}th pctile of {c.erp_n_months} months
+              · {ordinal(c.erp_pctile)} pctile of {c.erp_n_months} months
             </span>
           )}
         </div>
@@ -127,7 +128,7 @@ function rc(c: NonNullable<SpValuation["rate_context"]>) {
           </span>
           <span className="text-[0.6rem] text-text-muted tabular-nums">
             {c.beta_window_days}d
-            {typeof c.beta_pctile === "number" && `, ${Math.round(c.beta_pctile)}th pctile of ${c.beta_pctile_years}y`}
+            {typeof c.beta_pctile === "number" && `, ${ordinal(c.beta_pctile)} pctile of ${c.beta_pctile_years}y`}
             {typeof c.rates_r2 === "number" && `, R² ${c.rates_r2.toFixed(2)}`}
           </span>
         </div>

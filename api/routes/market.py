@@ -3205,15 +3205,14 @@ def _es_card_audit_cached() -> dict:
     return out
 
 
-_TRACK_CACHE: dict = {}
-
-
 @router.get("/es-track-record")
 async def es_track_record(user: str = Depends(get_current_user)):
     """Calibration of the session-character read, replayed over the full history.
 
     Separate from the brief because it describes the MODULE rather than today,
-    and it moves once a day at most.
+    and it moves once a day at most. No cache layer here on purpose —
+    `character_track_record` holds its own 12h cache, which is also what the
+    startup pre-warm in `api/main.py` fills.
     """
     from src.es_track_record import character_track_record
     return await asyncio.to_thread(character_track_record)
