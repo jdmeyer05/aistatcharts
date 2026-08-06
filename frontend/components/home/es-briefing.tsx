@@ -487,6 +487,14 @@ export default function EsBriefing() {
   // this guard exists to fix, just on the days nobody was looking.
   const inRth = (session?.phase ?? "").startsWith("rth");
 
+  // The path-implied estimator divides the range so far by the fraction of its
+  // range a typical session has covered by now. At 100% covered that divisor is
+  // 1.0 and the "estimate" IS the delivered range — the session is a result, not
+  // a forecast. Tested on the data rather than on the clock, because the two can
+  // disagree: an early close covers its path before the phase flips.
+  const sessionComplete =
+    (d?.regime?.path_implied?.typical_pct_covered ?? 0) >= 95 || !inRth;
+
   // The shared epistemics collect into one disclosure instead of repeating
   // under each block. Caveats specific to TODAY's numbers (the `surface`
   // reasons on the gate, the unattributed-move note) stay inline where they
@@ -1374,7 +1382,7 @@ export default function EsBriefing() {
                     <div className="pt-1.5 mt-1.5 border-t border-border space-y-0.5">
                       <div className="flex items-baseline gap-1.5">
                         <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                          Session character
+                          {sessionComplete ? "Session result" : "Session character"}
                         </span>
                         <span
                           className={`text-[0.6rem] font-bold uppercase ${
@@ -1390,19 +1398,65 @@ export default function EsBriefing() {
                           </span>
                         )}
                       </div>
-                      <div className="text-[0.6rem] text-text-muted tabular-nums">
-                        {d.regime.path_implied.range_so_far?.toFixed(0)} handles in by{" "}
-                        {d.regime.path_implied.slot} · a typical session has{" "}
-                        {d.regime.path_implied.typical_pct_covered?.toFixed(0)}% of its range by
-                        then · implies {d.regime.path_implied.implied_range?.toFixed(0)} for the
-                        session against a normal {d.regime.path_implied.normal_range?.toFixed(0)}
-                      </div>
-                      <p className="text-[0.55rem] text-text-muted/80 leading-snug">
-                        Measured from this session&apos;s own range, not priced at the open —
-                        the estimates above cannot move once the day is underway. Median error
-                        at this hour is {d.regime.path_implied.oos_mae_pct?.toFixed(0)}% out of
-                        sample.
-                      </p>
+                      {/* Once the path is fully covered this stops being an
+                          estimate — implied_range is range_so_far divided by
+                          1.0, i.e. the delivered range. Saying "implies 44 for
+                          the session" about a session that is over applies
+                          forecast language to a measured fact, and quoting the
+                          estimator's out-of-sample error alongside it is worse:
+                          a measurement has no forecast error. */}
+                      {sessionComplete ? (
+                        <>
+                          <div className="text-[0.6rem] text-text-muted tabular-nums">
+                            Delivered {d.regime.path_implied.implied_range?.toFixed(0)} handles
+                            against a normal{" "}
+                            {d.regime.path_implied.normal_range?.toFixed(0)}
+                          </div>
+                          {/* The forecast, GRADED. This comparison used to fire as
+                              an auditor contradiction ("options-implied 97 vs
+                              path-implied 44 differ by more than 50%"), which was
+                              wrong — nothing contradicted, the day simply came in
+                              quieter than it was priced. Removing it from the
+                              auditor left the observation homeless; it belongs
+                              here, where the forecast and its outcome sit
+                              together and the reader can see how the open's
+                              pricing actually did. */}
+                          {d.expected_move?.expected_range != null &&
+                            d.expected_move?.consumed?.pct != null && (
+                              <div className="text-[0.6rem] text-text-muted tabular-nums">
+                                Priced{" "}
+                                <span className="text-text">
+                                  {d.expected_move.expected_range.toFixed(0)}
+                                </span>{" "}
+                                at the open
+                                {d.expected_move.headline?.source
+                                  ? ` by ${d.expected_move.headline.source}`
+                                  : ""}{" "}
+                                — the session used{" "}
+                                <span className="text-text">
+                                  {d.expected_move.consumed.pct.toFixed(0)}%
+                                </span>{" "}
+                                of it
+                              </div>
+                            )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-[0.6rem] text-text-muted tabular-nums">
+                            {d.regime.path_implied.range_so_far?.toFixed(0)} handles in by{" "}
+                            {d.regime.path_implied.slot} · a typical session has{" "}
+                            {d.regime.path_implied.typical_pct_covered?.toFixed(0)}% of its range by
+                            then · implies {d.regime.path_implied.implied_range?.toFixed(0)} for the
+                            session against a normal {d.regime.path_implied.normal_range?.toFixed(0)}
+                          </div>
+                          <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                            Measured from this session&apos;s own range, not priced at the open —
+                            the estimates above cannot move once the day is underway. Median error
+                            at this hour is {d.regime.path_implied.oos_mae_pct?.toFixed(0)}% out of
+                            sample.
+                          </p>
+                        </>
+                      )}
 
                       {/* HOW THIS READ HAS ACTUALLY DONE. Sits against the number
                           it scores rather than on a separate page — a track
