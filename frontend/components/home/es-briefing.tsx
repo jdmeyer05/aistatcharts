@@ -475,6 +475,29 @@ export default function EsBriefing() {
     [d?.schedule, liveMins]
   );
 
+  // With no session running the card has far less to say, and it used to say it
+  // at full size anyway — rendering "From here to the close" during the 17:00
+  // maintenance break, four condition chips of which three scored 0, and a
+  // caveat paragraph under every block. Density should track how much is
+  // actually known.
+  const isClosed = session?.phase === "closed";
+
+  // The shared epistemics collect into one disclosure instead of repeating
+  // under each block. Caveats specific to TODAY's numbers (the `surface`
+  // reasons on the gate, the unattributed-move note) stay inline where they
+  // are read — those are findings, not standing methodology.
+  const howToRead = useMemo(() => {
+    const out: { label: string; text: string }[] = [];
+    const add = (label: string, text?: string | null) => {
+      if (text) out.push({ label, text });
+    };
+    add("Conditions", d?.conditions?.disclaimer);
+    if (!isClosed) add("From here to the close", d?.rest_of_session?.caveat);
+    add("Reference levels", d?.level_clusters?.caveat);
+    add("What moved the tape", d?.attribution?.caveat);
+    return out;
+  }, [d, isClosed]);
+
   return (
     <div className="card space-y-3">
       {/* header */}
@@ -614,22 +637,39 @@ export default function EsBriefing() {
                 )}
                 <span className="text-[0.65rem] text-text">{d.conditions.note}</span>
               </div>
-              {d.conditions.reasons.length > 0 && (
-                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
-                  {d.conditions.reasons.map((r, i) => (
-                    <span key={i} className="text-[0.6rem] whitespace-nowrap" title={r.why}>
+              {/* A factor that scored 0 changed nothing about the verdict, and
+                  four chips reading "-1 / 0 / 0 / 0" spend four slots to say
+                  one thing. The scored factors keep their chip; the rest
+                  collapse to a count that still names them on hover, so the
+                  abstentions remain auditable without competing for the eye. */}
+              {d.conditions.reasons.length > 0 && (() => {
+                const scored = d.conditions.reasons.filter((r) => r.effect !== 0);
+                const abstained = d.conditions.reasons.filter((r) => r.effect === 0);
+                return (
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mt-1.5">
+                    {scored.map((r, i) => (
+                      <span key={i} className="text-[0.6rem] whitespace-nowrap" title={r.why}>
+                        <span
+                          className={`tabular-nums font-semibold ${
+                            r.effect > 0 ? "text-gain" : "text-loss"
+                          }`}
+                        >
+                          {r.effect > 0 ? "+" : ""}{r.effect}
+                        </span>{" "}
+                        <span className="text-text-muted">{r.factor}</span>
+                      </span>
+                    ))}
+                    {abstained.length > 0 && (
                       <span
-                        className={`tabular-nums font-semibold ${
-                          r.effect > 0 ? "text-gain" : r.effect < 0 ? "text-loss" : "text-text-muted"
-                        }`}
+                        className="text-[0.6rem] text-text-muted/70 whitespace-nowrap"
+                        title={abstained.map((r) => `${r.factor} — ${r.why}`).join("\n\n")}
                       >
-                        {r.effect > 0 ? "+" : ""}{r.effect}
-                      </span>{" "}
-                      <span className="text-text-muted">{r.factor}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
+                        {abstained.length} abstained
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
               {/* An abstention that moved the verdict is readable on the card.
                   A factor scoring 0 because two estimators disagree is a caveat,
                   and caveats belong in text where they are read, not in a title
@@ -639,7 +679,6 @@ export default function EsBriefing() {
                   {r.why}
                 </p>
               ))}
-              <p className="text-[0.55rem] text-text-muted mt-1">{d.conditions.disclaimer}</p>
             </div>
           )}
 
@@ -693,8 +732,13 @@ export default function EsBriefing() {
               this is the only block addressed to somebody already positioned.
               On 2026-08-03 the card shouted STAND ASIDE at a reader who was
               already long, while the number that spoke to holding sat collapsed
-              in a table three screens down. */}
-          {d.rest_of_session?.available && (
+              in a table three screens down.
+
+              Hidden once the session is over: every number in it is conditioned
+              on time remaining, so "takes the high 4%" with no close ahead is
+              describing a session that already finished. The block answers a
+              question nobody can act on at 17:14. */}
+          {d.rest_of_session?.available && !isClosed && (
             <div className="border border-border rounded px-3 py-2">
               <div className="flex items-baseline gap-2 flex-wrap">
                 <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
@@ -749,9 +793,6 @@ export default function EsBriefing() {
                 handles half the time
               </div>
 
-              <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
-                {d.rest_of_session.caveat}
-              </p>
             </div>
           )}
 
@@ -788,9 +829,6 @@ export default function EsBriefing() {
                     </div>
                   ))}
               </div>
-              <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
-                {d.level_clusters.caveat}
-              </p>
             </div>
           )}
 
@@ -802,9 +840,21 @@ export default function EsBriefing() {
               because that is information about the day rather than a gap. */}
           {d.attribution?.available && (d.attribution.moves?.length ?? 0) > 0 && (
             <div className="border border-border rounded px-3 py-2">
-              <div className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                What moved the tape
-              </div>
+              {/* During the session this is live context — what is driving the
+                  tape right now. Once the session is over it is history, so it
+                  collapses rather than occupying the same space as the levels
+                  the next session will open against. */}
+              <details open={!isClosed} className="group">
+                <summary className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted cursor-pointer select-none list-none flex items-center gap-1">
+                  <span className="transition-transform group-open:rotate-90">▸</span>
+                  What moved the tape
+                  {isClosed && (
+                    <span className="font-normal normal-case tracking-normal text-text-muted/70">
+                      · {d.attribution.moves?.length} move
+                      {(d.attribution.moves?.length ?? 0) === 1 ? "" : "s"}, last session
+                    </span>
+                  )}
+                </summary>
 
               <div className="mt-1.5 space-y-1">
                 {d.attribution.moves?.map((m, i) => (
@@ -856,14 +906,12 @@ export default function EsBriefing() {
                 </div>
               )}
 
-              {d.attribution.unattributed_note && (
-                <p className="text-[0.6rem] text-amber-400/90 mt-1.5 leading-snug">
-                  {d.attribution.unattributed_note}
-                </p>
-              )}
-              <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
-                {d.attribution.caveat}
-              </p>
+                {d.attribution.unattributed_note && (
+                  <p className="text-[0.6rem] text-amber-400/90 mt-1.5 leading-snug">
+                    {d.attribution.unattributed_note}
+                  </p>
+                )}
+              </details>
             </div>
           )}
 
@@ -2059,6 +2107,22 @@ export default function EsBriefing() {
                 Rows marked <span className="uppercase text-[0.55rem]">est</span> have a release date derived
                 from the usual scheduling rule rather than a published calendar, so they can slip a day.
               </p>
+              {/* Each block used to print its own standing caveat, so the card
+                  carried five methodology paragraphs stacked between the numbers
+                  a reader came for. They are the same sentences every session —
+                  standing methodology, which is what this disclosure is for.
+                  Caveats about TODAY (a contested estimate, an unattributed
+                  move) still print inline, because those are findings. */}
+              {howToRead.length > 0 && (
+                <div className="space-y-1.5 pt-1.5 border-t border-border">
+                  {howToRead.map((c, i) => (
+                    <p key={i}>
+                      <span className="text-text font-semibold">{c.label}.</span>{" "}
+                      {c.text}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           </details>
 
