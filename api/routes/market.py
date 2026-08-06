@@ -3242,6 +3242,20 @@ async def es_track_record(user: str = Depends(get_current_user)):
     return await asyncio.to_thread(character_track_record)
 
 
+@router.get("/es-analogs")
+async def es_analogs(user: str = Depends(get_current_user)):
+    """The sessions most similar to today, and what they went on to do.
+
+    Separate from `/es-brief` for the same reason as the track record: it is a
+    statement about history rather than about the tape right now, and it moves
+    once a session. `session_analogs` holds its own 30-minute cache, which the
+    startup pre-warm fills — the first build reads five years of 5-minute bars
+    plus the VIX complex and measures ~10s cold against nothing warm.
+    """
+    from src.es_analogs import session_analogs
+    return await asyncio.to_thread(session_analogs)
+
+
 @router.get("/es-card-audit")
 async def es_card_audit(user: str = Depends(get_current_user)):
     """Internal contradictions on the ES card.

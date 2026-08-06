@@ -3361,6 +3361,56 @@ export async function fetchEsTrackRecord(): Promise<EsTrackRecord> {
   return apiFetch("/api/market/es-track-record");
 }
 
+/** One historical session that resembled today, and what it went on to do. */
+export interface EsAnalogSession {
+  date: string;
+  range_mult: number | null;
+  range_pct: number | null;
+  ret_oc: number | null;
+  up: boolean | null;
+  close_pos: number | null;
+  trendiness: number | null;
+  max_up: number | null;
+  max_dn: number | null;
+}
+
+/** Similar-session matching, the "similar day" method from power trading.
+ *
+ *  `today.implied_range_mult` is VALIDATED out of sample (8.4% better than the
+ *  unconditional forecast, p=0.0005, 1.87x lift on wide-day calls).
+ *  `today.share_up` and everything under `next_session` are NOT — direction is
+ *  a measured null and the next-session horizon came in at p=0.051 with the
+ *  sign flipping between halves. The split is carried so the card can print it
+ *  as the null it is, rather than omitting it and letting a reader assume it
+ *  was never checked. */
+export interface EsAnalogs {
+  available: boolean;
+  reason?: string;
+  session_date?: string;
+  n_history?: number;
+  k_shown?: number;
+  k_scored?: number;
+  features?: string[];
+  analogs?: (EsAnalogSession & { next: EsAnalogSession | null })[];
+  today?: {
+    implied_range_mult: number | null;
+    calls_wide: boolean;
+    share_up: number | null;
+    median_close_pos: number | null;
+  };
+  next_session?: {
+    implied_range_mult: number | null;
+    validated: boolean;
+    note: string;
+  };
+  accuracy?: Record<string, number>;
+  caveat?: string;
+}
+
+export async function fetchEsAnalogs(): Promise<EsAnalogs> {
+  return apiFetch("/api/market/es-analogs", { timeoutMs: 45_000 });
+}
+
 /** Internal contradictions on the card. Claims about THIS PAGE, never about the
  *  market — whether two blocks can both be right, not which one is. */
 export interface EsCardAudit {

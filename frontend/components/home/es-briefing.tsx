@@ -25,9 +25,11 @@ import {
   fetchEsBrief,
   fetchEsCardAudit,
   fetchEsTrackRecord,
+  fetchEsAnalogs,
   type EsBrief,
   type EsCardAudit,
   type EsTrackRecord,
+  type EsAnalogs,
   type EsImpact,
   type EsLevel,
   type EsScheduleItem,
@@ -385,6 +387,15 @@ export default function EsBriefing() {
     queryKey: ["es-track-record"],
     queryFn: fetchEsTrackRecord,
     staleTime: 6 * 60 * 60_000,
+    refetchInterval: false,
+  });
+
+  // Lazy, like the track record: the match is a statement about history and
+  // changes once a session, so it must never gate the brief on the first paint.
+  const analogQ = useQuery<EsAnalogs>({
+    queryKey: ["es-analogs"],
+    queryFn: fetchEsAnalogs,
+    staleTime: 60 * 60_000,
     refetchInterval: false,
   });
 
@@ -852,6 +863,89 @@ export default function EsBriefing() {
                     </div>
                   ))}
               </div>
+            </div>
+          )}
+
+          {/* SESSIONS THAT LOOKED LIKE THIS ONE. The similar-day method power
+              traders use for load forecasting: rather than extrapolating, find
+              the days whose conditions resembled today and read what they did.
+
+              What each number may claim differs, and the block says so rather
+              than presenting them at one confidence. The range multiplier
+              validated out of sample — 8.4% better than the unconditional
+              forecast, p=0.0005, 1.87x lift on wide calls over 744 sessions. The
+              up/down split is a measured NULL (53.8% against a 53.4% base rate)
+              and is printed anyway: omitting it invites the reader to assume
+              nobody checked. */}
+          {analogQ.data?.available && (analogQ.data.analogs?.length ?? 0) > 0 && (
+            <div className="border border-border rounded px-3 py-2">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                  Sessions that looked like this one
+                </span>
+                <span className="text-[0.55rem] text-text-muted">
+                  nearest {analogQ.data.k_scored} of{" "}
+                  {analogQ.data.n_history?.toLocaleString()} · prior structure + vol
+                </span>
+              </div>
+
+              <div className="mt-1.5 space-y-1">
+                {analogQ.data.analogs?.map((a) => (
+                  <div key={a.date} className="flex items-baseline gap-2 text-[0.65rem]">
+                    <span className="tabular-nums text-text w-[5rem] shrink-0">{a.date}</span>
+                    <span className="tabular-nums text-text-muted w-[3.25rem] shrink-0 text-right">
+                      {a.range_mult?.toFixed(2)}×
+                    </span>
+                    <span className={`tabular-nums w-[3.5rem] shrink-0 text-right ${pctClass(a.ret_oc)}`}>
+                      {a.ret_oc != null
+                        ? `${a.ret_oc > 0 ? "+" : ""}${a.ret_oc.toFixed(2)}%`
+                        : "—"}
+                    </span>
+                    <span className="text-text-muted/70 flex-1 min-w-0 truncate">
+                      closed {a.close_pos != null ? `${(a.close_pos * 100).toFixed(0)}%` : "—"} up
+                      the range
+                      {a.next?.range_mult != null &&
+                        ` · next day ${a.next.range_mult.toFixed(2)}×`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-1.5 pt-1.5 border-t border-border text-[0.6rem] tabular-nums leading-snug">
+                <span className="text-text-muted">These sessions imply </span>
+                <span className="text-text font-semibold">
+                  {analogQ.data.today?.implied_range_mult?.toFixed(2)}×
+                </span>
+                <span className="text-text-muted"> a normal range today</span>
+                {analogQ.data.accuracy && (
+                  <span className="text-text-muted/70">
+                    {" — "}
+                    {analogQ.data.accuracy.mae_gain_pct}% better than assuming a normal
+                    day, on {analogQ.data.accuracy.n_out_of_sample} out-of-sample
+                    sessions (p={analogQ.data.accuracy.p_value})
+                  </span>
+                )}
+              </div>
+
+              {/* Printed as the null it is, in the same shape the macro-setup
+                  block uses, so a coin flip cannot be read as a lean. */}
+              {analogQ.data.today?.share_up != null && analogQ.data.accuracy && (
+                <div className="text-[0.6rem] text-text-muted/80 tabular-nums leading-snug">
+                  {(analogQ.data.today.share_up * 100).toFixed(0)}% of them closed up —
+                  which says nothing. Direction called this way runs{" "}
+                  {analogQ.data.accuracy.direction_accuracy}% against a{" "}
+                  {analogQ.data.accuracy.direction_base}% base rate.
+                </div>
+              )}
+
+              {analogQ.data.next_session?.implied_range_mult != null && (
+                <div className="text-[0.6rem] text-amber-400/80 tabular-nums leading-snug mt-1">
+                  The sessions that FOLLOWED these ran{" "}
+                  {analogQ.data.next_session.implied_range_mult.toFixed(2)}× — context
+                  only, not a forecast: that horizon measured p=
+                  {analogQ.data.accuracy?.next_day_p} and flipped sign between halves.
+                </div>
+              )}
             </div>
           )}
 

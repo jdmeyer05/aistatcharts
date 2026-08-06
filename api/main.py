@@ -207,9 +207,26 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"ES track record pre-warm failed: {e}")
 
+    def _warm_es_analogs() -> None:
+        """Prefill the similar-session match.
+
+        ~10s cold: it builds a 1,244-session panel from the same 5-minute
+        history the brief and the track record use, then joins the VIX complex.
+        Warmed INSIDE the ES lane rather than beside it for the reason the track
+        record is — they share the bar cache, and run concurrently on a cold
+        instance they would each pay for the same five-year fetch.
+        """
+        try:
+            from src.es_analogs import session_analogs
+            session_analogs()
+            logger.info("ES analogs pre-warmed")
+        except Exception as e:
+            logger.warning(f"ES analogs pre-warm failed: {e}")
+
     def _warm_es() -> None:
         _warm_es_brief()
         _warm_es_track_record()
+        _warm_es_analogs()
 
     def _warm_energy() -> None:
         """Prefill the oil + natgas bundle caches. Each bundle does ~10
