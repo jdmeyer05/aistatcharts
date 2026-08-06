@@ -308,12 +308,29 @@ function SectorRelative() {
 
 /** "Relative to what" for a single measure.
  *
- *  Renders the percentile against the measure's own recorded history, or
- *  nothing at all when there is not yet enough history — never a placeholder
- *  and never a middle value, because a stand-in reads as a real reading. The
- *  absence is reported once for the whole row instead (see `refNote`). */
-function Ref({ h }: { h?: { pctile: number | null; n_history: number } }) {
-  if (!h || h.pctile == null) return null;
+ *  Renders the percentile against the measure's own recorded history — never a
+ *  placeholder and never a middle value, because a stand-in reads as a real
+ *  reading.
+ *
+ *  `gap` handles the MIXED case. `percentiles()` counts history per measure, so
+ *  a measure added to TRACKED later carries fewer rows than its neighbours; once
+ *  the older ones clear the 60-row floor and it has not, this row would show
+ *  percentiles on three stats and a silently bare number on the fourth — which
+ *  is the exact ambiguity this whole change exists to remove. When some measures
+ *  can be placed and this one cannot, say so in place. When NONE can, the row
+ *  note says it once instead (see `refNote`) rather than repeating a dash. */
+function Ref({ h, gap }: { h?: { pctile: number | null; n_history: number }; gap?: boolean }) {
+  if (!h || h.pctile == null) {
+    if (!gap || !h) return null;
+    return (
+      <span
+        className="ml-1 text-text-muted/50"
+        title={`No reference for this measure yet — ${h.n_history} recorded sessions, and 60 are needed. The other stats in this row have enough history; this one does not.`}
+      >
+        —
+      </span>
+    );
+  }
   const p = Math.round(h.pctile);
   // Only the tails are worth colouring. Everything between is the normal state
   // and colouring it would manufacture significance out of an ordinary reading.
@@ -359,13 +376,29 @@ function VolLandscapeSnapshot() {
     return `No historical reference yet — ${n} session${n === 1 ? "" : "s"} recorded, and the percentiles above need 60. Until then these are levels, not readings: nothing here says whether they are high or low.`;
   }, [d]);
 
+  // True only in the mixed state: at least one measure placed, at least one not.
+  // Drives the in-place dash so no number is ever silently uncontextualised.
+  const refPartial = useMemo(() => {
+    const entries = Object.values(d?.history ?? {});
+    return entries.some((e) => e.pctile != null) && entries.some((e) => e.pctile == null);
+  }, [d]);
+
   // Cuts that cannot discriminate, named rather than left in the payload.
   const nearMedianCuts = useMemo(() => {
     const t = d?.thresholds;
     if (!t) return [];
     return Object.entries(t)
-      .filter(([, v]) => v.near_median)
-      .map(([k, v]) => `the ${k.replace(/_/g, " ")} cut of ${v.cut} sits at the ${Math.round(v.pctile_in_universe ?? 0)}th percentile of today's ${v.n ?? "?"} names`);
+      // `pctile_in_universe != null` is not redundant with `near_median`.
+      // threshold_report omits `near_median` entirely when it cannot compute a
+      // percentile, so the pair is unreachable today — but the type permits it,
+      // and the previous `?? 0` would have printed "0th percentile", inventing
+      // the exact statistic this sentence exists to report. Filter, never
+      // default: a fabricated number is worse than a missing line.
+      .filter(([, v]) => v.near_median && v.pctile_in_universe != null)
+      .map(([k, v]) => {
+        const where = `the ${k.replace(/_/g, " ")} cut of ${v.cut} sits at the ${ordinal(v.pctile_in_universe as number)} percentile`;
+        return v.n ? `${where} of today's ${v.n} names` : where;
+      });
   }, [d]);
 
   return (
@@ -398,16 +431,16 @@ function VolLandscapeSnapshot() {
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.62rem] text-text-muted tabular-nums">
               <span title="Average front-month implied vol across the scanned universe.">
                 avg IV <span className="text-text">{s.avg_iv?.toFixed(1)}</span>
-                <Ref h={d.history?.avg_iv} />
+                <Ref h={d.history?.avg_iv} gap={refPartial} />
               </span>
               <span title="Implied over realised. Above 1 means options are pricing more movement than has been delivered.">
                 IV/HV <span className="text-text">{s.avg_ivhv?.toFixed(2)}</span>
-                <Ref h={d.history?.avg_ivhv} />
+                <Ref h={d.history?.avg_ivhv} gap={refPartial} />
               </span>
               <span title="Names whose term structure is inverted — front vol above back vol, which prices near-term event risk.">
                 <span className="text-text">{s.n_inverted}</span> inverted
                 <span className="text-text-muted/70"> of {s.n_tickers}</span>
-                <Ref h={d.history?.n_inverted} />
+                <Ref h={d.history?.n_inverted} gap={refPartial} />
               </span>
               {/* Separate denominators on purpose. Skew is counted only over
                   chains that pass put-call parity, so a shared "of 20" would
@@ -416,7 +449,7 @@ function VolLandscapeSnapshot() {
               <span title="Names with unusually steep put skew. Counted only over chains whose ATM put and ATM call agree to within put-call parity — a chain quoting stale wings gets no vote.">
                 <span className="text-text">{s.n_steep_skew}</span> steep skew
                 <span className="text-text-muted/70"> of {s.n_skew_rated ?? s.n_tickers}</span>
-                <Ref h={d.history?.n_steep_skew} />
+                <Ref h={d.history?.n_steep_skew} gap={refPartial} />
               </span>
             </div>
           )}
