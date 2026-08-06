@@ -63,9 +63,21 @@ def _deterministic(brief: dict) -> list[dict]:
         })
 
     # Two range estimates that disagree by more than half.
+    #
+    # Only while path-implied is still an ESTIMATE. It is computed as
+    # `range_so_far / typical_pct_covered`, so once the session has covered its
+    # full path the divisor is 1.0 and the "estimate" is just the realised
+    # range. Comparing a pre-session forecast against the outcome it was trying
+    # to predict is not an internal contradiction — it is the forecast being
+    # graded, which the card has a track record for. Left unguarded this fired
+    # on every quiet session by construction (97.27 forecast vs 44.25 delivered
+    # = 2.2x), putting a false "THIS CARD DISAGREES WITH ITSELF" banner above
+    # the real content after the close every day.
     implied = em.get("expected_range")
     pi = path.get("implied_range")
-    if implied and pi and max(implied, pi) / min(implied, pi) >= 1.5:
+    covered = path.get("typical_pct_covered")
+    still_forecasting = not isinstance(covered, (int, float)) or covered < 95.0
+    if implied and pi and still_forecasting and max(implied, pi) / min(implied, pi) >= 1.5:
         out.append({
             "severity": "medium",
             "where": "expected move vs session character",
@@ -141,13 +153,24 @@ def _payload(brief: dict) -> dict:
         # (7.65) as contradicting VIX1D (45.14) — a divergence the expected-move
         # module already knows about and handles by never making a settled quote
         # the headline. Strip the qualifier and a handled case reads as a defect.
+        #
+        # The UNIT travels with the number for exactly the same reason. This
+        # sent only sigma while the conditions text quotes a RANGE ("Options
+        # price 97 handles for the session"), so the auditor compared 97 against
+        # sigmas of 60.95 and 64.93 and reported — correctly, on the evidence it
+        # was handed — that no estimate supported 97. But 97.27 IS the headline,
+        # its `range_handles`. A number stripped of its unit is as unreconcilable
+        # as one stripped of its provenance, and produces the same false
+        # positive on the most alarming block of the card.
         "expected_move_estimates": [
-            {"source": e.get("source"), "sigma": e.get("sigma_handles"),
+            {"source": e.get("source"), "sigma_handles": e.get("sigma_handles"),
+             "range_handles": e.get("range_handles"),
              "quote_source": e.get("quote_source"),
              "forward_looking": e.get("forward_looking")}
             for e in (brief.get("expected_move") or {}).get("estimates", [])
         ],
         "expected_move_headline_source": txt("expected_move", "headline", "source"),
+        "expected_move_headline_range_handles": txt("expected_move", "headline", "range_handles"),
         "consumed_pct": txt("expected_move", "consumed", "pct"),
         "breadth": {k: (brief.get("breadth") or {}).get(k)
                     for k in ("available", "live", "net_advancers_pct", "divergence")},
