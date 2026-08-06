@@ -930,11 +930,25 @@ def test_gamma_evaluates_the_book_where_price_actually_is(monkeypatch):
         assert out["put_wall_es"] <= 7555.25 + 0.01, "a wall 'below' must be below price"
 
 
+def _freeze_now(monkeypatch, dg, when: str):
+    """Pin wall-clock `now` onto the session under test.
+
+    Patching `_cash_is_open` is NOT enough to test a cash-session branch:
+    dealer_gamma independently compares `spot_asof.date()` against the real
+    today to catch a market holiday, so a test that hardcodes a session date
+    and leaves the clock live stops exercising the branch it claims to — the
+    day after it is written it passes through the stale-print path instead.
+    """
+    monkeypatch.setattr(dg.pd.Timestamp, "now",
+                        classmethod(lambda cls, tz=None: pd.Timestamp(when, tz=tz)))
+
+
 def test_gamma_effective_spot_is_the_cash_print_during_rth(monkeypatch):
     """During cash hours the two are the same and nothing may change."""
     dg = _stub_gamma_chain(monkeypatch)
     monkeypatch.setattr(dg, "_cash_is_open", lambda now: True)
     monkeypatch.setattr(dg, "_es_at", lambda ts: (None, None))
+    _freeze_now(monkeypatch, dg, "2026-08-03 11:00")
     out = dg.dealer_gamma(
         session_day=pd.Timestamp("2026-08-03", tz="America/New_York"),
         spot=7500.0, spot_asof=pd.Timestamp("2026-08-03", tz="America/New_York"),
@@ -982,6 +996,7 @@ def test_dealer_gamma_uses_the_live_basis_during_the_cash_session(monkeypatch):
     dg = _stub_gamma_chain(monkeypatch)
     monkeypatch.setattr(dg, "_cash_is_open", lambda now: True)
     monkeypatch.setattr(dg, "_es_at", lambda ts: (7522.25, None))
+    _freeze_now(monkeypatch, dg, "2026-08-03 11:00")
     out = dg.dealer_gamma(
         session_day=pd.Timestamp("2026-08-03", tz="America/New_York"),
         spot=7500.0, spot_asof=pd.Timestamp("2026-08-03", tz="America/New_York"),
