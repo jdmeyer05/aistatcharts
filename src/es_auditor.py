@@ -50,6 +50,11 @@ def _deterministic(brief: dict) -> list[dict]:
     ros = brief.get("rest_of_session") or {}
     setup = brief.get("macro_setup") or {}
     clusters = brief.get("level_clusters") or {}
+    # Phases are rth_open / rth_midday / rth_close / premarket / overnight /
+    # closed / weekend. Anything intraday-conditioned is only meaningful in the
+    # three RTH phases, so test for those positively rather than excluding
+    # "closed" — excluding by name silently misses `weekend`.
+    in_rth = str((brief.get("session") or {}).get("phase") or "").startswith("rth")
 
     # The gate can only speak for factors it could read.
     scored = cond.get("factors_scored")
@@ -105,7 +110,14 @@ def _deterministic(brief: dict) -> list[dict]:
                 })
 
     # Rest-of-session quoting a cell it had to borrow.
-    if ros.get("available") and ros.get("exact_cell") is False:
+    #
+    # Only while the card is showing that block. Every number in it is
+    # conditioned on time left in the session, so the card hides it outside RTH
+    # — and an auditor that reports defects in a block the reader cannot see is
+    # describing a page that does not exist. The backend still emits the module
+    # outside RTH, so this has to be checked here rather than inferred from
+    # `available`.
+    if in_rth and ros.get("available") and ros.get("exact_cell") is False:
         out.append({
             "severity": "low",
             "where": "rest of session",
@@ -113,15 +125,20 @@ def _deterministic(brief: dict) -> list[dict]:
                         "regime at this time of day, not the exact one."),
         })
 
-    # Levels double-counted as agreement.
-    if clusters.get("n_cross_method"):
-        out.append({
-            "severity": "low",
-            "where": "reference levels",
-            "finding": (f"{clusters['n_cross_method']} price zones each carry several "
-                        f"co-located levels. Any read that counts them separately is "
-                        f"counting one observation more than once."),
-        })
+    # REMOVED: "N price zones each carry several co-located levels."
+    #
+    # It was gated on `n_cross_method` being non-zero, which is true on nearly
+    # every session — and non-zero is also the exact condition under which the
+    # card RENDERS the clusters block, whose title is literally "One reference,
+    # several reasons". So it fired only when the mitigation was already on
+    # screen, restating it under a banner that reads "this card disagrees with
+    # itself". Nothing disagreed; a feature was working.
+    #
+    # A finding has to be about something being WRONG. A standing property of
+    # the data belongs in the block that presents it, or in "How to read this" —
+    # both of which already carry this one. Padding the auditor with permanent
+    # observations is how a reader learns to skip the block that exists to catch
+    # the rare real contradiction.
 
     return out
 

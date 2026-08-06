@@ -480,23 +480,38 @@ export default function EsBriefing() {
   // maintenance break, four condition chips of which three scored 0, and a
   // caveat paragraph under every block. Density should track how much is
   // actually known.
-  const isClosed = session?.phase === "closed";
+  // Phases are rth_open / rth_midday / rth_close / premarket / overnight /
+  // closed / weekend. Test for RTH POSITIVELY: `phase === "closed"` reads as
+  // covering it but silently misses `weekend`, which would have put "From here
+  // to the close" back on the card every Saturday and Sunday — the same bug
+  // this guard exists to fix, just on the days nobody was looking.
+  const inRth = (session?.phase ?? "").startsWith("rth");
 
   // The shared epistemics collect into one disclosure instead of repeating
   // under each block. Caveats specific to TODAY's numbers (the `surface`
   // reasons on the gate, the unattributed-move note) stay inline where they
   // are read — those are findings, not standing methodology.
+  //
+  // Each entry is gated on the SAME condition as the block it explains, so this
+  // never describes a block the reader cannot see. Explaining absent content is
+  // the failure this whole pass is about.
   const howToRead = useMemo(() => {
     const out: { label: string; text: string }[] = [];
     const add = (label: string, text?: string | null) => {
       if (text) out.push({ label, text });
     };
-    add("Conditions", d?.conditions?.disclaimer);
-    if (!isClosed) add("From here to the close", d?.rest_of_session?.caveat);
-    add("Reference levels", d?.level_clusters?.caveat);
-    add("What moved the tape", d?.attribution?.caveat);
+    if (d?.conditions?.available) add("Conditions", d.conditions.disclaimer);
+    if (inRth && d?.rest_of_session?.available) {
+      add("From here to the close", d.rest_of_session.caveat);
+    }
+    if (d?.level_clusters?.available && (d.level_clusters.n_cross_method ?? 0) > 0) {
+      add("Reference levels", d.level_clusters.caveat);
+    }
+    if (d?.attribution?.available && (d.attribution.moves?.length ?? 0) > 0) {
+      add("What moved the tape", d.attribution.caveat);
+    }
     return out;
-  }, [d, isClosed]);
+  }, [d, inRth]);
 
   return (
     <div className="card space-y-3">
@@ -734,11 +749,11 @@ export default function EsBriefing() {
               already long, while the number that spoke to holding sat collapsed
               in a table three screens down.
 
-              Hidden once the session is over: every number in it is conditioned
-              on time remaining, so "takes the high 4%" with no close ahead is
-              describing a session that already finished. The block answers a
-              question nobody can act on at 17:14. */}
-          {d.rest_of_session?.available && !isClosed && (
+              Shown only during RTH: every number in it is conditioned on time
+              remaining, so "takes the high 4%" with no close ahead is describing
+              a session that already finished. The block answers a question
+              nobody can act on at 17:14, on a Saturday, or before the open. */}
+          {d.rest_of_session?.available && inRth && (
             <div className="border border-border rounded px-3 py-2">
               <div className="flex items-baseline gap-2 flex-wrap">
                 <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
@@ -844,11 +859,11 @@ export default function EsBriefing() {
                   tape right now. Once the session is over it is history, so it
                   collapses rather than occupying the same space as the levels
                   the next session will open against. */}
-              <details open={!isClosed} className="group">
+              <details open={inRth} className="group">
                 <summary className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted cursor-pointer select-none list-none flex items-center gap-1">
                   <span className="transition-transform group-open:rotate-90">▸</span>
                   What moved the tape
-                  {isClosed && (
+                  {!inRth && (
                     <span className="font-normal normal-case tracking-normal text-text-muted/70">
                       · {d.attribution.moves?.length} move
                       {(d.attribution.moves?.length ?? 0) === 1 ? "" : "s"}, last session
