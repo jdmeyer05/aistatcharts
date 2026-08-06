@@ -10,6 +10,8 @@ import asyncio
 import logging
 import os
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -175,6 +177,9 @@ async def _warm_caches() -> None:
         try:
             from api.routes.market import _es_brief_cached
             _es_brief_cached()
+            # This line did not exist, which made the single most expensive warm
+            # on the instance the one warm you could not confirm had finished.
+            logger.info("ES brief pre-warmed")
         except Exception as e:
             logger.warning(f"ES brief pre-warm failed: {e}")
 
@@ -349,19 +354,69 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"ERCOT pre-warm failed: {e}")
 
+    # Ordered by what the home page actually needs first. The ES brief is the
+    # lead card AND the heaviest single warm (~47s), so it starts immediately
+    # rather than queueing behind energy/ERCOT; causality and ERCOT render on
+    # pages nobody lands on cold, so they go last.
+    _groups = (
+        ("ES brief + track record", _warm_es),
+        ("Macro pressure", _warm_macro_pressure),
+        ("Sector RRG", _warm_sector_rrg),
+        ("S&P valuation", _warm_sp_valuation),
+        ("Vol landscape", _warm_vol_landscape),
+        ("CFTC", _warm_cftc),
+        ("Sectors", _warm_sectors),
+        ("Energy", _warm_energy),
+        ("ERCOT", _warm_ercot),
+        ("Causality", _warm_causality),
+    )
+
+    def _timed(label, fn):
+        """Every group already swallows its own exceptions, so this only times."""
+        def run() -> None:
+            t0 = time.monotonic()
+            try:
+                fn()
+            finally:
+                logger.info(f"Pre-warm group '{label}' took {time.monotonic() - t0:.1f}s")
+        return run
+
+    # These ten ran on `run_in_executor(None, ...)`, i.e. the DEFAULT executor,
+    # which on this 2-vCPU instance holds min(32, cpu+4) = 6 threads. Two costs,
+    # both observed:
+    #
+    #   1. Six groups ran at once and each then opened its OWN pool (energy
+    #      fans out to 18 EIA fetches, macro to 10, sectors to 4), so a cold
+    #      instance opened 40-60 concurrent sockets. FRED answered with
+    #      `SSL: UNEXPECTED_EOF` and Supabase with `[Errno 32] Broken pipe` —
+    #      the startup error burst that made this worth fixing.
+    #   2. Prewarms occupied all six default-executor slots for minutes, so
+    #      request-path work sharing it — `_log_gate_snapshot` in
+    #      api/routes/market.py — queued behind a 47s warm.
+    #
+    # A dedicated, bounded pool fixes both: it caps the fan-out and leaves the
+    # default executor free for requests. Three lanes keeps the peak near 25
+    # sockets while the ordering above still finishes the home page first.
+    # PREWARM_CONCURRENCY tunes it without a code change.
+    # Parsed defensively: this runs inside a fire-and-forget task, so a bad
+    # value would raise here and silently skip every warm — the failure mode
+    # the whole function exists to prevent.
+    try:
+        max_par = max(1, int(os.environ.get("PREWARM_CONCURRENCY", "3")))
+    except ValueError:
+        logger.warning(
+            f"PREWARM_CONCURRENCY={os.environ.get('PREWARM_CONCURRENCY')!r} "
+            "is not an integer — falling back to 3")
+        max_par = 3
     loop = asyncio.get_event_loop()
-    # Kick off in parallel so total warmup time ≈ slowest task, not the sum.
-    await asyncio.gather(
-        loop.run_in_executor(None, _warm_cftc),
-        loop.run_in_executor(None, _warm_vol_landscape),
-        loop.run_in_executor(None, _warm_sectors),
-        loop.run_in_executor(None, _warm_causality),
-        loop.run_in_executor(None, _warm_macro_pressure),
-        loop.run_in_executor(None, _warm_sector_rrg),
-        loop.run_in_executor(None, _warm_sp_valuation),
-        loop.run_in_executor(None, _warm_es),
-        loop.run_in_executor(None, _warm_energy),
-        loop.run_in_executor(None, _warm_ercot),
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=max_par, thread_name_prefix="prewarm") as pool:
+        await asyncio.gather(*(
+            loop.run_in_executor(pool, _timed(label, fn)) for label, fn in _groups
+        ))
+    logger.info(
+        f"Pre-warm complete: {len(_groups)} groups, {max_par} at a time, "
+        f"{time.monotonic() - started:.1f}s total"
     )
 
 
