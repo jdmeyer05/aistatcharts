@@ -74,7 +74,11 @@ except Exception:
 async def _warm_caches() -> None:
     """Fire the slow cacheable dashboards in background so the first user hits
     warm Supabase caches instead of a cold 30-120s wait. Non-fatal if any fail.
-    Each warm task runs in its own thread so one slow fetcher doesn't block the others."""
+
+    Groups run on a dedicated pool, PREWARM_CONCURRENCY (default 3) at a time,
+    in the priority order set at the bottom of this function — NOT one thread
+    each, which is what caused the cold-start connection storm. See the comment
+    above the pool for the reasoning."""
     def _warm_cftc() -> None:
         try:
             from src.cftc import positioning_dashboard
@@ -355,9 +359,15 @@ async def _warm_caches() -> None:
             logger.warning(f"ERCOT pre-warm failed: {e}")
 
     # Ordered by what the home page actually needs first. The ES brief is the
-    # lead card AND the heaviest single warm (~47s), so it starts immediately
-    # rather than queueing behind energy/ERCOT; causality and ERCOT render on
-    # pages nobody lands on cold, so they go last.
+    # lead card AND the heaviest single warm, so it starts immediately rather
+    # than queueing behind energy/ERCOT; causality and ERCOT render on pages
+    # nobody lands on cold, so they go last.
+    #
+    # Measured on revision 00130, the first startup where per-group timing
+    # existed at all: ES 95.8s (brief + track record), macro 56.2s, RRG 42.1s,
+    # ERCOT 34.0s, S&P val 12.2s, sectors 9.7s, causality 3.8s. Energy 0.5s /
+    # CFTC 0.4s / vol 0.0s hit a warm Supabase L2 from the prior revision and
+    # are NOT cold costs — do not re-order on them.
     _groups = (
         ("ES brief + track record", _warm_es),
         ("Macro pressure", _warm_macro_pressure),
@@ -395,8 +405,12 @@ async def _warm_caches() -> None:
     #      api/routes/market.py — queued behind a 47s warm.
     #
     # A dedicated, bounded pool fixes both: it caps the fan-out and leaves the
-    # default executor free for requests. Three lanes keeps the peak near 25
-    # sockets while the ordering above still finishes the home page first.
+    # default executor free for requests. Three lanes bounds the worst case to
+    # three groups' inner pools instead of six — the socket count itself was
+    # never counted directly, so treat it as a bound, not a measurement. What
+    # WAS measured is the outcome: FRED `UNEXPECTED_EOF` in the first six
+    # minutes of instance life went 26 (rev 00129) -> 1 (rev 00130), and the
+    # survivor arrived after the warm-up finished, so it was request-path.
     # PREWARM_CONCURRENCY tunes it without a code change.
     # Parsed defensively: this runs inside a fire-and-forget task, so a bad
     # value would raise here and silently skip every warm — the failure mode
@@ -408,12 +422,22 @@ async def _warm_caches() -> None:
             f"PREWARM_CONCURRENCY={os.environ.get('PREWARM_CONCURRENCY')!r} "
             "is not an integer — falling back to 3")
         max_par = 3
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     started = time.monotonic()
     with ThreadPoolExecutor(max_workers=max_par, thread_name_prefix="prewarm") as pool:
-        await asyncio.gather(*(
+        # return_exceptions=True is load-bearing, not defensive habit. Without
+        # it gather propagates the FIRST exception while the other groups are
+        # still running, and the `with` block then calls pool.shutdown(wait=True)
+        # on the EVENT LOOP THREAD — freezing the whole API for as long as the
+        # slowest remaining warm takes (~96s measured). Every group already
+        # catches its own exceptions, so this only covers what escapes one, but
+        # the cost of being wrong about that is the server, not a warm.
+        results = await asyncio.gather(*(
             loop.run_in_executor(pool, _timed(label, fn)) for label, fn in _groups
-        ))
+        ), return_exceptions=True)
+    for (label, _), outcome in zip(_groups, results):
+        if isinstance(outcome, BaseException):
+            logger.warning(f"Pre-warm group '{label}' raised past its own handler: {outcome!r}")
     logger.info(
         f"Pre-warm complete: {len(_groups)} groups, {max_par} at a time, "
         f"{time.monotonic() - started:.1f}s total"
