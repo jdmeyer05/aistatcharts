@@ -1372,12 +1372,22 @@ export default function EsBriefing() {
                     ))}
                   </div>
 
-                  {/* SESSION CHARACTER. Every estimate above is fixed at the
-                      open and cannot move once an unscheduled event starts —
-                      2026-08-03 ran 79 handles against a VIX1D-implied 54 with
-                      nothing on the card able to say so mid-session. This one
-                      is measured from the range actually delivered. It carries
-                      its own out-of-sample error rather than a confidence word. */}
+                  {/* SESSION CHARACTER. The estimates above are option prices
+                      and trailing statistics: they say what a session is worth,
+                      never what THIS one is delivering. 2026-08-03 ran 79
+                      handles against a VIX1D-implied 54 with nothing on the card
+                      able to say so mid-session. This one is measured from the
+                      range actually delivered, and carries its own out-of-sample
+                      error rather than a confidence word.
+
+                      The old wording here said those estimates were "fixed at
+                      the open and cannot move". They are not fixed: `_vix1d()`
+                      re-reads `Close.iloc[-1]` on every request and `_atr_handles`
+                      refetches too, so both drift through the day. The real
+                      limitation is direction, not staleness — VIX1D prices the
+                      session AHEAD, so after 09:30 it is decreasingly about the
+                      session being measured. Saying "frozen" told the reader a
+                      number was anchored when nothing anchors it. */}
                   {d.regime?.path_implied?.available && (
                     <div className="pt-1.5 mt-1.5 border-t border-border space-y-0.5">
                       <div className="flex items-baseline gap-1.5">
@@ -1412,31 +1422,34 @@ export default function EsBriefing() {
                             against a normal{" "}
                             {d.regime.path_implied.normal_range?.toFixed(0)}
                           </div>
-                          {/* The forecast, GRADED. This comparison used to fire as
-                              an auditor contradiction ("options-implied 97 vs
-                              path-implied 44 differ by more than 50%"), which was
-                              wrong — nothing contradicted, the day simply came in
-                              quieter than it was priced. Removing it from the
-                              auditor left the observation homeless; it belongs
-                              here, where the forecast and its outcome sit
-                              together and the reader can see how the open's
-                              pricing actually did. */}
+                          {/* Implied against delivered. This comparison used to
+                              fire as an auditor contradiction ("options-implied
+                              97 vs path-implied 44 differ by more than 50%"),
+                              which was wrong — nothing contradicted, the day
+                              simply came in quieter than options price a session.
+                              Removing it from the auditor left the observation
+                              homeless; it belongs here, beside the range it is
+                              being compared against.
+                              NOT worded as grading the open's forecast, which is
+                              what I wrote first and could not support: nothing
+                              anchors this estimate to the open. `_vix1d()` takes
+                              `Close.iloc[-1]` on every call, so `expected_range`
+                              is the CURRENT quote, not the one that stood at
+                              09:30 — the open's number is never retained. This
+                              says what options price now versus what today
+                              delivered, which is what the data supports. */}
                           {d.expected_move?.expected_range != null &&
                             d.expected_move?.consumed?.pct != null && (
                               <div className="text-[0.6rem] text-text-muted tabular-nums">
-                                Priced{" "}
+                                {d.expected_move.headline?.source ?? "Options"} prices{" "}
                                 <span className="text-text">
                                   {d.expected_move.expected_range.toFixed(0)}
                                 </span>{" "}
-                                at the open
-                                {d.expected_move.headline?.source
-                                  ? ` by ${d.expected_move.headline.source}`
-                                  : ""}{" "}
-                                — the session used{" "}
+                                for a session — today&apos;s range was{" "}
                                 <span className="text-text">
                                   {d.expected_move.consumed.pct.toFixed(0)}%
                                 </span>{" "}
-                                of it
+                                of that
                               </div>
                             )}
                         </>
@@ -1450,10 +1463,11 @@ export default function EsBriefing() {
                             session against a normal {d.regime.path_implied.normal_range?.toFixed(0)}
                           </div>
                           <p className="text-[0.55rem] text-text-muted/80 leading-snug">
-                            Measured from this session&apos;s own range, not priced at the open —
-                            the estimates above cannot move once the day is underway. Median error
-                            at this hour is {d.regime.path_implied.oos_mae_pct?.toFixed(0)}% out of
-                            sample.
+                            Measured from this session&apos;s own delivered range rather than from
+                            an option price. The estimates above are re-read on every load and
+                            price the session ahead, so neither they nor this one is anchored to
+                            the open. Median error at this hour is{" "}
+                            {d.regime.path_implied.oos_mae_pct?.toFixed(0)}% out of sample.
                           </p>
                         </>
                       )}
