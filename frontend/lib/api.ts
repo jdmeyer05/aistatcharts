@@ -1407,6 +1407,12 @@ export interface OIHistoryResponse {
   ticker: string;
   n_days_captured: number;
   total_days_available?: number;
+  // `available: false` means the capture TABLE is not provisioned, which is a
+  // different fact from "no captures yet" — the latter resolves on its own
+  // after a couple of trading days, this one never does without a migration.
+  // Optional because a frontend deploy can lead the API's.
+  available?: boolean;
+  reason?: string;
   dates: string[];
   series: OIHistorySeries[];
   summary: {

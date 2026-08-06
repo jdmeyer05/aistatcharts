@@ -533,6 +533,33 @@ try:
 except ImportError:
     logger.warning("slowapi not installed — rate limiting disabled (legacy image or dev env)")
 
+# A Supabase/PostgREST failure used to reach the browser as "Failed to fetch"
+# with no status and no message, which is indistinguishable from the API being
+# down. The cause is middleware ordering, and it is NOT fixable by reordering:
+# Starlette builds ServerErrorMiddleware -> [user middleware] -> ExceptionMiddleware
+# -> router, so ServerErrorMiddleware is ALWAYS outside CORSMiddleware and its
+# 500 can never carry Access-Control-Allow-Origin. The browser then blocks the
+# response and reports a network error rather than the real one.
+#
+# Verified by experiment: no handler -> no ACAO header; a handler registered for
+# `Exception` -> still none (Starlette routes that one to ServerErrorMiddleware,
+# also outside CORS); a handler registered for a CONCRETE class -> handled by
+# ExceptionMiddleware, which is INSIDE CORSMiddleware, so the response flows out
+# through it and arrives with headers intact. Hence the concrete class here.
+try:
+    from postgrest.exceptions import APIError as _PostgrestAPIError
+    from fastapi.responses import JSONResponse
+
+    @app.exception_handler(_PostgrestAPIError)
+    async def _postgrest_error_handler(request, exc):
+        logger.error(f"Supabase error on {request.url.path}: {exc}")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "A database query failed", "source": "supabase"},
+        )
+except ImportError:
+    logger.warning("postgrest not importable — Supabase errors will surface as opaque 500s")
+
 # Compress responses ≥ 1 KB. Dashboards are 5-25 KB JSON; compression ratio
 # is typically 6-10× for pretty-printed JSON. Material win on mobile networks.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)

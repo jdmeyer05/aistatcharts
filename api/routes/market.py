@@ -528,12 +528,36 @@ async def oi_history_query(
         raise HTTPException(500, "Supabase client not available")
 
     tk = ticker.upper()
-    result = db.table("options_oi_history").select(
-        "capture_date,strike,expiration,contract_type,open_interest,volume"
-    ).eq("ticker", tk).order("capture_date", desc=False).execute()
+    try:
+        result = db.table("options_oi_history").select(
+            "capture_date,strike,expiration,contract_type,open_interest,volume"
+        ).eq("ticker", tk).order("capture_date", desc=False).execute()
+    except Exception as e:
+        # The capture table is created by supabase_oi_history_schema.sql and
+        # filled by the worker in OI_WORKER_SETUP.md. That migration has never
+        # been run, so PostgREST answers PGRST205 ("Could not find the table
+        # 'public.options_oi_history'") and this endpoint 500s — which reaches
+        # the browser as an opaque "Failed to fetch", not as an error.
+        #
+        # Deliberately NOT folded into the empty-result branch below: that path
+        # renders "check back after 2+ weekdays of captures", which would
+        # promise data that cannot arrive until someone runs the SQL. An
+        # unprovisioned table and an empty one are different facts.
+        msg = str(e)
+        if "PGRST205" in msg or "options_oi_history" in msg:
+            logger.warning("OI history requested but the capture table does not exist")
+            return {
+                "ticker": tk, "n_days_captured": 0, "dates": [], "series": [],
+                "summary": None, "available": False,
+                "reason": "OI history capture is not provisioned. Run "
+                          "supabase_oi_history_schema.sql, then enable the daily "
+                          "capture worker (see OI_WORKER_SETUP.md).",
+            }
+        raise
     raw_rows = result.data or []
     if not raw_rows:
-        return {"ticker": tk, "n_days_captured": 0, "dates": [], "series": [], "summary": None}
+        return {"ticker": tk, "n_days_captured": 0, "dates": [], "series": [],
+                "summary": None, "available": True}
 
     # Build date list and per-contract series
     all_dates = sorted({r["capture_date"] for r in raw_rows})

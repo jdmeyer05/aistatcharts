@@ -863,6 +863,20 @@ function OIChangesPanel({ ticker, theme: t, baseLayout: L }: { ticker: string; t
       </div>
     );
   }
+  // Checked BEFORE the n_days_captured branch below: an unprovisioned capture
+  // table also reports 0 days, and that branch tells the reader to check back
+  // after two trading days — data that will never arrive until the migration
+  // is run. Say which of the two situations this actually is.
+  if (data.available === false) {
+    return (
+      <div className="card space-y-3 py-6 text-center">
+        <div className="text-sm font-semibold">OI history not enabled</div>
+        <p className="text-xs text-text-muted max-w-md mx-auto">
+          {data.reason ?? "The open-interest capture pipeline has not been provisioned."}
+        </p>
+      </div>
+    );
+  }
   if (data.n_days_captured < 2) {
     return (
       <div className="card space-y-3 py-6 text-center">
