@@ -38,7 +38,7 @@ import {
   type MarketDriverResponse,
   type TrumpPost,
 } from "@/lib/api";
-import { PULSE_TICKERS, PULSE_LABELS } from "@/lib/home-constants";
+import { PULSE_TICKERS, PULSE_LABELS, ordinal } from "@/lib/home-constants";
 import EsBriefing from "@/components/home/es-briefing";
 import PageInterpretation from "@/components/home/page-interpretation";
 import CtaFlows from "@/components/home/cta-flows";
@@ -306,6 +306,27 @@ function SectorRelative() {
 
 /* ─── Vol Landscape Snapshot ──────────────────────────────────── */
 
+/** "Relative to what" for a single measure.
+ *
+ *  Renders the percentile against the measure's own recorded history, or
+ *  nothing at all when there is not yet enough history — never a placeholder
+ *  and never a middle value, because a stand-in reads as a real reading. The
+ *  absence is reported once for the whole row instead (see `refNote`). */
+function Ref({ h }: { h?: { pctile: number | null; n_history: number } }) {
+  if (!h || h.pctile == null) return null;
+  const p = Math.round(h.pctile);
+  // Only the tails are worth colouring. Everything between is the normal state
+  // and colouring it would manufacture significance out of an ordinary reading.
+  const tone = p >= 80 ? "text-loss" : p <= 20 ? "text-gain" : "text-text-muted/70";
+  // `ordinal` rather than an inline suffix: the inline version is where "1th
+  // pctile" came from, and it was already fixed once at three other sites.
+  return (
+    <span className={`ml-1 ${tone}`} title={`Percentile against its own last ${h.n_history} recorded sessions.`}>
+      {ordinal(p)}
+    </span>
+  );
+}
+
 function VolLandscapeSnapshot() {
   const q = useQuery({
     queryKey: ["vol-landscape-home"],
@@ -324,6 +345,28 @@ function VolLandscapeSnapshot() {
   // dislocations the card was written to show.
   const divergences = useMemo(() => (d?.divergences ?? []).slice(0, 5), [d]);
   const s = d?.summary;
+
+  // One honest sentence when the reference set is too thin, instead of a
+  // per-stat "n/a". `n_history` is the same for every measure (they are
+  // recorded as one row per session), so take it from whichever is present.
+  const refNote = useMemo(() => {
+    const hist = d?.history;
+    if (!hist) return null;
+    const entries = Object.values(hist);
+    if (entries.length === 0) return null;
+    if (entries.some((e) => e.pctile != null)) return null;
+    const n = Math.max(...entries.map((e) => e.n_history));
+    return `No historical reference yet — ${n} session${n === 1 ? "" : "s"} recorded, and the percentiles above need 60. Until then these are levels, not readings: nothing here says whether they are high or low.`;
+  }, [d]);
+
+  // Cuts that cannot discriminate, named rather than left in the payload.
+  const nearMedianCuts = useMemo(() => {
+    const t = d?.thresholds;
+    if (!t) return [];
+    return Object.entries(t)
+      .filter(([, v]) => v.near_median)
+      .map(([k, v]) => `the ${k.replace(/_/g, " ")} cut of ${v.cut} sits at the ${Math.round(v.pctile_in_universe ?? 0)}th percentile of today's ${v.n ?? "?"} names`);
+  }, [d]);
 
   return (
     <div className="card card-compact space-y-2">
@@ -355,13 +398,16 @@ function VolLandscapeSnapshot() {
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.62rem] text-text-muted tabular-nums">
               <span title="Average front-month implied vol across the scanned universe.">
                 avg IV <span className="text-text">{s.avg_iv?.toFixed(1)}</span>
+                <Ref h={d.history?.avg_iv} />
               </span>
               <span title="Implied over realised. Above 1 means options are pricing more movement than has been delivered.">
                 IV/HV <span className="text-text">{s.avg_ivhv?.toFixed(2)}</span>
+                <Ref h={d.history?.avg_ivhv} />
               </span>
               <span title="Names whose term structure is inverted — front vol above back vol, which prices near-term event risk.">
                 <span className="text-text">{s.n_inverted}</span> inverted
                 <span className="text-text-muted/70"> of {s.n_tickers}</span>
+                <Ref h={d.history?.n_inverted} />
               </span>
               {/* Separate denominators on purpose. Skew is counted only over
                   chains that pass put-call parity, so a shared "of 20" would
@@ -370,8 +416,38 @@ function VolLandscapeSnapshot() {
               <span title="Names with unusually steep put skew. Counted only over chains whose ATM put and ATM call agree to within put-call parity — a chain quoting stale wings gets no vote.">
                 <span className="text-text">{s.n_steep_skew}</span> steep skew
                 <span className="text-text-muted/70"> of {s.n_skew_rated ?? s.n_tickers}</span>
+                <Ref h={d.history?.n_steep_skew} />
               </span>
             </div>
+          )}
+
+          {/* RELATIVE TO WHAT. A bare "avg IV 20.7" reads as a fact about the
+              market; without a reference set it is a fact about nothing. The
+              percentiles above are computed and typed already — they were just
+              never rendered, so the card printed raw levels and the reader had
+              no way to tell whether 20.7 was calm, ordinary or extreme.
+
+              When the reference does not exist yet, say so ONCE here rather
+              than stamping "n/a" on every stat. Silence would be worse than
+              either: an uncontextualised number looks identical to a
+              contextualised one that happens to be normal. */}
+          {refNote && (
+            <p className="text-[0.58rem] text-text-muted/80 leading-snug">
+              {refNote}
+            </p>
+          )}
+
+          {/* A cut sitting at the median of the cross section splits the
+              universe in half, so a count taken against it cannot separate a
+              regime from its opposite — "10 of 17 have steep skew" is then
+              close to "10 of 17 are above average". The backend already
+              discloses this in `thresholds`; nothing displayed it. Shown only
+              when it is true, because a cut that DOES discriminate is not news. */}
+          {nearMedianCuts.length > 0 && (
+            <p className="text-[0.58rem] text-amber-400/80 leading-snug">
+              {nearMedianCuts.join("; ")} — that count separates less than it
+              appears to.
+            </p>
           )}
 
           {/* What the scan above means for the instrument actually being traded.
