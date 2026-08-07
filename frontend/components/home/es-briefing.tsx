@@ -885,7 +885,10 @@ export default function EsBriefing() {
                 </span>
                 <span className="text-[0.55rem] text-text-muted">
                   nearest {analogQ.data.k_scored} of{" "}
-                  {analogQ.data.n_history?.toLocaleString()} · prior structure + vol
+                  {analogQ.data.n_history?.toLocaleString()}
+                  {analogQ.data.mode === "intraday blend"
+                    ? ` · re-matched at ${analogQ.data.slot}`
+                    : " · prior structure + shape + vol"}
                 </span>
               </div>
 
@@ -904,6 +907,7 @@ export default function EsBriefing() {
                     <span className="text-text-muted/70 flex-1 min-w-0 truncate">
                       closed {a.close_pos != null ? `${(a.close_pos * 100).toFixed(0)}%` : "—"} up
                       the range
+                      {a.hi_slot && ` · high ${a.hi_slot}`}
                       {a.next?.range_mult != null &&
                         ` · next day ${a.next.range_mult.toFixed(2)}×`}
                     </span>
@@ -917,6 +921,13 @@ export default function EsBriefing() {
                   {analogQ.data.today?.implied_range_mult?.toFixed(2)}×
                 </span>
                 <span className="text-text-muted"> a normal range today</span>
+                {analogQ.data.today?.p25 != null && analogQ.data.today?.p75 != null && (
+                  <span className="text-text-muted/70">
+                    {" "}
+                    (middle half {analogQ.data.today.p25.toFixed(2)}–
+                    {analogQ.data.today.p75.toFixed(2)}×)
+                  </span>
+                )}
                 {analogQ.data.accuracy && (
                   <span className="text-text-muted/70">
                     {" — "}
@@ -926,6 +937,20 @@ export default function EsBriefing() {
                   </span>
                 )}
               </div>
+
+              {/* When the blend is live, show both halves. One fused number hides
+                  that the analogs and the session's own path can disagree, and
+                  the disagreement is the interesting part. */}
+              {analogQ.data.mode === "intraday blend" &&
+                analogQ.data.today?.path_implied != null &&
+                analogQ.data.today?.analog_only != null && (
+                  <div className="text-[0.6rem] text-text-muted/80 tabular-nums leading-snug">
+                    Blending the analogs ({analogQ.data.today.analog_only.toFixed(2)}×) with
+                    this session&apos;s own path ({analogQ.data.today.path_implied.toFixed(2)}×).
+                    Measured better than the path alone at 10:30 and 11:30, and worse
+                    after — so it is switched off from 12:30.
+                  </div>
+                )}
 
               {/* Printed as the null it is, in the same shape the macro-setup
                   block uses, so a coin flip cannot be read as a lean. */}

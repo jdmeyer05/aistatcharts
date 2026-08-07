@@ -3253,7 +3253,12 @@ async def es_analogs(user: str = Depends(get_current_user)):
     plus the VIX complex and measures ~10s cold against nothing warm.
     """
     from src.es_analogs import session_analogs
-    return await asyncio.to_thread(session_analogs)
+    from src.es_baserates import _current_slot
+
+    # The slot decides whether the intraday blend engages. It is measured to
+    # help at 10:30 and 11:30 and to HURT by 13:30, so the module refuses any
+    # slot outside that window rather than blending wherever it is asked.
+    return await asyncio.to_thread(session_analogs, 5, _current_slot(None))
 
 
 @router.get("/es-card-audit")

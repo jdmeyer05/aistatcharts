@@ -3370,6 +3370,9 @@ export interface EsAnalogSession {
   up: boolean | null;
   close_pos: number | null;
   trendiness: number | null;
+  /** When the session's own high / low printed. */
+  hi_slot?: string | null;
+  lo_slot?: string | null;
   max_up: number | null;
   max_dn: number | null;
 }
@@ -3392,11 +3395,24 @@ export interface EsAnalogs {
   k_scored?: number;
   features?: string[];
   analogs?: (EsAnalogSession & { next: EsAnalogSession | null })[];
+  /** "pre-open" or "intraday blend" — the blend is only engaged at the slots it
+   *  was measured to help at (10:30, 11:30). After 11:30 it measured worse than
+   *  path-implied alone, so the module falls back rather than blending anyway. */
+  mode?: string;
+  slot?: string | null;
   today?: {
     implied_range_mult: number | null;
+    /** The two inputs behind `implied_range_mult` when blending, so the card can
+     *  show what each half contributed rather than one fused number. */
+    analog_only?: number | null;
+    path_implied?: number | null;
     calls_wide: boolean;
+    /** The analogs' spread. Ten agreeing on 1.1x and ten spanning 0.6-2.1x are
+     *  different claims and a lone median cannot tell them apart. */
+    p25?: number | null;
+    p75?: number | null;
     share_up: number | null;
-    median_close_pos: number | null;
+    median_distance?: number | null;
   };
   next_session?: {
     implied_range_mult: number | null;
