@@ -20,6 +20,20 @@ from datetime import datetime, timedelta
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("worker")
 
+# No LLM call may be allowed to hang. The OpenAI and Anthropic SDKs both default to
+# 600s per attempt with 2 retries — up to ~30 min for a single stalled provider,
+# inside a job whose `timeout-minutes` is 10. A stall would look exactly like a
+# runner outage: the job dies with no error attributable to us.
+#
+# The budget, measured off four real runs on 2026-08-07 (31206592724..31219519492):
+# setup — almost entirely `pip install` — takes 49-58s of the 600s cap, leaving
+# ~540s for this script. `--task all` makes six LLM calls (4 Grok, 1 Gemini,
+# 1 Claude), so 40s x 2 attempts x 6 = 480s worst case, leaving ~60s for the
+# non-LLM work (metrics, options prewarm, cleanup). Those same runs finished
+# end-to-end in 9-24s, so 40s per attempt is over an order of magnitude of headroom.
+LLM_TIMEOUT_SECONDS = 40
+LLM_MAX_RETRIES = 1
+
 
 def _load_secrets():
     """Load API keys from environment or .streamlit/secrets.toml."""
@@ -47,9 +61,78 @@ def _get_db():
     return create_client(url, key)
 
 
+def _parse_json_response(raw):
+    """Pull a JSON value out of an LLM response, tolerating the three things these
+    models actually do (all observed live on 2026-08-07, real prompts):
+
+    1. A prose preamble before a ```json fence. Claude Sonnet 5 opens with a caveat
+       paragraph about not being able to verify the scenario, THEN emits the JSON.
+       The old two-line strip only removed fences anchored at the very start/end of
+       the string, so a preamble made json.loads fail at char 0.
+    2. Tilde-marked estimates -- `"disruption_mbpd": ~2`. Grok does this because
+       ACCURACY_CHECK_LIGHT (src/ai_validation.py) says "Label estimates with ~".
+       That is right for the prose pages that also use the constant, and invalid
+       JSON here, so strip it at the value position instead of editing the shared text.
+    3. Plain fenced or bare objects, which already worked.
+
+    Raises ValueError with the head of the payload when nothing parses, so a failure
+    says what came back instead of surfacing an offset into a string nobody logged.
+    """
+    import re
+
+    if not raw or not raw.strip():
+        raise ValueError("empty response")
+
+    text = raw.strip()
+
+    # A fenced block anywhere wins -- it is the model's own explicit delimiter.
+    fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", text, re.DOTALL)
+    candidate = fenced.group(1).strip() if fenced else text
+
+    # Otherwise take the first balanced object/array, skipping any preamble.
+    if not candidate.startswith(("{", "[")):
+        start = min((i for i in (candidate.find("{"), candidate.find("[")) if i != -1),
+                    default=-1)
+        if start == -1:
+            raise ValueError(f"no JSON found in: {text[:200]}")
+        opener = candidate[start]
+        closer = "}" if opener == "{" else "]"
+        depth, in_str, escaped, end = 0, False, False, -1
+        for i, ch in enumerate(candidate[start:], start):
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = not in_str
+            elif not in_str:
+                if ch == opener:
+                    depth += 1
+                elif ch == closer:
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+        if end == -1:
+            raise ValueError(f"unterminated JSON in: {text[:200]}")
+        candidate = candidate[start:end + 1]
+
+    # "score": ~15  ->  "score": 15
+    candidate = re.sub(r'(:\s*)~\s*(-?[\d.])', r"\1\2", candidate)
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{e}; payload started: {candidate[:200]}") from e
+
+
 def _get_openai_client(api_key, base_url=None):
     from openai import OpenAI
-    kwargs = {"api_key": api_key}
+    kwargs = {
+        "api_key": api_key,
+        "timeout": LLM_TIMEOUT_SECONDS,
+        "max_retries": LLM_MAX_RETRIES,
+    }
     if base_url:
         kwargs["base_url"] = base_url
     return OpenAI(**kwargs)
@@ -161,10 +244,7 @@ Only CONFIRMED events. Do NOT fabricate. Verify each event has a named source be
         if not raw:
             return
 
-        import re
-        cleaned = re.sub(r"^```json?\s*", "", raw.strip())
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-        parsed = json.loads(cleaned)
+        parsed = _parse_json_response(raw)
         events = parsed if isinstance(parsed, list) else parsed.get("events", parsed.get("timeline", []))
 
         added = 0
@@ -243,10 +323,7 @@ Provide your assessment as JSON:
                 max_tokens=1000, temperature=0.2,
             )
             raw = resp.choices[0].message.content
-            import re
-            cleaned = re.sub(r"^```json?\s*", "", raw.strip())
-            cleaned = re.sub(r"\s*```$", "", cleaned)
-            data = json.loads(cleaned)
+            data = _parse_json_response(raw)
             data["model"] = "Grok 4"
             assessments.append(data)
             logger.info("Grok assessment: done")
@@ -258,17 +335,41 @@ Provide your assessment as JSON:
         try:
             from google import genai
             from google.genai import types
-            client = genai.Client(api_key=gemini_key)
+            # google-genai takes its timeout in MILLISECONDS, unlike the OpenAI and
+            # Anthropic SDKs which take seconds. It exposes no retry count to cap.
+            client = genai.Client(
+                api_key=gemini_key,
+                http_options=types.HttpOptions(timeout=LLM_TIMEOUT_SECONDS * 1000),
+            )
+            # Same trap the Claude call below was already fixed for: thinking shares
+            # the output budget with the JSON body we parse. Measured 2026-08-07 on
+            # this exact prompt — at max_output_tokens=1000 thinking took 957 of them
+            # and left 39 for the JSON, so every run finished MAX_TOKENS and died on a
+            # JSONDecodeError swallowed by the handler below. Gemini 3.1 Pro will NOT
+            # let thinking be disabled (thinking_budget=0 -> 400 INVALID_ARGUMENT), and
+            # thinking_level alone does not help while the budget is the binding limit.
+            # 4000 + LOW measured 745 thinking / 246 output, finish STOP, 14.0s.
             resp = client.models.generate_content(
                 model="gemini-3.1-pro-preview",
                 contents=base_prompt,
-                config=types.GenerateContentConfig(max_output_tokens=1000, temperature=0.2),
+                config=types.GenerateContentConfig(
+                    max_output_tokens=4000,
+                    temperature=0.2,
+                    thinking_config=types.ThinkingConfig(
+                        thinking_level=types.ThinkingLevel.LOW
+                    ),
+                ),
             )
+            finish = getattr(resp.candidates[0], "finish_reason", None) if resp.candidates else None
+            if str(finish).endswith("MAX_TOKENS"):
+                # Otherwise this resurfaces as a confusing JSONDecodeError on a
+                # half-written object, which is what hid the bug for months.
+                raise RuntimeError(
+                    f"Gemini truncated before finishing the JSON (thinking used "
+                    f"{getattr(resp.usage_metadata, 'thoughts_token_count', '?')} tokens)"
+                )
             raw = resp.text
-            import re
-            cleaned = re.sub(r"^```json?\s*", "", raw.strip())
-            cleaned = re.sub(r"\s*```$", "", cleaned)
-            data = json.loads(cleaned)
+            data = _parse_json_response(raw)
             data["model"] = "Gemini 3.1 Pro"
             assessments.append(data)
             logger.info("Gemini assessment: done")
@@ -279,7 +380,11 @@ Provide your assessment as JSON:
     if anthropic_key:
         try:
             import anthropic
-            client = anthropic.Anthropic(api_key=anthropic_key)
+            client = anthropic.Anthropic(
+                api_key=anthropic_key,
+                timeout=LLM_TIMEOUT_SECONDS,
+                max_retries=LLM_MAX_RETRIES,
+            )
             resp = client.messages.create(
                 model="claude-sonnet-5",
                 # Sonnet 5 thinks by default where 4.6 did not, and thinking
@@ -292,10 +397,7 @@ Provide your assessment as JSON:
                 # Otherwise this surfaces as a confusing JSON decode error below.
                 raise RuntimeError("Claude declined the assessment request")
             raw = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
-            import re
-            cleaned = re.sub(r"^```json?\s*", "", raw.strip())
-            cleaned = re.sub(r"\s*```$", "", cleaned)
-            data = json.loads(cleaned)
+            data = _parse_json_response(raw)
             data["model"] = "Claude Sonnet"
             assessments.append(data)
             logger.info("Claude assessment: done")
