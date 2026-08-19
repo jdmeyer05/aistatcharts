@@ -40,10 +40,6 @@ def _load_secrets() -> None:
         pass
 
 
-def _fmt_pct(x) -> str:
-    return "—" if x is None else f"{x:+.3f}"
-
-
 def build_report(res: dict) -> str:
     ev = res["events"]
     dr = res["drivers"]
@@ -85,21 +81,42 @@ def build_report(res: dict) -> str:
     A(f"**Survived FDR: {', '.join(survivors) if survivors else 'nothing'}.** "
       f"Everything else is inside the noise of its own calendar.")
     A("")
-    A("Two things the table is easy to misread:")
+    top = ev["ranking"][0]
+    best_miss = next((r for r in ev["ranking"] if not r["survives_fdr"]), None)
+    witch = next((r for r in ev["ranking"] if r["event"] == "Triple witching"), None)
+    opex = next((r for r in ev["ranking"] if r["event"] == "Monthly opex"), None)
+    A("Three things the table is easy to misread:")
     A("")
-    A("- **FOMC is third and does not survive.** Its raw p is 0.0325, which would pass any")
-    A("  single test and does not pass twenty-three of them. Read it as \"probably real,")
-    A("  not established here\" rather than as a null — its confidence interval spans 0.79")
-    A("  to 1.62, which is the honest width at n=123 on a distribution this heavy-tailed.")
-    A("- **Triple witching is a subset of monthly opex,** not an independent row. Every")
-    A("  witching Friday is also an opex Friday, so the two lines share 58 sessions.")
+    if best_miss:
+        A(f"- **{best_miss['event']} ranks {best_miss['rank']} and does not survive.** Its raw p is "
+          f"{best_miss['p_rotation']:.4f}, which would pass a single test and does not pass "
+          f"{len(ev['ranking'])} of them. Read it as \"possibly real, not established here\" "
+          f"rather than as a null — its interval spans {best_miss['rel_abs_ci95'][0]:.2f} to "
+          f"{best_miss['rel_abs_ci95'][1]:.2f}, which is the honest width at n={best_miss['n']} on a "
+          f"distribution this heavy-tailed.")
+    if witch and opex:
+        A(f"- **Triple witching is a subset of monthly opex,** not an independent row — every")
+        A(f"  witching Friday is also an opex Friday. They rank {witch['rank']} and {opex['rank']}.")
+        A(f"- **Both of them were an artefact until the dividend was taken out.** SPY goes")
+        A(f"  ex-dividend on the third Friday of March, June, September and December — 57 of the")
+        A(f"  58 witching days here — and on unadjusted closes that puts a mechanical ~0.25% drop")
+        A(f"  into a session whose typical absolute move is near 0.5%. Measured that way witching")
+        A(f"  came first at 1.53x with p=0.0055 and opex sixth. On adjusted closes they are")
+        A(f"  {witch['rel_abs_median']:.2f}x and {opex['rel_abs_median']:.2f}x, ranked")
+        A(f"  {witch['rank']} and {opex['rank']}. The finding was the dividend.")
     A("")
     A("### Persistence: the move does not carry")
     A("")
-    A("The `t+1` column is the same metric on the following session. Nothing here stays")
-    A("elevated, and the biggest event in the table is followed by a QUIETER-than-normal")
-    A("day: payrolls run 1.39x on the print and 0.84x the session after. Whatever these")
-    A("events do, they do it once and it is over by the next close.")
+    t1 = top["persistence"].get("t+1")
+    A(f"The `t+1` column is the same metric on the following session. Nothing here stays")
+    if t1 is not None and t1 < 1.0:
+        A(f"elevated, and the biggest event in the table is followed by a QUIETER-than-normal")
+        A(f"day: {top['event'].lower()} runs {top['rel_abs_median']:.2f}x on the print and "
+          f"{t1:.2f}x the session after. Whatever these events do, they do it once and it is")
+        A(f"over by the next close.")
+    else:
+        A(f"elevated: {top['event'].lower()} runs {top['rel_abs_median']:.2f}x on the print and "
+          f"{t1 if t1 is not None else float('nan'):.2f}x the session after.")
     A("")
 
     A("## 2. The ranking is not stable, and that is the finding")
@@ -107,6 +124,9 @@ def build_report(res: dict) -> str:
     A("Mean rank across calendar years, with the spread. An event with a good average and a")
     A("wide spread is a different proposition from one that sits in the same place every")
     A("year, and the pooled table above cannot tell them apart.")
+    A("")
+    A("Quarterly events (witching, quarter end) are absent: at four observations a year")
+    A("there is no median worth ranking inside a single year, so `rank_by_year` skips them.")
     A("")
     A("| Event | years | mean rank | best | worst | rank sd | in top 10 |")
     A("|---|---:|---:|---:|---:|---:|---:|")

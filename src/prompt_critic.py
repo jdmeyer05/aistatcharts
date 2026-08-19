@@ -177,10 +177,21 @@ def _build_dossier(surface: str, graded: list[dict], scoreboard: dict | None) ->
     whether a claim was supportable, not the whole board. Sending the full
     payload for twelve examples would blow the context and bury the findings.
     """
-    ranked = sorted(graded, key=lambda g: (g["grade"].get("score") if g["grade"].get("score") is not None else 1.0))
+    ranked = sorted(graded, key=lambda g: (g["grade"].get("score")
+                                           if g["grade"].get("score") is not None else 1.0))
     worst = ranked[:_N_WORST]
-    rest = [g for g in ranked[_N_WORST:]][:: max(1, len(ranked[_N_WORST:]) // max(1, _N_EXAMPLES - _N_WORST) or 1)]
-    chosen = (worst + rest)[:_N_EXAMPLES]
+    # The rest are spread evenly across the remaining score range rather than
+    # taken from one end. A dossier of nothing but failures teaches the critic
+    # that failure is the normal case and invites it to find defects in the
+    # clean outputs too; a dossier of nothing but clean ones hides the pattern.
+    remainder = ranked[_N_WORST:]
+    want = max(0, _N_EXAMPLES - len(worst))
+    if remainder and want:
+        step = max(1, len(remainder) // want)
+        rest = remainder[::step][:want]
+    else:
+        rest = []
+    chosen = worst + rest
 
     blocks = []
     for i, g in enumerate(chosen, 1):

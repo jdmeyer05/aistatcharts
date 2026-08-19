@@ -45,39 +45,55 @@ def _db():
 
 # ── stage 1: grade ────────────────────────────────────────────────
 
-def grade_pending(surface: str | None = None, limit: int = 300) -> dict:
-    """Apply the rule set to every snapshot that has not been graded yet."""
-    from src import prompt_snapshots, prompt_rules
+def grade_pending(surface: str | None = None, days: int = 30,
+                  page: int = 400, max_pages: int = 12) -> dict:
+    """Apply the rule set to every snapshot that has not been graded yet.
+
+    PAGES THE WHOLE WINDOW, oldest first. The obvious version — take the newest
+    N snapshots and grade whatever is ungraded among them — strands rows
+    permanently: miss a few runs, and by the time the job comes back the newest
+    N are all graded already, so it writes nothing and the gap behind them is
+    never revisited. Nothing would look broken, and the sample every downstream
+    number is computed over would just be quietly missing a week.
+    """
+    from src import prompt_rules
+    from src.prompt_snapshots import paged
     db = _db()
     if db is None:
         return {"ok": False, "error": "no database"}
 
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     out: dict = {}
-    for s in ([surface] if surface else SURFACES):
-        rows = prompt_snapshots.fetch(s, limit=limit, days=30)
+    for surf in ([surface] if surface else SURFACES):
+        rows = paged(lambda surf=surf: db.table("ai_snapshots").select("*")
+                     .eq("surface", surf).eq("is_replay", False)
+                     .gte("created_at", since).order("created_at"),
+                     page=page, max_pages=max_pages)
         if not rows:
-            out[s] = {"graded": 0, "skipped": 0}
+            out[surf] = {"graded": 0, "skipped": 0, "scanned": 0}
             continue
 
+        already: set[int] = set()
         ids = [r["id"] for r in rows]
-        try:
-            done = db.table("ai_grades").select("snapshot_id") \
-                .in_("snapshot_id", ids).eq("grader", "rules").execute().data or []
-        except Exception as e:
-            out[s] = {"error": str(e)}
-            continue
-        already = {r["snapshot_id"] for r in done}
+        for i in range(0, len(ids), 200):
+            try:
+                done = (db.table("ai_grades").select("snapshot_id")
+                        .in_("snapshot_id", ids[i:i + 200]).eq("grader", "rules")
+                        .execute().data or [])
+                already |= {r["snapshot_id"] for r in done}
+            except Exception as e:
+                logger.warning(f"prompt_loop: grade lookup failed for {surf}: {e}")
 
         payloads = []
         for r in rows:
             if r["id"] in already:
                 continue
-            g = prompt_rules.grade(s, r.get("payload") or {}, r.get("output"))
+            g = prompt_rules.grade(surf, r.get("payload") or {}, r.get("output"))
             if g.get("score") is None and g.get("error"):
                 continue
             payloads.append({
                 "snapshot_id": r["id"],
-                "surface": s,
+                "surface": surf,
                 "grader": "rules",
                 "score": g["score"],
                 "findings": g["findings"],
@@ -91,8 +107,8 @@ def grade_pending(surface: str | None = None, limit: int = 300) -> dict:
                                              on_conflict="snapshot_id,grader").execute()
                 wrote += len(payloads[i:i + 50])
             except Exception as e:
-                logger.warning(f"prompt_loop: grade write failed for {s}: {e}")
-        out[s] = {"graded": wrote, "skipped": len(already)}
+                logger.warning(f"prompt_loop: grade write failed for {surf}: {e}")
+        out[surf] = {"graded": wrote, "skipped": len(already), "scanned": len(rows)}
 
     return {"ok": True, "surfaces": out}
 
@@ -206,7 +222,7 @@ def evaluate_cycle(surface: str, n: int = 24) -> dict:
     if not result.get("ok"):
         return {"ok": False, "stage": "replay", **result}
 
-    _record_experiment(surface, champ_version, chall_version, result)
+    experiment_id = _record_experiment(surface, champ_version, chall_version, result)
 
     wins = sum(1 for e in prior if e.get("verdict") == "promote") + \
         (1 if result.get("verdict") == "win" else 0)
@@ -217,6 +233,14 @@ def evaluate_cycle(surface: str, n: int = 24) -> dict:
     if result.get("verdict") == "win" and wins >= _WINS_TO_PROMOTE:
         if prompt_registry.promote(surface, chall_version, metrics=result):
             decision = "promoted"
+            # Stamp the experiment that actually triggered it, so the dashboard's
+            # `promoted` column means something. Without this every row reads
+            # false and the version history is the only place a promotion shows.
+            if experiment_id is not None:
+                try:
+                    _db().table("prompt_experiments").update({"promoted": True})                         .eq("id", experiment_id).execute()
+                except Exception as e:
+                    logger.debug(f"prompt_loop: promotion stamp failed: {e}")
     elif losses >= _LOSSES_TO_REJECT:
         prompt_registry.reject(surface, chall_version, metrics=result,
                                note="; ".join(result.get("reasons") or []))
@@ -238,13 +262,13 @@ def _experiments(surface: str, challenger_version: int) -> list[dict]:
         return []
 
 
-def _record_experiment(surface: str, champ_v: int, chall_v: int, result: dict) -> None:
+def _record_experiment(surface: str, champ_v: int, chall_v: int, result: dict) -> int | None:
     db = _db()
     if db is None:
-        return
+        return None
     verdict = "promote" if result.get("verdict") == "win" else result.get("verdict", "inconclusive")
     try:
-        db.table("prompt_experiments").insert({
+        res = db.table("prompt_experiments").insert({
             "surface": surface,
             "champion_version": champ_v,
             "challenger_version": chall_v,
@@ -256,8 +280,11 @@ def _record_experiment(surface: str, champ_v: int, chall_v: int, result: dict) -
             "notes": "; ".join(result.get("reasons") or []) or None,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
+        rows = res.data or []
+        return int(rows[0]["id"]) if rows else None
     except Exception as e:
         logger.warning(f"prompt_loop: experiment write failed: {e}")
+        return None
 
 
 # ── reporting ─────────────────────────────────────────────────────
@@ -272,13 +299,14 @@ def summary(surface: str, days: int = 30) -> dict:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     champ = prompt_registry.champion(surface) or {}
 
-    try:
-        grades = db.table("ai_grades").select("score,counts,created_at,snapshot_id") \
-            .eq("surface", surface).eq("grader", "rules").gte("created_at", since) \
-            .order("created_at", desc=True).limit(1000).execute().data or []
-    except Exception as e:
-        grades = []
-        logger.debug(f"prompt_loop: grade fetch failed: {e}")
+    # Paged: a 30-day window on a busy surface crosses PostgREST's silent
+    # 1000-row ceiling, and a truncated read here would move the mean score
+    # without moving anything that looks like an error.
+    from src.prompt_snapshots import paged
+    grades = paged(lambda: db.table("ai_grades")
+                   .select("score,counts,created_at,snapshot_id")
+                   .eq("surface", surface).eq("grader", "rules")
+                   .gte("created_at", since).order("created_at"))
 
     try:
         versions = db.table("prompt_versions") \

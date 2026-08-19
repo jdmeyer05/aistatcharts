@@ -397,10 +397,15 @@ def scoreboard(surface: str = "market_driver", days: int = 90,
         return {"ok": False, "error": "no database"}
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    # Paged, not limited: a 90-day window crosses PostgREST's silent 1000-row
+    # ceiling inside two weeks of normal traffic, and a truncated sample here
+    # would quietly change every calibration number on the page.
+    from src.prompt_snapshots import paged
     try:
-        q = db.table("ai_claims").select("claim,confidence,correct,base_rate,stated_at,snapshot_id") \
-            .eq("surface", surface).eq("status", "resolved").gte("stated_at", since)
-        rows = q.limit(2000).execute().data or []
+        rows = paged(lambda: db.table("ai_claims")
+                     .select("claim,confidence,correct,base_rate,stated_at,snapshot_id")
+                     .eq("surface", surface).eq("status", "resolved")
+                     .gte("stated_at", since).order("stated_at"))
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

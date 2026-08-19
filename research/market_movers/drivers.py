@@ -65,6 +65,12 @@ _WINDOW = 126          # ~6 months of sessions
 def load_returns(tickers: list[str], start: str = "2011-06-01") -> pd.DataFrame:
     """Daily returns, one column per ticker.
 
+    ADJUSTED CLOSES. TLT, HYG and IEF all distribute MONTHLY — HYG's yield puts
+    roughly half a percent of phantom drop into one session every month — so on
+    unadjusted prices the credit spread carries a recurring step that is an
+    accounting event, not a market one. Every correlation and R² below would be
+    measuring it.
+
     `Ticker().history()` in a loop, never `download()` — the batch API is not
     thread-safe and has silently returned partially-empty frames on this
     platform before.
@@ -73,7 +79,7 @@ def load_returns(tickers: list[str], start: str = "2011-06-01") -> pd.DataFrame:
     cols = {}
     for tk in tickers:
         try:
-            df = yf.Ticker(tk).history(start=start, interval="1d", auto_adjust=False)
+            df = yf.Ticker(tk).history(start=start, interval="1d", auto_adjust=True)
             if df is None or df.empty:
                 logger.warning(f"drivers: no bars for {tk}")
                 continue

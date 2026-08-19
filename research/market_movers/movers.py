@@ -48,11 +48,19 @@ _BOOTSTRAP = 2000
 def load_sessions(ticker: str = "SPY", start: str = "2011-06-01") -> pd.DataFrame:
     """Daily bars with the regime-normalised magnitude columns attached.
 
+    ADJUSTED CLOSES, AND THIS IS NOT A DETAIL. SPY goes ex-dividend on the third
+    Friday of March, June, September and December — which is triple witching, on
+    57 of the 58 witching days in this sample. On unadjusted closes each of those
+    days carries a mechanical drop of roughly a quarter of a percent that has
+    nothing to do with anyone trading, against a typical absolute move near half
+    a percent. Measured that way, witching ranked first in this study by a margin
+    it had partly been handed. `auto_adjust=True` removes the dividend step.
+
     yfinance is called through `Ticker().history()`, never `download()` — the
     latter is not thread-safe and this module is imported by code that fans out.
     """
     import yfinance as yf
-    df = yf.Ticker(ticker).history(start=start, interval="1d", auto_adjust=False)
+    df = yf.Ticker(ticker).history(start=start, interval="1d", auto_adjust=True)
     if df is None or df.empty:
         raise RuntimeError(f"no bars for {ticker}")
     df = df[["Open", "High", "Low", "Close"]].copy()

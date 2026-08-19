@@ -161,6 +161,33 @@ def _write(surface, payload, output, prompt_version, model, meta,
     return snap_id
 
 
+def paged(build, page: int = 500, max_pages: int = 20) -> list[dict]:
+    """Read every matching row, not the first thousand.
+
+    PostgREST caps a single response at 1000 rows and says NOTHING about it: a
+    `.limit(2000)` is not an error, does not warn, and returns 1000 — after which
+    the caller computes a statistic over a silently truncated sample and gets a
+    number that looks fine. That exact failure cost this platform weeks of a
+    wrong OHLCV cache, and the tables here cross a thousand rows in about ten
+    days of normal traffic. `build` is a callable returning a fresh query, since
+    a PostgREST query object cannot be re-ranged after execution.
+    """
+    out: list[dict] = []
+    for i in range(max_pages):
+        lo = i * page
+        try:
+            rows = build().range(lo, lo + page - 1).execute().data or []
+        except Exception as e:
+            logger.warning(f"prompt_snapshots.paged: page {i} failed: {e}")
+            return out
+        out.extend(rows)
+        if len(rows) < page:
+            return out
+    logger.warning(f"prompt_snapshots.paged: stopped at max_pages={max_pages}; "
+                   f"{len(out)} rows returned and more may exist")
+    return out
+
+
 def fetch(surface: str, *, split: str | None = None, limit: int = 200,
           days: int = 45, include_replays: bool = False,
           prompt_version: int | None = None) -> list[dict]:

@@ -82,7 +82,7 @@ src/prompt_replay.py       paired holdout replay and the promotion gate
 src/prompt_loop.py         orchestration + reporting
 api/routes/prompt_loop.py  admin endpoints + a narrow public track-record
 frontend/app/prompt-loop   the scoreboard (admin, not in nav, not crawled)
-tests/test_prompt_loop.py  32 tests, network-free
+tests/test_prompt_loop.py  34 tests, network-free
 ```
 
 ## Schedule
@@ -96,15 +96,18 @@ tests/test_prompt_loop.py  32 tests, network-free
 
 ## Setup, in order
 
-1. **Run the migration.** Apply `supabase_prompt_loop.sql` in the Supabase SQL
-   editor.
+1. ~~Run the migration.~~ **Done 2026-08-18** — `supabase_prompt_loop.sql` is
+   applied to the production project. The file is kept as the record of what
+   was created; re-running it is safe (everything is `IF NOT EXISTS`).
 2. **Add `SUPABASE_SERVICE_ROLE_KEY` to GitHub repo secrets.** The tables are
    RLS'd to `service_role`. With the anon key every write fails silently and the
    loop looks like it is running while recording nothing. Both workflows already
    pass the secret through.
-3. **Seed the baselines:** `python worker.py --task prompt_seed`, or POST
-   `/api/prompt-loop/seed` as an admin. This records the git text as version 0
-   and makes it champion.
+3. ~~Seed the baselines.~~ **Done 2026-08-18** — all three surfaces are seeded
+   at v0 and serving. Re-run `python worker.py --task prompt_seed` after any
+   edit to `src/prompt_defaults.py`: it appends the new git text as the next
+   version rather than overwriting v0, so the history stays truthful about what
+   was served when.
 4. Wait a day or two for snapshots to accumulate, then run
    `--task prompt_critique` and `--task prompt_evaluate` manually once to watch
    what they do before the cron takes over.
