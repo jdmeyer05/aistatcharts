@@ -468,3 +468,102 @@ def test_attribution_block_does_not_trip_the_other_rules():
         "what_to_watch": "TLT at 88.0.",
     }))
     assert g["counts"]["critical"] == 0, g["findings"]
+
+
+# ── news_digest: the ES card's one unmeasured AI block ────────────
+
+_HEADLINES = {"headlines": [
+    {"title": "Waller says one more cut is appropriate this year", "tier": 1},
+    {"title": "Retail sales beat at 0.6% MoM", "tier": 1},
+    {"title": "Hormuz shipping resumes after de-escalation", "tier": 2},
+]}
+
+
+def _digest(text):
+    return {f["rule"] for f in prompt_rules.grade_news_digest(_HEADLINES, text)}
+
+
+def test_a_clean_digest_scores_clean():
+    g = prompt_rules.grade("news_digest", _HEADLINES,
+                           "Waller signalled one more cut this year while retail sales beat at "
+                           "0.6%, leaving the policy path unresolved into the open. Shipping "
+                           "through Hormuz resumed after the de-escalation.")
+    assert g["counts"] == {"critical": 0, "major": 0, "minor": 0}, g["findings"]
+    assert g["score"] == 1.0
+
+
+def test_implying_a_direction_is_critical():
+    """The ES card's founding distinction: context is not signal.
+
+    This paragraph is the easiest place on that card to blur it, which is why
+    the rule is critical and sits in the regression suite.
+    """
+    for bad in ("Retail sales beat at 0.6%, which is supportive of higher prices into the open.",
+                "The tone is constructive after Waller's comments.",
+                "Watch support at 6400 after the retail sales beat.",
+                "Headlines favour the upside into the cash open."):
+        assert "digest_implies_direction" in _digest(bad), bad
+
+
+def test_named_jargon_is_flagged():
+    assert "digest_jargon" in _digest("A risk-on tone after the retail sales beat at 0.6%.")
+
+
+def test_quiet_tape_wording_is_not_penalised():
+    """"Nothing new" is explicitly a success in this prompt, not a failure."""
+    g = prompt_rules.grade("news_digest", _HEADLINES,
+                           "Nothing new since Friday. The headlines repeat the retail sales "
+                           "beat at 0.6% and add no policy detail.")
+    assert g["counts"]["critical"] == 0, g["findings"]
+
+
+def test_headline_only_rule_catches_an_invented_name():
+    assert "invented_ticker" in _digest("Waller signalled a cut and NVDA guided higher.")
+
+
+def test_digest_structure_and_length():
+    assert "digest_has_structure" in _digest("- Waller signalled a cut\n- Retail sales beat 0.6%")
+    assert "digest_too_long" in _digest("Waller signalled one more cut this year. " * 14)
+
+
+def test_digest_regression_rules_are_registered():
+    assert "digest_implies_direction" in prompt_rules.REGRESSION_RULES
+    assert "empty_digest" in prompt_rules.REGRESSION_RULES
+
+
+def test_replay_can_rebuild_the_digest_user_message():
+    """Replay must reconstruct what the model saw from the frozen payload alone."""
+    msg = prompt_replay._user_message("news_digest", {"lines": ["[tier 1] Waller says one more cut"]})
+    assert "Waller says one more cut" in msg
+    # And from raw headlines when `lines` was not stored.
+    msg2 = prompt_replay._user_message("news_digest", _HEADLINES)
+    assert "Retail sales beat at 0.6% MoM" in msg2
+
+
+def test_every_registered_surface_has_rules_and_invariants():
+    from src import prompt_loop
+    for surface in prompt_loop.SURFACES:
+        assert surface in prompt_defaults.BASELINES, surface
+        assert surface in prompt_rules._GRADERS, surface
+        assert prompt_critic._INVARIANTS.get(surface), surface
+        assert surface in prompt_replay._REPLAY_MODEL, surface
+
+
+def test_interpretation_panel_is_held_to_the_same_driver_rule():
+    """It receives the same measured attribution, so it inherits the same limit."""
+    pay = {"tickers": ["SPY"], "drivers": {"available": True,
+           "ranking": [{"driver": "Gold", "share_of_variance": 0.1}]}}
+    bad = {f["rule"] for f in prompt_rules.grade_home_interpret(
+        pay, "Gold is driving the tape. Bottom line: risk stays on.")}
+    assert "driver_causal_language" in bad
+
+    ok = {f["rule"] for f in prompt_rules.grade_home_interpret(
+        pay, "The tape has moved with gold. Bottom line: watch that co-movement.")}
+    assert "driver_causal_language" not in ok
+
+
+def test_per_page_interpret_surfaces_reuse_the_home_rules():
+    g = prompt_rules.grade("interpret:smart-money", {"tickers": ["SPY"]},
+                           "SPY looks constructive. PLTR does not.")
+    assert "error" not in g
+    assert any(f["rule"] == "invented_ticker" for f in g["findings"])

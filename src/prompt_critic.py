@@ -112,6 +112,15 @@ _INVARIANTS = {
         'The instruction never to cite a ticker, fund or person absent from the payload must remain.',
         'The output must stay under roughly 220 words.',
     ],
+    "news_digest": [
+        'The output must remain 2-3 plain sentences of prose under 70 words, with no bullets, no heading and no preamble.',
+        'The rule that ONLY the supplied headlines may be used — no number, name, ticker or event from outside them — must remain.',
+        "The prohibition on stating or implying a direction, a level or a bias must remain, in "
+        "substance. This is the ES card's founding distinction between context and signal, and "
+        "this paragraph is the easiest place on that card to blur it.",
+        'The instruction that saying "nothing new" is a useful and honest brief must remain, so the model does not manufacture significance on a quiet tape.',
+        'The tier weighting must remain: tier 1 is policy and hard data, tier 3 is single-company news that rarely moves the index.',
+    ],
     "es_audit": [
         'The output must remain a single JSON object of the form {"findings": [{"severity", "where", "finding"}]}.',
         'The auditor must never state what the market will do. It reports contradictions within the page and nothing else.',
@@ -307,6 +316,7 @@ def validate(surface: str, champion: str, challenger: str) -> tuple[bool, str]:
                           "what_to_watch", "citations", "confidence", "calls",
                           "vix_level_band", "macro_headlines", "change_pct_1d"],
         "home_interpret": ["Bottom line", "payload"],
+        "news_digest": ["headlines", "70 words", "direction"],
         "es_audit": ["findings", "severity"],
     }.get(surface, [])
     missing = [k for k in required if k not in body]

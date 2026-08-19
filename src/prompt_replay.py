@@ -37,6 +37,7 @@ _REPLAY_MODEL = {
     "market_driver": "gemini-3.1-pro-preview",
     "home_interpret": "claude-opus-5",
     "es_audit": "claude-sonnet-5",
+    "news_digest": "claude-sonnet-5",
 }
 
 _DEFAULT_N = 24
@@ -77,6 +78,13 @@ def _user_message(surface: str, payload: dict) -> str:
             + json.dumps(payload, default=str, indent=2)[:20000]
             + "\n```\n\nInterpret these results for me. What does it mean?"
         )
+
+    if surface == "news_digest":
+        lines = (payload or {}).get("lines") or []
+        if not lines:
+            lines = [f"[tier {h.get('tier','?')}] {h.get('title','')}"
+                     for h in (payload or {}).get("headlines", []) if h.get("title")]
+        return "Headlines, most index-relevant first:\n\n" + "\n".join(lines)
 
     if surface == "es_audit":
         return ("Audit this payload:\n```json\n"
@@ -144,7 +152,7 @@ def _generate(surface: str, system: str, payload: dict) -> object | None:
 
 def _parse(surface: str, raw: str):
     txt = (raw or "").strip()
-    if surface == "home_interpret":
+    if surface in ("home_interpret", "news_digest"):
         return txt or None
     if txt.startswith("```"):
         txt = txt.strip("`")

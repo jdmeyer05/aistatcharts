@@ -866,8 +866,29 @@ export interface MarketDriverResponse {
   escalated?: boolean;
   as_of_utc: string;
   quotes: Record<string, MarketDriverQuote>;
+  /** Measured cross-asset attribution. Carried for the interpretation panel,
+   *  not rendered on the card. */
+  drivers?: CrossAssetDrivers | null;
   cache_hit?: boolean;
   error?: string;
+}
+
+export interface CrossAssetDrivers {
+  available: boolean;
+  window_sessions: number;
+  as_of: string;
+  explained_share: number;
+  explained_share_a_year_ago: number | null;
+  credit_increment: number | null;
+  ranking: Array<{
+    driver: string;
+    ticker: string;
+    rank: number;
+    share_of_variance: number;
+    corr_with_spy: number;
+    rank_a_year_ago: number | null;
+  }>;
+  note: string;
 }
 
 export async function fetchMarketDriver(): Promise<MarketDriverResponse> {
@@ -4860,7 +4881,17 @@ export async function fetchCapitalFinancing(): Promise<CapitalFinancing> {
 // The self-improvement loop's own record: how the home page's AI blocks scored,
 // which prompt version was serving, and what the adversarial pass changed.
 
-export type PromptSurface = "market_driver" | "home_interpret" | "es_audit";
+// The four versioned surfaces, plus `interpret:<page>` for every page the
+// interpretation panel writes on — those are measured and graded but not
+// rewritten, so they arrive as ids rather than a closed union.
+export type PromptSurface = string;
+
+export const CORE_PROMPT_SURFACES = [
+  "market_driver",
+  "home_interpret",
+  "es_audit",
+  "news_digest",
+] as const;
 
 export interface PromptFindingCounts {
   critical: number;
@@ -4933,7 +4964,7 @@ export interface PromptSurfaceSummary {
 export interface PromptOverview {
   ok: boolean;
   window_days: number;
-  surfaces: Record<PromptSurface, PromptSurfaceSummary>;
+  surfaces: Record<string, PromptSurfaceSummary>;
 }
 
 export async function fetchPromptOverview(days = 30): Promise<PromptOverview> {

@@ -333,6 +333,23 @@ def grade_home_interpret(payload: dict, output) -> list[dict]:
                                       f"'{tk}' appears in the interpretation but nowhere in the payload.", tk))
     _safe(_tickers, findings, "tickers")
 
+    def _drivers():
+        # Same prohibition as the market-driver surface, for the same reason:
+        # the interpretation panel now receives the measured attribution too,
+        # and a ranked list is the input that invites a causal sentence.
+        if not ((payload or {}).get("drivers") or {}):
+            return
+        for rx in (_DRIVER_CAUSAL, _DRIVER_CAUSAL_REVERSE):
+            m = rx.search(text)
+            if m:
+                findings.append(_find(
+                    "major", "driver_causal_language",
+                    "States a macro market as causing or predicting the equity move. "
+                    "`drivers` measures same-day co-movement only.",
+                    text[max(0, m.start() - 60):m.end() + 60]))
+                return
+    _safe(_drivers, findings, "drivers")
+
     def _directive():
         m = _DIRECTIVE.search(text)
         if m:
@@ -416,16 +433,117 @@ def grade_es_audit(payload: dict, output: dict) -> list[dict]:
     return findings
 
 
+# ══════════════════════════════════════════════════════════════════
+# news_digest
+# ══════════════════════════════════════════════════════════════════
+
+# The digest's one job is to say what changed, and its one prohibition is to
+# imply what to do about it. "This is context, not a signal" is the principle
+# the entire ES card is built on, and a paragraph of prose is the easiest place
+# on that card to blur it — which is exactly why this check exists here and is
+# CRITICAL rather than advisory.
+_DIGEST_DIRECTIONAL = re.compile(
+    r"\b(bullish|bearish|risk[- ]on|risk[- ]off|constructive|supportive of (?:higher|lower)|"
+    r"points? (?:higher|lower)|should (?:rally|fall|rise|drop|open) |"
+    r"expect(?:s|ed)? (?:a )?(?:rally|selloff|sell-off|bounce|drop|move (?:higher|lower))|"
+    r"favou?rs? (?:the )?(?:upside|downside|bulls|bears)|"
+    r"(?:upside|downside) (?:bias|risk is)|lean (?:long|short)|"
+    r"buy|sell|short the|fade the|target of|support at|resistance at)\b", re.I)
+
+# Named in the prompt itself, so this is not a taste call — the instruction says
+# "No 'risk-on', no 'constructive'" and these are the words it named.
+_DIGEST_JARGON = re.compile(r"\b(risk[- ]on|risk[- ]off|constructive|goldilocks|melt[- ]up)\b", re.I)
+
+_DIGEST_STRUCTURE = re.compile(r"^\s*[-*•]|\n\s*[-*•]|^#{1,6}\s|\*\*[A-Z]", re.M)
+
+
+def grade_news_digest(payload: dict, output) -> list[dict]:
+    """The ES card's headline synthesis, checked against its own instructions.
+
+    Nearly every rule this prompt states is mechanically verifiable, which is
+    rare for prose and is why this surface is worth grading at all: use only the
+    headlines given, never imply a direction or a level, stay under 70 words, no
+    bullets, and a jargon blacklist the prompt names explicitly.
+    """
+    findings: list[dict] = []
+    text = output if isinstance(output, str) else str((output or {}).get("text") or "")
+
+    def _shape():
+        if not text.strip():
+            findings.append(_find("critical", "empty_digest", "No digest text returned."))
+            return
+        n = _words(text)
+        if n > 85:                      # 70-word cap plus grace
+            findings.append(_find("minor", "digest_too_long",
+                                  f"{n} words against a 70-word cap."))
+        if _DIGEST_STRUCTURE.search(text):
+            findings.append(_find("minor", "digest_has_structure",
+                                  "Bullets or headings, where the prompt asks for 2-3 plain sentences."))
+    _safe(_shape, findings, "shape")
+
+    if not text.strip():
+        return findings
+
+    def _directional():
+        m = _DIGEST_DIRECTIONAL.search(text)
+        if m:
+            findings.append(_find(
+                "critical", "digest_implies_direction",
+                "States or implies a direction, bias or level. The digest is context for a "
+                "session, not a signal, and this is the one place on the ES card where prose "
+                "can blur that.",
+                text[max(0, m.start() - 70):m.end() + 70]))
+    _safe(_directional, findings, "directional")
+
+    def _jargon():
+        m = _DIGEST_JARGON.search(text)
+        if m:
+            findings.append(_find("minor", "digest_jargon",
+                                  f"Uses '{m.group(0)}', which the prompt names as banned.",
+                                  text[max(0, m.start() - 50):m.end() + 50]))
+    _safe(_jargon, findings, "jargon")
+
+    def _grounding():
+        from src.grounding import _check_grounding
+        g = _check_grounding(text, payload or {})
+        for tok in (g.get("unverified_tokens") or [])[:4]:
+            findings.append(_find("major", "ungrounded_number",
+                                  f"'{tok}' appears in the digest but in none of the headlines.", tok))
+    _safe(_grounding, findings, "grounding")
+
+    def _tickers():
+        ptext = _payload_text(payload).upper()
+        seen: set[str] = set()
+        for tk in _TICKER.findall(text):
+            if tk in _TICKER_STOPWORDS or tk in seen:
+                continue
+            seen.add(tk)
+            if tk not in ptext:
+                findings.append(_find("critical", "invented_ticker",
+                                      f"'{tk}' appears in the digest but in none of the headlines.", tk))
+    _safe(_tickers, findings, "tickers")
+
+    return findings
+
+
 _GRADERS = {
     "market_driver": grade_market_driver,
     "home_interpret": grade_home_interpret,
     "es_audit": grade_es_audit,
+    "news_digest": grade_news_digest,
 }
 
 
 def grade(surface: str, payload, output) -> dict:
-    """Run the rule set for a surface. Never raises."""
+    """Run the rule set for a surface. Never raises.
+
+    `interpret:<page>` surfaces all share the home interpretation rules: the
+    same prompt writes them, so the same checks apply — grounding, invented
+    tickers, the closing "Bottom line", the word cap.
+    """
     fn = _GRADERS.get(surface)
+    if fn is None and surface.startswith("interpret:"):
+        fn = _GRADERS["home_interpret"]
     if fn is None:
         return {"score": None, "findings": [], "counts": {}, "error": f"no rules for {surface}"}
     try:
@@ -452,6 +570,8 @@ REGRESSION_RULES = {
     "empty_interpretation",
     "invented_contradiction",
     "bad_findings_shape",
+    "empty_digest",
+    "digest_implies_direction",
 }
 
 

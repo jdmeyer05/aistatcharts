@@ -298,7 +298,17 @@ PAGE_CONTEXT: dict[str, str] = {
         "prices or position sizes — describe conditions and what would confirm or invalidate a "
         "read. Do NOT convert CTA exposure or gamma into dollars. Do NOT invent levels, times or "
         "events not in the payload. Do NOT simply walk the blocks in order — that is the failure "
-        "mode this consolidation exists to fix."
+        "mode this consolidation exists to fix.\n"
+        "`drivers`, when present, is MEASURED and replaces any impression you might form about "
+        "what is moving the tape: a rolling 126-session regression of SPY daily returns on rates, "
+        "the dollar, oil and gold. `share_of_variance` is each market's incremental share, "
+        "`corr_with_spy` carries the sign, and `rank_a_year_ago` is the same measurement twelve "
+        "months earlier — the rotation between the two is the part worth a sentence, because it "
+        "is the one thing on this page a snapshot cannot show. It is SAME-DAY co-movement whose "
+        "next-day correlations were measured at essentially zero, so say the tape HAS MOVED WITH "
+        "a market; never that a market is driving, caused, or will move equities. Below 0.20 "
+        "`explained_share` the four barely account for the tape and the honest read is that the "
+        "move has been idiosyncratic, not the top of a weak list."
     ),
     "home_es_briefing": (
         "Home-page session briefing for someone trading E-mini S&P futures (ES) INTRADAY — in and out "
@@ -737,17 +747,24 @@ async def interpret(
                 _supabase_put(cache_key, result)
             except Exception as e:
                 logger.debug(f"ai interpret cache write failed: {e}")
-        if body.page == "home_page":
-            try:
-                from src import prompt_snapshots
-                prompt_snapshots.record(
-                    "home_interpret", body.data, interpretation,
-                    prompt_version=interp_version, model=MODEL,
-                    meta={"subject": body.subject or "",
-                          "output_tokens": result.get("output_tokens")},
-                )
-            except Exception as e:
-                logger.debug(f"interpret snapshot skipped: {e}")
+        # MEASURE EVERY PAGE, EDIT ONLY WHERE THERE IS EVIDENCE. The home page is
+        # the surface the loop versions and rewrites, but the same prompt writes
+        # an interpretation on twenty-odd other pages and none of them were
+        # recorded — so a defect there had no way to surface except by someone
+        # reading it. Every page now snapshots under `interpret:<page>` and is
+        # graded by the same rules; only `home_interpret` has versions and a
+        # critic, because that is the only page with a record to argue from.
+        try:
+            from src import prompt_snapshots
+            surface = "home_interpret" if body.page == "home_page" else f"interpret:{body.page}"
+            prompt_snapshots.record(
+                surface, body.data, interpretation,
+                prompt_version=interp_version, model=MODEL,
+                meta={"page": body.page, "subject": body.subject or "",
+                      "output_tokens": result.get("output_tokens")},
+            )
+        except Exception as e:
+            logger.debug(f"interpret snapshot skipped: {e}")
 
         return {**result, "cache_hit": False}
     except HTTPException:

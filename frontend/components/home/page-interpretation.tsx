@@ -315,6 +315,13 @@ export default function PageInterpretation() {
       // produce an echo rather than an independent read.
       driver_regime: driver?.regime_label ?? null,
       driver_citations: (driver?.citations ?? []).map((c) => c.label).slice(0, 8),
+
+      // The measured attribution, passed through rather than re-derived. It
+      // rides on the driver card's response because this panel deliberately
+      // fetches nothing of its own — and unlike that card's paragraphs, this is
+      // a measurement rather than another model's prose, so feeding it back is
+      // not an echo.
+      drivers: driver?.drivers ?? null,
     };
   }, [brief, driver, heatmap, vol, events, cta, macro, rrg, valuation]);
 

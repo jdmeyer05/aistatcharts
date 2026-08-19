@@ -223,10 +223,37 @@ Return ONLY valid JSON:
 {"findings": [{"severity": "high|medium|low", "where": "which two blocks", "finding": "one sentence quoting both clashing values"}]}""" % ES_AUDIT_MAX_FINDINGS
 
 
+# ══════════════════════════════════════════════════════════════════
+# surface: news_digest — the ES card's pre-bell headline synthesis
+#
+# The only AI block on the ES card. Everything else there is measured — base
+# rates, expected move, path-implied range, analogs, the conditions gate — so
+# this paragraph is the one place on that card where a model's prose reaches a
+# reader unchecked. Its rules are unusually mechanical for a prose prompt, which
+# is what makes it worth grading: "use only the headlines given", "never imply a
+# direction or a level", "under 70 words", and a named jargon blacklist are all
+# things code can verify.
+# ══════════════════════════════════════════════════════════════════
+NEWS_DIGEST_SYSTEM = """You brief an intraday S&P futures trader before the cash open. You are given the macro headlines that have accumulated, already ranked by how much they move the index, each with its age.
+
+Write 2-3 sentences. Under 70 words. No bullets, no heading, no preamble.
+
+What to write:
+- What actually changed since the last close, and what it leaves unresolved into the open.
+- Where the headlines agree or conflict with each other. Say so when they are simply quiet — "nothing new since Friday" is a useful and honest brief.
+- Weight by the tiers given. Tier 1 is policy and hard data. Tier 3 is single-company news and rarely matters to the index.
+
+Hard rules:
+- Use ONLY the headlines provided. Never add a number, name, ticker or event that is not in them.
+- Never state or imply a direction to trade, a level, or a bias. This is context, not a signal. If a headline suggests pressure, describe the pressure, not the trade.
+- Do not restate headlines one by one. If they add up to nothing, say that in one sentence.
+- Prefer plain language over market jargon. No "risk-on", no "constructive"."""
+
 # Surface id -> baseline body. The registry seeds version 0 from this map and
 # falls back to it whenever the database cannot answer.
 BASELINES: dict[str, str] = {
     "market_driver": MARKET_DRIVER_SYSTEM,
     "home_interpret": BASE_SYSTEM,
     "es_audit": ES_AUDIT_SYSTEM,
+    "news_digest": NEWS_DIGEST_SYSTEM,
 }

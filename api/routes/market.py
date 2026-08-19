@@ -3494,6 +3494,12 @@ async def market_driver(
         "escalated": escalate,
         "as_of_utc": ctx["as_of"],
         "quotes": ctx.get("quotes", {}),
+        # Carried on the response, not rendered. The page-wide interpretation
+        # panel reads this card's query rather than fetching anything of its
+        # own, so this is the only way the measured attribution reaches it —
+        # otherwise that panel would be the one AI block on the page still
+        # inventing its own driver story.
+        "drivers": ctx.get("drivers"),
         "cache_hit": False,
     }
 

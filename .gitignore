@@ -1,4 +1,8 @@
 .streamlit/secrets.toml
+# Backups and variants too — a .bak of the secrets file is still the secrets
+# file, and `git add -A` will happily stage one.
+.streamlit/secrets.toml*
+.streamlit/*.bak
 __pycache__/
 *.pyc
 .env

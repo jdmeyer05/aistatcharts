@@ -27,10 +27,16 @@ from time import time as _now
 
 logger = logging.getLogger(__name__)
 
-SURFACES = ("market_driver", "home_interpret", "es_audit")
+SURFACES = ("market_driver", "home_interpret", "es_audit", "news_digest")
 
 _TTL_S = 300
 _CACHE: dict[str, tuple[float, str, int]] = {}
+
+
+_WRITE_FAILED = ("WRITE FAILED — the insert returned nothing. Almost always the "
+                 "anon key instead of SUPABASE_SERVICE_ROLE_KEY: these tables are "
+                 "RLS'd to service_role, so a wrong key reads zero rows and drops "
+                 "writes without raising.")
 
 
 def _db():
@@ -150,6 +156,7 @@ def seed_baselines(promote_edits: bool = True) -> dict:
     out: dict[str, str] = {}
     for surface in SURFACES:
         base = baseline(surface)
+        # (loop body below)
         if not base:
             out[surface] = "missing baseline"
             continue
@@ -162,9 +169,14 @@ def seed_baselines(promote_edits: bool = True) -> dict:
 
         h = body_hash(base)
         if not rows:
-            _insert(db, surface, 0, base, status="champion", origin="baseline",
-                    rationale="Initial baseline, lifted from git.")
-            out[surface] = "seeded v0"
+            wrote = _insert(db, surface, 0, base, status="champion", origin="baseline",
+                            rationale="Initial baseline, lifted from git.")
+            # A write under the WRONG KEY does not raise — RLS simply drops it,
+            # and PostgREST returns an empty result. Reporting "seeded" on that
+            # is how a run with the anon key looked like a success while the
+            # database stayed empty, which is the exact class of silent failure
+            # this whole system exists to catch. Check what came back.
+            out[surface] = "seeded v0" if wrote else _WRITE_FAILED
             continue
 
         if any(r.get("body_hash") == h for r in rows):
@@ -184,17 +196,21 @@ def seed_baselines(promote_edits: bool = True) -> dict:
         nxt = int(rows[0].get("version") or 0) + 1
         if promote_edits:
             prior = champion(surface)
-            _insert(db, surface, nxt, base, status="challenger", origin="baseline",
-                    rationale="Baseline edited in git after the loop started.")
+            wrote = _insert(db, surface, nxt, base, status="challenger", origin="baseline",
+                            rationale="Baseline edited in git after the loop started.")
+            if not wrote:
+                out[surface] = _WRITE_FAILED
+                continue
             promote(surface, nxt)
             if prior and int(prior.get("version") or 0) != nxt:
                 out[surface] = f"promoted v{nxt} from git (was v{prior.get('version')})"
             else:
                 out[surface] = f"promoted v{nxt} from git"
         else:
-            _insert(db, surface, nxt, base, status="challenger", origin="baseline",
-                    rationale="Baseline edited in git; staged, not promoted.")
-            out[surface] = f"staged v{nxt} from git as a challenger"
+            wrote = _insert(db, surface, nxt, base, status="challenger", origin="baseline",
+                            rationale="Baseline edited in git; staged, not promoted.")
+            out[surface] = (f"staged v{nxt} from git as a challenger" if wrote
+                            else _WRITE_FAILED)
 
     return {"ok": True, "surfaces": out}
 

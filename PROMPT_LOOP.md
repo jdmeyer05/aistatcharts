@@ -9,13 +9,29 @@ prompt. The rewrite is replayed against the incumbent on held-out historical
 payloads, and only replaces it after winning two independent draws on different
 days.
 
-Three surfaces are covered:
+Four surfaces are versioned and rewritten:
 
 | surface | what it is | prompt baseline |
 |---|---|---|
 | `market_driver` | the regime read at the top of home | `src/prompt_defaults.MARKET_DRIVER_SYSTEM` |
 | `home_interpret` | the page-wide interpretation panel (home page only) | `src/prompt_defaults.BASE_SYSTEM` |
 | `es_audit` | the ES card's contradiction auditor | `src/prompt_defaults.ES_AUDIT_SYSTEM` |
+| `news_digest` | the ES card's pre-bell headline synthesis | `src/prompt_defaults.NEWS_DIGEST_SYSTEM` |
+
+Plus `interpret:<page>` for every other page the interpretation panel writes on.
+Those are **measured and graded but not rewritten** — the loop only edits a
+prompt where it has a record to argue from, and the versioned record is the home
+page's. Measuring them anyway is the point: a defect on the positioning page had
+no way to surface before except by someone reading it.
+
+The ES card's only AI block is `news_digest`; everything else on that card —
+base rates, expected move, path-implied range, analogs, the conditions gate — is
+already measured. Its rules are unusually mechanical for prose, which is what
+makes grading it worth doing: "use ONLY the headlines given", "never imply a
+direction or a level", "under 70 words", and a jargon blacklist the prompt names
+itself are all things code can verify. The direction check is CRITICAL and sits
+in the regression suite, because "context is not signal" is the distinction the
+whole ES card is built on and a paragraph of prose is the easiest place to blur it.
 
 ## The two scores, and why they are not interchangeable
 
@@ -80,9 +96,10 @@ src/prompt_claims.py       falsifiable calls, resolution, base rates, Brier skil
 src/prompt_critic.py       adversarial critique + the editor that rewrites
 src/prompt_replay.py       paired holdout replay and the promotion gate
 src/prompt_loop.py         orchestration + reporting
+src/market_drivers.py      measured cross-asset attribution fed to the prompts
 api/routes/prompt_loop.py  admin endpoints + a narrow public track-record
 frontend/app/prompt-loop   the scoreboard (admin, not in nav, not crawled)
-tests/test_prompt_loop.py  34 tests, network-free
+tests/test_prompt_loop.py  47 tests, network-free
 ```
 
 ## Schedule

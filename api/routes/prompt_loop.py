@@ -19,11 +19,13 @@ from api.deps import get_current_user, require_admin
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-SURFACES = ("market_driver", "home_interpret", "es_audit")
+SURFACES = ("market_driver", "home_interpret", "es_audit", "news_digest")
 
 
 def _check_surface(surface: str) -> str:
-    if surface not in SURFACES:
+    # `interpret:<page>` is measured for every page the interpretation panel
+    # runs on; only the core surfaces are versioned and rewritten.
+    if surface not in SURFACES and not surface.startswith("interpret:"):
         raise HTTPException(400, f"unknown surface '{surface}'")
     return surface
 
@@ -45,10 +47,10 @@ async def overview(
     days: int = Query(30, ge=1, le=180),
     user: str = Depends(require_admin),
 ):
-    """All three surfaces at once, trimmed to what a dashboard header needs."""
-    from src.prompt_loop import summary as _summary
+    """Every surface at once, trimmed to what a dashboard header needs."""
+    from src.prompt_loop import summary as _summary, discover_surfaces
     out = {}
-    for s in SURFACES:
+    for s in discover_surfaces(days):
         try:
             full = _summary(s, days=days)
             out[s] = {

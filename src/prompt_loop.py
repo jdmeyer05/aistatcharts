@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-SURFACES = ("market_driver", "home_interpret", "es_audit")
+SURFACES = ("market_driver", "home_interpret", "es_audit", "news_digest")
 
 # Two independent holdout draws, on different days, before anything is served.
 _WINS_TO_PROMOTE = 2
@@ -41,6 +41,30 @@ _LOSSES_TO_REJECT = 2
 def _db():
     from src.db import get_client
     return get_client()
+
+
+def discover_surfaces(days: int = 30) -> list[str]:
+    """Core surfaces plus every `interpret:<page>` seen recently.
+
+    The per-page interpretations are not enumerated anywhere in this process —
+    the page list lives in the API's PAGE_CONTEXT, which the worker has no
+    business importing — so they are read back off the record instead. A page
+    that has not been interpreted in the window simply has nothing to grade.
+    """
+    from src.prompt_snapshots import paged
+    db = _db()
+    found = set(SURFACES)
+    if db is None:
+        return sorted(found)
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        rows = paged(lambda: db.table("ai_snapshots").select("surface")
+                     .gte("created_at", since).order("created_at", desc=True),
+                     page=1000, max_pages=4)
+        found |= {r["surface"] for r in rows if r.get("surface")}
+    except Exception as e:
+        logger.debug(f"prompt_loop: surface discovery failed: {e}")
+    return sorted(found)
 
 
 # ── stage 1: grade ────────────────────────────────────────────────
@@ -64,7 +88,7 @@ def grade_pending(surface: str | None = None, days: int = 30,
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     out: dict = {}
-    for surf in ([surface] if surface else SURFACES):
+    for surf in ([surface] if surface else discover_surfaces(days)):
         rows = paged(lambda surf=surf: db.table("ai_snapshots").select("*")
                      .eq("surface", surf).eq("is_replay", False)
                      .gte("created_at", since).order("created_at"),

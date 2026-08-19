@@ -25,20 +25,10 @@ MODEL = "claude-sonnet-5"
 _MAX_HEADLINES = 12
 _CACHE_TTL_HOURS = 6
 
-_SYSTEM = """You brief an intraday S&P futures trader before the cash open. You are given the macro headlines that have accumulated, already ranked by how much they move the index, each with its age.
-
-Write 2-3 sentences. Under 70 words. No bullets, no heading, no preamble.
-
-What to write:
-- What actually changed since the last close, and what it leaves unresolved into the open.
-- Where the headlines agree or conflict with each other. Say so when they are simply quiet — "nothing new since Friday" is a useful and honest brief.
-- Weight by the tiers given. Tier 1 is policy and hard data. Tier 3 is single-company news and rarely matters to the index.
-
-Hard rules:
-- Use ONLY the headlines provided. Never add a number, name, ticker or event that is not in them.
-- Never state or imply a direction to trade, a level, or a bias. This is context, not a signal. If a headline suggests pressure, describe the pressure, not the trade.
-- Do not restate headlines one by one. If they add up to nothing, say that in one sentence.
-- Prefer plain language over market jargon. No "risk-on", no "constructive"."""
+# The system prompt is versioned data — baseline in src/prompt_defaults.py,
+# live text resolved through src/prompt_registry.py at call time so a promotion
+# reaches the card without a deploy.
+from src.prompt_defaults import NEWS_DIGEST_SYSTEM as _SYSTEM  # noqa: E402
 
 
 def _fingerprint(headlines: list[dict]) -> str:
@@ -81,6 +71,9 @@ def news_digest(headlines: list[dict]) -> dict | None:
         lines.append(f"[tier {h.get('tier', '?')}] ({when}) {h['title']} — {h.get('source', '')}")
     payload = "\n".join(lines)
 
+    from src.prompt_registry import active as _active_prompt
+    system_text, prompt_version = _active_prompt("news_digest")
+
     try:
         import anthropic
         from src.api_keys import get_secret
@@ -100,7 +93,7 @@ def news_digest(headlines: list[dict]) -> dict | None:
             output_config={"effort": "low"},
             # No `fallbacks` here: it is an Opus-5/Fable-5 parameter and Sonnet 5
             # rejects it outright with a 400.
-            system=_SYSTEM,
+            system=system_text,
             messages=[{"role": "user",
                        "content": f"Headlines, most index-relevant first:\n\n{payload}"}],
         )
@@ -118,5 +111,20 @@ def news_digest(headlines: list[dict]) -> dict | None:
                               ticker="ES", ttl_hours=_CACHE_TTL_HOURS)
         except Exception as e:
             logger.debug(f"news digest cache write failed: {e}")
+
+    # Freeze the headlines this was written from, next to what it wrote. Only
+    # real generations are recorded — the cache hit above returns before this —
+    # so volume is already bounded by how often the feeds actually move.
+    try:
+        from src import prompt_snapshots
+        prompt_snapshots.record(
+            "news_digest",
+            {"headlines": usable, "lines": lines},
+            text,
+            prompt_version=prompt_version, model=MODEL,
+            meta={"n_headlines": len(usable)},
+        )
+    except Exception as e:
+        logger.debug(f"news digest snapshot skipped: {e}")
 
     return {"text": text, "model": MODEL, "cached": False, "n_headlines": len(usable)}

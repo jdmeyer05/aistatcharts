@@ -28,6 +28,7 @@ import {
   fetchPromptSummary,
   fetchPromptSnapshots,
   fetchPromptClaims,
+  CORE_PROMPT_SURFACES,
   type PromptSurface,
 } from "@/lib/api";
 import { getChartTheme, getBaseLayout, getPlotConfig, useIsMobile } from "@/lib/chart-theme";
@@ -35,23 +36,45 @@ import { Plot } from "@/components/plot";
 import { ChartCard } from "@/components/ui/chart-card";
 import { Metric } from "@/components/ui/metric";
 
-const SURFACES: { id: PromptSurface; label: string; blurb: string }[] = [
-  {
-    id: "market_driver",
+const SURFACE_META: Record<string, { label: string; blurb: string }> = {
+  market_driver: {
     label: "Market Driver",
     blurb: "The regime read at the top of the home page. The only surface that makes falsifiable calls, so the only one with a calibration record.",
   },
-  {
-    id: "home_interpret",
-    label: "Page Interpretation",
-    blurb: "The page-wide interpretation panel. Scored on grounding and shape; a promoted version serves the home page only, never the other pages.",
+  home_interpret: {
+    label: "Page Interpretation (home)",
+    blurb: "The page-wide interpretation panel on home. Scored on grounding and shape; a promoted version serves the home page only, never the other pages.",
   },
-  {
-    id: "es_audit",
+  es_audit: {
     label: "ES Card Auditor",
     blurb: "The contradiction auditor on the ES card. Scored on whether its findings quote both sides and stay inside their remit — an empty finding list is a success, not a failure.",
   },
-];
+  news_digest: {
+    label: "ES News Digest",
+    blurb: "The pre-bell headline synthesis, and the ES card's only AI block — everything else on that card is measured. Its prohibition on implying a direction is enforced as a critical rule.",
+  },
+};
+
+/** `interpret:smart-money` -> a readable label, for the per-page surfaces. */
+function surfaceLabel(id: string): string {
+  const meta = SURFACE_META[id];
+  if (meta) return meta.label;
+  if (id.startsWith("interpret:")) return `Interpretation — ${id.slice("interpret:".length)}`;
+  return id;
+}
+
+function surfaceBlurb(id: string): string {
+  const meta = SURFACE_META[id];
+  if (meta) return meta.blurb;
+  if (id.startsWith("interpret:")) {
+    return (
+      "The interpretation panel on this page. Measured and graded by the same rules as the " +
+      "home panel, but not versioned or rewritten — the loop only edits a prompt where it has " +
+      "a record to argue from, and that record is currently the home page's."
+    );
+  }
+  return "";
+}
 
 const TABS = ["Scorecard", "Calibration", "Versions", "Experiments", "Recent Outputs"] as const;
 type Tab = (typeof TABS)[number];
@@ -100,6 +123,15 @@ export default function PromptLoopPage() {
     retry: false,
   });
 
+  // Built from what the overview actually returned, so a new surface appears
+  // here the first time it records anything — no list to keep in sync.
+  const surfaces: string[] = Object.keys(overview.data?.surfaces ?? {}).sort((a, b) => {
+    const ia = CORE_PROMPT_SURFACES.indexOf(a as never);
+    const ib = CORE_PROMPT_SURFACES.indexOf(b as never);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    return a.localeCompare(b);
+  });
+
   const denied =
     (overview.error as Error | undefined)?.message?.includes("403") ||
     (summary.error as Error | undefined)?.message?.includes("403");
@@ -122,7 +154,7 @@ export default function PromptLoopPage() {
   const s = summary.data;
   const series = s?.score_series ?? [];
   const cal = s?.calibration ?? null;
-  const active = SURFACES.find((x) => x.id === surface)!;
+
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 space-y-4">
@@ -146,17 +178,17 @@ export default function PromptLoopPage() {
 
       {/* surface + window selectors */}
       <div className="flex flex-wrap items-center gap-2">
-        {SURFACES.map((x) => (
+        {(surfaces.length ? surfaces : [...CORE_PROMPT_SURFACES]).map((id) => (
           <button
-            key={x.id}
-            onClick={() => setSurface(x.id)}
+            key={id}
+            onClick={() => setSurface(id)}
             className={`px-3 py-1.5 text-sm rounded border transition-colors ${
-              surface === x.id
+              surface === id
                 ? "border-accent text-accent"
                 : "border-border text-text-muted hover:text-text"
             }`}
           >
-            {x.label}
+            {surfaceLabel(id)}
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
@@ -174,7 +206,7 @@ export default function PromptLoopPage() {
         </div>
       </div>
 
-      <p className="text-xs text-text-muted">{active.blurb}</p>
+      <p className="text-xs text-text-muted">{surfaceBlurb(surface)}</p>
 
       {/* headline row */}
       <div className="card p-4 grid grid-cols-2 md:grid-cols-5 gap-4">
