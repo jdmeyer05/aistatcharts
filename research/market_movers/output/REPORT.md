@@ -1,6 +1,6 @@
 # What actually moves the tape
 
-Generated 2026-08-18 21:52. SPY daily bars, 3677 sessions from 2012-01-03 to 2026-08-18.
+Generated 2026-08-18 22:22. SPY daily bars, 3677 sessions from 2012-01-03 to 2026-08-18.
 
 **The metric.** Every session is divided by the trailing 60-session median absolute
 move, so a value of 1.40 means "1.40x a day that was normal AT THE TIME". Without
@@ -21,26 +21,26 @@ all events tested, not across the survivors.
 |---|---|---:|---:|---|---:|---:|:--:|---:|---:|
 | 1 | Nonfarm payrolls | 175 | 1.39 | [1.20, 1.62] | 1.58 | 0.0015 | **yes** | 46% | 0.8353 |
 | 2 | ISM services | 176 | 1.25 | [0.98, 1.42] | 1.42 | 0.0160 | no | 39% | 1.0829 |
-| 3 | FOMC decision | 123 | 1.25 | [0.79, 1.62] | 1.41 | 0.0320 | no | 44% | 1.1628 |
+| 3 | FOMC decision | 123 | 1.25 | [0.79, 1.62] | 1.41 | 0.0320 | no | 44% | 1.1627 |
 | 4 | Empire State manufacturing | 150 | 1.23 | [0.92, 1.46] | 1.40 | 0.0220 | no | 37% | 0.849 |
 | 5 | PCE price index | 151 | 1.19 | [0.96, 1.34] | 1.35 | 0.0445 | no | 35% | 0.8291 |
-| 6 | Trade balance | 173 | 1.17 | [0.97, 1.43] | 1.32 | 0.0510 | no | 39% | 1.0782 |
-| 7 | ISM manufacturing | 176 | 1.13 | [0.89, 1.30] | 1.28 | 0.1000 | no | 38% | 1.0745 |
+| 6 | Trade balance | 173 | 1.17 | [0.97, 1.43] | 1.32 | 0.0510 | no | 39% | 1.0783 |
+| 7 | ISM manufacturing | 176 | 1.13 | [0.89, 1.30] | 1.28 | 0.1000 | no | 38% | 1.0744 |
 | 8 | PPI | 174 | 1.12 | [1.02, 1.40] | 1.27 | 0.1349 | no | 37% | 1.0912 |
-| 9 | Quarter end | 58 | 1.11 | [0.89, 1.42] | 1.26 | 0.2444 | no | 34% | 1.0765 |
-| 10 | Industrial production | 175 | 1.09 | [0.94, 1.32] | 1.23 | 0.1679 | no | 33% | 0.9201 |
-| 11 | Retail sales | 174 | 1.08 | [0.78, 1.34] | 1.22 | 0.1924 | no | 37% | 1.0897 |
+| 9 | Quarter end | 58 | 1.11 | [0.89, 1.42] | 1.26 | 0.2444 | no | 34% | 1.0766 |
+| 10 | Industrial production | 175 | 1.09 | [0.94, 1.32] | 1.23 | 0.1679 | no | 33% | 0.9203 |
+| 11 | Retail sales | 174 | 1.08 | [0.78, 1.34] | 1.22 | 0.1924 | no | 37% | 1.0898 |
 | 12 | CPI | 175 | 1.06 | [0.87, 1.27] | 1.20 | 0.2774 | no | 37% | 1.0629 |
-| 13 | Housing starts | 171 | 1.04 | [0.74, 1.26] | 1.17 | 0.3298 | no | 31% | 0.8229 |
-| 14 | GDP | 171 | 1.02 | [0.82, 1.24] | 1.16 | 0.3513 | no | 29% | 1.1671 |
+| 13 | Housing starts | 171 | 1.04 | [0.74, 1.26] | 1.17 | 0.3298 | no | 31% | 0.8228 |
+| 14 | GDP | 171 | 1.02 | [0.82, 1.24] | 1.16 | 0.3513 | no | 29% | 1.167 |
 | 15 | Philly Fed manufacturing | 134 | 1.01 | [0.80, 1.27] | 1.14 | 0.4078 | no | 35% | 0.7687 |
-| 16 | Month end | 175 | 1.00 | [0.86, 1.12] | 1.13 | 0.4363 | no | 28% | 1.1182 |
-| 17 | Initial jobless claims | 757 | 1.00 | [0.89, 1.09] | 1.13 | 0.3993 | no | 34% | 1.0868 |
-| 18 | U. Michigan sentiment (final) | 162 | 1.00 | [0.80, 1.28] | 1.13 | 0.4428 | no | 31% | 0.8112 |
-| 19 | FOMC minutes | 122 | 0.96 | [0.76, 1.21] | 1.09 | 0.5872 | no | 34% | 1.0844 |
-| 20 | Monthly opex | 175 | 0.94 | [0.69, 1.23] | 1.07 | 0.6557 | no | 35% | 1.0322 |
+| 16 | Month end | 175 | 1.00 | [0.86, 1.12] | 1.13 | 0.4373 | no | 28% | 1.1182 |
+| 17 | Initial jobless claims | 757 | 1.00 | [0.89, 1.09] | 1.13 | 0.3993 | no | 34% | 1.0867 |
+| 18 | U. Michigan sentiment (final) | 162 | 1.00 | [0.80, 1.28] | 1.13 | 0.4423 | no | 31% | 0.8112 |
+| 19 | FOMC minutes | 122 | 0.96 | [0.76, 1.21] | 1.09 | 0.5877 | no | 34% | 1.0844 |
+| 20 | Monthly opex | 175 | 0.94 | [0.69, 1.23] | 1.07 | 0.6557 | no | 35% | 1.0323 |
 | 21 | Triple witching | 58 | 0.94 | [0.61, 1.33] | 1.07 | 0.6127 | no | 31% | 1.1807 |
-| 22 | JOLTS job openings | 162 | 0.93 | [0.72, 1.09] | 1.05 | 0.7066 | no | 31% | 0.89 |
+| 22 | JOLTS job openings | 162 | 0.93 | [0.72, 1.09] | 1.05 | 0.7061 | no | 31% | 0.89 |
 | 23 | New home sales | 167 | 0.85 | [0.65, 1.04] | 0.97 | 0.8926 | no | 34% | 0.8012 |
 
 **Survived FDR: Nonfarm payrolls.** Everything else is inside the noise of its own calendar.
@@ -119,14 +119,14 @@ there is no median worth ranking inside a single year, so `rank_by_year` skips t
 ## 3. Continuous drivers: what share of the daily move they explain
 
 Rolling 126-session regression of SPY daily returns on four macro
-markets. Latest window to 2026-08-18: total R² **0.430**.
+markets. Latest window to 2026-08-18: total R² **0.449**.
 
 | Driver | incremental R² (latest) | same-day corr | next-day corr |
 |---|---:|---:|---:|
-| Gold (GLD) | +0.1004 | +0.062 | +0.015 |
-| Oil (USO) | +0.0557 | +0.295 | -0.034 |
-| Dollar (DXY) | +0.0228 | -0.158 | -0.013 |
-| Rates (TLT) | +0.0091 | -0.263 | +0.044 |
+| Gold (GLD) | +0.0877 | +0.062 | +0.013 |
+| Oil (USO) | +0.0609 | +0.293 | -0.034 |
+| Dollar (DXY) | +0.0216 | -0.158 | -0.012 |
+| Rates (TLT) | +0.0143 | -0.263 | +0.044 |
 
 **Every next-day correlation is inside noise.** That column is the control, and it
 says these relationships account for what happened rather than anticipate it. None of
@@ -150,11 +150,11 @@ this is a signal.
 | 2023 | 0.228 | Dollar +0.076 > Oil +0.027 > Gold +0.024 > Rates +0.014 |
 | 2024 | 0.148 | Dollar +0.046 > Gold +0.036 > Rates +0.013 > Oil +0.004 |
 | 2025 | 0.144 | Oil +0.074 > Gold +0.017 > Rates +0.015 > Dollar +0.007 |
-| 2026 | 0.194 | Oil +0.050 > Gold +0.040 > Rates +0.009 > Dollar +0.006 |
+| 2026 | 0.203 | Oil +0.051 > Gold +0.043 > Rates +0.009 > Dollar +0.007 |
 
 ### Credit, held out on purpose
 
-Adding high yield against duration takes the latest window from R² 0.430 to 0.668 — an incremental +0.2377, larger than any macro driver.
+Adding high yield against duration takes the latest window from R² 0.449 to 0.671 — an incremental +0.2223, larger than any macro driver.
 
 Held out of the headline ranking deliberately. HYG is itself a risk asset; equities and high yield falling together is closer to a definition than an explanation, which is why credit topped every year of this sample. Its incremental R² over macro is the part that is actually a finding.
 

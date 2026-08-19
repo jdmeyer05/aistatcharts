@@ -128,13 +128,20 @@ def invalidate(surface: str | None = None) -> None:
 
 # ── Write side: used by the seeder, the critic and the promoter ──────────
 
-def seed_baselines() -> dict:
+def seed_baselines(promote_edits: bool = True) -> dict:
     """Record version 0 for every surface from git, if not already present.
 
     Idempotent, and re-run safely after a baseline edit: if the git text has
-    changed, the old v0 is left in place and the new text is appended as the
-    next version with origin `baseline`, so history stays truthful about what
-    was served when.
+    changed, the old version is left in place and the new text is appended as
+    the next version with origin `baseline`, so history stays truthful about
+    what was served when.
+
+    A GIT EDIT IS PROMOTED IMMEDIATELY, unlike a machine proposal. The two-win
+    holdout gate exists to stop the loop from promoting its own opinion of its
+    own work; it is not a review process for the operator. Someone editing
+    `prompt_defaults.py` and deploying it has already decided. Pass
+    `promote_edits=False` to stage a baseline edit as a challenger instead and
+    make it earn its way in like any other.
     """
     db = _db()
     if db is None:
@@ -175,9 +182,19 @@ def seed_baselines() -> dict:
             continue
 
         nxt = int(rows[0].get("version") or 0) + 1
-        _insert(db, surface, nxt, base, status="challenger", origin="baseline",
-                rationale="Baseline edited in git after the loop started.")
-        out[surface] = f"appended v{nxt} from git"
+        if promote_edits:
+            prior = champion(surface)
+            _insert(db, surface, nxt, base, status="challenger", origin="baseline",
+                    rationale="Baseline edited in git after the loop started.")
+            promote(surface, nxt)
+            if prior and int(prior.get("version") or 0) != nxt:
+                out[surface] = f"promoted v{nxt} from git (was v{prior.get('version')})"
+            else:
+                out[surface] = f"promoted v{nxt} from git"
+        else:
+            _insert(db, surface, nxt, base, status="challenger", origin="baseline",
+                    rationale="Baseline edited in git; staged, not promoted.")
+            out[surface] = f"staged v{nxt} from git as a challenger"
 
     return {"ok": True, "surfaces": out}
 

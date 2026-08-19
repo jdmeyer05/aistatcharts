@@ -1,5 +1,5 @@
 {
- "generated": "2026-08-18 21:52",
+ "generated": "2026-08-18 22:22",
  "sample": {
   "ticker": "SPY",
   "sessions": 3677,
@@ -177,18 +177,18 @@
     "source": "fred-vintage:PAYEMS",
     "release_time_et": "08:30",
     "n": 175,
-    "rel_abs_median": 1.3925,
+    "rel_abs_median": 1.3926,
     "rel_abs_ci95": [
      1.1975,
-     1.6232
+     1.6231
     ],
     "rel_range_median": 1.1295,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.5762,
+    "vs_quiet": 1.5764,
     "persistence": {
-     "t+0": 1.3925,
+     "t+0": 1.3926,
      "t+1": 0.8353,
-     "t+2": 0.8624,
+     "t+2": 0.8626,
      "t+3": 0.9656
     },
     "p_rotation": 0.0015,
@@ -203,18 +203,18 @@
     "source": "rule",
     "release_time_et": "10:00",
     "n": 176,
-    "rel_abs_median": 1.2521,
+    "rel_abs_median": 1.252,
     "rel_abs_ci95": [
      0.9832,
-     1.4162
+     1.4161
     ],
     "rel_range_median": 1.0108,
     "quiet_day_median": 0.8834,
     "vs_quiet": 1.4173,
     "persistence": {
-     "t+0": 1.2521,
+     "t+0": 1.252,
      "t+1": 1.0829,
-     "t+2": 0.9893,
+     "t+2": 0.9891,
      "t+3": 0.9179
     },
     "p_rotation": 0.016,
@@ -231,7 +231,7 @@
     "n": 123,
     "rel_abs_median": 1.2474,
     "rel_abs_ci95": [
-     0.7857,
+     0.7859,
      1.6209
     ],
     "rel_range_median": 1.2902,
@@ -239,8 +239,8 @@
     "vs_quiet": 1.412,
     "persistence": {
      "t+0": 1.2474,
-     "t+1": 1.1628,
-     "t+2": 1.216,
+     "t+1": 1.1627,
+     "t+2": 1.2159,
      "t+3": 0.9396
     },
     "p_rotation": 0.032,
@@ -255,18 +255,18 @@
     "source": "fred-release:321",
     "release_time_et": "08:30",
     "n": 150,
-    "rel_abs_median": 1.2345,
+    "rel_abs_median": 1.2344,
     "rel_abs_ci95": [
      0.9211,
      1.4586
     ],
     "rel_range_median": 0.9559,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.3975,
+    "vs_quiet": 1.3974,
     "persistence": {
-     "t+0": 1.2345,
+     "t+0": 1.2344,
      "t+1": 0.849,
-     "t+2": 0.9501,
+     "t+2": 0.95,
      "t+3": 1.0592
     },
     "p_rotation": 0.022,
@@ -281,19 +281,19 @@
     "source": "fred-vintage:PCEPI",
     "release_time_et": "08:30",
     "n": 151,
-    "rel_abs_median": 1.1922,
+    "rel_abs_median": 1.192,
     "rel_abs_ci95": [
-     0.9574,
-     1.3434
+     0.9573,
+     1.3433
     ],
     "rel_range_median": 1.0131,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.3495,
+    "vs_quiet": 1.3493,
     "persistence": {
-     "t+0": 1.1922,
+     "t+0": 1.192,
      "t+1": 0.8291,
-     "t+2": 0.9961,
-     "t+3": 1.2303
+     "t+2": 0.9963,
+     "t+3": 1.2304
     },
     "p_rotation": 0.0445,
     "share_over_1_5x": 0.351,
@@ -310,15 +310,15 @@
     "rel_abs_median": 1.165,
     "rel_abs_ci95": [
      0.9674,
-     1.428
+     1.4279
     ],
     "rel_range_median": 1.0349,
     "quiet_day_median": 0.8834,
     "vs_quiet": 1.3188,
     "persistence": {
      "t+0": 1.165,
-     "t+1": 1.0782,
-     "t+2": 0.8704,
+     "t+1": 1.0783,
+     "t+2": 0.8703,
      "t+3": 0.9152
     },
     "p_rotation": 0.051,
@@ -336,16 +336,16 @@
     "rel_abs_median": 1.1338,
     "rel_abs_ci95": [
      0.893,
-     1.2955
+     1.2957
     ],
     "rel_range_median": 1.1212,
     "quiet_day_median": 0.8834,
     "vs_quiet": 1.2834,
     "persistence": {
      "t+0": 1.1338,
-     "t+1": 1.0745,
-     "t+2": 1.2521,
-     "t+3": 1.0288
+     "t+1": 1.0744,
+     "t+2": 1.252,
+     "t+3": 1.0289
     },
     "p_rotation": 0.1,
     "share_over_1_5x": 0.375,
@@ -361,8 +361,8 @@
     "n": 174,
     "rel_abs_median": 1.1213,
     "rel_abs_ci95": [
-     1.019,
-     1.4005
+     1.0189,
+     1.4006
     ],
     "rel_range_median": 0.9955,
     "quiet_day_median": 0.8834,
@@ -387,15 +387,15 @@
     "n": 58,
     "rel_abs_median": 1.1111,
     "rel_abs_ci95": [
-     0.8946,
+     0.8945,
      1.4196
     ],
     "rel_range_median": 1.044,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.2577,
+    "vs_quiet": 1.2578,
     "persistence": {
      "t+0": 1.1111,
-     "t+1": 1.0765,
+     "t+1": 1.0766,
      "t+2": 0.926,
      "t+3": 1.3329
     },
@@ -411,17 +411,17 @@
     "source": "fred-vintage:INDPRO",
     "release_time_et": "09:15",
     "n": 175,
-    "rel_abs_median": 1.0906,
+    "rel_abs_median": 1.0908,
     "rel_abs_ci95": [
-     0.9366,
+     0.9367,
      1.3184
     ],
     "rel_range_median": 0.9111,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.2346,
+    "vs_quiet": 1.2348,
     "persistence": {
-     "t+0": 1.0906,
-     "t+1": 0.9201,
+     "t+0": 1.0908,
+     "t+1": 0.9203,
      "t+2": 0.8918,
      "t+3": 0.9736
     },
@@ -437,18 +437,18 @@
     "source": "fred-vintage:RSAFS",
     "release_time_et": "08:30",
     "n": 174,
-    "rel_abs_median": 1.0795,
+    "rel_abs_median": 1.0794,
     "rel_abs_ci95": [
-     0.783,
+     0.7829,
      1.3426
     ],
     "rel_range_median": 0.9933,
     "quiet_day_median": 0.8834,
     "vs_quiet": 1.2219,
     "persistence": {
-     "t+0": 1.0795,
-     "t+1": 1.0897,
-     "t+2": 1.0672,
+     "t+0": 1.0794,
+     "t+1": 1.0898,
+     "t+2": 1.0673,
      "t+3": 0.8077
     },
     "p_rotation": 0.1924,
@@ -496,12 +496,12 @@
     ],
     "rel_range_median": 0.9477,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.1746,
+    "vs_quiet": 1.1745,
     "persistence": {
      "t+0": 1.0376,
-     "t+1": 0.8229,
-     "t+2": 1.0775,
-     "t+3": 0.8141
+     "t+1": 0.8228,
+     "t+2": 1.0774,
+     "t+3": 0.8142
     },
     "p_rotation": 0.3298,
     "share_over_1_5x": 0.3099,
@@ -525,8 +525,8 @@
     "vs_quiet": 1.1594,
     "persistence": {
      "t+0": 1.0242,
-     "t+1": 1.1671,
-     "t+2": 0.8394,
+     "t+1": 1.167,
+     "t+2": 0.8396,
      "t+3": 0.9821
     },
     "p_rotation": 0.3513,
@@ -552,7 +552,7 @@
     "persistence": {
      "t+0": 1.0081,
      "t+1": 0.7687,
-     "t+2": 1.179,
+     "t+2": 1.1791,
      "t+3": 0.9703
     },
     "p_rotation": 0.4078,
@@ -578,10 +578,10 @@
     "persistence": {
      "t+0": 1.0024,
      "t+1": 1.1182,
-     "t+2": 1.0746,
+     "t+2": 1.0745,
      "t+3": 1.2567
     },
-    "p_rotation": 0.4363,
+    "p_rotation": 0.4373,
     "share_over_1_5x": 0.28,
     "share_over_2x": 0.2,
     "survives_fdr": false,
@@ -593,17 +593,17 @@
     "source": "fred-vintage:ICSA",
     "release_time_et": "08:30",
     "n": 757,
-    "rel_abs_median": 0.9961,
+    "rel_abs_median": 0.9963,
     "rel_abs_ci95": [
      0.8928,
-     1.092
+     1.0921
     ],
     "rel_range_median": 1.0185,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.1276,
+    "vs_quiet": 1.1278,
     "persistence": {
-     "t+0": 0.9961,
-     "t+1": 1.0868,
+     "t+0": 0.9963,
+     "t+1": 1.0867,
      "t+2": 0.9207,
      "t+3": 1.0099
     },
@@ -619,21 +619,21 @@
     "source": "fred-vintage:UMCSENT",
     "release_time_et": "10:00",
     "n": 162,
-    "rel_abs_median": 0.9956,
+    "rel_abs_median": 0.9955,
     "rel_abs_ci95": [
      0.7999,
-     1.2812
+     1.2811
     ],
     "rel_range_median": 0.952,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.127,
+    "vs_quiet": 1.1269,
     "persistence": {
-     "t+0": 0.9956,
+     "t+0": 0.9955,
      "t+1": 0.8112,
      "t+2": 1.0125,
-     "t+3": 0.8492
+     "t+3": 0.8491
     },
-    "p_rotation": 0.4428,
+    "p_rotation": 0.4423,
     "share_over_1_5x": 0.3148,
     "share_over_2x": 0.2531,
     "survives_fdr": false,
@@ -652,14 +652,14 @@
     ],
     "rel_range_median": 0.9784,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.0915,
+    "vs_quiet": 1.0914,
     "persistence": {
      "t+0": 0.9642,
      "t+1": 1.0844,
      "t+2": 1.0523,
-     "t+3": 1.0839
+     "t+3": 1.084
     },
-    "p_rotation": 0.5872,
+    "p_rotation": 0.5877,
     "share_over_1_5x": 0.3361,
     "share_over_2x": 0.1803,
     "survives_fdr": false,
@@ -674,14 +674,14 @@
     "rel_abs_median": 0.9434,
     "rel_abs_ci95": [
      0.6899,
-     1.2254
+     1.2255
     ],
     "rel_range_median": 0.9277,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.0679,
+    "vs_quiet": 1.068,
     "persistence": {
      "t+0": 0.9434,
-     "t+1": 1.0322,
+     "t+1": 1.0323,
      "t+2": 1.0151,
      "t+3": 0.8064
     },
@@ -709,7 +709,7 @@
      "t+0": 0.9418,
      "t+1": 1.1807,
      "t+2": 1.1246,
-     "t+3": 0.9024
+     "t+3": 0.9023
     },
     "p_rotation": 0.6127,
     "share_over_1_5x": 0.3103,
@@ -723,21 +723,21 @@
     "source": "fred-vintage:JTSJOL",
     "release_time_et": "10:00",
     "n": 162,
-    "rel_abs_median": 0.9252,
+    "rel_abs_median": 0.9253,
     "rel_abs_ci95": [
      0.7242,
      1.0949
     ],
     "rel_range_median": 0.952,
     "quiet_day_median": 0.8834,
-    "vs_quiet": 1.0473,
+    "vs_quiet": 1.0474,
     "persistence": {
-     "t+0": 0.9252,
+     "t+0": 0.9253,
      "t+1": 0.89,
      "t+2": 0.9663,
      "t+3": 0.8854
     },
-    "p_rotation": 0.7066,
+    "p_rotation": 0.7061,
     "share_over_1_5x": 0.3148,
     "share_over_2x": 0.1667,
     "survives_fdr": false,
@@ -751,8 +751,8 @@
     "n": 167,
     "rel_abs_median": 0.8535,
     "rel_abs_ci95": [
-     0.6538,
-     1.036
+     0.6539,
+     1.0358
     ],
     "rel_range_median": 0.9922,
     "quiet_day_median": 0.8834,
@@ -761,7 +761,7 @@
      "t+0": 0.8535,
      "t+1": 0.8012,
      "t+2": 0.9456,
-     "t+3": 0.9758
+     "t+3": 0.9757
     },
     "p_rotation": 0.8926,
     "share_over_1_5x": 0.3353,
@@ -793,25 +793,25 @@
     {
      "event": "PPI",
      "n": 12,
-     "rel_abs_median": 1.3516,
+     "rel_abs_median": 1.3517,
      "rank": 4
     },
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 1.1894,
+     "rel_abs_median": 1.1895,
      "rank": 5
     },
     {
      "event": "FOMC minutes",
      "n": 7,
-     "rel_abs_median": 1.1453,
+     "rel_abs_median": 1.1451,
      "rank": 6
     },
     {
      "event": "Housing starts",
      "n": 12,
-     "rel_abs_median": 1.1384,
+     "rel_abs_median": 1.1385,
      "rank": 7
     },
     {
@@ -823,19 +823,19 @@
     {
      "event": "PCE price index",
      "n": 10,
-     "rel_abs_median": 1.1306,
+     "rel_abs_median": 1.1305,
      "rank": 9
     },
     {
      "event": "CPI",
      "n": 12,
-     "rel_abs_median": 1.0897,
+     "rel_abs_median": 1.0898,
      "rank": 10
     },
     {
      "event": "Initial jobless claims",
      "n": 52,
-     "rel_abs_median": 1.0662,
+     "rel_abs_median": 1.0663,
      "rank": 11
     },
     {
@@ -847,25 +847,25 @@
     {
      "event": "Monthly opex",
      "n": 12,
-     "rel_abs_median": 1.0124,
+     "rel_abs_median": 1.0126,
      "rank": 13
     },
     {
      "event": "Month end",
      "n": 12,
-     "rel_abs_median": 0.9528,
+     "rel_abs_median": 0.9527,
      "rank": 14
     },
     {
      "event": "FOMC decision",
      "n": 8,
-     "rel_abs_median": 0.9049,
+     "rel_abs_median": 0.9051,
      "rank": 15
     },
     {
      "event": "New home sales",
      "n": 12,
-     "rel_abs_median": 0.8803,
+     "rel_abs_median": 0.8805,
      "rank": 16
     },
     {
@@ -891,13 +891,13 @@
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 2.229,
+     "rel_abs_median": 2.2288,
      "rank": 1
     },
     {
      "event": "FOMC decision",
      "n": 8,
-     "rel_abs_median": 1.9666,
+     "rel_abs_median": 1.9667,
      "rank": 2
     },
     {
@@ -909,31 +909,31 @@
     {
      "event": "Housing starts",
      "n": 11,
-     "rel_abs_median": 1.4516,
+     "rel_abs_median": 1.4515,
      "rank": 4
     },
     {
      "event": "FOMC minutes",
      "n": 8,
-     "rel_abs_median": 1.4335,
+     "rel_abs_median": 1.4337,
      "rank": 5
     },
     {
      "event": "ISM manufacturing",
      "n": 12,
-     "rel_abs_median": 1.2066,
+     "rel_abs_median": 1.2064,
      "rank": 6
     },
     {
      "event": "New home sales",
      "n": 10,
-     "rel_abs_median": 1.2028,
+     "rel_abs_median": 1.2029,
      "rank": 7
     },
     {
      "event": "PCE price index",
      "n": 9,
-     "rel_abs_median": 1.1922,
+     "rel_abs_median": 1.192,
      "rank": 8
     },
     {
@@ -951,7 +951,7 @@
     {
      "event": "Trade balance",
      "n": 12,
-     "rel_abs_median": 1.0608,
+     "rel_abs_median": 1.0607,
      "rank": 11
     },
     {
@@ -963,7 +963,7 @@
     {
      "event": "CPI",
      "n": 12,
-     "rel_abs_median": 1.0078,
+     "rel_abs_median": 1.0079,
      "rank": 13
     },
     {
@@ -975,7 +975,7 @@
     {
      "event": "Initial jobless claims",
      "n": 52,
-     "rel_abs_median": 0.929,
+     "rel_abs_median": 0.9291,
      "rank": 15
     },
     {
@@ -993,7 +993,7 @@
     {
      "event": "Month end",
      "n": 12,
-     "rel_abs_median": 0.6502,
+     "rel_abs_median": 0.6501,
      "rank": 18
     },
     {
@@ -1025,13 +1025,13 @@
     {
      "event": "FOMC minutes",
      "n": 8,
-     "rel_abs_median": 1.4054,
+     "rel_abs_median": 1.4053,
      "rank": 4
     },
     {
      "event": "ISM manufacturing",
      "n": 12,
-     "rel_abs_median": 1.3847,
+     "rel_abs_median": 1.3846,
      "rank": 5
     },
     {
@@ -1043,25 +1043,25 @@
     {
      "event": "Industrial production",
      "n": 12,
-     "rel_abs_median": 1.1606,
+     "rel_abs_median": 1.1604,
      "rank": 7
     },
     {
      "event": "Initial jobless claims",
      "n": 53,
-     "rel_abs_median": 1.1246,
+     "rel_abs_median": 1.1245,
      "rank": 8
     },
     {
      "event": "Nonfarm payrolls",
      "n": 12,
-     "rel_abs_median": 0.959,
+     "rel_abs_median": 0.9591,
      "rank": 9
     },
     {
      "event": "Empire State manufacturing",
      "n": 10,
-     "rel_abs_median": 0.9171,
+     "rel_abs_median": 0.9172,
      "rank": 10
     },
     {
@@ -1079,7 +1079,7 @@
     {
      "event": "U. Michigan sentiment (final)",
      "n": 11,
-     "rel_abs_median": 0.8719,
+     "rel_abs_median": 0.872,
      "rank": 13
     },
     {
@@ -1091,7 +1091,7 @@
     {
      "event": "Month end",
      "n": 12,
-     "rel_abs_median": 0.7886,
+     "rel_abs_median": 0.7887,
      "rank": 15
     },
     {
@@ -1103,13 +1103,13 @@
     {
      "event": "PCE price index",
      "n": 9,
-     "rel_abs_median": 0.6022,
+     "rel_abs_median": 0.6023,
      "rank": 17
     },
     {
      "event": "Trade balance",
      "n": 12,
-     "rel_abs_median": 0.5967,
+     "rel_abs_median": 0.5968,
      "rank": 18
     },
     {
@@ -1121,7 +1121,7 @@
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 0.4177,
+     "rel_abs_median": 0.4176,
      "rank": 20
     }
    ],
@@ -1129,7 +1129,7 @@
     {
      "event": "Philly Fed manufacturing",
      "n": 7,
-     "rel_abs_median": 2.5339,
+     "rel_abs_median": 2.5338,
      "rank": 1
     },
     {
@@ -1141,7 +1141,7 @@
     {
      "event": "FOMC decision",
      "n": 8,
-     "rel_abs_median": 1.7581,
+     "rel_abs_median": 1.7582,
      "rank": 3
     },
     {
@@ -1165,7 +1165,7 @@
     {
      "event": "ISM manufacturing",
      "n": 12,
-     "rel_abs_median": 1.528,
+     "rel_abs_median": 1.5279,
      "rank": 7
     },
     {
@@ -1177,7 +1177,7 @@
     {
      "event": "Month end",
      "n": 12,
-     "rel_abs_median": 1.5004,
+     "rel_abs_median": 1.5005,
      "rank": 9
     },
     {
@@ -1189,7 +1189,7 @@
     {
      "event": "Trade balance",
      "n": 12,
-     "rel_abs_median": 1.2755,
+     "rel_abs_median": 1.2756,
      "rank": 11
     },
     {
@@ -1201,37 +1201,37 @@
     {
      "event": "JOLTS job openings",
      "n": 12,
-     "rel_abs_median": 1.1208,
+     "rel_abs_median": 1.1209,
      "rank": 13
     },
     {
      "event": "PPI",
      "n": 12,
-     "rel_abs_median": 1.0625,
+     "rel_abs_median": 1.0626,
      "rank": 14
     },
     {
      "event": "Industrial production",
      "n": 12,
-     "rel_abs_median": 0.9959,
+     "rel_abs_median": 0.996,
      "rank": 15
     },
     {
      "event": "Initial jobless claims",
      "n": 52,
-     "rel_abs_median": 0.8983,
+     "rel_abs_median": 0.8984,
      "rank": 16
     },
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 0.8881,
+     "rel_abs_median": 0.8882,
      "rank": 17
     },
     {
      "event": "New home sales",
      "n": 12,
-     "rel_abs_median": 0.8339,
+     "rel_abs_median": 0.8337,
      "rank": 18
     },
     {
@@ -1243,7 +1243,7 @@
     {
      "event": "Housing starts",
      "n": 12,
-     "rel_abs_median": 0.4703,
+     "rel_abs_median": 0.4704,
      "rank": 20
     },
     {
@@ -1269,7 +1269,7 @@
     {
      "event": "PPI",
      "n": 12,
-     "rel_abs_median": 1.5646,
+     "rel_abs_median": 1.5645,
      "rank": 3
     },
     {
@@ -1281,31 +1281,31 @@
     {
      "event": "CPI",
      "n": 12,
-     "rel_abs_median": 1.2524,
+     "rel_abs_median": 1.2523,
      "rank": 5
     },
     {
      "event": "Nonfarm payrolls",
      "n": 12,
-     "rel_abs_median": 1.169,
+     "rel_abs_median": 1.1689,
      "rank": 6
     },
     {
      "event": "Empire State manufacturing",
      "n": 12,
-     "rel_abs_median": 1.1634,
+     "rel_abs_median": 1.1633,
      "rank": 7
     },
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 1.1471,
+     "rel_abs_median": 1.147,
      "rank": 8
     },
     {
      "event": "FOMC minutes",
      "n": 8,
-     "rel_abs_median": 1.1233,
+     "rel_abs_median": 1.1234,
      "rank": 9
     },
     {
@@ -1329,13 +1329,13 @@
     {
      "event": "ISM manufacturing",
      "n": 12,
-     "rel_abs_median": 0.931,
+     "rel_abs_median": 0.9311,
      "rank": 13
     },
     {
      "event": "FOMC decision",
      "n": 8,
-     "rel_abs_median": 0.9081,
+     "rel_abs_median": 0.9082,
      "rank": 14
     },
     {
@@ -1353,31 +1353,31 @@
     {
      "event": "GDP",
      "n": 12,
-     "rel_abs_median": 0.8248,
+     "rel_abs_median": 0.8247,
      "rank": 17
     },
     {
      "event": "Initial jobless claims",
      "n": 52,
-     "rel_abs_median": 0.7379,
+     "rel_abs_median": 0.738,
      "rank": 18
     },
     {
      "event": "New home sales",
      "n": 12,
-     "rel_abs_median": 0.6656,
+     "rel_abs_median": 0.6655,
      "rank": 19
     },
     {
      "event": "PCE price index",
      "n": 10,
-     "rel_abs_median": 0.5885,
+     "rel_abs_median": 0.5886,
      "rank": 20
     },
     {
      "event": "Monthly opex",
      "n": 12,
-     "rel_abs_median": 0.5122,
+     "rel_abs_median": 0.5121,
      "rank": 21
     }
    ],
@@ -1385,19 +1385,19 @@
     {
      "event": "PCE price index",
      "n": 9,
-     "rel_abs_median": 1.9177,
+     "rel_abs_median": 1.9176,
      "rank": 1
     },
     {
      "event": "Empire State manufacturing",
      "n": 12,
-     "rel_abs_median": 1.4993,
+     "rel_abs_median": 1.4992,
      "rank": 2
     },
     {
      "event": "Nonfarm payrolls",
      "n": 12,
-     "rel_abs_median": 1.4494,
+     "rel_abs_median": 1.4492,
      "rank": 3
     },
     {
@@ -1409,7 +1409,7 @@
     {
      "event": "Retail sales",
      "n": 12,
-     "rel_abs_median": 1.3081,
+     "rel_abs_median": 1.308,
      "rank": 5
     },
     {
@@ -1433,7 +1433,7 @@
     {
      "event": "Philly Fed manufacturing",
      "n": 12,
-     "rel_abs_median": 1.1772,
+     "rel_abs_median": 1.1771,
      "rank": 9
     },
     {
@@ -1445,19 +1445,19 @@
     {
      "event": "Initial jobless claims",
      "n": 53,
-     "rel_abs_median": 1.0684,
+     "rel_abs_median": 1.0686,
      "rank": 11
     },
     {
      "event": "Monthly opex",
      "n": 12,
-     "rel_abs_median": 1.0546,
+     "rel_abs_median": 1.0547,
      "rank": 12
     },
     {
      "event": "FOMC minutes",
      "n": 8,
-     "rel_abs_median": 1.0098,
+     "rel_abs_median": 1.0095,
      "rank": 13
     },
     {
@@ -1475,7 +1475,7 @@
     {
      "event": "Housing starts",
      "n": 12,
-     "rel_abs_median": 0.867,
+     "rel_abs_median": 0.8668,
      "rank": 16
     },
     {
@@ -1487,7 +1487,7 @@
     {
      "event": "U. Michigan sentiment (final)",
      "n": 11,
-     "rel_abs_median": 0.6719,
+     "rel_abs_median": 0.6721,
      "rank": 18
     },
     {
@@ -1513,13 +1513,13 @@
     {
      "event": "New home sales",
      "n": 11,
-     "rel_abs_median": 2.593,
+     "rel_abs_median": 2.5929,
      "rank": 1
     },
     {
      "event": "GDP",
      "n": 12,
-     "rel_abs_median": 2.2513,
+     "rel_abs_median": 2.2511,
      "rank": 2
     },
     {
@@ -1531,13 +1531,13 @@
     {
      "event": "Philly Fed manufacturing",
      "n": 12,
-     "rel_abs_median": 1.7893,
+     "rel_abs_median": 1.7894,
      "rank": 4
     },
     {
      "event": "PPI",
      "n": 12,
-     "rel_abs_median": 1.7177,
+     "rel_abs_median": 1.7178,
      "rank": 5
     },
     {
@@ -1561,7 +1561,7 @@
     {
      "event": "ISM manufacturing",
      "n": 12,
-     "rel_abs_median": 1.3654,
+     "rel_abs_median": 1.3656,
      "rank": 9
     },
     {
@@ -1573,13 +1573,13 @@
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 1.3091,
+     "rel_abs_median": 1.3089,
      "rank": 11
     },
     {
      "event": "Industrial production",
      "n": 12,
-     "rel_abs_median": 1.2697,
+     "rel_abs_median": 1.2696,
      "rank": 12
     },
     {
@@ -1591,7 +1591,7 @@
     {
      "event": "PCE price index",
      "n": 11,
-     "rel_abs_median": 1.1356,
+     "rel_abs_median": 1.1357,
      "rank": 14
     },
     {
@@ -1641,19 +1641,19 @@
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 1.854,
+     "rel_abs_median": 1.8541,
      "rank": 1
     },
     {
      "event": "ISM manufacturing",
      "n": 12,
-     "rel_abs_median": 1.7516,
+     "rel_abs_median": 1.7518,
      "rank": 2
     },
     {
      "event": "Nonfarm payrolls",
      "n": 12,
-     "rel_abs_median": 1.6283,
+     "rel_abs_median": 1.6284,
      "rank": 3
     },
     {
@@ -1665,7 +1665,7 @@
     {
      "event": "Monthly opex",
      "n": 12,
-     "rel_abs_median": 1.2195,
+     "rel_abs_median": 1.2197,
      "rank": 5
     },
     {
@@ -1689,19 +1689,19 @@
     {
      "event": "PCE price index",
      "n": 10,
-     "rel_abs_median": 1.1312,
+     "rel_abs_median": 1.1313,
      "rank": 9
     },
     {
      "event": "U. Michigan sentiment (final)",
      "n": 10,
-     "rel_abs_median": 1.1312,
+     "rel_abs_median": 1.1313,
      "rank": 10
     },
     {
      "event": "FOMC minutes",
      "n": 9,
-     "rel_abs_median": 1.0655,
+     "rel_abs_median": 1.0656,
      "rank": 11
     },
     {
@@ -1713,13 +1713,13 @@
     {
      "event": "JOLTS job openings",
      "n": 12,
-     "rel_abs_median": 0.9483,
+     "rel_abs_median": 0.9482,
      "rank": 13
     },
     {
      "event": "GDP",
      "n": 11,
-     "rel_abs_median": 0.9424,
+     "rel_abs_median": 0.9423,
      "rank": 14
     },
     {
@@ -1731,7 +1731,7 @@
     {
      "event": "FOMC decision",
      "n": 9,
-     "rel_abs_median": 0.7857,
+     "rel_abs_median": 0.7859,
      "rank": 16
     },
     {
@@ -1743,19 +1743,19 @@
     {
      "event": "Industrial production",
      "n": 12,
-     "rel_abs_median": 0.6219,
+     "rel_abs_median": 0.622,
      "rank": 18
     },
     {
      "event": "CPI",
      "n": 12,
-     "rel_abs_median": 0.614,
+     "rel_abs_median": 0.6139,
      "rank": 19
     },
     {
      "event": "Retail sales",
      "n": 11,
-     "rel_abs_median": 0.5325,
+     "rel_abs_median": 0.5324,
      "rank": 20
     },
     {
@@ -1775,7 +1775,7 @@
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 1.8752,
+     "rel_abs_median": 1.8753,
      "rank": 2
     },
     {
@@ -1823,13 +1823,13 @@
     {
      "event": "PCE price index",
      "n": 11,
-     "rel_abs_median": 0.9473,
+     "rel_abs_median": 0.9474,
      "rank": 10
     },
     {
      "event": "U. Michigan sentiment (final)",
      "n": 11,
-     "rel_abs_median": 0.9473,
+     "rel_abs_median": 0.9474,
      "rank": 11
     },
     {
@@ -1847,7 +1847,7 @@
     {
      "event": "Empire State manufacturing",
      "n": 12,
-     "rel_abs_median": 0.7258,
+     "rel_abs_median": 0.7259,
      "rank": 14
     },
     {
@@ -1883,7 +1883,7 @@
     {
      "event": "Retail sales",
      "n": 12,
-     "rel_abs_median": 0.4883,
+     "rel_abs_median": 0.4884,
      "rank": 20
     },
     {
@@ -1903,13 +1903,13 @@
     {
      "event": "Retail sales",
      "n": 12,
-     "rel_abs_median": 1.5885,
+     "rel_abs_median": 1.5884,
      "rank": 2
     },
     {
      "event": "Monthly opex",
      "n": 12,
-     "rel_abs_median": 1.5885,
+     "rel_abs_median": 1.5884,
      "rank": 3
     },
     {
@@ -1939,7 +1939,7 @@
     {
      "event": "ISM services",
      "n": 12,
-     "rel_abs_median": 1.3113,
+     "rel_abs_median": 1.3112,
      "rank": 8
     },
     {
@@ -1957,7 +1957,7 @@
     {
      "event": "Nonfarm payrolls",
      "n": 12,
-     "rel_abs_median": 1.2253,
+     "rel_abs_median": 1.2254,
      "rank": 11
     },
     {
@@ -1975,7 +1975,7 @@
     {
      "event": "PPI",
      "n": 12,
-     "rel_abs_median": 1.1104,
+     "rel_abs_median": 1.1105,
      "rank": 14
     },
     {
@@ -1987,7 +1987,7 @@
     {
      "event": "CPI",
      "n": 12,
-     "rel_abs_median": 0.9957,
+     "rel_abs_median": 0.9956,
      "rank": 16
     },
     {
@@ -1999,13 +1999,13 @@
     {
      "event": "Philly Fed manufacturing",
      "n": 12,
-     "rel_abs_median": 0.9032,
+     "rel_abs_median": 0.9033,
      "rank": 18
     },
     {
      "event": "FOMC minutes",
      "n": 8,
-     "rel_abs_median": 0.7986,
+     "rel_abs_median": 0.7987,
      "rank": 19
     },
     {
@@ -2017,7 +2017,7 @@
     {
      "event": "JOLTS job openings",
      "n": 12,
-     "rel_abs_median": 0.4555,
+     "rel_abs_median": 0.4556,
      "rank": 21
     }
    ],
@@ -2109,7 +2109,7 @@
     {
      "event": "Industrial production",
      "n": 12,
-     "rel_abs_median": 0.929,
+     "rel_abs_median": 0.9289,
      "rank": 15
     },
     {
@@ -2177,7 +2177,7 @@
     {
      "event": "U. Michigan sentiment (final)",
      "n": 12,
-     "rel_abs_median": 1.3856,
+     "rel_abs_median": 1.3857,
      "rank": 5
     },
     {
@@ -2255,7 +2255,7 @@
     {
      "event": "FOMC minutes",
      "n": 8,
-     "rel_abs_median": 0.7254,
+     "rel_abs_median": 0.7253,
      "rank": 18
     },
     {
@@ -2287,7 +2287,7 @@
     {
      "event": "FOMC decision",
      "n": 8,
-     "rel_abs_median": 2.124,
+     "rel_abs_median": 2.1239,
      "rank": 2
     },
     {
@@ -2305,7 +2305,7 @@
     {
      "event": "Nonfarm payrolls",
      "n": 12,
-     "rel_abs_median": 1.673,
+     "rel_abs_median": 1.6731,
      "rank": 5
     },
     {
@@ -2317,7 +2317,7 @@
     {
      "event": "Empire State manufacturing",
      "n": 12,
-     "rel_abs_median": 1.6277,
+     "rel_abs_median": 1.6276,
      "rank": 7
     },
     {
@@ -2341,13 +2341,13 @@
     {
      "event": "U. Michigan sentiment (final)",
      "n": 11,
-     "rel_abs_median": 1.3706,
+     "rel_abs_median": 1.3705,
      "rank": 11
     },
     {
      "event": "New home sales",
      "n": 12,
-     "rel_abs_median": 1.3633,
+     "rel_abs_median": 1.3634,
      "rank": 12
     },
     {
@@ -2359,19 +2359,19 @@
     {
      "event": "FOMC minutes",
      "n": 8,
-     "rel_abs_median": 1.277,
+     "rel_abs_median": 1.2771,
      "rank": 14
     },
     {
      "event": "Industrial production",
      "n": 12,
-     "rel_abs_median": 1.2228,
+     "rel_abs_median": 1.2227,
      "rank": 15
     },
     {
      "event": "JOLTS job openings",
      "n": 9,
-     "rel_abs_median": 1.1893,
+     "rel_abs_median": 1.1892,
      "rank": 16
     },
     {
@@ -2383,13 +2383,13 @@
     {
      "event": "Initial jobless claims",
      "n": 52,
-     "rel_abs_median": 1.1453,
+     "rel_abs_median": 1.1452,
      "rank": 18
     },
     {
      "event": "Philly Fed manufacturing",
      "n": 12,
-     "rel_abs_median": 1.0735,
+     "rel_abs_median": 1.0736,
      "rank": 19
     },
     {
@@ -2409,7 +2409,7 @@
     {
      "event": "Nonfarm payrolls",
      "n": 11,
-     "rel_abs_median": 1.8527,
+     "rel_abs_median": 1.8528,
      "rank": 1
     },
     {
@@ -2517,7 +2517,7 @@
     {
      "event": "Retail sales",
      "n": 11,
-     "rel_abs_median": 0.6069,
+     "rel_abs_median": 0.6068,
      "rank": 19
     },
     {
@@ -2871,12 +2871,12 @@
   "macro": {
    "current": {
     "as_of": "2026-08-18",
-    "r2_total": 0.43,
+    "r2_total": 0.4491,
     "shares": {
-     "Rates (TLT)": 0.0091,
-     "Dollar (DXY)": 0.0228,
-     "Oil (USO)": 0.0557,
-     "Gold (GLD)": 0.1004
+     "Rates (TLT)": 0.0143,
+     "Dollar (DXY)": 0.0216,
+     "Oil (USO)": 0.0609,
+     "Gold (GLD)": 0.0877
     },
     "ranking": [
      "Gold (GLD)",
@@ -2921,7 +2921,7 @@
      "shares": {
       "Rates (TLT)": 0.1302,
       "Dollar (DXY)": 0.0079,
-      "Oil (USO)": 0.0393,
+      "Oil (USO)": 0.0394,
       "Gold (GLD)": 0.0106
      },
      "ranking": [
@@ -3097,12 +3097,12 @@
      ]
     },
     "2026": {
-     "r2_total_mean": 0.1944,
+     "r2_total_mean": 0.2028,
      "shares": {
-      "Rates (TLT)": 0.009,
-      "Dollar (DXY)": 0.0063,
-      "Oil (USO)": 0.0499,
-      "Gold (GLD)": 0.0404
+      "Rates (TLT)": 0.0089,
+      "Dollar (DXY)": 0.0067,
+      "Oil (USO)": 0.0507,
+      "Gold (GLD)": 0.0426
      },
      "ranking": [
       "Oil (USO)",
@@ -3115,20 +3115,20 @@
    "correlations": {
     "full": {
      "Rates (TLT)": {
-      "same_day": -0.2634,
-      "next_day": 0.0442
+      "same_day": -0.2632,
+      "next_day": 0.044
      },
      "Dollar (DXY)": {
       "same_day": -0.158,
-      "next_day": -0.0128
+      "next_day": -0.0122
      },
      "Oil (USO)": {
-      "same_day": 0.2954,
-      "next_day": -0.0336
+      "same_day": 0.2934,
+      "next_day": -0.0344
      },
      "Gold (GLD)": {
-      "same_day": 0.0619,
-      "next_day": 0.0148
+      "same_day": 0.0624,
+      "next_day": 0.0134
      }
     },
     "by_year": {
@@ -3182,9 +3182,9 @@
      },
      "2019": {
       "Rates (TLT)": -0.4565,
-      "Dollar (DXY)": 0.0803,
+      "Dollar (DXY)": 0.0802,
       "Oil (USO)": 0.3469,
-      "Gold (GLD)": -0.2674
+      "Gold (GLD)": -0.2673
      },
      "2020": {
       "Rates (TLT)": -0.4773,
@@ -3223,10 +3223,10 @@
       "Gold (GLD)": 0.0408
      },
      "2026": {
-      "Rates (TLT)": 0.3473,
-      "Dollar (DXY)": -0.3704,
-      "Oil (USO)": -0.4367,
-      "Gold (GLD)": 0.3658
+      "Rates (TLT)": 0.342,
+      "Dollar (DXY)": -0.3645,
+      "Oil (USO)": -0.4475,
+      "Gold (GLD)": 0.3663
      }
     }
    }
@@ -3234,9 +3234,9 @@
   "risk_comovement": {
    "current": {
     "as_of": "2026-08-18",
-    "r2_macro_only": 0.43,
-    "r2_with_credit": 0.6677,
-    "credit_incremental_r2": 0.2377
+    "r2_macro_only": 0.4491,
+    "r2_with_credit": 0.6714,
+    "credit_incremental_r2": 0.2223
    },
    "by_year": {
     "2012": {
@@ -3342,7 +3342,7 @@
      ]
     },
     "2018": {
-     "r2_total_mean": 0.6469,
+     "r2_total_mean": 0.647,
      "shares": {
       "Rates (TLT)": 0.0927,
       "Dollar (DXY)": 0.0015,
@@ -3478,13 +3478,13 @@
      ]
     },
     "2026": {
-     "r2_total_mean": 0.6312,
+     "r2_total_mean": 0.633,
      "shares": {
-      "Rates (TLT)": 0.2125,
-      "Dollar (DXY)": 0.0008,
-      "Oil (USO)": 0.0099,
-      "Gold (GLD)": 0.0338,
-      "Credit (HYG-IEF)": 0.4368
+      "Rates (TLT)": 0.209,
+      "Dollar (DXY)": 0.0009,
+      "Oil (USO)": 0.0102,
+      "Gold (GLD)": 0.0359,
+      "Credit (HYG-IEF)": 0.4302
      },
      "ranking": [
       "Credit (HYG-IEF)",
@@ -3498,8 +3498,8 @@
    "correlations": {
     "full": {
      "Credit (HYG-IEF)": {
-      "same_day": 0.741,
-      "next_day": -0.0837
+      "same_day": 0.7409,
+      "next_day": -0.0836
      }
     },
     "by_year": {
@@ -3525,7 +3525,7 @@
       "Credit (HYG-IEF)": 0.6981
      },
      "2018": {
-      "Credit (HYG-IEF)": 0.7938
+      "Credit (HYG-IEF)": 0.7939
      },
      "2019": {
       "Credit (HYG-IEF)": 0.7885
@@ -3549,7 +3549,7 @@
       "Credit (HYG-IEF)": 0.755
      },
      "2026": {
-      "Credit (HYG-IEF)": 0.3366
+      "Credit (HYG-IEF)": 0.341
      }
     }
    },
@@ -3589,10 +3589,10 @@
       "Small caps (IWM-SPY)": 0.3178
      },
      "2013": {
-      "Breadth (RSP-SPY)": 0.2774,
+      "Breadth (RSP-SPY)": 0.2775,
       "Semis (SMH-SPY)": 0.148,
       "Defensives (XLP-SPY)": -0.2846,
-      "Small caps (IWM-SPY)": 0.2986
+      "Small caps (IWM-SPY)": 0.2987
      },
      "2014": {
       "Breadth (RSP-SPY)": 0.1179,
@@ -7350,11 +7350,16 @@
     "2026-07-16",
     "2026-07-17",
     "2026-07-20",
+    "2026-07-21",
+    "2026-07-22",
+    "2026-07-23",
     "2026-07-24",
     "2026-07-27",
     "2026-07-28",
     "2026-07-29",
     "2026-07-30",
+    "2026-07-31",
+    "2026-08-03",
     "2026-08-04",
     "2026-08-05",
     "2026-08-06",
@@ -7420,7 +7425,7 @@
     0.7571,
     0.744,
     0.7504,
-    0.7467,
+    0.7466,
     0.7439,
     0.7449,
     0.7338,
@@ -7447,7 +7452,7 @@
     0.7353,
     0.7362,
     0.7283,
-    0.7141,
+    0.714,
     0.7146,
     0.7185,
     0.7232,
@@ -7459,7 +7464,7 @@
     0.7073,
     0.7042,
     0.7056,
-    0.693,
+    0.6929,
     0.6947,
     0.6978,
     0.6969,
@@ -7538,7 +7543,7 @@
     0.6388,
     0.642,
     0.6382,
-    0.6406,
+    0.6405,
     0.6474,
     0.6492,
     0.6561,
@@ -7610,7 +7615,7 @@
     0.6314,
     0.627,
     0.6082,
-    0.6075,
+    0.6074,
     0.6031,
     0.607,
     0.6093,
@@ -7618,7 +7623,7 @@
     0.6167,
     0.617,
     0.6175,
-    0.6203,
+    0.6202,
     0.6134,
     0.6138,
     0.6058,
@@ -7699,14 +7704,14 @@
     0.5363,
     0.5405,
     0.5378,
-    0.5352,
+    0.5353,
     0.5382,
     0.5337,
     0.5298,
     0.5319,
     0.5139,
     0.5155,
-    0.517,
+    0.5171,
     0.5286,
     0.5421,
     0.5436,
@@ -7758,7 +7763,7 @@
     0.4373,
     0.436,
     0.4177,
-    0.4109,
+    0.4108,
     0.4229,
     0.411,
     0.4055,
@@ -7769,8 +7774,8 @@
     0.3945,
     0.38,
     0.3895,
-    0.3842,
-    0.3857,
+    0.3841,
+    0.3856,
     0.3742,
     0.3632,
     0.3575,
@@ -7779,7 +7784,7 @@
     0.3593,
     0.3614,
     0.3581,
-    0.3592,
+    0.3591,
     0.354,
     0.3576,
     0.3581,
@@ -7821,7 +7826,7 @@
     0.1872,
     0.1814,
     0.1884,
-    0.1833,
+    0.1832,
     0.1844,
     0.1887,
     0.1866,
@@ -7914,7 +7919,7 @@
     0.0653,
     0.0716,
     0.0624,
-    0.074,
+    0.0739,
     0.0781,
     0.0779,
     0.081,
@@ -7974,11 +7979,11 @@
     0.2153,
     0.2152,
     0.2158,
-    0.2134,
+    0.2133,
     0.2147,
     0.2167,
     0.2153,
-    0.2125,
+    0.2124,
     0.2158,
     0.2221,
     0.22,
@@ -7998,7 +8003,7 @@
     0.2398,
     0.2393,
     0.2303,
-    0.2431,
+    0.243,
     0.2476,
     0.2542,
     0.2625,
@@ -8009,7 +8014,7 @@
     0.3082,
     0.3104,
     0.2937,
-    0.2909,
+    0.2908,
     0.28,
     0.284,
     0.3176,
@@ -8120,7 +8125,7 @@
     0.1714,
     0.173,
     0.1732,
-    0.1674,
+    0.1673,
     0.1662,
     0.1618,
     0.1606,
@@ -8134,7 +8139,7 @@
     0.1848,
     0.209,
     0.2095,
-    0.222,
+    0.2219,
     0.2468,
     0.2637,
     0.2645,
@@ -8183,7 +8188,7 @@
     0.3462,
     0.348,
     0.3342,
-    0.337,
+    0.3369,
     0.3372,
     0.3335,
     0.3359,
@@ -8213,7 +8218,7 @@
     0.1809,
     0.1727,
     0.1784,
-    0.1911,
+    0.191,
     0.186,
     0.1871,
     0.1868,
@@ -8369,7 +8374,7 @@
     0.3874,
     0.3829,
     0.3835,
-    0.3834,
+    0.3835,
     0.3874,
     0.3874,
     0.3925,
@@ -8382,12 +8387,12 @@
     0.3951,
     0.3947,
     0.4005,
-    0.4015,
+    0.4016,
     0.4099,
     0.412,
     0.417,
     0.4045,
-    0.3974,
+    0.3975,
     0.3957,
     0.4038,
     0.4014,
@@ -8404,30 +8409,30 @@
     0.4027,
     0.3988,
     0.3911,
-    0.3891,
+    0.3892,
     0.3929,
-    0.4033,
+    0.4034,
     0.4059,
     0.4073,
     0.4211,
     0.4288,
     0.437,
     0.4362,
-    0.4322,
+    0.4323,
     0.4312,
     0.4266,
     0.4372,
     0.4401,
     0.4403,
     0.4204,
-    0.4233,
-    0.4201,
+    0.4234,
+    0.4202,
     0.4138,
     0.407,
     0.4206,
     0.426,
     0.4325,
-    0.4337,
+    0.4338,
     0.4367,
     0.4418,
     0.4387,
@@ -8468,9 +8473,9 @@
     0.3972,
     0.4014,
     0.3985,
-    0.3964,
+    0.3965,
     0.3932,
-    0.3839,
+    0.384,
     0.3805,
     0.3787,
     0.3773,
@@ -8484,7 +8489,7 @@
     0.3663,
     0.3704,
     0.3707,
-    0.3737,
+    0.3738,
     0.3804,
     0.3816,
     0.3815,
@@ -8532,12 +8537,12 @@
     0.4886,
     0.4937,
     0.4862,
-    0.4732,
+    0.4733,
     0.4652,
     0.4658,
     0.4547,
-    0.4425,
-    0.4454,
+    0.4426,
+    0.4455,
     0.4561,
     0.4575,
     0.5256,
@@ -8549,7 +8554,7 @@
     0.5037,
     0.5034,
     0.5054,
-    0.4919,
+    0.492,
     0.483,
     0.4762,
     0.462,
@@ -8653,7 +8658,7 @@
     0.0847,
     0.0865,
     0.087,
-    0.0803,
+    0.0802,
     0.0791,
     0.0796,
     0.0815,
@@ -8730,8 +8735,8 @@
     0.131,
     0.1293,
     0.1309,
-    0.1312,
-    0.1243,
+    0.1311,
+    0.1242,
     0.1274,
     0.125,
     0.1205,
@@ -8744,7 +8749,7 @@
     0.1044,
     0.1024,
     0.0998,
-    0.1007,
+    0.1006,
     0.1023,
     0.0982,
     0.0967,
@@ -8822,7 +8827,7 @@
     0.1824,
     0.1838,
     0.1828,
-    0.1822,
+    0.1823,
     0.1668,
     0.1679,
     0.1647,
@@ -8839,9 +8844,9 @@
     0.1626,
     0.1643,
     0.1634,
-    0.1579,
+    0.158,
     0.1559,
-    0.1515,
+    0.1516,
     0.1467,
     0.1532,
     0.1522,
@@ -8963,7 +8968,7 @@
     0.1903,
     0.1897,
     0.2073,
-    0.2048,
+    0.2049,
     0.21,
     0.2105,
     0.2047,
@@ -8991,13 +8996,13 @@
     0.1853,
     0.1854,
     0.1843,
-    0.1877,
+    0.1878,
     0.192,
     0.1893,
     0.187,
     0.1802,
     0.1901,
-    0.2018,
+    0.2019,
     0.2097,
     0.1981,
     0.195,
@@ -9111,7 +9116,7 @@
     0.1384,
     0.1295,
     0.1245,
-    0.1259,
+    0.1258,
     0.1308,
     0.1531,
     0.1505,
@@ -9150,7 +9155,7 @@
     0.2358,
     0.2709,
     0.2721,
-    0.2728,
+    0.2729,
     0.2716,
     0.2704,
     0.2691,
@@ -9180,7 +9185,7 @@
     0.3094,
     0.3067,
     0.3062,
-    0.2993,
+    0.2994,
     0.2963,
     0.2966,
     0.2967,
@@ -9296,7 +9301,7 @@
     0.2767,
     0.2994,
     0.2792,
-    0.2789,
+    0.279,
     0.2687,
     0.2591,
     0.2738,
@@ -9391,11 +9396,11 @@
     0.251,
     0.2502,
     0.2525,
-    0.2518,
+    0.2517,
     0.2543,
     0.2586,
     0.2601,
-    0.2621,
+    0.262,
     0.2546,
     0.2636,
     0.2612,
@@ -9404,8 +9409,8 @@
     0.275,
     0.2746,
     0.2731,
-    0.2769,
-    0.2769,
+    0.2768,
+    0.2768,
     0.2816,
     0.2733,
     0.2802,
@@ -9421,7 +9426,7 @@
     0.3444,
     0.3452,
     0.3256,
-    0.36,
+    0.3599,
     0.364,
     0.3877,
     0.3954,
@@ -9454,7 +9459,7 @@
     0.5619,
     0.5689,
     0.5708,
-    0.5768,
+    0.5769,
     0.5769,
     0.5441,
     0.549,
@@ -9484,7 +9489,7 @@
     0.4209,
     0.4201,
     0.4181,
-    0.418,
+    0.4181,
     0.416,
     0.4178,
     0.418,
@@ -9560,7 +9565,7 @@
     0.4414,
     0.442,
     0.4376,
-    0.4346,
+    0.4347,
     0.4343,
     0.4351,
     0.4447,
@@ -9574,13 +9579,13 @@
     0.4389,
     0.4192,
     0.4516,
-    0.3656,
+    0.3655,
     0.3399,
     0.3774,
     0.4016,
     0.3788,
-    0.3714,
-    0.2925,
+    0.3713,
+    0.2924,
     0.3013,
     0.3215,
     0.2963,
@@ -9723,9 +9728,9 @@
     0.1447,
     0.144,
     0.1494,
-    0.1467,
+    0.1468,
     0.1487,
-    0.1485,
+    0.1486,
     0.1488,
     0.1502,
     0.1512,
@@ -9748,7 +9753,7 @@
     0.1083,
     0.1111,
     0.1133,
-    0.117,
+    0.1171,
     0.1162,
     0.1196,
     0.121,
@@ -9842,7 +9847,7 @@
     0.2087,
     0.1873,
     0.185,
-    0.1746,
+    0.1745,
     0.1811,
     0.1795,
     0.1797,
@@ -9856,7 +9861,7 @@
     0.2066,
     0.2051,
     0.1998,
-    0.2031,
+    0.203,
     0.2031,
     0.2051,
     0.1944,
@@ -9870,7 +9875,7 @@
     0.2078,
     0.1976,
     0.2005,
-    0.2164,
+    0.2163,
     0.2102,
     0.2156,
     0.2175,
@@ -9907,7 +9912,7 @@
     0.3414,
     0.3372,
     0.3272,
-    0.3266,
+    0.3265,
     0.331,
     0.3427,
     0.3414,
@@ -10176,7 +10181,7 @@
     0.4047,
     0.4064,
     0.3947,
-    0.3986,
+    0.3987,
     0.4037,
     0.4056,
     0.403,
@@ -10355,7 +10360,7 @@
     0.1376,
     0.1476,
     0.1474,
-    0.145,
+    0.1449,
     0.1423,
     0.1216,
     0.1316,
@@ -10369,7 +10374,7 @@
     0.1592,
     0.1574,
     0.1531,
-    0.161,
+    0.1609,
     0.1719,
     0.1722,
     0.2086,
@@ -10472,7 +10477,7 @@
     0.1523,
     0.1558,
     0.1565,
-    0.1744,
+    0.1745,
     0.169,
     0.1785,
     0.178,
@@ -11002,7 +11007,7 @@
     0.3166,
     0.3192,
     0.3197,
-    0.3426,
+    0.3425,
     0.3393,
     0.3429,
     0.3401,
@@ -11040,22 +11045,27 @@
     0.3249,
     0.329,
     0.3293,
-    0.3288,
-    0.3679,
-    0.3714,
-    0.3692,
-    0.3794,
-    0.3854,
-    0.3754,
-    0.3767,
+    0.3269,
+    0.3743,
+    0.3859,
+    0.3847,
     0.3783,
-    0.3952,
-    0.403,
-    0.4377,
+    0.3775,
+    0.3747,
+    0.3854,
+    0.3815,
+    0.4054,
+    0.4189,
+    0.4389,
+    0.4394,
+    0.4408,
+    0.4342,
+    0.4351,
     0.4361,
-    0.4357,
-    0.4296,
-    0.43
+    0.4354,
+    0.4427,
+    0.4471,
+    0.4491
    ],
    "Rates (TLT)": [
     0.0507,
@@ -11175,7 +11185,7 @@
     0.1341,
     0.1384,
     0.1391,
-    0.1529,
+    0.153,
     0.1364,
     0.1323,
     0.1431,
@@ -11186,13 +11196,13 @@
     0.1619,
     0.1613,
     0.1564,
-    0.1555,
+    0.1556,
     0.1611,
     0.1679,
     0.1702,
     0.1723,
     0.1701,
-    0.1661,
+    0.1662,
     0.1713,
     0.1551,
     0.1551,
@@ -11328,7 +11338,7 @@
     0.178,
     0.1767,
     0.1786,
-    0.1787,
+    0.1788,
     0.1846,
     0.2033,
     0.2366,
@@ -11338,8 +11348,8 @@
     0.2462,
     0.2429,
     0.2446,
-    0.2401,
-    0.2386,
+    0.2402,
+    0.2387,
     0.2479,
     0.2435,
     0.2417,
@@ -11389,7 +11399,7 @@
     0.266,
     0.264,
     0.2576,
-    0.2545,
+    0.2546,
     0.257,
     0.2572,
     0.2613,
@@ -11436,7 +11446,7 @@
     0.2263,
     0.2063,
     0.2064,
-    0.1962,
+    0.1961,
     0.2138,
     0.2126,
     0.2138,
@@ -11450,14 +11460,14 @@
     0.1315,
     0.0898,
     0.0895,
-    0.1005,
+    0.1004,
     0.1013,
     0.0895,
     0.0766,
     0.0768,
     0.0745,
     0.0691,
-    0.0615,
+    0.0614,
     0.066,
     0.0642,
     0.0626,
@@ -11508,7 +11518,7 @@
     0.0288,
     0.0287,
     0.0279,
-    0.0293,
+    0.0292,
     0.0279,
     0.0252,
     0.0234,
@@ -11643,7 +11653,7 @@
     0.0648,
     0.0681,
     0.0691,
-    0.0707,
+    0.0706,
     0.0782,
     0.081,
     0.0847,
@@ -11694,7 +11704,7 @@
     0.183,
     0.1927,
     0.1924,
-    0.1983,
+    0.1982,
     0.2241,
     0.2253,
     0.2273,
@@ -11715,10 +11725,10 @@
     0.2459,
     0.245,
     0.2415,
-    0.2508,
+    0.2507,
     0.2522,
     0.2468,
-    0.2564,
+    0.2563,
     0.257,
     0.2576,
     0.2551,
@@ -11727,8 +11737,8 @@
     0.2509,
     0.2638,
     0.2687,
-    0.255,
-    0.2302,
+    0.2549,
+    0.2301,
     0.2278,
     0.2139,
     0.2098,
@@ -11743,11 +11753,11 @@
     0.1973,
     0.2086,
     0.2059,
-    0.2038,
+    0.2037,
     0.2002,
     0.1971,
     0.1964,
-    0.2016,
+    0.2015,
     0.2013,
     0.201,
     0.1704,
@@ -11756,9 +11766,9 @@
     0.1742,
     0.1762,
     0.1714,
-    0.1763,
+    0.1762,
     0.159,
-    0.1435,
+    0.1434,
     0.1382,
     0.1468,
     0.1553,
@@ -11811,7 +11821,7 @@
     0.1105,
     0.1121,
     0.1077,
-    0.1069,
+    0.1068,
     0.1018,
     0.0952,
     0.0993,
@@ -11835,11 +11845,11 @@
     0.1365,
     0.1317,
     0.1374,
-    0.1377,
+    0.1376,
     0.1419,
     0.1395,
     0.1348,
-    0.1451,
+    0.145,
     0.1466,
     0.1454,
     0.1467,
@@ -11853,7 +11863,7 @@
     0.1528,
     0.1481,
     0.1564,
-    0.1621,
+    0.162,
     0.207,
     0.203,
     0.2114,
@@ -11863,14 +11873,14 @@
     0.1893,
     0.1998,
     0.2029,
-    0.2082,
+    0.2081,
     0.2107,
     0.2092,
     0.204,
     0.2004,
     0.1986,
     0.1997,
-    0.1905,
+    0.1904,
     0.1941,
     0.1808,
     0.1841,
@@ -11878,7 +11888,7 @@
     0.1801,
     0.1928,
     0.1923,
-    0.1582,
+    0.1581,
     0.1512,
     0.1635,
     0.1689,
@@ -11895,7 +11905,7 @@
     0.1125,
     0.102,
     0.1017,
-    0.0995,
+    0.0994,
     0.1044,
     0.095,
     0.0972,
@@ -11938,7 +11948,7 @@
     0.0844,
     0.0872,
     0.0875,
-    0.0855,
+    0.0854,
     0.0954,
     0.097,
     0.0949,
@@ -11983,7 +11993,7 @@
     0.0437,
     0.0472,
     0.0403,
-    0.0422,
+    0.0421,
     0.0434,
     0.0453,
     0.0508,
@@ -11997,7 +12007,7 @@
     0.0478,
     0.0413,
     0.0256,
-    0.0205,
+    0.0204,
     0.0328,
     0.0251,
     0.0259,
@@ -12216,7 +12226,7 @@
     0.048,
     0.0459,
     0.0417,
-    0.0478,
+    0.0479,
     0.043,
     0.0395,
     0.0449,
@@ -12400,7 +12410,7 @@
     0.0308,
     0.0324,
     0.0278,
-    0.0238,
+    0.0239,
     0.0239,
     0.0207,
     0.0212,
@@ -12441,20 +12451,20 @@
     0.0501,
     0.0596,
     0.0589,
-    0.061,
+    0.0611,
     0.0617,
     0.0849,
     0.0872,
     0.0855,
     0.0808,
-    0.0892,
+    0.0893,
     0.1002,
     0.1025,
     0.119,
     0.127,
     0.1276,
     0.1267,
-    0.1291,
+    0.1292,
     0.089,
     0.0914,
     0.0673,
@@ -12484,7 +12494,7 @@
     0.0422,
     0.0403,
     0.0405,
-    0.0371,
+    0.0372,
     0.0404,
     0.0391,
     0.0392,
@@ -12618,9 +12628,9 @@
     0.0363,
     0.0333,
     0.0286,
-    0.0283,
+    0.0282,
     0.0254,
-    0.0251,
+    0.025,
     0.0156,
     0.0154,
     0.0164,
@@ -12653,7 +12663,7 @@
     0.0289,
     0.0289,
     0.0265,
-    0.0271,
+    0.027,
     0.0266,
     0.0266,
     0.0269,
@@ -12747,7 +12757,7 @@
     0.0486,
     0.0557,
     0.0573,
-    0.0723,
+    0.0724,
     0.0736,
     0.0804,
     0.0793,
@@ -12863,11 +12873,11 @@
     0.1015,
     0.1017,
     0.1001,
-    0.1019,
+    0.102,
     0.1007,
     0.099,
     0.0979,
-    0.0906,
+    0.0907,
     0.092,
     0.0915,
     0.0889,
@@ -12922,7 +12932,7 @@
     0.1437,
     0.136,
     0.1341,
-    0.1315,
+    0.1316,
     0.1458,
     0.1502,
     0.1515,
@@ -12983,7 +12993,7 @@
     0.0791,
     0.0954,
     0.1049,
-    0.1231,
+    0.1232,
     0.1492,
     0.1421,
     0.1437,
@@ -13027,7 +13037,7 @@
     0.1727,
     0.1569,
     0.1471,
-    0.1336,
+    0.1335,
     0.1303,
     0.1211,
     0.1245,
@@ -13069,7 +13079,7 @@
     0.111,
     0.0856,
     0.0819,
-    0.0837,
+    0.0836,
     0.0924,
     0.0913,
     0.0918,
@@ -13189,7 +13199,7 @@
     0.2307,
     0.2347,
     0.2351,
-    0.2343,
+    0.2344,
     0.2346,
     0.2334,
     0.2337,
@@ -13523,7 +13533,7 @@
     0.0198,
     0.0194,
     0.0134,
-    0.0125,
+    0.0124,
     0.0137,
     0.0133,
     0.0047,
@@ -13910,7 +13920,7 @@
     0.002,
     0.0026,
     0.0027,
-    0.0022,
+    0.0021,
     0.0022,
     0.002,
     0.0013,
@@ -14241,7 +14251,7 @@
     0.0203,
     0.0262,
     0.023,
-    0.0115,
+    0.0116,
     0.0206,
     0.0102,
     0.0096,
@@ -14730,22 +14740,27 @@
     0.0117,
     0.011,
     0.0111,
-    0.0111,
+    0.0107,
     0.001,
+    0.0002,
+    0.0002,
     0.0003,
-    0.0022,
-    0.0019,
-    0.0025,
-    0.0023,
+    0.0003,
     0.0021,
-    0.0022,
-    0.0024,
+    0.0015,
+    0.001,
+    0.0012,
+    0.0023,
+    0.0034,
     0.0031,
-    0.0045,
+    0.0053,
+    0.0052,
     0.0049,
-    0.0086,
-    0.01,
-    0.0091
+    0.0059,
+    0.0064,
+    0.0137,
+    0.0163,
+    0.0143
    ],
    "Dollar (DXY)": [
     0.028,
@@ -14753,7 +14768,7 @@
     0.0315,
     0.0308,
     0.0317,
-    0.0306,
+    0.0307,
     0.0315,
     0.0306,
     0.0301,
@@ -14994,7 +15009,7 @@
     0.0245,
     0.0239,
     0.0228,
-    0.0234,
+    0.0233,
     0.0301,
     0.03,
     0.0293,
@@ -15017,7 +15032,7 @@
     0.0252,
     0.025,
     0.0251,
-    0.0231,
+    0.023,
     0.0221,
     0.0242,
     0.0195,
@@ -15102,7 +15117,7 @@
     0.0141,
     0.0153,
     0.0156,
-    0.0183,
+    0.0182,
     0.0177,
     0.0151,
     0.0146,
@@ -15379,7 +15394,7 @@
     0.0019,
     0.0014,
     0.0012,
-    0.0027,
+    0.0028,
     0.0024,
     0.0057,
     0.0066,
@@ -15406,14 +15421,14 @@
     0.0072,
     0.0064,
     0.0044,
-    0.0056,
+    0.0057,
     0.0047,
     0.006,
     0.0062,
     0.0056,
     0.0048,
     0.0048,
-    0.0048,
+    0.0049,
     0.0037,
     0.0041,
     0.005,
@@ -15760,7 +15775,7 @@
     0.1094,
     0.14,
     0.1389,
-    0.1438,
+    0.1439,
     0.1445,
     0.1465,
     0.1447,
@@ -15785,7 +15800,7 @@
     0.1203,
     0.1219,
     0.1146,
-    0.1059,
+    0.106,
     0.102,
     0.0997,
     0.0995,
@@ -16390,7 +16405,7 @@
     0.0129,
     0.0099,
     0.0121,
-    0.0118,
+    0.0117,
     0.0149,
     0.0146,
     0.0137,
@@ -17124,7 +17139,7 @@
     0.0177,
     0.022,
     0.0252,
-    0.0184,
+    0.0185,
     0.0179,
     0.0236,
     0.0284,
@@ -17252,7 +17267,7 @@
     0.0607,
     0.0785,
     0.075,
-    0.0614,
+    0.0613,
     0.0591,
     0.0572,
     0.0585,
@@ -17369,7 +17384,7 @@
     0.0643,
     0.0844,
     0.1064,
-    0.1127,
+    0.1128,
     0.1083,
     0.1072,
     0.104,
@@ -17493,7 +17508,7 @@
     0.129,
     0.1296,
     0.1317,
-    0.1217,
+    0.1218,
     0.1058,
     0.1016,
     0.1234,
@@ -17563,7 +17578,7 @@
     0.099,
     0.098,
     0.1143,
-    0.1174,
+    0.1175,
     0.1149,
     0.113,
     0.1176,
@@ -17710,7 +17725,7 @@
     0.0455,
     0.0369,
     0.03,
-    0.0276,
+    0.0275,
     0.0271,
     0.0242,
     0.0188,
@@ -17781,13 +17796,13 @@
     0.0934,
     0.0957,
     0.0912,
-    0.0896,
+    0.0897,
     0.0931,
     0.092,
     0.095,
     0.0963,
     0.1015,
-    0.1101,
+    0.1102,
     0.1132,
     0.1124,
     0.1134,
@@ -17797,7 +17812,7 @@
     0.1096,
     0.1066,
     0.1066,
-    0.1065,
+    0.1066,
     0.1059,
     0.1065,
     0.1036,
@@ -17857,7 +17872,7 @@
     0.1105,
     0.1123,
     0.0986,
-    0.0758,
+    0.0759,
     0.0761,
     0.0684,
     0.0847,
@@ -17867,7 +17882,7 @@
     0.1063,
     0.1009,
     0.0971,
-    0.0777,
+    0.0778,
     0.0873,
     0.0985,
     0.0914,
@@ -18420,22 +18435,27 @@
     0.012,
     0.0112,
     0.0113,
-    0.0114,
-    0.0271,
-    0.0299,
-    0.0207,
-    0.0276,
-    0.0259,
-    0.0269,
-    0.0244,
-    0.0247,
+    0.01,
+    0.0218,
     0.0237,
-    0.0274,
-    0.0234,
-    0.0232,
-    0.0216,
-    0.0223,
-    0.0228
+    0.0243,
+    0.0296,
+    0.03,
+    0.0199,
+    0.0231,
+    0.0266,
+    0.0233,
+    0.0251,
+    0.0228,
+    0.022,
+    0.0211,
+    0.0217,
+    0.0233,
+    0.0236,
+    0.0239,
+    0.0235,
+    0.0222,
+    0.0216
    ],
    "Oil (USO)": [
     0.1117,
@@ -18575,7 +18595,7 @@
     0.0896,
     0.0935,
     0.1083,
-    0.1142,
+    0.1141,
     0.1147,
     0.1117,
     0.1083,
@@ -18599,18 +18619,18 @@
     0.1047,
     0.1088,
     0.103,
-    0.1022,
+    0.1021,
     0.1063,
     0.1027,
     0.1061,
     0.1005,
-    0.093,
+    0.0929,
     0.0922,
     0.0963,
     0.0956,
     0.0962,
     0.0946,
-    0.0938,
+    0.0937,
     0.0904,
     0.09,
     0.0903,
@@ -18667,7 +18687,7 @@
     0.0553,
     0.0556,
     0.0589,
-    0.0588,
+    0.0589,
     0.0621,
     0.0613,
     0.0617,
@@ -18781,7 +18801,7 @@
     0.0435,
     0.0354,
     0.0347,
-    0.048,
+    0.0481,
     0.0446,
     0.0452,
     0.0375,
@@ -18965,14 +18985,14 @@
     0.0254,
     0.0397,
     0.0325,
-    0.0342,
+    0.0341,
     0.032,
     0.034,
     0.043,
     0.0441,
     0.0495,
     0.0519,
-    0.0555,
+    0.0554,
     0.0532,
     0.0523,
     0.0554,
@@ -19001,7 +19021,7 @@
     0.0598,
     0.0573,
     0.0581,
-    0.0857,
+    0.0856,
     0.0854,
     0.0782,
     0.069,
@@ -19084,7 +19104,7 @@
     0.0295,
     0.0271,
     0.028,
-    0.0279,
+    0.028,
     0.0277,
     0.0282,
     0.0278,
@@ -19174,7 +19194,7 @@
     0.0585,
     0.0541,
     0.0545,
-    0.054,
+    0.0541,
     0.0547,
     0.0556,
     0.055,
@@ -19391,7 +19411,7 @@
     0.0715,
     0.0633,
     0.0708,
-    0.0703,
+    0.0704,
     0.0589,
     0.054,
     0.0546,
@@ -19423,7 +19443,7 @@
     0.058,
     0.0591,
     0.0629,
-    0.064,
+    0.0641,
     0.0631,
     0.0679,
     0.0667,
@@ -19643,7 +19663,7 @@
     0.0652,
     0.0742,
     0.0692,
-    0.0719,
+    0.072,
     0.0721,
     0.0726,
     0.073,
@@ -19697,7 +19717,7 @@
     0.0746,
     0.0737,
     0.0733,
-    0.067,
+    0.0671,
     0.0683,
     0.0687,
     0.065,
@@ -19789,7 +19809,7 @@
     0.0297,
     0.034,
     0.0304,
-    0.0328,
+    0.0327,
     0.0289,
     0.0285,
     0.0273,
@@ -19822,7 +19842,7 @@
     0.0245,
     0.0225,
     0.0224,
-    0.0227,
+    0.0226,
     0.0314,
     0.0326,
     0.033,
@@ -19862,11 +19882,11 @@
     0.0065,
     0.007,
     0.007,
-    0.0067,
+    0.0066,
     0.0061,
     0.0069,
     0.0064,
-    0.0116,
+    0.0115,
     0.011,
     0.0077,
     0.0074,
@@ -19955,7 +19975,7 @@
     0.0073,
     0.0062,
     0.0054,
-    0.0073,
+    0.0074,
     0.0045,
     0.0041,
     0.004,
@@ -20249,7 +20269,7 @@
     0.1011,
     0.1008,
     0.1016,
-    0.1006,
+    0.1007,
     0.1026,
     0.1046,
     0.1048,
@@ -20373,7 +20393,7 @@
     0.0596,
     0.0599,
     0.0613,
-    0.0541,
+    0.054,
     0.0537,
     0.053,
     0.0486,
@@ -20381,7 +20401,7 @@
     0.0512,
     0.0503,
     0.0551,
-    0.0571,
+    0.0572,
     0.0598,
     0.0608,
     0.0638,
@@ -20419,7 +20439,7 @@
     0.0519,
     0.0536,
     0.052,
-    0.0513,
+    0.0514,
     0.0516,
     0.0553,
     0.0555,
@@ -20434,7 +20454,7 @@
     0.0518,
     0.0525,
     0.0518,
-    0.0504,
+    0.0505,
     0.05,
     0.05,
     0.0521,
@@ -20451,7 +20471,7 @@
     0.0498,
     0.0466,
     0.0425,
-    0.0428,
+    0.0429,
     0.0427,
     0.0409,
     0.039,
@@ -20489,7 +20509,7 @@
     0.0314,
     0.0305,
     0.0367,
-    0.0369,
+    0.037,
     0.0386,
     0.048,
     0.0517,
@@ -20548,7 +20568,7 @@
     0.1115,
     0.1107,
     0.1048,
-    0.1049,
+    0.1048,
     0.1071,
     0.101,
     0.0997,
@@ -20594,7 +20614,7 @@
     0.1064,
     0.1065,
     0.1068,
-    0.1068,
+    0.1067,
     0.1074,
     0.1073,
     0.1069,
@@ -20901,14 +20921,14 @@
     0.0044,
     0.0057,
     0.0065,
-    0.006,
+    0.0061,
     0.0136,
     0.018,
     0.0112,
     0.01,
     0.0143,
     0.0157,
-    0.0107,
+    0.0108,
     0.0236,
     0.0184,
     0.0209,
@@ -20958,7 +20978,7 @@
     0.137,
     0.1374,
     0.1381,
-    0.1395,
+    0.1396,
     0.139,
     0.1418,
     0.1315,
@@ -21075,7 +21095,7 @@
     0.0723,
     0.0764,
     0.058,
-    0.0569,
+    0.057,
     0.05,
     0.048,
     0.0377,
@@ -21307,10 +21327,10 @@
     0.0323,
     0.0311,
     0.0402,
-    0.0466,
+    0.0465,
     0.0481,
     0.0577,
-    0.0575,
+    0.0574,
     0.058,
     0.0584,
     0.0608,
@@ -21319,13 +21339,13 @@
     0.0735,
     0.0803,
     0.0763,
-    0.0752,
+    0.0751,
     0.075,
     0.0714,
     0.0686,
     0.0629,
     0.0672,
-    0.0646,
+    0.0645,
     0.0695,
     0.0711,
     0.0694,
@@ -22110,22 +22130,27 @@
     0.0658,
     0.0728,
     0.0719,
-    0.0715,
-    0.075,
-    0.0802,
-    0.0878,
-    0.081,
-    0.0845,
-    0.0822,
-    0.0825,
-    0.0805,
-    0.0754,
-    0.0621,
-    0.0536,
-    0.0544,
-    0.0543,
-    0.0572,
-    0.0557
+    0.0707,
+    0.0821,
+    0.0906,
+    0.0906,
+    0.0775,
+    0.077,
+    0.0837,
+    0.0821,
+    0.0798,
+    0.0833,
+    0.0721,
+    0.062,
+    0.0627,
+    0.063,
+    0.0653,
+    0.0633,
+    0.0611,
+    0.0613,
+    0.0622,
+    0.0609,
+    0.0609
    ],
    "Gold (GLD)": [
     0.0133,
@@ -22229,7 +22254,7 @@
     0.0149,
     0.0147,
     0.015,
-    0.0151,
+    0.0152,
     0.0212,
     0.0202,
     0.0217,
@@ -22241,7 +22266,7 @@
     0.0209,
     0.0193,
     0.0204,
-    0.0281,
+    0.0282,
     0.0272,
     0.0272,
     0.027,
@@ -22436,7 +22461,7 @@
     0.0304,
     0.0343,
     0.0323,
-    0.033,
+    0.0329,
     0.0263,
     0.0277,
     0.0234,
@@ -22465,7 +22490,7 @@
     0.0114,
     0.0125,
     0.0118,
-    0.0135,
+    0.0136,
     0.0133,
     0.0092,
     0.0068,
@@ -22674,11 +22699,11 @@
     0.0086,
     0.0116,
     0.0137,
-    0.0134,
+    0.0135,
     0.0132,
     0.0162,
     0.0167,
-    0.0181,
+    0.0182,
     0.018,
     0.0125,
     0.0126,
@@ -22754,7 +22779,7 @@
     0.0015,
     0.0038,
     0.0036,
-    0.0036,
+    0.0037,
     0.0035,
     0.0035,
     0.0038,
@@ -22784,7 +22809,7 @@
     0.028,
     0.0259,
     0.0276,
-    0.0267,
+    0.0268,
     0.0296,
     0.0274,
     0.0242,
@@ -22795,7 +22820,7 @@
     0.029,
     0.0268,
     0.0244,
-    0.0287,
+    0.0288,
     0.0283,
     0.0268,
     0.012,
@@ -23149,7 +23174,7 @@
     0.0233,
     0.0301,
     0.0242,
-    0.0271,
+    0.0272,
     0.0257,
     0.0251,
     0.0265,
@@ -23353,7 +23378,7 @@
     0.1071,
     0.0971,
     0.098,
-    0.0972,
+    0.0971,
     0.0953,
     0.0945,
     0.0938,
@@ -23364,7 +23389,7 @@
     0.0922,
     0.0833,
     0.0752,
-    0.0791,
+    0.079,
     0.0842,
     0.0925,
     0.0919,
@@ -24175,7 +24200,7 @@
     0.0085,
     0.0103,
     0.01,
-    0.0098,
+    0.0099,
     0.0096,
     0.0181,
     0.0188,
@@ -24187,7 +24212,7 @@
     0.0454,
     0.0475,
     0.047,
-    0.063,
+    0.0631,
     0.0638,
     0.0644,
     0.0626,
@@ -24534,7 +24559,7 @@
     0.0101,
     0.01,
     0.0108,
-    0.0109,
+    0.0108,
     0.0116,
     0.0101,
     0.021,
@@ -24756,7 +24781,7 @@
     0.0714,
     0.0787,
     0.0815,
-    0.082,
+    0.0821,
     0.0768,
     0.0823,
     0.083,
@@ -24890,7 +24915,7 @@
     0.0116,
     0.0131,
     0.0146,
-    0.0163,
+    0.0162,
     0.0159,
     0.0167,
     0.0153,
@@ -25292,7 +25317,7 @@
     0.0078,
     0.0081,
     0.0057,
-    0.0057,
+    0.0056,
     0.0057,
     0.0081,
     0.0052,
@@ -25356,7 +25381,7 @@
     0.068,
     0.0627,
     0.0558,
-    0.0616,
+    0.0617,
     0.0605,
     0.0609,
     0.0555,
@@ -25443,7 +25468,7 @@
     0.0424,
     0.0328,
     0.0319,
-    0.0332,
+    0.0331,
     0.0394,
     0.0413,
     0.04,
@@ -25800,22 +25825,27 @@
     0.0572,
     0.0572,
     0.0573,
-    0.0571,
-    0.07,
-    0.067,
-    0.0694,
-    0.0658,
-    0.0657,
-    0.0589,
-    0.0603,
-    0.06,
-    0.0805,
-    0.086,
-    0.1178,
+    0.0623,
+    0.0782,
+    0.0753,
+    0.0757,
+    0.0714,
+    0.0721,
+    0.0746,
+    0.0733,
+    0.0696,
+    0.0911,
+    0.0959,
     0.1155,
-    0.1066,
-    0.0948,
-    0.1004
+    0.117,
+    0.1074,
+    0.1003,
+    0.1018,
+    0.1003,
+    0.098,
+    0.0779,
+    0.0799,
+    0.0877
    ]
   }
  }

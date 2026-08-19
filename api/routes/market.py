@@ -2769,9 +2769,28 @@ def _assemble_market_driver_context() -> dict:
         except Exception as e:
             logger.warning(f"market-driver macro news failed: {e}")
 
-    with ThreadPoolExecutor(max_workers=7) as pool:
+    def _drivers() -> None:
+        """Which markets the tape has actually moved with, measured.
+
+        The synthesis used to assert what was driving markets from a page of
+        quotes. This is the measured version — a rolling regression of SPY on
+        four macro markets — and it carries the ranking from a year earlier
+        alongside, because what SPY co-moves with ROTATES and a snapshot of
+        today's quotes cannot show that. Behind a six-hour cache and prewarmed at
+        startup, so it is never on the request path in practice; the 15s subtask
+        timeout below covers the case where it is.
+        """
+        try:
+            from src.market_drivers import driver_board
+            board = driver_board()
+            if board.get("available"):
+                ctx["drivers"] = board
+        except Exception as e:
+            logger.debug(f"market-driver attribution failed: {e}")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(fn) for fn in (_pulse, _news, _events, _vol, _cftc,
-                                              _breadth, _macro_news)]
+                                              _breadth, _macro_news, _drivers)]
         for f in futures:
             try:
                 f.result(timeout=15)
@@ -3334,6 +3353,10 @@ async def market_driver(
         # on a page that renders 3,403 names right below the paragraph. The
         # gatherer was fine; the handoff to the prompt was the missing wire.
         "breadth": ctx.get("breadth"),
+        # Measured co-movement, present only when it computed cleanly. Absent is
+        # a valid state and the prompt is told to write around it rather than
+        # guess — the same rule that governs a quote with no change_pct_1d.
+        "cross_asset_drivers": ctx.get("drivers"),
     }
     user_message = (
         "Context (cite from here only):\n"

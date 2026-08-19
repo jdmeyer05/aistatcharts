@@ -40,110 +40,20 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# label -> (long leg, short leg or None)
-MACRO_DRIVERS: dict[str, tuple[str, str | None]] = {
-    "Rates (TLT)": ("TLT", None),
-    "Dollar (DXY)": ("DX-Y.NYB", None),
-    "Oil (USO)": ("USO", None),
-    "Gold (GLD)": ("GLD", None),
-}
-
-RISK_COMOVEMENT: dict[str, tuple[str, str | None]] = {
-    "Credit (HYG-IEF)": ("HYG", "IEF"),
-}
-
-COMPOSITION: dict[str, tuple[str, str | None]] = {
-    "Breadth (RSP-SPY)": ("RSP", "SPY"),
-    "Semis (SMH-SPY)": ("SMH", "SPY"),
-    "Defensives (XLP-SPY)": ("XLP", "SPY"),
-    "Small caps (IWM-SPY)": ("IWM", "SPY"),
-}
-
-_WINDOW = 126          # ~6 months of sessions
-
-
-def load_returns(tickers: list[str], start: str = "2011-06-01") -> pd.DataFrame:
-    """Daily returns, one column per ticker.
-
-    ADJUSTED CLOSES. TLT, HYG and IEF all distribute MONTHLY — HYG's yield puts
-    roughly half a percent of phantom drop into one session every month — so on
-    unadjusted prices the credit spread carries a recurring step that is an
-    accounting event, not a market one. Every correlation and R² below would be
-    measuring it.
-
-    `Ticker().history()` in a loop, never `download()` — the batch API is not
-    thread-safe and has silently returned partially-empty frames on this
-    platform before.
-    """
-    import yfinance as yf
-    cols = {}
-    for tk in tickers:
-        try:
-            df = yf.Ticker(tk).history(start=start, interval="1d", auto_adjust=True)
-            if df is None or df.empty:
-                logger.warning(f"drivers: no bars for {tk}")
-                continue
-            s = df["Close"].copy()
-            s.index = pd.to_datetime(s.index).tz_localize(None).normalize()
-            cols[tk] = s
-        except Exception as e:
-            logger.warning(f"drivers: {tk} failed ({e})")
-    if not cols:
-        raise RuntimeError("no driver data")
-    px = pd.DataFrame(cols).sort_index()
-    return px.pct_change(fill_method=None).dropna(how="all")
-
-
-def build_factors(rets: pd.DataFrame, spec: dict[str, tuple[str, str | None]]) -> pd.DataFrame:
-    out = {}
-    for label, (long, short) in spec.items():
-        if long not in rets.columns:
-            continue
-        if short is None:
-            out[label] = rets[long]
-        elif short in rets.columns:
-            out[label] = rets[long] - rets[short]
-    return pd.DataFrame(out)
-
-
-def _ols_r2(y: np.ndarray, X: np.ndarray) -> float:
-    """R² of an OLS fit with an intercept. Returns nan on a singular design."""
-    if len(y) < X.shape[1] + 5:
-        return float("nan")
-    A = np.column_stack([np.ones(len(y)), X])
-    try:
-        beta, *_ = np.linalg.lstsq(A, y, rcond=None)
-    except np.linalg.LinAlgError:
-        return float("nan")
-    resid = y - A @ beta
-    ss_res = float(resid @ resid)
-    ss_tot = float(((y - y.mean()) ** 2).sum())
-    return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-
-
-def rolling_attribution(spy: pd.Series, factors: pd.DataFrame,
-                        window: int = _WINDOW) -> pd.DataFrame:
-    """Rolling total R² and each factor's incremental contribution.
-
-    A factor's share is the drop in R² when it alone is removed, so heavily
-    correlated factors split the credit rather than each claiming it. The
-    increments therefore do NOT sum to the total, and that gap is itself
-    informative: a large one means the drivers were moving together.
-    """
-    df = pd.concat([spy.rename("spy"), factors], axis=1).dropna()
-    names = list(factors.columns)
-    rows = []
-    for end in range(window, len(df) + 1):
-        chunk = df.iloc[end - window:end]
-        y = chunk["spy"].to_numpy()
-        X = chunk[names].to_numpy()
-        full = _ols_r2(y, X)
-        rec = {"date": chunk.index[-1], "r2_total": full}
-        for i, nm in enumerate(names):
-            reduced = _ols_r2(y, np.delete(X, i, axis=1))
-            rec[nm] = (full - reduced) if (full == full and reduced == reduced) else np.nan
-        rows.append(rec)
-    return pd.DataFrame(rows).set_index("date")
+# The driver specs and the regression primitives live in src/market_drivers.py,
+# which is what the home page reads. Importing them here rather than restating
+# them is the point: if the study and the page ever measured different baskets
+# with different code, the page would be citing a methodology nobody had run.
+from src.market_drivers import (  # noqa: E402
+    MACRO_DRIVERS,
+    RISK_COMOVEMENT,
+    COMPOSITION,
+    WINDOW as _WINDOW,
+    load_returns,
+    build_factors,
+    ols_r2 as _ols_r2,
+    rolling_attribution,
+)
 
 
 def correlation_table(spy: pd.Series, factors: pd.DataFrame,

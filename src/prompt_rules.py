@@ -115,6 +115,19 @@ _BROAD_RALLY = re.compile(
     r"\b(broad(?:-based| based)? (?:rally|advance|gain)|stocks rallied|"
     r"broad risk appetite|rally was broad|widespread (?:buying|gains))\b", re.I)
 _BREADTH_QUALIFIER = re.compile(r"narrow|divergen|breadth|equal[- ]weight|few names|thin participation", re.I)
+
+# Turning a same-day co-movement number into a cause or a forecast. The
+# attribution block is a regression on CONTEMPORANEOUS returns whose next-day
+# correlations were measured at essentially zero, so "gold is driving equities"
+# and "rates will push the tape" are both claims the payload cannot support —
+# and both are the natural sentence to write when handed a ranked list.
+_DRIVER_NOUN = r"(?:gold|oil|crude|the dollar|dollar|rates|duration|credit|treasuries)"
+_DRIVER_CAUSAL = re.compile(
+    rf"\b{_DRIVER_NOUN}\b[^.]{{0,45}}?\b(?:is|are|has been|have been)?\s*"
+    r"(?:driving|drove|drives|caused|causing|will (?:push|drive|lift|weigh|lead|send)|"
+    r"leads the|is leading the)\b", re.I)
+_DRIVER_CAUSAL_REVERSE = re.compile(
+    rf"\b(?:driven|propelled|dragged|led)\s+(?:higher\s+|lower\s+)?by\s+{_DRIVER_NOUN}\b", re.I)
 _TICKER = re.compile(r"\b[A-Z]{2,5}\b")
 
 
@@ -204,6 +217,22 @@ def grade_market_driver(payload: dict, output: dict) -> list[dict]:
                 "Breadth reads 'divergent' but the note describes a broad rally with no narrowness qualifier.",
                 prose[max(0, m.start() - 80):m.end() + 80]))
     _safe(_breadth, findings, "breadth")
+
+    # ── the attribution block is co-movement, not cause ──────────
+    def _drivers():
+        if not (payload.get("cross_asset_drivers") or {}):
+            return
+        for rx in (_DRIVER_CAUSAL, _DRIVER_CAUSAL_REVERSE):
+            m = rx.search(prose)
+            if m:
+                findings.append(_find(
+                    "major", "driver_causal_language",
+                    "States a macro market as causing or predicting the equity move. "
+                    "`cross_asset_drivers` measures same-day co-movement only, and its "
+                    "next-day correlations were measured at essentially zero.",
+                    prose[max(0, m.start() - 60):m.end() + 60]))
+                return
+    _safe(_drivers, findings, "drivers")
 
     # ── numbers must trace to the payload ────────────────────────
     def _grounding():

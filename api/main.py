@@ -223,6 +223,22 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"ES analogs pre-warm failed: {e}")
 
+    def _warm_drivers() -> None:
+        """Prefill the cross-asset attribution the market-driver synthesis reads.
+
+        ~6s of adjusted-close fetches for seven symbols, behind a six-hour
+        cache. It sits in the synthesis's parallel context assembly with a 15s
+        subtask timeout, so an unwarmed instance would not break the card — it
+        would just drop the one block on it that is measured rather than
+        inferred, silently, on the first generation after a deploy.
+        """
+        try:
+            from src.market_drivers import prewarm
+            prewarm()
+            logger.info("Cross-asset drivers pre-warmed")
+        except Exception as e:
+            logger.warning(f"Cross-asset driver pre-warm failed: {e}")
+
     def _warm_es() -> None:
         _warm_es_brief()
         _warm_es_track_record()
@@ -388,6 +404,7 @@ async def _warm_caches() -> None:
     _groups = (
         ("ES brief + track record", _warm_es),
         ("Macro pressure", _warm_macro_pressure),
+        ("Cross-asset drivers", _warm_drivers),
         ("Sector RRG", _warm_sector_rrg),
         ("S&P valuation", _warm_sp_valuation),
         ("Vol landscape", _warm_vol_landscape),

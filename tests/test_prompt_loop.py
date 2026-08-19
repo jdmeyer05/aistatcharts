@@ -397,3 +397,74 @@ def test_every_surface_has_a_baseline_and_a_rule_set():
         assert len(body) > 500, surface
         g = prompt_rules.grade(surface, {}, {} if surface != "home_interpret" else "")
         assert "error" not in g, (surface, g)
+
+
+# ── the cross-asset attribution block ─────────────────────────────
+
+def _payload_with_drivers(**over):
+    pay = _payload(**over)
+    pay["cross_asset_drivers"] = {
+        "available": True,
+        "window_sessions": 126,
+        "explained_share": 0.43,
+        "ranking": [
+            {"driver": "Gold", "ticker": "GLD", "rank": 1,
+             "share_of_variance": 0.10, "corr_with_spy": 0.482, "rank_a_year_ago": 4},
+            {"driver": "Oil", "ticker": "USO", "rank": 2,
+             "share_of_variance": 0.056, "corr_with_spy": -0.477, "rank_a_year_ago": 1},
+        ],
+        "credit_increment": 0.238,
+    }
+    return pay
+
+
+def _driver_rules(paragraph, payload=None):
+    out = _output(paragraphs={
+        "what_happened": "SPY rose 0.42%.",
+        "whats_driving": paragraph,
+        "what_to_watch": "TLT 88.0.",
+    })
+    return {f["rule"] for f in prompt_rules.grade_market_driver(
+        payload if payload is not None else _payload_with_drivers(), out)}
+
+
+def test_calling_a_driver_causal_is_flagged():
+    """The natural sentence to write when handed a ranked list, and the wrong one.
+
+    The attribution is a regression on same-day returns whose next-day
+    correlations were measured at essentially zero, so causation and prediction
+    are both unsupported by the payload that prompted them.
+    """
+    for bad in ("Gold is driving the tape higher.",
+                "The advance was driven by gold.",
+                "Rates will push equities lower into the close.",
+                "Credit has been driving risk appetite."):
+        assert "driver_causal_language" in _driver_rules(bad), bad
+
+
+def test_co_movement_wording_is_accepted():
+    for ok in ("The tape has moved with gold this quarter, gold at a 0.10 share.",
+               "SPY and gold have risen together; the 0.482 correlation is unusual for a haven.",
+               "Oil co-moved inversely at -0.477."):
+        assert "driver_causal_language" not in _driver_rules(ok), ok
+
+
+def test_causal_rule_is_silent_without_the_attribution_block():
+    """Scoped to the instruction it tests.
+
+    Without `cross_asset_drivers` in the payload there is no attribution to
+    misuse, and firing here would penalise a sentence about a headline instead.
+    """
+    assert "driver_causal_language" not in _driver_rules(
+        "Gold is driving the tape higher.", payload=_payload())
+
+
+def test_attribution_block_does_not_trip_the_other_rules():
+    """Its numbers must not read as ungrounded claims once quoted back."""
+    g = prompt_rules.grade("market_driver", _payload_with_drivers(), _output(paragraphs={
+        "what_happened": "SPY rose 0.42% and QQQ added 0.61%.",
+        "whats_driving": "The tape has moved with gold, a 0.1 share of daily variation "
+                         "against 0.43 for the four together; gold was fourth a year ago.",
+        "what_to_watch": "TLT at 88.0.",
+    }))
+    assert g["counts"]["critical"] == 0, g["findings"]
