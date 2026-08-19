@@ -917,11 +917,77 @@ def refresh_sectors(db):
 
 # ─── MAIN ─────────────────────────────────────────────────────
 
+# ─── TASK 10: SELF-IMPROVING PROMPT LOOP ───────────────────────
+#
+# Four stages, split by what they cost. See src/prompt_loop.py for the design;
+# what matters here is that the free half (grading, claim resolution) runs on
+# the hourly cron and the expensive half (critique, replay) runs nightly, so a
+# failure in the improvement machinery can never stop the measurement.
+
+
+def prompt_loop_seed(db):
+    """Record the git baseline as version 0 for every surface. Idempotent."""
+    try:
+        from src.prompt_registry import seed_baselines
+        res = seed_baselines()
+        logger.info(f"prompt_seed: {res}")
+    except Exception as e:
+        logger.error(f"prompt_seed failed: {e}")
+
+
+def prompt_loop_grade(db):
+    """Deterministic grading of new snapshots + settle any due claims."""
+    try:
+        from src.prompt_loop import run_all
+        res = run_all("grade")
+        graded = res.get("grade", {}).get("surfaces", {})
+        for surface, stat in graded.items():
+            if stat.get("graded"):
+                logger.info(f"prompt_grade: {surface} graded {stat['graded']} new outputs")
+        claims = res.get("claims", {})
+        if claims.get("resolved") or claims.get("expired"):
+            logger.info(f"prompt_grade: claims {claims}")
+    except Exception as e:
+        logger.error(f"prompt_grade failed: {e}")
+
+
+def prompt_loop_critique(db):
+    """Adversarial read of each surface's record; proposes challengers."""
+    try:
+        from src.prompt_loop import run_all
+        res = run_all("critique")
+        for surface, out in res.items():
+            logger.info(f"prompt_critique: {surface} -> {out.get('skipped') or out.get('note') or out}")
+    except Exception as e:
+        logger.error(f"prompt_critique failed: {e}")
+
+
+def prompt_loop_evaluate(db):
+    """Replay open challengers on holdout payloads; promote what earns it."""
+    try:
+        from src.prompt_loop import run_all
+        res = run_all("evaluate")
+        for surface, out in res.items():
+            if out.get("skipped"):
+                logger.info(f"prompt_evaluate: {surface} skipped ({out['skipped']})")
+                continue
+            logger.info(
+                f"prompt_evaluate: {surface} decision={out.get('decision')} "
+                f"verdict={out.get('verdict')} n={out.get('n')} "
+                f"diff={out.get('mean_diff')} ci={out.get('ci95')} "
+                f"reasons={out.get('reasons')}"
+            )
+    except Exception as e:
+        logger.error(f"prompt_evaluate failed: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI Statcharts hourly worker")
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
                                             "metrics", "cleanup", "prewarm", "options",
-                                            "market_news", "trump_validate", "sector_refresh"],
+                                            "market_news", "trump_validate", "sector_refresh",
+                                            "prompt_seed", "prompt_grade", "prompt_critique",
+                                            "prompt_evaluate"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -949,6 +1015,25 @@ def main():
 
     if args.task in ("all", "trump_validate"):
         validate_trump_decodes(db)
+
+    # The prompt loop's cheap half. Grading is deterministic and claim
+    # resolution is a price lookup, so both belong in the hourly job; the two
+    # stages that cost model calls run on their own schedule below.
+    if args.task in ("all", "prompt_grade"):
+        prompt_loop_grade(db)
+
+    # LLM stages — never in "all". Critique is two Opus calls and evaluate is
+    # ~50 generations, which would blow the hourly job's 10-minute budget and
+    # would be pointless at hourly cadence anyway: a day's snapshots is the
+    # smallest sample worth re-reading.
+    if args.task == "prompt_seed":
+        prompt_loop_seed(db)
+
+    if args.task == "prompt_critique":
+        prompt_loop_critique(db)
+
+    if args.task == "prompt_evaluate":
+        prompt_loop_evaluate(db)
 
     # sector_refresh is NOT in "all" — runs on its own daily cron (5pm ET)
     # rather than hourly to avoid hammering Polygon/yfinance with 77 calls

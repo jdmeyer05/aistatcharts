@@ -2793,88 +2793,10 @@ def _should_escalate_to_claude(ctx: dict) -> bool:
     return abs(spy) >= 1.0 or abs(vix) >= 10.0
 
 
-_MARKET_DRIVER_SYSTEM = """You are the market-driver desk at an institutional trading shop. Every 15 minutes you publish a short regime read to the rest of the firm — traders open the internal homepage and read your note first.
-
-Produce three tight paragraphs with specific numbers and explicit linkage between catalysts and moves. No generic hedging, no "it depends." If the signal is genuinely mixed, say so with specifics.
-
-PARAGRAPH 1 — WHAT HAPPENED (past tense, last session + today):
-- Lead with the biggest quotable move in the data (SPY, sector, vol, yield).
-- Name the catalyst linking the move — cite a specific news headline or release from the payload.
-- Include at least 3 specific numbers (prices, %, bps, odds).
-
-PARAGRAPH 2 — WHAT'S DRIVING IT NOW (present tense, regime read):
-- State the regime label plainly: risk-on / risk-off / duration-favored / short-vol / long-vol / defensive / cyclical-rotation / dollar-up / dollar-down / etc.
-- Explain WHY this regime, referencing the cross-asset pattern (e.g., "bonds bid alongside equities = duration trade").
-- Flag the most interesting divergence if one exists.
-
-PARAGRAPH 3 — WHAT TO WATCH (near future, next 4–24h):
-- Name 2–3 specific events/levels with explicit thresholds. Ex: "NFP 08:30 Fri — below 150K hardens cut narrative. SPY support at 4820."
-- If an event in the payload would shift the regime, say which direction.
-
-OUTPUT FORMAT — return ONLY valid JSON, no prose wrapper:
-{
-  "regime_label": "short phrase, e.g. 'risk-on / duration-favored'",
-  "paragraphs": {
-    "what_happened": "...",
-    "whats_driving": "...",
-    "what_to_watch": "..."
-  },
-  "citations": [
-    {"label": "CPI 0.2% MoM", "source": "news | release | polymarket | cftc | vol", "detail": "optional short context"}
-  ],
-  "confidence": 1-10
-}
-
-ACCURACY RULES — non-negotiable:
-- Only cite numbers that appear in the context below. Derivations (e.g., "XLF +1.2% vs SPY +0.3% = +0.9% relative") are fine if shown.
-- Never invent tickers, news items, or events not in the payload.
-- If the context is thin (market closed, no news, no events), say so in one short paragraph and emit minimal filler for the other two. Do not pad.
-- A quote with NO `change_pct_1d` field means the day's move is UNKNOWN, not zero. Do not
-  describe it as flat, unchanged, or muted, and do not treat it as evidence of anything — say the
-  move is unavailable, or write around it using the quotes that do carry a change. Reporting an
-  absent move as "flat price action" is the single worst error you can make here, because it reads
-  as a confident market call rather than as missing data.
-
-BREADTH DECIDES WHETHER A MOVE IS A RALLY OR A FEW NAMES. When `breadth` is present and its
-`divergence` reads `divergent`, the index move is NOT confirmed by the majority of stocks, and
-writing "stocks rallied" without that qualifier is the most misleading sentence available to you
-here. Lead paragraph two with it when it fires: an index up on a negative `net_advancers_pct` is
-narrow, narrow moves retrace, and `equal_vs_cap_spread_pct` is the independent confirmation. When
-breadth CONFIRMS, say so in three words and move on — it is only the story when it disagrees.
-Never present these as NYSE figures; they are a liquid-universe reconstruction and will not tie
-out against a terminal.
-
-TWO HEADLINE FEEDS, AND THEY ARE NOT EQUAL. `macro_headlines` is the curated macro feed, ranked by
-how much a story moves the index. `news_headlines` is an unfiltered wire that on a quiet tape fills
-with law-firm class-action notices and single-name press releases. Look in `macro_headlines` FIRST
-when attributing a move, and never conclude "no catalyst" or "no matching headline" from
-`news_headlines` alone — that sentence is only available to you when BOTH lists are empty of
-anything relevant. Either feed may be cited; say which kind of story it is, not which feed it came
-from.
-
-VIX REGIME CALIBRATION — use the `vix_level_band` field, not the 1D % change:
-- `complacent` (VIX < 15): "muted vol", "complacent", "carry-friendly". NEVER call this elevated.
-- `muted` (15 ≤ VIX < 20): "below-average vol", "muted", "benign". NEVER call this elevated.
-- `elevated` (20 ≤ VIX < 25): the only band that warrants "elevated".
-- `stressed` (25 ≤ VIX < 35): "stressed", "risk-off bid".
-- `panic` (VIX ≥ 35): "panic", "crisis-pricing".
-A VIX 1D move (e.g. +0.5%, +10%) describes the *direction*, not the *level*. A VIX up 0.5% but still printing 17 is a *muted* regime that is *firming*, not "elevated volatility". Get this right — the rest of the firm reads this and trades off the regime label.
-
-CITATION LABEL RULES — disambiguate every percentage:
-- Stock price moves: use ticker + signed %. "QQQ +0.96%". "USO -2.92%". Always include the +/- sign.
-- Single-name catalyst with non-price % (earnings, revenue, guidance, odds): suffix the metric. "VRT EPS +83% YoY". "LTRE -22% on guide cut". Never write a bare "Vertiv up 83%" — readers will misread it as a stock move.
-- News/release citations: short label of the catalyst itself ("Vertiv Q1 beat", "NFP miss"). Don't put a % in the label unless the % is part of the announced figure.
-- Polymarket / CFTC / odds-based: include the source verb. "Polymarket recession-2026 38% (-2pp)".
-
-LENGTH — HARD LIMITS:
-- Each paragraph: 60 words MAX. 3 paragraphs total.
-- Confidence + regime_label: ≤ 20 words combined.
-- Citations: ≤ 5 items. Each label ≤ 10 words.
-- Going over truncates your JSON and breaks the page — do not exceed.
-
-SELF-CHECK — before returning JSON:
-Draft your three paragraphs first. Then re-read once and verify: every number traces to the payload, every cited catalyst appears in the news/events list, regime_label is consistent with the cross-asset story in paragraph 2, "what to watch" references events/levels actually in the payload. Make small corrections if needed — this is a verification pass, not a rewrite. Return only the final revised JSON.
-"""
+# The market-driver system prompt is versioned data, not a module constant.
+# Baseline text: src/prompt_defaults.py. Text actually served: resolved per
+# request through src.prompt_registry, so a promotion takes effect without a
+# deploy and a rollback without a revert.
 
 
 _MACRO_PRESSURE_CACHE: dict = {}
@@ -3421,6 +3343,11 @@ async def market_driver(
 
     model_used = "claude-opus-5" if escalate else "gemini-3.1-pro-preview"
 
+    # Whichever prompt version is champion right now. Falls back to the git
+    # baseline at version 0 on any database trouble — see src/prompt_registry.
+    from src.prompt_registry import active as _active_prompt
+    driver_system, driver_version = _active_prompt("market_driver")
+
     def _generate() -> str:
         """One generation attempt. Raises on a truncated response.
 
@@ -3444,7 +3371,7 @@ async def market_driver(
                 max_tokens=12000,          # thinking + prose, not prose alone
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
-                system=[{"type": "text", "text": _MARKET_DRIVER_SYSTEM,
+                system=[{"type": "text", "text": driver_system,
                          "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user_message}],
             )
@@ -3460,7 +3387,7 @@ async def market_driver(
         client = genai.Client(api_key=key)
         resp = client.models.generate_content(
             model="gemini-3.1-pro-preview",
-            contents=f"{_MARKET_DRIVER_SYSTEM}\n\n{user_message}",
+            contents=f"{driver_system}\n\n{user_message}",
             config=types.GenerateContentConfig(
                 max_output_tokens=12000,
                 temperature=0.25,
@@ -3531,6 +3458,13 @@ async def market_driver(
             "quotes": ctx.get("quotes", {}),
         }
 
+    # The `calls` block is instrumentation, not copy. It is the model's own
+    # falsifiable version of what the three paragraphs imply, and it is scored
+    # against price days later — but it is not something a reader should see on
+    # the home page, so it is lifted out here and never reaches the client or
+    # the served cache. See src/prompt_claims.py for how it settles.
+    calls = parsed.pop("calls", None)
+
     result = {
         **parsed,
         "model": model_used,
@@ -3544,6 +3478,25 @@ async def market_driver(
         _set_bundle_cache(cache_key, result, ttl_minutes=_driver_ttl_minutes())
     except Exception:
         pass
+
+    # Freeze what the model saw next to what it said. Everything the prompt
+    # loop can ever measure comes from this row, and it is written on a daemon
+    # thread that swallows its own errors — a lost snapshot is a lost row, a
+    # raised one would be a broken home page.
+    try:
+        from src import prompt_snapshots
+        prompt_snapshots.record(
+            "market_driver",
+            payload,
+            {**parsed, "calls": calls or []},
+            prompt_version=driver_version,
+            model=model_used,
+            meta={"escalated": escalate, "market_open": ctx.get("market_open", False),
+                  "attempts": attempt},
+            claims=calls or [],
+        )
+    except Exception as e:
+        logger.debug(f"market-driver snapshot skipped: {e}")
 
     return result
 

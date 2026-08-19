@@ -4855,3 +4855,163 @@ export interface CapitalFinancing {
 export async function fetchCapitalFinancing(): Promise<CapitalFinancing> {
   return apiFetch("/api/ai-infra/capital-financing");
 }
+
+// ─── Prompt Loop ─────────────────────────────────────────────
+// The self-improvement loop's own record: how the home page's AI blocks scored,
+// which prompt version was serving, and what the adversarial pass changed.
+
+export type PromptSurface = "market_driver" | "home_interpret" | "es_audit";
+
+export interface PromptFindingCounts {
+  critical: number;
+  major: number;
+  minor: number;
+}
+
+export interface PromptScorePoint {
+  date: string;
+  mean_score: number;
+  n: number;
+}
+
+export interface PromptCalibration {
+  ok: boolean;
+  n?: number;
+  note?: string;
+  hit_rate?: number;
+  hit_rate_ci95?: [number, number];
+  base_rate?: number | null;
+  n_with_base_rate?: number;
+  brier?: number | null;
+  brier_base_rate?: number | null;
+  brier_skill?: number | null;
+  by_op?: Record<string, { n: number; hits: number; hit_rate: number | null; base_rate: number | null }>;
+  by_subject?: Record<string, { n: number; hits: number; hit_rate: number | null; base_rate: number | null }>;
+}
+
+export interface PromptVersionRow {
+  version: number;
+  status: string;
+  origin: string;
+  rationale: string | null;
+  diff_summary: string | null;
+  created_at: string;
+  promoted_at: string | null;
+  retired_at: string | null;
+  body_hash: string;
+}
+
+export interface PromptExperimentRow {
+  id: number;
+  surface: string;
+  champion_version: number;
+  challenger_version: number;
+  n_holdout: number;
+  metrics: Record<string, unknown>;
+  regression_pass: boolean;
+  verdict: string;
+  promoted: boolean;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface PromptSurfaceSummary {
+  ok: boolean;
+  error?: string;
+  champion?: { version: number; promoted_at: string | null; origin: string; rationale: string | null; chars: number };
+  n_graded?: number;
+  mean_score?: number | null;
+  finding_totals?: PromptFindingCounts;
+  findings_per_output?: Partial<Record<keyof PromptFindingCounts, number>>;
+  score_series?: PromptScorePoint[];
+  calibration?: PromptCalibration | null;
+  challenger_version?: number | null;
+  n_versions?: number;
+  last_experiment?: PromptExperimentRow | Record<string, never>;
+}
+
+export interface PromptOverview {
+  ok: boolean;
+  window_days: number;
+  surfaces: Record<PromptSurface, PromptSurfaceSummary>;
+}
+
+export async function fetchPromptOverview(days = 30): Promise<PromptOverview> {
+  return apiFetch(`/api/prompt-loop/overview?days=${days}`, { timeoutMs: 45_000 });
+}
+
+export interface PromptFullSummary extends PromptSurfaceSummary {
+  surface: PromptSurface;
+  window_days: number;
+  versions: PromptVersionRow[];
+  experiments: PromptExperimentRow[];
+  challenger: (PromptVersionRow & { body?: string; parent_version?: number | null }) | null;
+}
+
+export async function fetchPromptSummary(surface: PromptSurface, days = 30): Promise<PromptFullSummary> {
+  return apiFetch(`/api/prompt-loop/summary?surface=${surface}&days=${days}`, { timeoutMs: 45_000 });
+}
+
+export interface PromptGradedSnapshot {
+  id: number;
+  created_at: string;
+  session_phase: string | null;
+  prompt_version: number;
+  model: string | null;
+  split: string;
+  output: Record<string, unknown> | string;
+  score: number | null;
+  counts: PromptFindingCounts;
+  findings: { severity: string; rule: string; detail: string; evidence?: string }[];
+}
+
+export async function fetchPromptSnapshots(
+  surface: PromptSurface,
+  opts: { split?: string; limit?: number; days?: number } = {},
+): Promise<{ ok: boolean; count: number; data: PromptGradedSnapshot[] }> {
+  const q = new URLSearchParams({ surface });
+  if (opts.split) q.set("split", opts.split);
+  if (opts.limit) q.set("limit", String(opts.limit));
+  if (opts.days) q.set("days", String(opts.days));
+  return apiFetch(`/api/prompt-loop/snapshots?${q.toString()}`, { timeoutMs: 45_000 });
+}
+
+export interface PromptClaimRow {
+  id: number;
+  claim: { subject: string; vs?: string; op: string; threshold: number; sessions: number; text?: string };
+  confidence: number | null;
+  stated_at: string;
+  status: string;
+  correct: boolean | null;
+  base_rate: number | null;
+  actual: Record<string, unknown> | null;
+}
+
+export async function fetchPromptClaims(
+  surface: PromptSurface = "market_driver",
+  days = 90,
+  status = "resolved",
+): Promise<{ ok: boolean; count: number; data: PromptClaimRow[]; scoreboard: PromptCalibration }> {
+  return apiFetch(`/api/prompt-loop/claims?surface=${surface}&days=${days}&status=${status}`, {
+    timeoutMs: 45_000,
+  });
+}
+
+export async function fetchPromptVersion(
+  surface: PromptSurface,
+  version: number,
+): Promise<{ ok: boolean; version: PromptVersionRow & { body: string }; parent_version: number | null; diff: string[] | null }> {
+  return apiFetch(`/api/prompt-loop/version?surface=${surface}&version=${version}`, { timeoutMs: 30_000 });
+}
+
+export async function rollbackPrompt(surface: PromptSurface): Promise<{ ok: boolean; from_version: number; to_version: number }> {
+  return apiFetch(`/api/prompt-loop/rollback?surface=${surface}`, { method: "POST" });
+}
+
+export async function promotePromptVersion(surface: PromptSurface, version: number): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/prompt-loop/promote?surface=${surface}&version=${version}`, { method: "POST" });
+}
+
+export async function seedPromptBaselines(): Promise<{ ok: boolean; surfaces: Record<string, string> }> {
+  return apiFetch("/api/prompt-loop/seed", { method: "POST", timeoutMs: 45_000 });
+}

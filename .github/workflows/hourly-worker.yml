@@ -24,6 +24,7 @@ on:
           - cleanup
           - market_news
           - trump_validate
+          - prompt_grade
 
 jobs:
   run-worker:
@@ -47,6 +48,9 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # The prompt-loop tables are RLS'd to service_role. Without this the
+          # hourly grading pass writes nothing and fails quietly.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

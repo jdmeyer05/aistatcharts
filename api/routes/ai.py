@@ -28,170 +28,20 @@ router = APIRouter()
 
 MODEL = "claude-opus-5"
 
-BASE_SYSTEM = """You are a senior quantitative analyst at an institutional trading desk. The user is looking at a page in our quant research platform and wants you to tell them WHAT IT MEANS — not describe what they're seeing, but interpret it.
-
-Style rules:
-- Be direct, specific, and actionable. No throat-clearing, no meta-commentary.
-- Use bullet points. Keep under 220 words total.
-- Distinguish signal from noise. A single outlier number is often noise; confluence of signals is usually signal.
-- Name the tradeable implication where one exists (long/short bias, sizing consideration, what would invalidate the read).
-- Be honest about data limitations — if the sample is small or the window is short, say so.
-- Assume the user is sophisticated: don't explain basic terms.
-- End with one line: "Bottom line:" followed by a single crisp takeaway.
-
-ACCURACY RULES — non-negotiable:
-- Only cite numbers that appear in the payload, either literally or as direct derivations (ratios, averages, sums) of payload values.
-- If you compute a derived number, either show the inputs (e.g., "177/129 = 1.37x buy/sell") or prefix with "roughly"/"approximately".
-- Prefer qualitative language ("modestly bullish", "heavy skew") over invented precise figures when precision isn't in the data.
-- Never cite a ticker, fund, or person not present in the payload.
-- If the data is too sparse for a specific claim, say so — don't pad with generalities.
-
-SELF-CHECK — before finalizing:
-Draft your response first. Then re-read it once and verify: every number traces to the payload, every ticker/fund/person appears in the payload, and your Bottom line is consistent with the data cited. Make small corrections if anything fails — this is a verification pass, not a rewrite. Output only the final revised version."""
+# The interpretation system prompt is versioned data now — baseline lives in
+# src/prompt_defaults.py, and the home page resolves a possibly-newer champion
+# through src/prompt_registry.py at request time.
+from src.prompt_defaults import BASE_SYSTEM  # noqa: E402
 
 
-# Extract numeric-looking tokens from Claude's interpretation so we can check
-# each one appears in the data payload. Handles plain numbers, thousands
-# commas, percentages, and $B/$M/$K suffixes.
-_NUM_TOKEN = re.compile(
-    r"""\$?\s*-?\d+(?:,\d{3})*(?:\.\d+)?\s*[%xBMKTbmkt]?""",
+# Grounding primitives live in src/grounding.py so the prompt-loop worker can
+# grade replayed outputs with the same check, without importing FastAPI.
+from src.grounding import (  # noqa: E402
+    _NUM_TOKEN,
+    _normalize_num,
+    _collect_payload_numbers,
+    _check_grounding,
 )
-
-
-def _normalize_num(token: str) -> tuple[float | None, bool]:
-    """Turn a token like '$1.2B', '15%', '1,500', '1.37x', '$3.2T' into a float.
-    Returns (value, is_percent). is_percent tells the grounding check to also
-    try the decimal form when matching against payload numbers (since data
-    often stores percentages as decimals — 0.153 vs "15.3%")."""
-    s = token.strip().replace("$", "").replace(",", "").replace(" ", "")
-    mult = 1.0
-    is_percent = False
-    if s.endswith("%"):
-        s = s[:-1]
-        is_percent = True
-    elif s.lower().endswith("t"):
-        s = s[:-1]
-        mult = 1e12
-    elif s.lower().endswith("b"):
-        s = s[:-1]
-        mult = 1e9
-    elif s.lower().endswith("m"):
-        s = s[:-1]
-        mult = 1e6
-    elif s.lower().endswith("k"):
-        s = s[:-1]
-        mult = 1e3
-    elif s.lower().endswith("x"):
-        s = s[:-1]
-    try:
-        return float(s) * mult, is_percent
-    except (ValueError, TypeError):
-        return None, False
-
-
-def _collect_payload_numbers(obj, out: set[float]) -> None:
-    """Recursively gather every numeric value in the payload for fuzzy match."""
-    if isinstance(obj, (int, float)) and not isinstance(obj, bool):
-        out.add(float(obj))
-    elif isinstance(obj, dict):
-        for v in obj.values():
-            _collect_payload_numbers(v, out)
-    elif isinstance(obj, list):
-        for v in obj:
-            _collect_payload_numbers(v, out)
-    elif isinstance(obj, str):
-        # Parse numeric substrings in string values too (e.g., "15.3%" in data)
-        for m in _NUM_TOKEN.findall(obj):
-            n, _ = _normalize_num(m)
-            if n is not None:
-                out.add(n)
-
-
-def _check_grounding(interpretation: str, data: dict) -> dict:
-    """Post-hoc hallucination check.
-
-    Every numeric claim in the interpretation either (a) appears verbatim in
-    the payload, (b) matches a payload value within 2% tolerance (for rounded
-    claims like "$1.2B" when payload has 1,215,432,000), or (c) is a trivial
-    derivation (ratio/percent of two payload values within tolerance).
-    Unverified tokens are surfaced in the response so the UI can flag them.
-    """
-    payload_nums: set[float] = set()
-    _collect_payload_numbers(data, payload_nums)
-    # Also include the stringified version for verbatim substring matches.
-    data_str = json.dumps(data, default=str)
-
-    grounded: list[str] = []
-    unverified: list[str] = []
-    skip_tiny = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0}
-
-    for raw_token in _NUM_TOKEN.findall(interpretation):
-        token = raw_token.strip()
-        if not token or token in ("-", "$"):
-            continue
-        n, is_pct = _normalize_num(token)
-        if n is None:
-            continue
-        # Skip tiny counting numbers — "3 buys", "2 sells" are everywhere and
-        # a false flag here is worse than a missed one.
-        if n in skip_tiny and "." not in token and "%" not in token:
-            continue
-
-        # Verbatim substring match on data JSON (handles "NDAQ (6 buys)"
-        # where 6 is in the payload's count field).
-        clean = token.replace("$", "").replace(",", "").replace(" ", "").rstrip("%xBMKTbmkt")
-        if clean and clean in data_str:
-            grounded.append(token)
-            continue
-
-        # Fuzzy numeric match within 2% tolerance against any payload number.
-        # For percentage tokens, also check the decimal form — payloads often
-        # store "15.3%" as 0.153. Also try the /100 form for bare integers in
-        # 1..100 (likely implicit percentile / percentage claims like
-        # "95th percentile" when the payload stores 0.95).
-        candidates = [n]
-        if is_pct:
-            candidates.append(n / 100.0)
-        elif "." not in token and "%" not in token and 1 <= n <= 100 and n == int(n):
-            candidates.append(n / 100.0)
-        matched = False
-        for c in candidates:
-            tolerance = max(abs(c) * 0.02, 0.01)
-            if any(abs(c - p) <= tolerance for p in payload_nums):
-                matched = True
-                break
-        if matched:
-            grounded.append(token)
-            continue
-
-        # Ratio check: is this a derivation of two payload numbers?
-        # Covers cases like "1.37x" when payload has {purchases: 177, sales: 129}.
-        ratio_match = False
-        if 0.01 < abs(n) < 1000:
-            nums_list = list(payload_nums)
-            for i, a in enumerate(nums_list):
-                if a == 0:
-                    continue
-                for j, b in enumerate(nums_list):
-                    if i == j:
-                        continue
-                    r = b / a
-                    if abs(r - n) <= abs(n) * 0.02:
-                        ratio_match = True
-                        break
-                if ratio_match:
-                    break
-        if ratio_match:
-            grounded.append(token)
-            continue
-
-        unverified.append(token)
-
-    return {
-        "grounded_count": len(grounded),
-        "unverified_count": len(unverified),
-        "unverified_tokens": unverified[:10],  # cap to avoid noisy UI
-    }
 
 # Per-page context so Claude understands the semantic meaning of each payload
 # without reinventing it every call. These stay in the user turn, not the
@@ -745,14 +595,21 @@ class InterpretRequest(BaseModel):
     subject: str | None = None  # e.g., ticker, fund name, politician — for context
 
 
-def _interpret_cache_key(page: str, data: dict, subject: str | None) -> str:
-    """Deterministic hash over the inputs AND the prompt text. Including
-    BASE_SYSTEM + PAGE_CONTEXT means any prompt edit automatically invalidates
+def _interpret_cache_key(page: str, data: dict, subject: str | None,
+                         system_text: str | None = None) -> str:
+    """Deterministic hash over the inputs AND the prompt text. Including the
+    system prompt + PAGE_CONTEXT means any prompt edit automatically invalidates
     cached answers for the affected page — no manual cache-wipe needed. Old
-    entries sit orphaned until their 24h TTL expires."""
+    entries sit orphaned until their 24h TTL expires.
+
+    `system_text` is passed explicitly rather than read from BASE_SYSTEM so that
+    a promoted home-page prompt busts its own cache. Hashing the baseline while
+    serving a challenger would have re-served the OLD answer under the NEW
+    prompt's name for a full day — which would show up as a mysteriously
+    unchanged score right after a promotion."""
     ctx = PAGE_CONTEXT.get(page, "")
     payload = json.dumps(
-        {"page": page, "system": BASE_SYSTEM, "ctx": ctx, "data": data, "subject": subject},
+        {"page": page, "system": system_text or BASE_SYSTEM, "ctx": ctx, "data": data, "subject": subject},
         sort_keys=True,
         default=str,
     )
@@ -786,7 +643,16 @@ async def interpret(
 
     # Cache check — Supabase-backed. Stale entries (> 24h) fall through to
     # recompute + rewrite.
-    cache_key = _interpret_cache_key(body.page, body.data, body.subject)
+    # The home page is the surface the prompt loop measures and edits; every
+    # other page stays on the git baseline until a version has earned its way
+    # past evidence gathered on that page's own traffic.
+    if body.page == "home_page":
+        from src.prompt_registry import active as _active_prompt
+        system_text, interp_version = _active_prompt("home_interpret")
+    else:
+        system_text, interp_version = BASE_SYSTEM, 0
+
+    cache_key = _interpret_cache_key(body.page, body.data, body.subject, system_text)
     try:
         from src._cache_util import _supabase_get
         entry = _supabase_get(cache_key)
@@ -830,7 +696,7 @@ async def interpret(
             system=[
                 {
                     "type": "text",
-                    "text": BASE_SYSTEM,
+                    "text": system_text,
                     # Prompt cache — system prompt is reused across every
                     # interpretation request, so cache hits cut input cost ~75%.
                     "cache_control": {"type": "ephemeral"},
@@ -871,6 +737,18 @@ async def interpret(
                 _supabase_put(cache_key, result)
             except Exception as e:
                 logger.debug(f"ai interpret cache write failed: {e}")
+        if body.page == "home_page":
+            try:
+                from src import prompt_snapshots
+                prompt_snapshots.record(
+                    "home_interpret", body.data, interpretation,
+                    prompt_version=interp_version, model=MODEL,
+                    meta={"subject": body.subject or "",
+                          "output_tokens": result.get("output_tokens")},
+                )
+            except Exception as e:
+                logger.debug(f"interpret snapshot skipped: {e}")
+
         return {**result, "cache_hit": False}
     except HTTPException:
         raise

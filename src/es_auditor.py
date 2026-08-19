@@ -36,7 +36,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 _MODEL = "claude-sonnet-5"
-_MAX_FINDINGS = 5
+from src.prompt_defaults import ES_AUDIT_MAX_FINDINGS as _MAX_FINDINGS  # noqa: E402
 
 
 def _deterministic(brief: dict) -> list[dict]:
@@ -214,32 +214,10 @@ def _payload(brief: dict) -> dict:
     }
 
 
-_SYSTEM = """You audit one page of a trading dashboard for INTERNAL CONTRADICTIONS. You are not a narrator, a summariser, or a market analyst. You never say what the market will do.
-
-Your only question: do any two parts of this payload make claims that cannot both be true?
-
-WHAT COUNTS
-- A block asserting data is absent when another block contains it.
-- A block asserting no catalyst when the headline list contains a matching one.
-- Two blocks describing the same quantity with numbers that do not reconcile.
-- A characterisation contradicted by a figure elsewhere (e.g. calling a tape broad while an equal-weight measure underperforms).
-- A verdict whose stated reasons do not support it.
-
-WHAT DOES NOT COUNT — do not report these:
-- Two modules disagreeing about the FUTURE. That is genuine uncertainty, not a contradiction.
-- A block being cautious while another is confident.
-- Anything you would have to assume market context to call wrong.
-- A number you think is unusual. You audit consistency, not plausibility.
-- A HEADLINE OLDER THAN TODAY conflicting with today's price action. Headlines carry `age` and `hours_ago`. A story from yesterday or earlier describes a different period and cannot contradict the current tape — an earnings report about a past quarter of rising oil says nothing about whether oil is falling now.
-- ESTIMATES THAT CARRY THEIR OWN QUALIFIER. An estimate marked `quote_source: "settled"` or `forward_looking: false` is explicitly not a live figure, and the card already declines to headline it. Divergence between a settled quote and a live one is disclosed behaviour, not an inconsistency. Only flag estimator divergence when the diverging estimates are all live.
-
-RULES
-- Quote the specific values that clash. A finding without both sides quoted is not a finding.
-- If nothing genuinely contradicts, return an empty list. THIS IS THE COMMON CASE AND IT IS A SUCCESS. Do not manufacture a finding to fill the list.
-- Never report more than %d findings; rank by how misleading each would be to a trader.
-
-Return ONLY valid JSON:
-{"findings": [{"severity": "high|medium|low", "where": "which two blocks", "finding": "one sentence quoting both clashing values"}]}""" % _MAX_FINDINGS
+# The auditor's system prompt is versioned data — baseline in src/prompt_defaults.py,
+# live text resolved through src/prompt_registry.py. Imported under the old name
+# so the call site below is unchanged.
+from src.prompt_defaults import ES_AUDIT_SYSTEM as _SYSTEM  # noqa: E402
 
 
 def audit_card(brief: dict, with_model: bool = True) -> dict:
@@ -247,6 +225,10 @@ def audit_card(brief: dict, with_model: bool = True) -> dict:
     rules = _deterministic(brief)
     model_findings: list[dict] = []
     model_used = None
+    audit_payload = _payload(brief)
+    # Champion text for this surface, or the git baseline on any DB trouble.
+    from src.prompt_registry import active as _active_prompt
+    audit_system, audit_version = _active_prompt("es_audit")
 
     if with_model:
         try:
@@ -267,10 +249,10 @@ def audit_card(brief: dict, with_model: bool = True) -> dict:
                 # digest's summarising. `fallbacks` is an Opus-5/Fable-5
                 # parameter and Sonnet 5 rejects it with a 400 — do not add it.
                 output_config={"effort": "medium"},
-                system=_SYSTEM,
+                system=audit_system,
                 messages=[{"role": "user",
                            "content": "Audit this payload:\n```json\n"
-                                      + json.dumps(_payload(brief), indent=1,
+                                      + json.dumps(audit_payload, indent=1,
                                                    default=str)[:14000]
                                       + "\n```"}],
             )
@@ -291,6 +273,25 @@ def audit_card(brief: dict, with_model: bool = True) -> dict:
         f.setdefault("source", "rule")
     order = {"high": 0, "medium": 1, "low": 2}
     findings.sort(key=lambda f: order.get(f.get("severity"), 3))
+
+    # Only the model pass is worth recording: the rule findings are a pure
+    # function of the payload and can be recomputed from it at any time, so
+    # storing them would be storing a derivation. What the loop needs is what
+    # the MODEL said, next to what it was shown.
+    # A failed model pass would otherwise be recorded as an output with no
+    # findings, which grades as a clean pass and quietly inflates the score for
+    # this surface with rows where the model never spoke.
+    if with_model and model_used:
+        try:
+            from src import prompt_snapshots
+            prompt_snapshots.record(
+                "es_audit", audit_payload,
+                {"findings": model_findings},
+                prompt_version=audit_version, model=model_used,
+                meta={"n_rule": len(rules)},
+            )
+        except Exception as e:
+            logger.debug(f"es_audit snapshot skipped: {e}")
 
     return {
         "available": True,

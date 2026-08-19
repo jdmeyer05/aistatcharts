@@ -1,0 +1,73 @@
+name: Prompt Loop
+
+# The expensive half of the self-improvement loop. The cheap half — rule
+# grading and claim resolution — rides along on the hourly worker, so the
+# measurement keeps running even if everything in this file is disabled.
+#
+# Two jobs, forty minutes apart, because evaluate can only score a challenger
+# that critique has already written. Neither is in the hourly `all` task: one
+# critique is two Opus calls and one evaluation is roughly fifty generations,
+# which would neither fit the hourly job's ten-minute budget nor mean anything
+# at hourly cadence — a day of snapshots is the smallest sample worth
+# re-reading.
+#
+# REQUIRES `SUPABASE_SERVICE_ROLE_KEY` IN REPO SECRETS. The prompt-loop tables
+# are RLS'd to service_role only, so with the anon key every write here fails
+# silently and the loop looks like it is running while recording nothing.
+
+on:
+  schedule:
+    # 02:20 UTC — after the US close, before the next premarket.
+    - cron: '20 2 * * *'
+    # 03:00 UTC — scores whatever critique proposed forty minutes earlier.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Stage to run'
+        required: false
+        default: 'prompt_critique'
+        type: choice
+        options:
+          - prompt_seed
+          - prompt_grade
+          - prompt_critique
+          - prompt_evaluate
+
+jobs:
+  prompt-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pick stage
+        id: stage
+        run: |
+          if [ -n "${{ github.event.inputs.task }}" ]; then
+            echo "task=${{ github.event.inputs.task }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "20 2 * * *" ]; then
+            echo "task=prompt_critique" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=prompt_evaluate" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run stage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: python worker.py --task ${{ steps.stage.outputs.task }}
