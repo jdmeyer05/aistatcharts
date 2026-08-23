@@ -136,6 +136,17 @@ def settles_asof(bars: pd.DataFrame, d: date, months: list) -> dict:
     On-or-before rather than exact, because a contract does not print every
     session and an exact-date lookup would silently thin the strip — and a
     missing contract breaks the chain, which is reported but changes the answer.
+
+    DO NOT ADD A STALENESS GUARD HERE. It looks like it needs one: 13% of
+    sessions read a contract more than three days old, up to eighteen. Every one
+    of those is the ANCHOR, and the anchor is by construction a MEETING-FREE
+    month before the first upcoming decision — which, once that month has ended,
+    is an expired contract whose final settlement is the average EFFR over a
+    month in which the rate never changed. That is not a stale quote, it is the
+    prevailing rate stated exactly, and it stays true until the next meeting
+    moves it. Rejecting it on age would push the anchor onto spot EFFR and lose
+    the cleaner read. Measured 2026-08-23: ZQG5 read on 2025-03-04..18, ZQQ4 on
+    2024-09-03..17, and six more of the same shape — all anchors, no exceptions.
     """
     want = {zq_ticker(y, m) for (y, m) in months}
     sl = bars[(bars["contract"].isin(want)) & (bars["session_end_date"] <= d)]
@@ -172,10 +183,18 @@ def build(refresh: bool = False) -> pd.DataFrame:
         if not path.get("available"):
             continue
 
+        # WHICH ANCHOR, recorded rather than inferred. The estimator switches
+        # between an expired meeting-free contract and spot EFFR as the calendar
+        # rolls, and the two disagree by a fraction of a bp, so a switch is a
+        # small artificial step in the series. Inferring it from
+        # `anchor_rate == spot_effr` does not work — the contract-implied rate
+        # lands exactly on spot often enough that the proxy reports switches on
+        # days when nothing switched.
         rec = {
             "settle_date": d,
             "cumulative_bp": path.get("cumulative_bp"),
             "anchor_rate": path.get("anchor_rate"),
+            "anchor_source": "spot" if path.get("anchor") == "spot EFFR" else "contract",
             "spot_effr": path.get("spot_effr"),
             "n_priced": sum(1 for m in path["meetings"] if "delta_bp" in m),
         }
@@ -187,6 +206,20 @@ def build(refresh: bool = False) -> pd.DataFrame:
         rows.append(rec)
 
     out = pd.DataFrame(rows).sort_values("settle_date").reset_index(drop=True)
+
+    # A BROKEN CHAIN SHORTENS THE HORIZON WITHOUT SAYING SO. `cumulative_bp` is
+    # measured to the last PRICED meeting, so a session that could only price two
+    # of the three would contribute a two-meeting number to a three-meeting
+    # series — a level shift that looks like repricing. None occur in the current
+    # sample (501 of 501 price all three), which is exactly why this has to be a
+    # guard rather than a note: the day it stops being true, nothing else would
+    # complain.
+    full = out["n_priced"] == N_MEETINGS
+    if not full.all():
+        logger.warning(f"dropping {int((~full).sum())} sessions that priced fewer "
+                       f"than {N_MEETINGS} meetings — mixing horizons would look "
+                       f"like a move in the level")
+        out = out[full].reset_index(drop=True)
 
     # The settlement lands after the close, so the earliest session that could
     # have traded on it is the next one in the series. Derived here rather than

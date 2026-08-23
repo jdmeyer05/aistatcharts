@@ -205,8 +205,11 @@ def _prev_month(y: int, m: int) -> tuple[int, int]:
     return (y, m - 1) if m > 1 else (y - 1, 12)
 
 
+_ANCHOR_MAX_DEPTH = 4
+
+
 def _anchor(first_meeting: date, settles: dict[str, float],
-            spot: float | None) -> tuple[float | None, str]:
+            spot: float | None, _depth: int = 0) -> tuple[float | None, str]:
     """The rate prevailing BEFORE the first upcoming meeting.
 
     Walks BACKWARD from that meeting, not forward from today. Walking forward
@@ -219,14 +222,58 @@ def _anchor(first_meeting: date, settles: dict[str, float],
     so 100 - settle is the prevailing rate no matter how much of the month has
     already elapsed. That is why using the current month here is fine, while
     using it as a forward estimate would not be.
+
+    ERROR 3 — FALLING BACK TO SPOT EFFR ON DECISION DAY. When the prior month
+    holds a meeting there is no constant-rate contract to read, and this used to
+    return spot EFFR, on the reasoning that a past decision is already in the
+    realised rate. It is not, for two days: a new target takes effect the
+    business day AFTER the vote and EFFR prints the morning after that, so on
+    decision day and the day following, spot EFFR is still the OLD rate and the
+    whole path is displaced by the size of the move that just happened.
+
+    Measured over 501 reconstructed sessions (2026-08-23): 15 anchored on a
+    stale EFFR, every one showing the same two-day excursion and snap-back.
+    2024-11-07 read -69.5bp between a -52.5 and a -38.0; 2025-09-17 read -82.5
+    between -67.6 and -56.0. The displacement equalled the decision each time.
+
+    So a prior month holding a decision is SOLVED rather than skipped, by the
+    same two routes used everywhere else: the meeting-free month after it when
+    there is one (no leverage), otherwise the within-month solve. Against a
+    stale spot this recovered -25.4bp on 2024-11-07, -25.6 on 2024-12-18, -24.8
+    on 2025-09-17 and -24.7 on 2025-12-10 — every one a 25bp cut — and about 0bp
+    on 2025-05-07, 2026-03-18 and 2026-06-17, every one a hold. The decision is
+    read out of the contract, never supplied.
     """
     py, pm = _prev_month(first_meeting.year, first_meeting.month)
     tk = zq_ticker(py, pm)
-    if not _has_meeting(py, pm) and tk in settles:
-        return 100.0 - settles[tk], f"{tk} (meeting-free month before the decision)"
-    # The prior month held a meeting, so there is no constant-rate contract to
-    # read. That meeting is already past, so its outcome is in realised EFFR.
-    return spot, "spot EFFR"
+    if not _has_meeting(py, pm):
+        if tk in settles:
+            return 100.0 - settles[tk], f"{tk} (meeting-free month before the decision)"
+        return spot, "spot EFFR (no contract for the meeting-free month)"
+
+    # The prior month holds a decision, and it is necessarily already PAST: a
+    # meeting later than the as-of date but in an earlier month than
+    # `first_meeting` would have BEEN `first_meeting`. So it can be solved.
+    if _depth >= _ANCHOR_MAX_DEPTH:
+        # Meeting-holding months four deep means the calendar is not what this
+        # assumes. Stop rather than keep recursing on a bad premise.
+        return spot, "spot EFFR (anchor chain ran too deep)"
+
+    m0 = max(d for d in FOMC_DATES if d.year == py and d.month == pm)
+    r_pre, _ = _anchor(m0, settles, spot, _depth + 1)
+    if r_pre is None:
+        return spot, "spot EFFR (no rate to chain the last decision from)"
+
+    ny, nm = _next_month(py, pm)
+    ntk = zq_ticker(ny, nm)
+    if _month_is_known(ny, nm) and not _has_meeting(ny, nm) and ntk in settles:
+        return 100.0 - settles[ntk], f"{ntk} (meeting-free month after the {m0} decision)"
+    if tk not in settles:
+        return spot, "spot EFFR (no contract to solve the last decision)"
+    solved = implied_post_rate(settles[tk], r_pre, m0)
+    if solved is None:
+        return spot, "spot EFFR (last decision fell on the last day of its month)"
+    return solved, f"{tk} (within-month solve of the {m0} decision)"
 
 
 def months_needed(asof: date, upcoming: list[date]) -> list[tuple[int, int]]:
@@ -240,8 +287,16 @@ def months_needed(asof: date, upcoming: list[date]) -> list[tuple[int, int]]:
         months.append((y, m))
         y, m = _next_month(y, m)
     # The anchor reads the month BEFORE the first meeting, which may be the
-    # current month and is not otherwise in the list.
-    months.append(_prev_month(upcoming[0].year, upcoming[0].month))
+    # current month and is not otherwise in the list — and when that month held
+    # a decision, `_anchor` solves it and needs the month before it too, up to
+    # `_ANCHOR_MAX_DEPTH` back. Walking the whole depth here rather than the
+    # single step keeps the fetch and the estimator from disagreeing about which
+    # contracts exist: a month the anchor wants but the fetch skipped does not
+    # raise, it silently drops the chain onto spot EFFR.
+    y, m = upcoming[0].year, upcoming[0].month
+    for _ in range(_ANCHOR_MAX_DEPTH + 1):
+        y, m = _prev_month(y, m)
+        months.append((y, m))
     return sorted(set(months))
 
 
