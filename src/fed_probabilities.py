@@ -229,18 +229,8 @@ def _anchor(first_meeting: date, settles: dict[str, float],
     return spot, "spot EFFR"
 
 
-def fed_probabilities(asof: date | None = None, n_meetings: int = _DEFAULT_MEETINGS) -> dict:
-    """What ZQ prices for the next `n_meetings` FOMC decisions."""
-    asof = asof or date.today()
-    upcoming = [d for d in FOMC_DATES if d > asof][:n_meetings]
-    if not upcoming:
-        return {"available": False,
-                "reason": "FOMC calendar exhausted — FOMC_DATES needs extending",
-                "calendar_exhausted": True,
-                "calendar_ends": FOMC_DATES[-1].isoformat()}
-
-    # Every meeting month, plus each following month for the next-month
-    # estimator, plus a couple ahead for the anchor.
+def months_needed(asof: date, upcoming: list[date]) -> list[tuple[int, int]]:
+    """Every contract month the reconstruction reads for this as-of date."""
     months: list[tuple[int, int]] = []
     for d in upcoming:
         months.append((d.year, d.month))
@@ -249,18 +239,54 @@ def fed_probabilities(asof: date | None = None, n_meetings: int = _DEFAULT_MEETI
     for _ in range(3):
         months.append((y, m))
         y, m = _next_month(y, m)
-    months = sorted(set(months))
-
     # The anchor reads the month BEFORE the first meeting, which may be the
     # current month and is not otherwise in the list.
     months.append(_prev_month(upcoming[0].year, upcoming[0].month))
-    months = sorted(set(months))
+    return sorted(set(months))
 
-    settles = _fetch_settles(months)
+
+def fed_probabilities(asof: date | None = None, n_meetings: int = _DEFAULT_MEETINGS) -> dict:
+    """What ZQ prices for the next `n_meetings` FOMC decisions, from the LATEST
+    settlements on the board.
+
+    `asof` selects which meetings are still upcoming; it does NOT rewind the
+    prices. Passing a past date here therefore prices yesterday's meetings with
+    today's settlements — a look-ahead. Historical reconstruction must supply
+    its own as-of settles through `path_from_settles`.
+    """
+    asof = asof or date.today()
+    upcoming = [d for d in FOMC_DATES if d > asof][:n_meetings]
+    if not upcoming:
+        return {"available": False,
+                "reason": "FOMC calendar exhausted — FOMC_DATES needs extending",
+                "calendar_exhausted": True,
+                "calendar_ends": FOMC_DATES[-1].isoformat()}
+
+    settles = _fetch_settles(months_needed(asof, upcoming))
     if not settles:
         return {"available": False, "reason": "no ZQ settlements available"}
 
-    spot = _spot_effr()
+    return path_from_settles(asof, settles, _spot_effr(), n_meetings=n_meetings)
+
+
+def path_from_settles(asof: date, settles: dict[str, float], spot: float | None,
+                      n_meetings: int = _DEFAULT_MEETINGS) -> dict:
+    """The same construction, over settlements the CALLER supplies.
+
+    Split out so a historical study reconstructs the path with the prices that
+    existed on its as-of date and still runs the identical chained/next-month
+    maths. Two copies of this loop would be two estimators, and the whole point
+    of the module docstring is that small differences here are worth 180bp.
+    """
+    upcoming = [d for d in FOMC_DATES if d > asof][:n_meetings]
+    if not upcoming:
+        return {"available": False,
+                "reason": "FOMC calendar exhausted — FOMC_DATES needs extending",
+                "calendar_exhausted": True,
+                "calendar_ends": FOMC_DATES[-1].isoformat()}
+    if not settles:
+        return {"available": False, "reason": "no ZQ settlements available"}
+
     r_pre, anchor_label = _anchor(upcoming[0], settles, spot)
     if r_pre is None:
         return {"available": False, "reason": "no anchor rate (ZQ and EFFR both unavailable)"}
