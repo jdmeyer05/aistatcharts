@@ -935,6 +935,98 @@ def prompt_loop_seed(db):
         logger.error(f"prompt_seed failed: {e}")
 
 
+# THE LOOP CAN ONLY MEASURE WHAT WAS GENERATED, and a snapshot is only written on
+# a cache MISS of a real inbound request — which made the entire record
+# traffic-gated. Between 2026-08-20 and 2026-08-23 the nightly crons ran clean
+# every night and read nothing, because nothing had been generated in between:
+# `prompt_critique` wants 10 graded discovery rows per surface and had 2. The
+# intake is therefore driven rather than waited for.
+_PROMPT_PING_ENDPOINTS = (
+    ("market_driver", "/api/market/market-driver"),
+    # es-brief before es-card-audit: the audit reads the assembled brief, so this
+    # order lets it reuse the 90-second cache the ping just filled instead of
+    # paying for a second build.
+    ("news_digest", "/api/market/es-brief"),
+    ("es_audit", "/api/market/es-card-audit"),
+)
+_PROMPT_PING_TIMEOUT_S = 240
+
+
+def _ping_state(surface: str, body: dict) -> str:
+    """Did the ping produce a generation, or just re-serve a cache?
+
+    Each endpoint reports this differently and one does not report it at all, so
+    an unknown says "served" rather than guessing. A ping that quietly hit cache
+    every hour and a ping that was quietly broken produce the same empty record,
+    and the log is the only thing that separates them.
+    """
+    if surface == "market_driver":
+        hit = body.get("cache_hit")
+    elif surface == "news_digest":
+        digest = body.get("news_digest")
+        if not isinstance(digest, dict):
+            # Fewer than three usable headlines — the digest declines to write a
+            # placeholder, so there is nothing to record and nothing is wrong.
+            return "no digest (too few headlines)"
+        hit = digest.get("cached")
+    else:
+        return "served (endpoint reports no cache state)"
+    if hit is True:
+        return "cache hit, no new snapshot"
+    if hit is False:
+        return "fresh generation"
+    return "served"
+
+
+def prompt_loop_ping(db):
+    """Drive the AI surfaces on a schedule so the loop has a record to read.
+
+    This hits the same public endpoints a visitor hits — no private path, no
+    payload reassembled here. The row that gets recorded is therefore the row a
+    reader would have been served; anything assembled in this worker would be
+    grading a payload nobody saw.
+
+    Cost stays governed by the caches that were already there rather than by this
+    cadence: market-driver re-serves its Supabase bundle inside a session-aware
+    TTL (15 min in the cash session, 6 hours when the market is shut), and the
+    digest is keyed on a fingerprint of the headlines, so a quiet hour generates
+    nothing. The card audit holds only a 10-minute in-process cache and so does
+    regenerate on every ping.
+
+    THE BIAS WORTH NAMING: samples now arrive on the clock rather than when
+    someone browses. The discovery/holdout split hashes the payload and not the
+    time, so the split itself is unaffected — but the record over-represents the
+    top of the hour, and under-represents whatever a human would have been
+    looking at when they chose to look.
+
+    `home_interpret` is deliberately absent. Its payload is assembled in the
+    browser from nine separate responses, so pinging it would mean rebuilding
+    that merge here and grading a payload that no longer matches the page.
+    """
+    import requests
+
+    base = (os.environ.get("API_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        logger.warning("prompt_ping: API_BASE_URL not set, skipping intake ping")
+        return
+
+    for surface, path in _PROMPT_PING_ENDPOINTS:
+        try:
+            r = requests.get(f"{base}{path}", timeout=_PROMPT_PING_TIMEOUT_S)
+        except Exception as e:
+            logger.warning(f"prompt_ping: {surface} request failed: {e}")
+            continue
+        if r.status_code != 200:
+            logger.warning(f"prompt_ping: {surface} -> HTTP {r.status_code}")
+            continue
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        logger.info(f"prompt_ping: {surface} {_ping_state(surface, body)} "
+                    f"({r.elapsed.total_seconds():.1f}s)")
+
+
 def prompt_loop_grade(db):
     """Deterministic grading of new snapshots + settle any due claims."""
     try:
@@ -986,8 +1078,8 @@ def main():
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
                                             "metrics", "cleanup", "prewarm", "options",
                                             "market_news", "trump_validate", "sector_refresh",
-                                            "prompt_seed", "prompt_grade", "prompt_critique",
-                                            "prompt_evaluate"],
+                                            "prompt_seed", "prompt_ping", "prompt_grade",
+                                            "prompt_critique", "prompt_evaluate"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -1016,9 +1108,15 @@ def main():
     if args.task in ("all", "trump_validate"):
         validate_trump_decodes(db)
 
-    # The prompt loop's cheap half. Grading is deterministic and claim
-    # resolution is a price lookup, so both belong in the hourly job; the two
-    # stages that cost model calls run on their own schedule below.
+    # The prompt loop's hourly half. Grading is deterministic and claim
+    # resolution is a price lookup, so both belong here. The ping is the one
+    # step in this job that provokes model calls, but it provokes them on the
+    # API side and only past each surface's own cache, so it buys a warm card
+    # for whoever loads the page next as well as a row for the record.
+    # The two stages that spend on REASONING run on their own schedule below.
+    if args.task in ("all", "prompt_ping"):
+        prompt_loop_ping(db)
+
     if args.task in ("all", "prompt_grade"):
         prompt_loop_grade(db)
 

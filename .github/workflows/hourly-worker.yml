@@ -24,6 +24,7 @@ on:
           - cleanup
           - market_news
           - trump_validate
+          - prompt_ping
           - prompt_grade
 
 jobs:
@@ -55,5 +56,11 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          # Where the intake ping sends its requests. The prompt loop records a
+          # snapshot only on a cache miss of a real request, so with no traffic
+          # it has nothing to grade; this job generates the surfaces itself.
+          # Public origin, deliberately not a secret: a wrong value here should
+          # be readable in the diff rather than hidden in repo settings.
+          API_BASE_URL: https://aistatcharts-api-6cftfbrvuq-ue.a.run.app
         run: |
           python worker.py --task ${{ github.event.inputs.task || 'all' }}
