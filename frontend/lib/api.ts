@@ -2979,9 +2979,53 @@ export interface EsScheduleItem {
   note: string;
   /** Rule-derived date rather than a published one — can slip a day. */
   derived?: boolean;
+  /** Agencies publish to the minute; companies do not. "After the close" is a
+   *  half-hour window, so the countdown on these is a convention, not a promise. */
+  time_approx?: boolean;
   minutes_away: number;
   status: "upcoming" | "released";
   before_open: boolean;
+  /** "macro" for a scheduled release, "earnings" for a single-name report. */
+  kind?: "macro" | "earnings";
+  /** Earnings only — WHICH session this bears on. An after-the-bell report
+   *  carries the report date but moves the NEXT session's gap, so this, not the
+   *  date, is what says whether it can touch the range in front of you. */
+  affects?: "this_session_gap" | "this_session_open" | "next_session_gap";
+  affects_label?: string;
+  symbol?: string;
+  /** Market cap, the selection criterion. NOT an index weight — no constituent
+   *  feed is available on this stack, and nothing here claims to price the
+   *  name's contribution to the index. */
+  market_cap?: number;
+  /** Same window, below the size cut and not shown as rows of their own. Kept
+   *  so a truncated list cannot be read as a complete one. */
+  also_reporting?: string[] | null;
+}
+
+/** What SPX options charge for spanning the close-to-close segment that
+ *  contains an after-the-bell event. Variance is additive, so the segment
+ *  between two expiries prices at sqrt(next² − today²); dividing by the plain
+ *  session gives `vs_session` — ordinary sessions of movement packed into one
+ *  overnight. Absent when nothing lands after the bell. */
+export interface EsEventPremium {
+  available: boolean;
+  reason?: string;
+  session_expiry?: string;
+  next_expiry?: string;
+  this_session_straddle?: number;
+  next_session_straddle?: number;
+  segment_handles?: number;
+  segment_pct?: number;
+  /** The headline multiple. 1.0 is an ordinary night. NULL once the session is
+   *  under way: the near straddle it divides by covers only the hours that are
+   *  left, so the ratio would measure elapsed time rather than the event. */
+  vs_session?: number | null;
+  baseline_is_full_session?: boolean;
+  vs_session_withheld?: string;
+  /** "settled" means both straddles came from a closed book — the ratio
+   *  survives that better than either level, but hedge the wording. */
+  quote_source?: "live" | "settled";
+  note?: string;
 }
 
 export interface EsLevel {
@@ -3745,6 +3789,11 @@ export interface EsBrief {
   schedule_is_today?: boolean;
   schedule?: EsScheduleItem[];
   next_event?: EsScheduleItem | null;
+  /** Lands after this session's close — megacap earnings, in practice. Kept out
+   *  of `next_event` on purpose: these size the risk of HOLDING, not the range
+   *  of the session in front of you. */
+  after_close?: EsScheduleItem[];
+  event_premium?: EsEventPremium | null;
   high_impact_today?: EsScheduleItem[];
   news?: EsNewsItem[];
   /** Synthesis of the headline set. Keyed on the headlines themselves, so it is

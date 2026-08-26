@@ -3028,6 +3028,16 @@ def _es_brief_build() -> dict:
         from src.news_digest import news_digest
         digest = _safe(lambda: news_digest(sess["news"]), "news_digest")
 
+    # What the options market charges for spanning tonight's close-to-close
+    # segment. Only priced when something actually lands after this bell —
+    # otherwise it is two extra chain calls on the ES card's critical path to
+    # measure the premium on an ordinary night, which is by construction ~1x.
+    after_close = (sess or {}).get("after_close") or []
+    premium = None
+    if after_close and (sess or {}).get("session_day"):
+        from src.es_expected_move import event_premium
+        premium = _safe(lambda: event_premium((sess or {})["session_day"]), "event_premium")
+
     gate = None
     if cock.get("available"):
         gate = _safe(lambda: conditions_gate(
@@ -3049,6 +3059,12 @@ def _es_brief_build() -> dict:
         "schedule_is_today": (sess or {}).get("schedule_is_today"),
         "schedule": (sess or {}).get("schedule", []),
         "next_event": (sess or {}).get("next_event"),
+        # Events that land after this session's close — megacap earnings, in
+        # practice. Deliberately separate from `next_event`: they size the risk
+        # of HOLDING, not the range of the session in front of you.
+        "after_close": after_close,
+        # What SPX options charge for the overnight that contains them.
+        "event_premium": premium,
         "high_impact_today": (sess or {}).get("high_impact_today", []),
         "news": (sess or {}).get("news", []),
         "news_digest": digest,

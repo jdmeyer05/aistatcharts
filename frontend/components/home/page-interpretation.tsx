@@ -246,6 +246,51 @@ export default function PageInterpretation() {
         : null,
 
       todays_schedule: brief.schedule,
+
+      // After-the-bell risk, kept as its own block rather than left to be found
+      // inside `todays_schedule`. The distinction it encodes — an event that
+      // cannot touch this session's range but owns the decision to hold through
+      // it — is the one the model was previously unable to make at all, because
+      // the card carried no single-name earnings and the prompt forbids
+      // inventing events that are not in the payload.
+      after_close: (brief.after_close ?? []).length
+        ? {
+            events: (brief.after_close ?? []).map((e) => ({
+              name: e.name, symbol: e.symbol, time_et: e.time_et,
+              time_approx: e.time_approx, impact: e.impact,
+              market_cap: e.market_cap, affects: e.affects,
+              also_reporting: e.also_reporting ?? undefined,
+            })),
+            premium: brief.event_premium?.available
+              ? {
+                  segment_handles: brief.event_premium.segment_handles,
+                  vs_session: brief.event_premium.vs_session ?? null,
+                  vs_session_withheld: brief.event_premium.vs_session_withheld,
+                  // The two straddles are deliberately NOT passed once the
+                  // multiple is withheld: handed both, the model reconstructs
+                  // the ratio itself and prints the inflated number the
+                  // withholding exists to prevent.
+                  ...(brief.event_premium.vs_session != null
+                    ? {
+                        this_session_straddle: brief.event_premium.this_session_straddle,
+                        next_session_straddle: brief.event_premium.next_session_straddle,
+                      }
+                    : {}),
+                  quote_source: brief.event_premium.quote_source,
+                }
+              : null,
+            premium_reason: brief.event_premium?.available
+              ? null
+              : (brief.event_premium?.reason ?? "not measured"),
+            note:
+              "`market_cap` selects the name and ranks nothing else — there is no index-weight " +
+              "feed here, so it must never be converted into index points or a share of the " +
+              "expected move. `vs_session` is the measured price of the event: ordinary sessions " +
+              "of movement priced into the one overnight that contains it, from two SPX " +
+              "straddles. 1.0 is a normal night.",
+          }
+        : null,
+
       macro_news: (brief.news ?? []).slice(0, 6).map((n) => ({ source: n.source, title: n.title })),
 
       cta_positioning: cta?.available

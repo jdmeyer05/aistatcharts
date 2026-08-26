@@ -375,3 +375,132 @@ def expected_move(bars: pd.DataFrame | None, session_day: pd.Timestamp,
         "vol_regime": vol_regime,
         "overnight": on_ctx,
     }
+
+
+# ── Event premium ─────────────────────────────────────────────────
+
+def _next_session_expiry(session_day: pd.Timestamp) -> str:
+    """The SPX expiry one trading day past the session day."""
+    d = pd.Timestamp(session_day).normalize() + pd.Timedelta(days=1)
+    while d.weekday() >= 5:
+        d += pd.Timedelta(days=1)
+    return str(d.date())
+
+
+def event_premium(session_day: pd.Timestamp | str, now: pd.Timestamp | None = None) -> dict:
+    """What SPX options charge for spanning tonight's close-to-close segment.
+
+    THE PROBLEM THIS SOLVES. An after-the-close event — a megacap earnings
+    report, most often — cannot be sized from the card's usual numbers. The
+    session's own expected move deliberately stops at this bell, and no index
+    weight is available on this stack to convert a single name's expected gap
+    into index handles. So the question "how much does this actually matter to
+    ES" had no measured answer, only an adjective.
+
+    It does have one, and the options market quotes it. Two SPX straddles:
+    one expiring at this session's close, one expiring at the next. Variance is
+    additive over non-overlapping periods, so the segment BETWEEN them — the
+    overnight that contains the event, plus the session after it — prices at
+
+        sigma_segment = sqrt(sigma_next**2 - sigma_today**2)
+
+    Dividing that by the plain session ahead of it gives the number the card
+    wants: how many ordinary sessions of movement the market is paying for in
+    one overnight. It needs no constituent feed, no weight and no assumption —
+    it is a price, read off two quotes.
+
+    THE RATIO IS ONLY PUBLISHED BEFORE THE OPEN, and this is the subtle part.
+    The denominator is the near straddle, which is not a fixed quantity — it is
+    what is left of the current period, and it shrinks all day. Before the open
+    it spans a whole session and the comparison is like-for-like. At 10:00 it
+    spans six hours while the numerator still spans a full close-to-close
+    segment, so the ratio silently becomes "24 hours over 6 hours" and reports
+    ~3.7x on a night that is priced at 1.7x. That is not a caveat, it is a wrong
+    number, so in-session the segment is still returned and the multiple is
+    withheld.
+
+    Two caveats that are stated rather than hidden:
+
+    - Even pre-open the match is not exact. Read at 21:00 the near straddle has
+      already lost the first hours of its overnight while the segment has all of
+      its own, and overnight carries roughly 40% of a session's variance here —
+      so the denominator is slightly short and the ratio slightly generous.
+      Small at that hour, and in the direction of caution, but real.
+    - With the market shut both straddles are settlement-based, and this module
+      does not trust a settled straddle as a LEVEL (one was observed at 36
+      handles against 58 and 62 from the two estimates that agreed). A RATIO of
+      two of them is sounder, because both legs are mispriced in the same
+      direction by the same closed book and much of the error divides out — but
+      it is not immune, so `quote_source` rides along and the caller should
+      hedge the wording when it says "settled".
+    """
+    spot = _spx_spot()
+    if not spot:
+        return {"available": False, "reason": "no SPX spot"}
+
+    today_exp = _next_expiry(session_day)
+    next_exp = _next_session_expiry(session_day)
+    s_today = _atm_straddle(spot, today_exp)
+    s_next = _atm_straddle(spot, next_exp)
+    if not s_today or not s_next:
+        missing = next_exp if s_today else today_exp
+        return {"available": False, "reason": f"no SPX straddle for {missing}"}
+
+    a, b = s_today["straddle"], s_next["straddle"]
+    if b <= a:
+        return {"available": False,
+                "reason": "next expiry prices no more than this one — no measurable event premium"}
+
+    segment = float(np.sqrt(b * b - a * a))
+    settled = "settled" in (s_today["quote_source"], s_next["quote_source"])
+
+    # Is the denominator still a whole session? See the docstring — after the
+    # bell rings the near straddle is a stub and the ratio measures elapsed time
+    # rather than event risk.
+    now = now if now is not None else pd.Timestamp.now(tz=_TZ)
+    if now.tzinfo is None:
+        now = now.tz_localize(_TZ)
+    session_open = pd.Timestamp.combine(
+        pd.Timestamp(session_day).normalize(), dtime(9, 30)).tz_localize(_TZ)
+    baseline_is_a_full_session = now < session_open
+
+    out = {
+        "available": True,
+        "session_expiry": today_exp,
+        "next_expiry": next_exp,
+        "this_session_straddle": a,
+        "next_session_straddle": b,
+        # Straddle points for the close-to-close segment that contains the event.
+        # Same units as the card's other handle numbers; SPX and ES move together
+        # in percentage terms, which is what makes the one-for-one carry legal.
+        # Valid at any hour — only the RATIO below depends on the clock.
+        "segment_handles": round(segment, 2),
+        "segment_pct": round(segment / spot * 100, 2),
+        "quote_source": "settled" if settled else "live",
+        "baseline_is_full_session": baseline_is_a_full_session,
+    }
+
+    if not baseline_is_a_full_session:
+        out["vs_session"] = None
+        out["vs_session_withheld"] = (
+            "the session is already under way, so the near straddle covers only "
+            "the hours that are left — a multiple against it would measure the "
+            "clock, not the event. The priced segment above still stands."
+        )
+        out["note"] = (
+            f"SPX prices {segment:.0f} handles for the segment from the {today_exp} "
+            f"close to the {next_exp} close. No multiple while the session is "
+            f"running — the baseline it would divide by has already decayed."
+        )
+        return out
+
+    out["vs_session"] = round(segment / a, 2)
+    out["note"] = (
+        f"SPX prices {segment:.0f} handles for the segment from the {today_exp} "
+        f"close to the {next_exp} close — {segment / a:.2f}x the {a:.0f} handles "
+        f"it prices for the session itself."
+        + (" Both straddles are settlement-based with the market shut; the ratio "
+           "survives that better than either level does, but treat it as indicative."
+           if settled else "")
+    )
+    return out

@@ -204,6 +204,12 @@ def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
     all come back on the event now, so this only has to do the arithmetic that
     depends on the current moment. `_match_release` stays as a fallback for any
     event that arrives without a time attached.
+
+    Two calendars feed this: macro releases, and megacap earnings from
+    `earnings_calendar`. They are merged rather than shown side by side because
+    the trader's question is "what can move this session", and splitting the
+    answer across two panels is how the biggest event of the quarter ends up
+    listed below a jobless-claims row.
     """
     now = now or pd.Timestamp.now(tz=_TZ)
     if now.tzinfo is None:
@@ -218,6 +224,20 @@ def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
         logger.warning(f"calendar fetch failed: {e}")
         events = []
 
+    # Unlike a macro print, an earnings event can carry a DIFFERENT DATE than the
+    # session it bears on — a report after Tuesday's close is Wednesday's gap.
+    # That is why the clock arithmetic below works off each event's own date
+    # instead of assuming the session day, and why the sort is on the absolute
+    # instant: on a wall clock alone, yesterday's 16:15 report sorts after
+    # today's 08:30 print.
+    try:
+        from src.earnings_calendar import earnings_for_session
+        events = events + (earnings_for_session(day) or [])
+    except Exception as e:
+        logger.warning(f"earnings calendar fetch failed: {e}")
+
+    session_open = pd.Timestamp.combine(pd.Timestamp(day), dtime(9, 30)).tz_localize(_TZ)
+
     out: list[dict] = []
     for ev in events:
         name = ev.get("name") or ""
@@ -226,7 +246,8 @@ def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
             rel = _match_release(name)
             hh, mm = (rel.hour, rel.minute) if rel else (8, 30)
 
-        when = pd.Timestamp.combine(pd.Timestamp(day), dtime(hh, mm)).tz_localize(_TZ)
+        when = pd.Timestamp.combine(
+            pd.Timestamp(ev.get("date") or day), dtime(hh, mm)).tz_localize(_TZ)
         mins = int((when - now).total_seconds() // 60)
         out.append({
             "name": name,
@@ -240,14 +261,31 @@ def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
             # A rule-derived date can slip a day; a published one can't. The UI
             # hedges the wording on these.
             "derived": bool(ev.get("derived")),
+            # An agency publishes to the minute; a company does not. "After the
+            # close" is a half-hour window, so the countdown on these is a
+            # convention rather than a promise and the UI says so.
+            "time_approx": bool(ev.get("time_approx")),
             "minutes_away": mins,
             "status": "upcoming" if mins > 0 else "released",
             # Pre-open prints set the tone for the whole session; ones that land
-            # mid-session interrupt an already-established range.
-            "before_open": (hh, mm) < (9, 30),
+            # mid-session interrupt an already-established range. Compared as
+            # instants, because an event on the prior afternoon is before this
+            # session's open even though 16:15 is not before 09:30.
+            "before_open": when < session_open,
+            # Present only on earnings: which session this bears on, and how big
+            # the name is. `affects` is the field that keeps an after-the-bell
+            # report from being read as risk to the session in front of you.
+            "kind": ev.get("kind") or "macro",
+            "affects": ev.get("affects"),
+            "affects_label": ev.get("affects_label"),
+            "symbol": ev.get("symbol"),
+            "market_cap": ev.get("market_cap"),
+            # Names in the same window that did not make the size cut. Carried
+            # so a truncated list cannot read as a complete one.
+            "also_reporting": ev.get("also_reporting"),
         })
 
-    out.sort(key=lambda e: e["time_et"])
+    out.sort(key=lambda e: e["when"])
     return out
 
 
@@ -456,6 +494,30 @@ def macro_news(limit_per_feed: int = 6, now: pd.Timestamp | None = None) -> list
     return merged[:20]
 
 
+def split_schedule(schedule: list[dict]) -> dict:
+    """Route a merged schedule by WHICH session each event can touch.
+
+    An after-the-bell report is on the schedule but is not risk to the session
+    in front of you, and the distinction has to be made here rather than left to
+    each consumer. `next_event` drives the card's countdown and its "liquidity
+    thins and spreads widen into it" warning; pointing either at a 16:15
+    earnings release tells a trader to brace for something that cannot move
+    their range. It is routed to `after_close` instead — still on the card,
+    still on the schedule, but framed as what it is: the cost of carrying a
+    position through the close.
+
+    Pure on purpose. This is the rule worth getting right, and it should be
+    testable without a calendar, a network or a clock.
+    """
+    intraday = [e for e in schedule if e.get("affects") != "next_session_gap"]
+    upcoming = [e for e in intraday if e.get("status") == "upcoming"]
+    return {
+        "next_event": min(upcoming, key=lambda e: e["minutes_away"]) if upcoming else None,
+        "after_close": [e for e in schedule if e.get("affects") == "next_session_gap"],
+        "high_impact_today": [e for e in intraday if e.get("impact") == "high"],
+    }
+
+
 def es_session_brief() -> dict:
     """Everything the top-of-page briefing needs, in one call."""
     now = pd.Timestamp.now(tz=_TZ)
@@ -465,9 +527,7 @@ def es_session_brief() -> dict:
         news = f_news.result()
         schedule = f_sched.result()
 
-    upcoming = [e for e in schedule if e["status"] == "upcoming"]
-    next_event = min(upcoming, key=lambda e: e["minutes_away"]) if upcoming else None
-
+    routed = split_schedule(schedule)
     session_day = trading_session_day(now)
     return {
         "available": True,
@@ -478,7 +538,10 @@ def es_session_brief() -> dict:
         "session_day": str(session_day.date()),
         "schedule_is_today": session_day.date() == now.date(),
         "schedule": schedule,
-        "next_event": next_event,
-        "high_impact_today": [e for e in schedule if e["impact"] == "high"],
+        "next_event": routed["next_event"],
+        # Lands after this session's close; sizes the gap risk of holding, not
+        # today's range.
+        "after_close": routed["after_close"],
+        "high_impact_today": routed["high_impact_today"],
         "news": news,
     }

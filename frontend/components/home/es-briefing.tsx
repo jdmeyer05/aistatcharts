@@ -111,6 +111,93 @@ function impactClass(i: EsImpact): string {
   return "bg-surface-alt text-text-muted";
 }
 
+function fmtCap(c?: number): string | null {
+  if (!c) return null;
+  return c >= 1e12 ? `$${(c / 1e12).toFixed(2)}T` : `$${Math.round(c / 1e9).toLocaleString()}B`;
+}
+
+/** One row of the scheduled-risk list.
+ *
+ *  Macro and earnings share it because they answer the same question — what is
+ *  on the clock — but they carry different uncertainty and it shows in the row.
+ *  A macro date can be rule-derived and slip a day (`est`); an earnings DATE is
+ *  published but its TIME is a convention, since "after the close" is a
+ *  half-hour window and no company promises a minute (`~`). Those are different
+ *  failure modes and conflating them into one caveat would understate both. */
+function ScheduleRow({
+  e,
+  mins,
+  hideCountdown = false,
+}: {
+  e: EsScheduleItem;
+  mins: number;
+  hideCountdown?: boolean;
+}) {
+  const done = mins <= 0;
+  const cap = fmtCap(e.market_cap);
+  return (
+    <div
+      className={`flex items-center gap-2 text-[0.65rem] ${done && !hideCountdown ? "opacity-50" : ""}`}
+      title={e.note}
+    >
+      <span className="tabular-nums text-text-muted w-[3rem] shrink-0">
+        {e.time_approx ? "~" : ""}
+        {e.time_et}
+      </span>
+      <span className="text-text truncate flex-1 min-w-0">
+        {e.name}
+        {e.derived && (
+          <span
+            className="ml-1 text-[0.52rem] uppercase text-text-muted/70"
+            title="Date derived from the usual release rule rather than a published calendar — it can slip a day."
+          >
+            est
+          </span>
+        )}
+        {cap && (
+          <span
+            className="ml-1 text-[0.52rem] text-text-muted/70 tabular-nums"
+            title="Market cap — the criterion this name was selected on. NOT an index weight: no constituent feed is available here, so this ranks the name rather than pricing what it contributes to the index."
+          >
+            {cap}
+          </span>
+        )}
+        {e.affects === "this_session_gap" && (
+          <span
+            className="ml-1 text-[0.52rem] uppercase text-amber-400/80"
+            title={e.affects_label}
+          >
+            gap
+          </span>
+        )}
+      </span>
+      {/* Same badge, two different derivations — worth saying, because a
+          trader reading "high" beside PCE and "high" beside NVDA would
+          reasonably assume they were measured the same way. Macro impact is
+          typical range expansion (your own data has CPI at ~1.0x a normal
+          session); an earnings badge is size, and the event's actual priced
+          cost is the premium below, not this chip. */}
+      <span
+        className={`px-1.5 py-0.5 rounded text-[0.52rem] font-bold uppercase shrink-0 ${impactClass(
+          e.impact
+        )}`}
+        title={
+          e.kind === "earnings"
+            ? "Ranked by market cap, not by measured range expansion — unlike the macro rows. What the event actually costs is the priced premium below."
+            : "Typical ES range expansion for this release."
+        }
+      >
+        {e.impact}
+      </span>
+      {!hideCountdown && (
+        <span className="tabular-nums text-text-muted w-[4.5rem] text-right shrink-0">
+          {done ? "released" : fmtCountdown(mins)}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const PHASE_CLASS: Record<string, string> = {
   rth_open: "bg-gain/15 text-gain",
   rth_midday: "bg-accent/15 text-accent",
@@ -318,12 +405,32 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
         : "");
   }
 
-  /* 3. The clock. */
+  /* 3. The clock. An after-the-bell report is on the schedule but is not risk to
+     the session in front of you, so it is excluded from the countdown and gets
+     its own sentence — pointing "next on the clock" at 16:15 would tell a trader
+     to brace for something that cannot touch their range. */
   let clock: string | null = null;
-  const upcoming = (d.schedule ?? []).filter((e) => liveMins(e) > 0);
+  const intradaySched = (d.schedule ?? []).filter((e) => e.affects !== "next_session_gap");
+  const upcoming = intradaySched.filter((e) => liveMins(e) > 0);
   const next = upcoming.length
     ? upcoming.reduce((a, b) => (liveMins(a) <= liveMins(b) ? a : b))
     : null;
+
+  const afterClose = d.after_close ?? [];
+  const prem = d.event_premium;
+  const heldOvernight = afterClose.length
+    ? ` After the bell: ${afterClose.map((e) => e.name).join(", ")}` +
+      (prem?.available && prem.vs_session != null
+        ? `. SPX prices the overnight that contains ${afterClose.length > 1 ? "them" : "it"} at ` +
+          `${prem.vs_session.toFixed(2)}x an ordinary session (${prem.segment_handles} handles)` +
+          `${prem.quote_source === "settled" ? ", off settled quotes" : ""} — that is the cost of ` +
+          `carrying a position through, not a reason to change today's range.`
+        : prem?.available
+          ? `. SPX prices that overnight at ${prem.segment_handles} handles — the cost of ` +
+            `carrying through, not a reason to change today's range.`
+          : ` — gap risk for the next session, not this one's range.`)
+    : "";
+
   if (next) {
     const mins = liveMins(next);
     const hedge = next.derived ? " (scheduled time derived from the usual release rule)" : "";
@@ -334,11 +441,16 @@ function buildRead(d: EsBrief, liveMins: (e: EsScheduleItem) => number): Read | 
         ? " Liquidity thins and spreads widen into a print this close."
         : next.before_open && next.impact === "high"
           ? " A pre-open print of this size makes the overnight range an unreliable guide."
-          : "");
-  } else if ((d.schedule ?? []).length) {
-    clock = "Everything scheduled has already printed; the rest of the session is left to positioning and the levels.";
+          : "") +
+      heldOvernight;
+  } else if (intradaySched.length) {
+    clock =
+      "Everything scheduled has already printed; the rest of the session is left to positioning and the levels." +
+      heldOvernight;
+  } else if (afterClose.length) {
+    clock = `Nothing timed inside this session.${heldOvernight}`;
   } else {
-    clock = "Nothing on the macro calendar for this session — no timed catalyst to trade around.";
+    clock = "Nothing on the calendar for this session — no timed catalyst to trade around.";
   }
 
   /* 4. Directional lean — swing horizon, explicitly not an intraday trigger. */
@@ -481,9 +593,19 @@ export default function EsBriefing() {
     return { label: "today", next: false };
   }, [d]);
 
+  // Split by whether the event can touch THIS session's range. An after-the-bell
+  // report belongs on the card but not in the countdown: it is drawn below, in
+  // its own block, because it sizes the cost of holding rather than the range.
+  const intradaySched = useMemo(
+    () => (d?.schedule ?? []).filter((e) => e.affects !== "next_session_gap"),
+    [d?.schedule]
+  );
+  const afterClose = useMemo(() => d?.after_close ?? [], [d?.after_close]);
+  const prem = d?.event_premium;
+
   const upcoming = useMemo(
-    () => (d?.schedule ?? []).filter((e) => liveMins(e) > 0).sort((a, b) => liveMins(a) - liveMins(b)),
-    [d?.schedule, liveMins]
+    () => intradaySched.filter((e) => liveMins(e) > 0).sort((a, b) => liveMins(a) - liveMins(b)),
+    [intradaySched, liveMins]
   );
 
   // With no session running the card has far less to say, and it used to say it
@@ -1168,50 +1290,80 @@ export default function EsBriefing() {
                 <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
                   Scheduled risk — {scheduleScope.label}
                 </h3>
-                {(d.schedule ?? []).length === 0 ? (
+                {intradaySched.length === 0 ? (
                   <p className="text-[0.65rem] text-text-muted">
-                    Nothing on the macro calendar for {scheduleScope.label}.
+                    Nothing timed inside {scheduleScope.label}
+                    {afterClose.length > 0 ? " — but see after the close, below." : "."}
                   </p>
                 ) : (
                   <div className="space-y-1">
-                    {(d.schedule ?? []).map((e, i) => {
-                      const mins = liveMins(e);
-                      const done = mins <= 0;
-                      return (
-                        <div
-                          key={`${e.name}-${i}`}
-                          className={`flex items-center gap-2 text-[0.65rem] ${done ? "opacity-50" : ""}`}
-                          title={e.note}
-                        >
-                          <span className="tabular-nums text-text-muted w-[3rem] shrink-0">{e.time_et}</span>
-                          <span className="text-text truncate flex-1 min-w-0">
-                            {e.name}
-                            {e.derived && (
-                              <span
-                                className="ml-1 text-[0.52rem] uppercase text-text-muted/70"
-                                title="Date derived from the usual release rule rather than a published calendar — it can slip a day."
-                              >
-                                est
-                              </span>
-                            )}
-                          </span>
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[0.52rem] font-bold uppercase shrink-0 ${impactClass(
-                              e.impact
-                            )}`}
-                          >
-                            {e.impact}
-                          </span>
-                          <span className="tabular-nums text-text-muted w-[4.5rem] text-right shrink-0">
-                            {done ? "released" : fmtCountdown(mins)}
-                          </span>
-                        </div>
-                      );
-                    })}
+                    {intradaySched.map((e, i) => (
+                      <ScheduleRow key={`${e.name}-${i}`} e={e} mins={liveMins(e)} />
+                    ))}
                   </div>
                 )}
-                {upcoming.length === 0 && (d.schedule ?? []).length > 0 && (
+                {upcoming.length === 0 && intradaySched.length > 0 && (
                   <p className="text-[0.55rem] text-text-muted">All of today&apos;s prints are out.</p>
+                )}
+
+                {/* ── after this close ──
+                    Separated from the rows above because it answers a different
+                    question. Everything above sizes THIS session's range; this
+                    sizes the cost of carrying a position through the night, and
+                    merging the two is how a 16:15 report gets read as a reason
+                    to trade the 10:00 chop differently. */}
+                {afterClose.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-border/60 space-y-1">
+                    <h4 className="text-[0.55rem] font-bold uppercase tracking-wider text-text-muted">
+                      After this close — next session&apos;s gap
+                    </h4>
+                    {afterClose.map((e, i) => (
+                      <ScheduleRow key={`ac-${e.name}-${i}`} e={e} mins={liveMins(e)} hideCountdown />
+                    ))}
+                    {prem?.available ? (
+                      <p className="text-[0.55rem] text-text-muted leading-snug">
+                        SPX prices{" "}
+                        <span className="font-semibold text-text tabular-nums">
+                          {prem.segment_handles}
+                        </span>{" "}
+                        handles for the {prem.session_expiry} close → {prem.next_expiry} close
+                        segment
+                        {prem.vs_session != null ? (
+                          <>
+                            {" "}
+                            —{" "}
+                            <span className="font-semibold text-text tabular-nums">
+                              {prem.vs_session.toFixed(2)}×
+                            </span>{" "}
+                            the {prem.this_session_straddle} it prices for the session itself. That
+                            multiple is the market&apos;s own price for the event; it needs no index
+                            weight, because it is read off two straddles rather than inferred from
+                            the name&apos;s size.
+                            {prem.quote_source === "settled" && (
+                              <>
+                                {" "}
+                                Both straddles are settlement-based with the book shut — the ratio
+                                survives that better than either level, but treat it as indicative.
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            . No multiple while the session is running:{" "}
+                            {prem.vs_session_withheld ??
+                              "the baseline it would divide by has already decayed."}
+                          </>
+                        )}
+                      </p>
+                    ) : (
+                      <p className="text-[0.55rem] text-text-muted leading-snug">
+                        {prem?.reason
+                          ? `No event premium measured: ${prem.reason}.`
+                          : "Event premium not measured for this session."}{" "}
+                        The report still lands after the bell; only its priced cost is missing.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
