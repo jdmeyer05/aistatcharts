@@ -1060,6 +1060,27 @@ def prompt_loop_regrade(db, days: int = 30):
         logger.error(f"prompt_regrade failed: {e}")
 
 
+def prompt_loop_health(db, days: int = 30):
+    """Audit the RULES and report what each surface is blocked on.
+
+    Manual and cheap (no LLM calls). The rules are the loop's only quality
+    signal and nothing checked them until one ran at zero precision for nine
+    days; this is the check that would have caught it.
+    """
+    try:
+        from src.prompt_health import report
+        res = report(days=days)
+        flags = (res.get("audit") or {}).get("flags") or []
+        probs = (res.get("readiness") or {}).get("problems") or []
+        if flags or probs:
+            logger.error(f"prompt_health: {len(flags)} rule(s) under suspicion, "
+                         f"{len(probs)} surface problem(s) — see above")
+        else:
+            logger.info("prompt_health: nothing flagged")
+    except Exception as e:
+        logger.error(f"prompt_health failed: {e}")
+
+
 def prompt_loop_critique(db):
     """Adversarial read of each surface's record; proposes challengers."""
     try:
@@ -1096,8 +1117,8 @@ def main():
                                             "metrics", "cleanup", "prewarm", "options",
                                             "market_news", "trump_validate", "sector_refresh",
                                             "prompt_seed", "prompt_ping", "prompt_grade",
-                                            "prompt_regrade", "prompt_critique",
-                                            "prompt_evaluate"],
+                                            "prompt_regrade", "prompt_health",
+                                            "prompt_critique", "prompt_evaluate"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -1140,6 +1161,9 @@ def main():
 
     if args.task == "prompt_regrade":
         prompt_loop_regrade(db)
+
+    if args.task == "prompt_health":
+        prompt_loop_health(db)
 
     # LLM stages — never in "all". Critique is two Opus calls and evaluate is
     # ~50 generations, which would blow the hourly job's 10-minute budget and

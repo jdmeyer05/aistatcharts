@@ -376,6 +376,12 @@ export default function PageInterpretation() {
       buttonLabel="Interpret the whole page"
       data={payload ?? undefined}
       disabled={!payload}
+      // The only surface with autoRun. This is the prompt the loop is meant to
+      // rewrite, and on clicks alone it gathered 7 records in nine days — short
+      // of the 10 its critic needs and the 8 its replay needs, so it was the
+      // one prompt that could never be improved from evidence. Firing once per
+      // page load feeds it at the rate the site is actually used.
+      autoRun
     />
   );
 }

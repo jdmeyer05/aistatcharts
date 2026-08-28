@@ -34,6 +34,9 @@ on:
           # Re-scores rows that ALREADY have a grade. Run after fixing a rule,
           # so the record the critic reads describes the rules that exist.
           - prompt_regrade
+          # Audits the rules themselves and reports what each surface is
+          # blocked on. Free — no LLM calls.
+          - prompt_health
           - prompt_critique
           - prompt_evaluate
 
@@ -64,6 +67,19 @@ jobs:
           else
             echo "task=prompt_evaluate" >> "$GITHUB_OUTPUT"
           fi
+
+      # Always, before the stage that costs money. No LLM calls — it audits the
+      # RULES (a rule whose findings keep naming the same token is repeating
+      # itself, not catching varied defects) and prints what each surface is
+      # blocked on. `invented_ticker` ran at zero precision for nine days with
+      # nothing to notice; this is what would have noticed.
+      - name: Health check
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python worker.py --task prompt_health
 
       - name: Run stage
         env:

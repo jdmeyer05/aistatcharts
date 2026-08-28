@@ -700,3 +700,65 @@ def test_per_page_interpret_surfaces_reuse_the_home_rules():
                            "SPY looks constructive. PLTR does not.")
     assert "error" not in g
     assert any(f["rule"] == "invented_ticker" for f in g["findings"])
+
+
+# ── watching the watcher ──────────────────────────────────────────
+
+def test_the_zero_precision_rule_would_have_been_flagged():
+    """The real 2026-08-19..28 firing pattern of `invented_ticker`.
+
+    18 findings, every one a false positive, and the tell is that they repeat:
+    TGA seven times, VAH five, then singletons. A rule catching genuine
+    fabrications would name a different symbol nearly every time.
+    """
+    from collections import Counter
+    from src import prompt_health
+    ev = Counter({"TGA": 7, "VAH": 5, "PVAH": 1, "PDH": 1,
+                  "RVOL": 1, "PVAL": 1, "PDL": 1, "UK": 1})
+    flags = prompt_health.flags_for("invented_ticker", ev, n=18, n_graded=248)
+    assert flags, "the broken rule must be flagged"
+    assert any("distinct values" in f for f in flags)
+
+
+def test_a_healthy_rule_is_not_flagged():
+    """Genuine fabrications are varied, so diversity stays high."""
+    from collections import Counter
+    from src import prompt_health
+    ev = Counter({f"FAKE{i}": 1 for i in range(12)})
+    assert prompt_health.flags_for("invented_ticker", ev, n=12, n_graded=248) == []
+
+
+def test_a_regression_rule_firing_constantly_is_flagged():
+    from collections import Counter
+    from src import prompt_health
+    ev = Counter({f"x{i}": 1 for i in range(60)})
+    flags = prompt_health.flags_for("invented_ticker", ev, n=60, n_graded=100)
+    assert any("firing on" in f for f in flags)
+
+
+def test_few_firings_are_never_flagged():
+    """Two identical findings are not evidence of anything."""
+    from collections import Counter
+    from src import prompt_health
+    assert prompt_health.flags_for("invented_ticker", Counter({"VAH": 2}), 2, 248) == []
+
+
+def test_only_vendor_errors_are_retried():
+    """A refusal or an unparseable answer is the prompt's, and must not be re-rolled."""
+    from src import prompt_replay
+    for msg in ("503 UNAVAILABLE", "429 too many requests", "connection reset",
+                "deadline exceeded"):
+        assert prompt_replay._retryable(Exception(msg)), msg
+    for msg in ("400 invalid_request", "401 authentication_error", "no such model"):
+        assert not prompt_replay._retryable(Exception(msg)), msg
+
+
+def test_a_ceilinged_surface_is_not_critiqued(monkeypatch):
+    """es_audit sits at 0.997-0.999; a challenger there cannot be shown to win."""
+    from src import prompt_loop
+    monkeypatch.setattr(prompt_loop, "_open_challenger", lambda s: None)
+    monkeypatch.setattr(prompt_loop, "graded_snapshots",
+                        lambda *a, **k: [{"snapshot": {}, "grade": {"score": 0.998}}
+                                         for _ in range(20)])
+    res = prompt_loop.critique_cycle("es_audit")
+    assert "headroom" in res.get("skipped", "")

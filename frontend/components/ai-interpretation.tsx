@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AIMarkdown } from "@/components/ai-markdown";
 import { fetchInterpretation } from "@/lib/api";
@@ -16,6 +16,15 @@ interface Props {
   disabled?: boolean;
   /** Optional: button copy override */
   buttonLabel?: string;
+  /**
+   * Optional: generate once as soon as the data is ready, instead of waiting
+   * for a click. Only worth setting where the prompt loop needs a record to
+   * argue from — `home_interpret` accumulated 7 rows in nine days on clicks
+   * alone, against the 10 its critique stage needs and the 8 replay needs, so
+   * the one surface the loop is supposed to rewrite was the one surface it
+   * could never see. Every other page stays click-to-run.
+   */
+  autoRun?: boolean;
 }
 
 /**
@@ -24,10 +33,11 @@ interface Props {
  * caches for the page's lifetime (same data won't retrigger until the user
  * re-clicks).
  */
-export function AIInterpretation({ page, data, subject, disabled, buttonLabel }: Props) {
+export function AIInterpretation({ page, data, subject, disabled, buttonLabel, autoRun }: Props) {
   const m = useMutation({
     mutationFn: () => fetchInterpretation({ page, data, subject }),
   });
+  const fired = useRef(false);
 
   // Clear stale output when `page` changes — React can reuse this component
   // instance across e.g. options-analysis tabs (same JSX tree position,
@@ -35,8 +45,21 @@ export function AIInterpretation({ page, data, subject, disabled, buttonLabel }:
   // lingers when the user lands on Tab 1.
   useEffect(() => {
     m.reset();
+    fired.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
+
+  // ONCE PER MOUNT, GUARDED BY A REF RATHER THAN BY THE DEPENDENCY LIST. The
+  // payload is rebuilt by `useMemo` from nine live queries, so its identity
+  // changes on every price tick; keying this effect on `data` alone would fire
+  // a fresh Opus call every few seconds. The ref makes "already run" a fact
+  // about this mount, not about the last render.
+  useEffect(() => {
+    if (!autoRun || fired.current || disabled || !data || m.isPending) return;
+    fired.current = true;
+    m.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, disabled, data]);
 
   const isDisabled = disabled || m.isPending || !data;
 

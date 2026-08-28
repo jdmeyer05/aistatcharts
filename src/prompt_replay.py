@@ -30,6 +30,8 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -122,11 +124,28 @@ def _user_message(surface: str, payload: dict) -> str:
 # so counting it against the challenger is counting a coin flip. Everything
 # else — a refusal, a truncation, output that will not parse — is caused by the
 # prompt and is exactly what the gate is supposed to punish.
-_INFRA_FAILURES = {"api_error", "no_key"}
+_INFRA_FAILURES = {"api_error", "api_fatal", "no_key"}
+
+# Vendor errors worth waiting out. Discounting a 503 from the failure count was
+# not enough on its own: it still deletes the pair, and a deleted pair shrinks
+# the sample until the bootstrap CI swallows a real result. On 2026-08-28 Gemini
+# returned 503 through the afternoon and killed 15 of 24 pairs in one replay and
+# 8 in another, which is what left market_driver v3 unresolved. Retrying costs
+# seconds; not retrying costs the experiment.
+_RETRYABLE = re.compile(
+    r"(?<![0-9])(429|500|502|503|504)(?![0-9])|unavailable|overloaded|resource[_ ]exhausted|"
+    r"rate.?limit|timeout|timed out|deadline|connection|temporarily",
+    re.I)
+_MAX_ATTEMPTS = 3
+_BACKOFF_S = (2.0, 6.0)
 
 
-def _generate(surface: str, system: str, payload: dict) -> tuple[object | None, str | None]:
-    """One replay generation.
+def _retryable(e: Exception) -> bool:
+    return bool(_RETRYABLE.search(f"{type(e).__name__} {e}"))
+
+
+def _generate_once(surface: str, system: str, payload: dict) -> tuple[object | None, str | None]:
+    """One replay generation ATTEMPT.
 
     Returns `(output, failure_reason)`. The reason is None on success and
     otherwise names WHY, because the previous version returned a bare None down
@@ -193,14 +212,38 @@ def _generate(surface: str, system: str, payload: dict) -> tuple[object | None, 
         # WARNING, not DEBUG: this is the only place the actual cause appears,
         # and the caller can only report a count. A silent DEBUG here is what
         # made an uninstalled SDK look like an empty holdout set.
-        logger.warning(f"prompt_replay: generation failed ({surface}, {model}): {e}")
-        return None, "api_error"
+        kind = "api_error" if _retryable(e) else "api_fatal"
+        logger.warning(f"prompt_replay: generation failed ({surface}, {model}) [{kind}]: {e}")
+        return None, kind
 
     obj = _parse(surface, raw)
     if obj is None:
         logger.warning(f"prompt_replay: {surface} output did not parse ({len(raw or '')} chars)")
         return None, "unparseable"
     return obj, None
+
+
+def _generate(surface: str, system: str, payload: dict) -> tuple[object | None, str | None]:
+    """One replay generation, waiting out transient vendor failures.
+
+    ONLY INFRASTRUCTURE IS RETRIED. A refusal, a truncation or output that will
+    not parse is a property of the prompt on this payload — running it again is
+    just paying twice for the same verdict, and hiding a real defect the gate is
+    supposed to catch. A 503 is a property of the afternoon.
+    """
+    last = None
+    for attempt in range(_MAX_ATTEMPTS):
+        obj, why = _generate_once(surface, system, payload)
+        if why != "api_error":
+            return obj, why          # success, prompt fault, or a permanent error
+        last = why
+        if attempt < _MAX_ATTEMPTS - 1:
+            wait = _BACKOFF_S[min(attempt, len(_BACKOFF_S) - 1)]
+            logger.info(f"prompt_replay: {surface} vendor failure, retrying in {wait:.0f}s "
+                        f"(attempt {attempt + 2}/{_MAX_ATTEMPTS})")
+            time.sleep(wait)
+    logger.warning(f"prompt_replay: {surface} gave up after {_MAX_ATTEMPTS} attempts")
+    return None, last
 
 
 def _parse(surface: str, raw: str):

@@ -180,6 +180,21 @@ def critique_cycle(surface: str, min_samples: int = 10) -> dict:
     if len(graded) < min_samples:
         return {"ok": True, "skipped": f"only {len(graded)} graded discovery snapshots, need {min_samples}"}
 
+    # NO HEADROOM, NO CRITIQUE. A surface the rules already score at the ceiling
+    # cannot produce a challenger that demonstrates an improvement — es_audit
+    # sits at 0.997-0.999 and its one challenger was rejected on an exact tie
+    # (0.9983 vs 0.9983, 100% tie rate) after spending two Opus calls to write
+    # it and twenty-four generations to score it. Skipping is self-correcting:
+    # if quality ever degrades the mean falls and critique resumes on its own.
+    from src.prompt_health import _CEILING
+    scores = [g["grade"].get("score") for g in graded
+              if g["grade"].get("score") is not None]
+    if scores and sum(scores) / len(scores) >= _CEILING:
+        mean = sum(scores) / len(scores)
+        return {"ok": True, "skipped": f"no measurable headroom (mean rule score "
+                                       f"{mean:.4f} over {len(scores)} outputs) — "
+                                       f"a challenger could not be shown to improve on it"}
+
     champ = prompt_registry.champion(surface) or {}
     body = champ.get("body") or prompt_registry.baseline(surface)
     version = int(champ.get("version") or 0)
