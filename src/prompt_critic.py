@@ -110,7 +110,12 @@ _INVARIANTS = {
         'The output must remain plain prose with bullet points, ending with a line beginning "Bottom line:".',
         'The rule that every number must trace to the payload, and that derivations must show their inputs, must remain.',
         'The instruction never to cite a ticker, fund or person absent from the payload must remain.',
-        'The output must stay under roughly 220 words.',
+        # Phrased as one soft bullet in a style list, this was broken by 10 of 10
+        # outputs on record. It only holds while it is stated as its own rule.
+        'The length ceiling must survive AS A CEILING, not a target: at most 6 bullets '
+        'plus the closing Bottom line, 220 words absolute, carried in its own section '
+        'rather than as one item in a style list. A rewrite that softens it or folds it '
+        'back into the style bullets is a regression.',
     ],
     "news_digest": [
         'The output must remain 2-3 plain sentences of prose under 70 words, with no bullets, no heading and no preamble.',
@@ -315,7 +320,9 @@ def validate(surface: str, champion: str, challenger: str) -> tuple[bool, str]:
         "market_driver": ["regime_label", "paragraphs", "what_happened", "whats_driving",
                           "what_to_watch", "citations", "confidence", "calls",
                           "vix_level_band", "macro_headlines", "change_pct_1d"],
-        "home_interpret": ["Bottom line", "payload"],
+        # "220" is here so the ceiling cannot be dropped silently: the structural
+        # gate refuses the rewrite before it costs a single generation to score.
+        "home_interpret": ["Bottom line", "payload", "220"],
         "news_digest": ["headlines", "70 words", "direction"],
         "es_audit": ["findings", "severity"],
     }.get(surface, [])

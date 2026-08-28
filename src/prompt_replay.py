@@ -40,6 +40,21 @@ _REPLAY_MODEL = {
     "news_digest": "claude-sonnet-5",
 }
 
+# MUST TRACK PRODUCTION, per surface. The model was held fixed from the start;
+# the rest of the generation config was not, and it silently drifted. The worst
+# of it: news_digest is served at effort="low" and was replayed at "medium", so
+# the gate was scoring a more deliberate model than the page ever runs. Budgets
+# cap reasoning AND prose together on these models, so a replay ceiling above
+# production's also hides truncation defects that real traffic would hit.
+# Sources: api/routes/ai.py (home_interpret), src/es_auditor.py (es_audit),
+# src/news_digest.py (news_digest).
+_REPLAY_PARAMS = {
+    "home_interpret": {"max_tokens": 4000, "effort": "medium"},
+    "es_audit": {"max_tokens": 3000, "effort": "medium"},
+    "news_digest": {"max_tokens": 2000, "effort": "low"},
+}
+_DEFAULT_PARAMS = {"max_tokens": 6000, "effort": "medium"}
+
 _DEFAULT_N = 24
 _MIN_N = 8
 # The margin a challenger must clear on top of statistical significance. With
@@ -69,11 +84,17 @@ def _user_message(surface: str, payload: dict) -> str:
         try:
             from api.routes.ai import PAGE_CONTEXT
             ctx = PAGE_CONTEXT.get("home_page", "")
-        except Exception:
-            # Degrades rather than fails: without the page blurb both arms lose
-            # the same context, so the comparison stays fair even though the
-            # absolute scores drift from production.
-            logger.debug("prompt_replay: PAGE_CONTEXT unavailable, replaying without it")
+        except Exception as e:
+            # Both arms lose the same context, so the A/B stays fair — but the
+            # replayed system is no longer the one production serves, and any
+            # ABSOLUTE reading taken off it is wrong. home_page's blurb is ~5.8k
+            # chars; without it the same prompt on the same payloads came back
+            # ~100 words shorter than the stored production outputs, which is
+            # enough to hide a word-cap violation entirely. WARNING, not debug:
+            # a degraded harness must announce itself.
+            logger.warning(f"prompt_replay: PAGE_CONTEXT unavailable ({e}) — replaying "
+                           "WITHOUT the page blurb. Paired comparison is still valid; "
+                           "absolute scores are NOT comparable to production.")
         return (
             "Page: home_page\n\n"
             f"What this page shows: {ctx}\n\n"
@@ -147,10 +168,11 @@ def _generate(surface: str, system: str, payload: dict) -> tuple[object | None, 
                 logger.error("prompt_replay: ANTHROPIC_API_KEY missing — replay cannot run")
                 return None, "no_key"
             client = anthropic.Anthropic(api_key=key)
+            params = _REPLAY_PARAMS.get(surface, _DEFAULT_PARAMS)
             kwargs = {
                 "model": model,
-                "max_tokens": 6000,
-                "output_config": {"effort": "medium"},
+                "max_tokens": params["max_tokens"],
+                "output_config": {"effort": params["effort"]},
                 "system": [{"type": "text", "text": system,
                             "cache_control": {"type": "ephemeral"}}],
                 "messages": [{"role": "user", "content": user}],
