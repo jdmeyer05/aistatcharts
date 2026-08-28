@@ -55,6 +55,32 @@ _TICKER_STOPWORDS = {
     "GMT", "UTC", "ET", "CT", "PT", "PM", "AM", "EOD", "EOM", "TBD", "NA", "OK",
     "BPS", "BP", "PP", "PPS", "VS", "WTI", "SPX", "NDX", "RUT", "ES", "NQ",
     "RTY", "DXY", "VIX", "MOVE", "CDS", "CTA",
+    # Market-structure and price-level shorthand. THIS GROUP IS WHY THE RULE HAD
+    # ZERO PRECISION IN PRODUCTION FOR ITS FIRST NINE DAYS. All 17 recorded
+    # `invented_ticker` findings between 2026-08-19 and 2026-08-28 were one of
+    # these — VAH, PVAH, PVAL, PDH, PDL, RVOL, TGA — written correctly, next to
+    # a number that DID trace to the payload. The cockpit prompts discuss prior
+    # value and overnight inventory constantly, so this is the vocabulary most
+    # likely to appear in correct prose. The cost was not cosmetic: it scored
+    # the home page at 0.139 and vetoed a challenger that won its replay.
+    "VAH", "VAL", "PVAH", "PVAL", "POC", "VPOC", "NPOC", "TPO", "LVN", "HVN",
+    "PDH", "PDL", "PDC", "PDO", "ONH", "ONL", "IBH", "IBL", "IBR",
+    "HOD", "LOD", "VWAP", "TWAP", "RVOL", "ATR", "ADR", "OHLC", "OHLCV",
+    "HTF", "LTF", "GEX", "DIX", "OPEX", "MOC", "LOC", "TICK", "ADD",
+    # Geography and blocs. `UK` fired on a news digest about Bailey and UK
+    # inflation on the very day the list above was written — the classes keep
+    # arriving, which is the argument for the structural guard in
+    # `_invented_tickers` and for the relative regression gate in
+    # src/prompt_replay.py rather than for trusting this list to be complete.
+    "UK", "EU", "EZ", "UAE", "APAC", "EMEA", "LATAM", "ROW", "OECD", "BRICS",
+    "NATO", "UN", "WHO", "G10", "EMFX",
+    # Funding and Treasury plumbing — the macro surfaces name these routinely.
+    "TGA", "RRP", "ONRRP", "SLR", "SRF", "BTFP", "MBS", "UST", "CMBS", "ABS",
+    "IORB", "EFFR", "ESTR", "SONIA", "TONA", "CORRA", "WAM", "QRA",
+    # Futures roots the ES cockpit quotes. These ARE symbols, but they are the
+    # platform's own contract shorthand, not securities the model invented.
+    "MES", "MNQ", "MYM", "M2K", "YM", "ZN", "ZB", "ZT", "ZF", "ZQ",
+    "CL", "GC", "SI", "HG", "NG", "ZC", "ZS", "ZW", "VX",
     "A", "I", "AND", "THE", "FOR", "BUT", "NOT", "ALL", "NEW", "NO", "ONE",
     "TWO", "ITS", "WAS", "ARE", "HAS", "HAD", "OUT", "OFF", "UP", "ON", "IN",
     "AT", "TO", "BY", "IF", "OR", "AS", "IS", "IT", "BE", "AN", "DO", "SO",
@@ -129,6 +155,68 @@ _DRIVER_CAUSAL = re.compile(
 _DRIVER_CAUSAL_REVERSE = re.compile(
     rf"\b(?:driven|propelled|dragged|led)\s+(?:higher\s+|lower\s+)?by\s+{_DRIVER_NOUN}\b", re.I)
 _TICKER = re.compile(r"\b[A-Z]{2,5}\b")
+_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# "PVAH 7700.04", "PVAH: 7700.04", "PVAH (7700.04)" — and the mirrored forms.
+_LABEL_AFTER = re.compile(r"^[\s:=~(\[]*(\d[\d,]*(?:\.\d+)?)")
+_LABEL_BEFORE = re.compile(r"(\d[\d,]*(?:\.\d+)?)[\s:=~)\]]*$")
+
+
+def _traces(num: str, ptext: str) -> bool:
+    """Does a number written in prose appear in the payload as its own value?
+
+    Bounded, not `in`. A bare substring test matches "5" inside "1523", which
+    would let a real invented ticker slip through on any number at all — the
+    wrong direction to be loose in for a critical rule.
+    """
+    raw = num.replace(",", "")
+    cands = {raw}
+    try:                                  # 7700.0 in prose vs 7700 in payload
+        f = float(raw)
+        cands |= {f"{f:g}", f"{f:.1f}", f"{f:.2f}"}
+        if f == int(f):
+            cands.add(str(int(f)))
+    except ValueError:
+        pass
+    return any(re.search(rf"(?<![\d.]){re.escape(c)}(?![\d])", ptext)
+               for c in cands if c)
+
+
+def _invented_tickers(text: str, payload, where: str) -> list[dict]:
+    """Uppercase tokens that name a security the payload never mentions.
+
+    TWO GUARDS, AND THE SECOND ONE EXISTS BECAUSE THE FIRST IS A LIST. The
+    stopword set above holds the desk vocabulary, and a list can only ever be as
+    complete as the last person to edit it — its first nine days in production
+    scored 0 true positives out of 17 because nobody had written down `VAH`.
+    So the structural guard: an acronym sitting immediately beside a number that
+    DOES trace to the payload is labelling that value, not naming a security.
+    "PVAH 7700.04" is the model reading the payload correctly, whichever
+    abbreviation it reached for. Without this, the next unlisted acronym repeats
+    the same outage, and the symptom is a silently vetoed promotion.
+    """
+    findings: list[dict] = []
+    ptext = _payload_text(payload).upper()
+    seen: set[str] = set()
+    for m in _TICKER.finditer(text or ""):
+        tk = m.group(0)
+        if tk in _TICKER_STOPWORDS or tk in seen:
+            continue
+        seen.add(tk)
+        if tk in ptext:
+            continue
+        # STRICTLY ADJACENT, and the first draft of this was not. A 14-character
+        # window either side let "SPY rose 0.42% while NVDA led" clear the guard
+        # on SPY's number, which is the exact invention the rule exists to
+        # catch. Only whitespace and light punctuation may separate the label
+        # from its value, so the number has to be the token's own.
+        before = _LABEL_BEFORE.search(text[max(0, m.start() - 24):m.start()])
+        after = _LABEL_AFTER.match(text[m.end():m.end() + 24])
+        adjacent = [g.group(1) for g in (before, after) if g]
+        if any(_traces(n, ptext) for n in adjacent):
+            continue          # a label for a grounded value, not a ticker
+        findings.append(_find("critical", "invented_ticker",
+                              f"'{tk}' {where}", tk))
+    return findings
 
 
 def grade_market_driver(payload: dict, output: dict) -> list[dict]:
@@ -245,15 +333,8 @@ def grade_market_driver(payload: dict, output: dict) -> list[dict]:
 
     # ── invented tickers ─────────────────────────────────────────
     def _tickers():
-        ptext = _payload_text(payload).upper()
-        seen: set[str] = set()
-        for tk in _TICKER.findall(prose):
-            if tk in _TICKER_STOPWORDS or tk in seen:
-                continue
-            seen.add(tk)
-            if tk not in ptext:
-                findings.append(_find("critical", "invented_ticker",
-                                      f"'{tk}' appears in the note but nowhere in the payload.", tk))
+        findings.extend(_invented_tickers(
+            prose, payload, "appears in the note but nowhere in the payload."))
     _safe(_tickers, findings, "tickers")
 
     # ── length caps ──────────────────────────────────────────────
@@ -322,15 +403,8 @@ def grade_home_interpret(payload: dict, output) -> list[dict]:
     _safe(_grounding, findings, "grounding")
 
     def _tickers():
-        ptext = _payload_text(payload).upper()
-        seen: set[str] = set()
-        for tk in _TICKER.findall(text):
-            if tk in _TICKER_STOPWORDS or tk in seen:
-                continue
-            seen.add(tk)
-            if tk not in ptext:
-                findings.append(_find("critical", "invented_ticker",
-                                      f"'{tk}' appears in the interpretation but nowhere in the payload.", tk))
+        findings.extend(_invented_tickers(
+            text, payload, "appears in the interpretation but nowhere in the payload."))
     _safe(_tickers, findings, "tickers")
 
     def _drivers():
@@ -512,15 +586,8 @@ def grade_news_digest(payload: dict, output) -> list[dict]:
     _safe(_grounding, findings, "grounding")
 
     def _tickers():
-        ptext = _payload_text(payload).upper()
-        seen: set[str] = set()
-        for tk in _TICKER.findall(text):
-            if tk in _TICKER_STOPWORDS or tk in seen:
-                continue
-            seen.add(tk)
-            if tk not in ptext:
-                findings.append(_find("critical", "invented_ticker",
-                                      f"'{tk}' appears in the digest but in none of the headlines.", tk))
+        findings.extend(_invented_tickers(
+            text, payload, "appears in the digest but in none of the headlines."))
     _safe(_tickers, findings, "tickers")
 
     return findings

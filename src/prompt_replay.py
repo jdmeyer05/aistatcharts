@@ -47,6 +47,9 @@ _MIN_N = 8
 # this is a declared floor, not an estimate.
 _MIN_MARGIN = 0.02
 _BOOTSTRAP = 2000
+# Share of the drawn payloads that must survive generation for a statistical
+# rejection to mean anything. DECLARED, not estimated — like _MIN_MARGIN above.
+_MIN_USABLE_SHARE = 0.6
 
 
 # ── generation ────────────────────────────────────────────────────
@@ -93,8 +96,25 @@ def _user_message(surface: str, payload: dict) -> str:
     return json.dumps(payload, default=str)[:12000]
 
 
-def _generate(surface: str, system: str, payload: dict) -> object | None:
-    """One replay generation. Returns the parsed output, or None on failure."""
+# Failures that belong to the VENDOR, not to the prompt under test. A 503 from
+# an overloaded model lands on whichever arm happened to call during the spike,
+# so counting it against the challenger is counting a coin flip. Everything
+# else — a refusal, a truncation, output that will not parse — is caused by the
+# prompt and is exactly what the gate is supposed to punish.
+_INFRA_FAILURES = {"api_error", "no_key"}
+
+
+def _generate(surface: str, system: str, payload: dict) -> tuple[object | None, str | None]:
+    """One replay generation.
+
+    Returns `(output, failure_reason)`. The reason is None on success and
+    otherwise names WHY, because the previous version returned a bare None down
+    four different paths — missing key, API exception, refusal/max_tokens, and
+    unparseable output — and only one of them logged anything. The gate then
+    charged all four to the prompt. On 2026-08-28 that rejected market_driver v3
+    for "failed to generate more often (5 vs 3)" during a Gemini 503 spike,
+    while the same replay had it winning +0.036 with a CI excluding zero.
+    """
     model = _REPLAY_MODEL.get(surface, "claude-sonnet-5")
     user = _user_message(surface, payload)
 
@@ -105,7 +125,8 @@ def _generate(surface: str, system: str, payload: dict) -> object | None:
             from src.api_keys import get_secret
             key = get_secret("GEMINI_API_KEY")
             if not key:
-                return None
+                logger.error("prompt_replay: GEMINI_API_KEY missing — replay cannot run")
+                return None, "no_key"
             client = genai.Client(api_key=key)
             resp = client.models.generate_content(
                 model=model,
@@ -123,7 +144,8 @@ def _generate(surface: str, system: str, payload: dict) -> object | None:
             from src.api_keys import get_secret
             key = get_secret("ANTHROPIC_API_KEY")
             if not key:
-                return None
+                logger.error("prompt_replay: ANTHROPIC_API_KEY missing — replay cannot run")
+                return None, "no_key"
             client = anthropic.Anthropic(api_key=key)
             kwargs = {
                 "model": model,
@@ -140,14 +162,23 @@ def _generate(surface: str, system: str, payload: dict) -> object | None:
                 kwargs["betas"] = ["server-side-fallback-2026-07-01"]
                 kwargs["fallbacks"] = "default"
             msg = client.beta.messages.create(**kwargs)
-            if getattr(msg, "stop_reason", None) in ("refusal", "max_tokens"):
-                return None
+            stop = getattr(msg, "stop_reason", None)
+            if stop in ("refusal", "max_tokens"):
+                logger.warning(f"prompt_replay: {surface} generation stopped on {stop}")
+                return None, stop
             raw = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
     except Exception as e:
-        logger.debug(f"prompt_replay: generation failed ({surface}): {e}")
-        return None
+        # WARNING, not DEBUG: this is the only place the actual cause appears,
+        # and the caller can only report a count. A silent DEBUG here is what
+        # made an uninstalled SDK look like an empty holdout set.
+        logger.warning(f"prompt_replay: generation failed ({surface}, {model}): {e}")
+        return None, "api_error"
 
-    return _parse(surface, raw)
+    obj = _parse(surface, raw)
+    if obj is None:
+        logger.warning(f"prompt_replay: {surface} output did not parse ({len(raw or '')} chars)")
+        return None, "unparseable"
+    return obj, None
 
 
 def _parse(surface: str, raw: str):
@@ -198,11 +229,12 @@ def run(surface: str, champion_version: int, challenger_version: int,
         payload = snap.get("payload") or {}
         if payload.get("_truncated"):
             continue          # a trimmed payload is not the situation the model saw
-        a = _generate(surface, champ["body"], payload)
-        b = _generate(surface, chall["body"], payload)
+        a, why_a = _generate(surface, champ["body"], payload)
+        b, why_b = _generate(surface, chall["body"], payload)
         if a is None or b is None:
             pairs.append({"snapshot_id": snap["id"], "champion": None, "challenger": None,
-                          "champion_failed": a is None, "challenger_failed": b is None})
+                          "champion_failed": a is None, "challenger_failed": b is None,
+                          "champion_why": why_a, "challenger_why": why_b})
             continue
         ga = prompt_rules.grade(surface, payload, a)
         gb = prompt_rules.grade(surface, payload, b)
@@ -210,7 +242,8 @@ def run(surface: str, champion_version: int, challenger_version: int,
             "snapshot_id": snap["id"],
             "champion": ga, "challenger": gb,
             "champion_failed": False, "challenger_failed": False,
-            "regressions": prompt_rules.regression_failures(gb.get("findings") or []),
+            "challenger_regressions": prompt_rules.regression_failures(gb.get("findings") or []),
+            "champion_regressions": prompt_rules.regression_failures(ga.get("findings") or []),
         })
 
     return _summarise(surface, champ, chall, pairs)
@@ -222,7 +255,39 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
     fails_a = sum(1 for p in pairs if p.get("champion_failed"))
     fails_b = sum(1 for p in pairs if p.get("challenger_failed"))
 
+    # Only PROMPT-attributable failures may count against an arm. A vendor 503
+    # hits whichever arm called during the spike; charging it to the challenger
+    # is scoring a coin flip as a defect.
+    def _blamed(side: str) -> int:
+        return sum(1 for p in pairs
+                   if p.get(f"{side}_failed")
+                   and p.get(f"{side}_why") not in _INFRA_FAILURES)
+
+    blamed_a, blamed_b = _blamed("champion"), _blamed("challenger")
+    infra = (fails_a + fails_b) - (blamed_a + blamed_b)
+    if infra:
+        logger.warning(f"prompt_replay: {surface} discounted {infra} vendor-side "
+                       "generation failures from the gate")
+
     if n < _MIN_N:
+        # A BROKEN ARM MUST NOT READ LIKE A QUIET ONE. `_generate` swallows its
+        # exception and returns None, so a missing dependency, a dead key or a
+        # changed SDK produces exactly the same "inconclusive, n=0" line as a
+        # surface that simply has not accumulated holdout rows yet — and the
+        # challenger sits unevaluated indefinitely while the log looks calm.
+        # (Local run, 2026-08-28: 48 generations failed on an uninstalled
+        # google-genai and reported n=0 in two seconds.) Same failure family as
+        # the ES card's empty panels: say the lookup broke, do not render it as
+        # an absence of news.
+        broke = fails_a + fails_b
+        if broke:
+            logger.error(
+                f"prompt_replay: {surface} INCONCLUSIVE because generation failed — "
+                f"champion {fails_a}, challenger {fails_b} of {len(pairs)} payloads. "
+                "This is a broken arm, not a thin sample; check keys and SDKs.")
+            return {"ok": False, "verdict": "inconclusive", "n": n,
+                    "error": f"generation failed on {broke} of {2 * len(pairs)} calls",
+                    "generation_failures": {"champion": fails_a, "challenger": fails_b}}
         return {"ok": True, "verdict": "inconclusive", "n": n,
                 "reason": f"only {n} paired generations completed",
                 "generation_failures": {"champion": fails_a, "challenger": fails_b}}
@@ -240,25 +305,65 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
         return out
 
     c_a, c_b = _counts("champion"), _counts("challenger")
-    regressions = sorted({r for p in scored for r in (p.get("regressions") or [])})
+
+    # RELATIVE, NOT ABSOLUTE — and the difference decided a real promotion.
+    # "Reintroduces" can only mean a defect the CHAMPION does not already
+    # produce on the same payloads. Counting the challenger's regression rules
+    # alone made this gate fire whenever a defect was endemic to the surface,
+    # so the challenger was blamed for inheriting the champion's problem: on
+    # 2026-08-27 market_driver v3 scored 0.950 against the champion's 0.902,
+    # with a CI excluding zero, and was rejected for `invented_ticker` while
+    # the champion produced exactly as many of them. A challenger is only
+    # charged for a defect it makes MORE common than the prompt it replaces.
+    def _rule_rate(key: str) -> dict:
+        out: dict = {}
+        for p in scored:
+            for r in (p.get(key) or []):
+                out[r] = out.get(r, 0) + 1
+        return out
+
+    reg_b, reg_a = _rule_rate("challenger_regressions"), _rule_rate("champion_regressions")
+    regressions = sorted(r for r, n in reg_b.items() if n > reg_a.get(r, 0))
 
     # THE GATE. Each condition is here because of a specific way this could go
     # wrong: significance without size, a win bought by reintroducing a known
     # defect, or a challenger that simply fails to produce parseable output more
     # often and is never penalised for it because failures are not scored.
-    reasons = []
+    # Defects the challenger actually exhibits, versus the sample simply being
+    # too thin to tell. The distinction matters because two rejects retire a
+    # challenger permanently, and only the first kind is evidence about it.
+    faults, thin = [], []
     if regressions:
-        reasons.append(f"reintroduces known defects: {', '.join(regressions)}")
+        detail = ", ".join(f"{r} ({reg_b.get(r, 0)} vs champion {reg_a.get(r, 0)})"
+                           for r in regressions)
+        faults.append(f"reintroduces known defects: {detail}")
     if c_b["critical"] > c_a["critical"]:
-        reasons.append(f"more critical findings ({c_b['critical']} vs {c_a['critical']})")
-    if fails_b > fails_a:
-        reasons.append(f"failed to generate more often ({fails_b} vs {fails_a})")
+        faults.append(f"more critical findings ({c_b['critical']} vs {c_a['critical']})")
+    if blamed_b > blamed_a:
+        faults.append(f"failed to generate more often ({blamed_b} vs {blamed_a}, "
+                      "vendor errors excluded)")
     if lo <= 0:
-        reasons.append(f"95% CI on the paired difference includes zero [{lo:.3f}, {hi:.3f}]")
+        thin.append(f"95% CI on the paired difference includes zero [{lo:.3f}, {hi:.3f}]")
     if mean_diff < _MIN_MARGIN:
-        reasons.append(f"improvement {mean_diff:+.3f} is under the {_MIN_MARGIN} margin")
+        thin.append(f"improvement {mean_diff:+.3f} is under the {_MIN_MARGIN} margin")
 
+    reasons = faults + thin
     verdict = "reject" if reasons else "win"
+
+    # A RUN THE VENDOR RUINED IS NOT A VERDICT ON THE PROMPT. Discounting a 503
+    # from the failure count still lets it decide the outcome the other way: it
+    # deletes the pair, the sample shrinks, the bootstrap CI widens, and the
+    # challenger is rejected for "CI includes zero" — which is a fact about
+    # Gemini's capacity that day, not about the prompt. Two such rejects retire
+    # it for good. So when vendor errors have eaten the sample and the only
+    # complaints left are statistical, the honest answer is "run it again".
+    # A substantive fault still rejects on whatever pairs survived.
+    attempted = len(pairs)
+    degraded = bool(infra) and attempted and n < _MIN_USABLE_SHARE * attempted
+    if degraded and verdict == "reject" and not faults:
+        verdict = "inconclusive"
+        reasons.insert(0, f"vendor failures left {n} usable pairs of {attempted}; "
+                          "rerun rather than a verdict on the prompt")
     return {
         "ok": True,
         "surface": surface,
@@ -274,7 +379,11 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
         "champion_counts": c_a,
         "challenger_counts": c_b,
         "regressions": regressions,
-        "generation_failures": {"champion": fails_a, "challenger": fails_b},
+        # Both sides, so a rejection can be read without rerunning the replay.
+        "regression_rates": {"champion": reg_a, "challenger": reg_b},
+        "generation_failures": {"champion": fails_a, "challenger": fails_b,
+                                "champion_blamed": blamed_a, "challenger_blamed": blamed_b,
+                                "vendor_discounted": infra},
         "win_rate": round(sum(1 for d in diffs if d > 0) / n, 4),
         "tie_rate": round(sum(1 for d in diffs if d == 0) / n, 4),
     }

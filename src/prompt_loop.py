@@ -70,7 +70,8 @@ def discover_surfaces(days: int = 30) -> list[str]:
 # ── stage 1: grade ────────────────────────────────────────────────
 
 def grade_pending(surface: str | None = None, days: int = 30,
-                  page: int = 400, max_pages: int = 12) -> dict:
+                  page: int = 400, max_pages: int = 12,
+                  regrade: bool = False) -> dict:
     """Apply the rule set to every snapshot that has not been graded yet.
 
     PAGES THE WHOLE WINDOW, oldest first. The obvious version — take the newest
@@ -79,6 +80,14 @@ def grade_pending(surface: str | None = None, days: int = 30,
     N are all graded already, so it writes nothing and the gap behind them is
     never revisited. Nothing would look broken, and the sample every downstream
     number is computed over would just be quietly missing a week.
+
+    `regrade=True` re-scores rows that already carry a grade. A rule fix would
+    otherwise leave the record frozen under the rule it fixed: on 2026-08-28 a
+    false-positive `invented_ticker` was corrected, and until the stored grades
+    were rewritten the critic went on reading 17 criticals that no longer
+    existed, arguing against a defect the prompt never had. A grade is a cache
+    of a pure function of (rules, payload, output) — when the rules change the
+    cache is stale, not historical.
     """
     from src import prompt_rules
     from src.prompt_snapshots import paged
@@ -99,14 +108,15 @@ def grade_pending(surface: str | None = None, days: int = 30,
 
         already: set[int] = set()
         ids = [r["id"] for r in rows]
-        for i in range(0, len(ids), 200):
-            try:
-                done = (db.table("ai_grades").select("snapshot_id")
-                        .in_("snapshot_id", ids[i:i + 200]).eq("grader", "rules")
-                        .execute().data or [])
-                already |= {r["snapshot_id"] for r in done}
-            except Exception as e:
-                logger.warning(f"prompt_loop: grade lookup failed for {surf}: {e}")
+        if not regrade:
+            for i in range(0, len(ids), 200):
+                try:
+                    done = (db.table("ai_grades").select("snapshot_id")
+                            .in_("snapshot_id", ids[i:i + 200]).eq("grader", "rules")
+                            .execute().data or [])
+                    already |= {r["snapshot_id"] for r in done}
+                except Exception as e:
+                    logger.warning(f"prompt_loop: grade lookup failed for {surf}: {e}")
 
         payloads = []
         for r in rows:

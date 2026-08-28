@@ -134,6 +134,35 @@ def test_invented_ticker_is_critical():
     assert "invented_ticker" in _findings(_payload(), out)
 
 
+def test_market_structure_shorthand_is_not_an_invented_ticker():
+    """The 17 false criticals that scored the home page at 0.139.
+
+    Every `invented_ticker` finding recorded in production between 2026-08-19
+    and 2026-08-28 was desk vocabulary, not a security. This is the real text
+    from snapshot 217, whose 7700.04 traces to the payload.
+    """
+    text = ("Price sits above prior value (PVAH 7700.04) and above the prior day "
+            "high 7705.5, but only 17.5% up the overnight range. RVOL is "
+            "unavailable and the TGA drawdown continues. Bottom line: watch 7700.04.")
+    payload = {"levels": {"prior_value_area_high": 7700.04, "prior_day_high": 7705.5},
+               "overnight": {"position_in_range": 0.175}}
+    rules = {f["rule"] for f in prompt_rules.grade_home_interpret(payload, text)}
+    assert "invented_ticker" not in rules
+
+
+def test_an_acronym_labelling_a_grounded_value_is_not_a_ticker():
+    """The structural guard, for the abbreviation nobody thought to list."""
+    payload = {"levels": {"weekly_pivot": 7688.25}}
+    clean = {f["rule"] for f in prompt_rules.grade_home_interpret(
+        payload, "The WKPV 7688.25 shelf held. Bottom line: watch it.")}
+    assert "invented_ticker" not in clean
+
+    # ...but the same acronym with no number of its own is still a finding.
+    dirty = {f["rule"] for f in prompt_rules.grade_home_interpret(
+        payload, "WKPV led the tape higher. Bottom line: watch it.")}
+    assert "invented_ticker" in dirty
+
+
 def test_empty_paragraph_is_critical():
     out = _output(paragraphs={"what_happened": "", "whats_driving": "x", "what_to_watch": "y"})
     assert "empty_paragraph" in _findings(_payload(), out)
@@ -320,13 +349,15 @@ def test_validate_rejects_dropping_the_bottom_line_for_interpret():
 
 # ── the promotion gate ────────────────────────────────────────────
 
-def _pair(champ_score, chall_score, regressions=None, counts_a=None, counts_b=None):
+def _pair(champ_score, chall_score, regressions=None, counts_a=None, counts_b=None,
+          champ_regressions=None):
     return {
         "snapshot_id": 1,
         "champion": {"score": champ_score, "counts": counts_a or {"critical": 0, "major": 0, "minor": 0}},
         "challenger": {"score": chall_score, "counts": counts_b or {"critical": 0, "major": 0, "minor": 0}},
         "champion_failed": False, "challenger_failed": False,
-        "regressions": regressions or [],
+        "challenger_regressions": regressions or [],
+        "champion_regressions": champ_regressions or [],
     }
 
 
@@ -344,6 +375,33 @@ def test_gate_rejects_a_win_that_reintroduces_a_known_defect():
     assert any("reintroduces" in r for r in res["reasons"])
 
 
+def test_gate_does_not_charge_the_challenger_for_the_champions_defect():
+    """The rejection that blocked market_driver v3 on 2026-08-27.
+
+    v3 scored 0.950 against the champion's 0.902 with a CI excluding zero, and
+    was rejected for `invented_ticker` while the champion produced exactly as
+    many. A defect endemic to the surface is not something the challenger
+    reintroduced, and the gate must not read it as one.
+    """
+    pairs = [_pair(0.902, 0.950,
+                   regressions=["invented_ticker"],
+                   champ_regressions=["invented_ticker"]) for _ in range(20)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, pairs)
+    assert res["regressions"] == []
+    assert res["verdict"] == "win", res["reasons"]
+
+
+def test_gate_still_rejects_a_defect_the_challenger_makes_more_common():
+    """Relative, not absent: a higher rate than the champion is still a veto."""
+    pairs = ([_pair(0.7, 0.95, regressions=["invented_ticker"],
+                    champ_regressions=["invented_ticker"]) for _ in range(10)]
+             + [_pair(0.7, 0.95, regressions=["invented_ticker"]) for _ in range(10)])
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    assert res["regressions"] == ["invented_ticker"]
+    assert res["verdict"] == "reject"
+    assert any("20 vs champion 10" in r for r in res["reasons"])
+
+
 def test_gate_rejects_a_tiny_improvement_that_is_merely_significant():
     pairs = [_pair(0.70, 0.705) for _ in range(30)]
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
@@ -356,6 +414,81 @@ def test_gate_rejects_a_noisy_wash():
     pairs = [_pair(a, b) for a, b in scores]
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
     assert res["verdict"] == "reject"
+
+
+def _dead_pair(champ_why=None, chall_why=None):
+    return {"snapshot_id": 99, "champion": None, "challenger": None,
+            "champion_failed": champ_why is not None,
+            "challenger_failed": chall_why is not None,
+            "champion_why": champ_why, "challenger_why": chall_why}
+
+
+def test_a_vendor_outage_cannot_reject_a_winning_challenger():
+    """The 2026-08-28 rejection of market_driver v3.
+
+    v3 won +0.036 with a CI excluding zero and was rejected for "failed to
+    generate more often" during a Gemini 503 spike. A 503 lands on whichever
+    arm called during the spike, so it is not evidence about the prompt.
+    """
+    pairs = ([_pair(0.90, 0.94) for _ in range(14)]
+             + [_dead_pair(chall_why="api_error") for _ in range(3)]
+             + [_dead_pair(champ_why="api_error")])
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, pairs)
+    assert res["generation_failures"]["vendor_discounted"] == 4
+    assert res["verdict"] == "win", res["reasons"]
+
+    # A challenger that genuinely fails to parse more often is still rejected.
+    prompt_broken = ([_pair(0.90, 0.94) for _ in range(14)]
+                     + [_dead_pair(chall_why="unparseable") for _ in range(3)])
+    bad = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, prompt_broken)
+    assert bad["verdict"] == "reject"
+    assert any("failed to generate more often" in r for r in bad["reasons"])
+
+
+def test_a_vendor_ruined_sample_is_inconclusive_not_a_rejection():
+    """Two rejects retire a challenger, so a 503 spike must not cast one.
+
+    2026-08-28: 15 of 24 pairs died to Gemini 503s, n fell to 11, the bootstrap
+    CI widened to include zero and v3 was rejected — a fact about the vendor's
+    capacity, not about the prompt.
+    """
+    noisy = [(0.90, 1.00), (0.90, 0.85), (0.90, 0.98), (0.90, 0.90), (0.90, 0.95),
+             (0.90, 0.88), (0.90, 0.99), (0.90, 0.84), (0.90, 0.93)]
+    pairs = ([_pair(a, b) for a, b in noisy]
+             + [_dead_pair(chall_why="api_error") for _ in range(15)])
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, pairs)
+    assert res["verdict"] == "inconclusive", res["reasons"]
+    assert "rerun" in res["reasons"][0]
+
+
+def test_a_ruined_sample_still_rejects_on_a_substantive_fault():
+    """Degradation excuses a thin CI, never an actual defect."""
+    pairs = ([_pair(0.90, 0.94, regressions=["invented_ticker"]) for _ in range(9)]
+             + [_dead_pair(chall_why="api_error") for _ in range(15)])
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, pairs)
+    assert res["verdict"] == "reject"
+    assert any("reintroduces" in r for r in res["reasons"])
+
+
+def test_a_broken_arm_is_not_reported_as_a_thin_sample():
+    """Every generation failing must not read like "not enough data yet".
+
+    On 2026-08-28 an uninstalled SDK failed all 48 calls and the run reported
+    `inconclusive, n=0` at INFO — indistinguishable from a surface with no
+    holdout rows, which is how a challenger sits unevaluated indefinitely.
+    """
+    dead = [{"snapshot_id": i, "champion": None, "challenger": None,
+             "champion_failed": True, "challenger_failed": True} for i in range(24)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, dead)
+    assert res["ok"] is False
+    assert res["n"] == 0
+    assert "generation failed" in res["error"]
+
+    # A genuinely thin but healthy sample still reports the quiet way.
+    thin = [_pair(0.9, 0.9) for _ in range(3)]
+    quiet = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, thin)
+    assert quiet["ok"] is True
+    assert quiet["verdict"] == "inconclusive"
 
 
 def test_gate_rejects_a_challenger_that_fails_to_generate_more_often():

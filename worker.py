@@ -1043,6 +1043,23 @@ def prompt_loop_grade(db):
         logger.error(f"prompt_grade failed: {e}")
 
 
+def prompt_loop_regrade(db, days: int = 30):
+    """Re-score every stored snapshot under the CURRENT rules.
+
+    Deliberately manual and never part of `all`: it is the thing you run after
+    fixing a rule, so that the record the critic reads describes the rules that
+    exist rather than the ones that were replaced.
+    """
+    try:
+        from src.prompt_loop import grade_pending
+        res = grade_pending(days=days, regrade=True)
+        for surface, stat in (res.get("surfaces") or {}).items():
+            logger.info(f"prompt_regrade: {surface} rescored {stat.get('graded', 0)} "
+                        f"of {stat.get('scanned', 0)} scanned")
+    except Exception as e:
+        logger.error(f"prompt_regrade failed: {e}")
+
+
 def prompt_loop_critique(db):
     """Adversarial read of each surface's record; proposes challengers."""
     try:
@@ -1079,7 +1096,8 @@ def main():
                                             "metrics", "cleanup", "prewarm", "options",
                                             "market_news", "trump_validate", "sector_refresh",
                                             "prompt_seed", "prompt_ping", "prompt_grade",
-                                            "prompt_critique", "prompt_evaluate"],
+                                            "prompt_regrade", "prompt_critique",
+                                            "prompt_evaluate"],
                         default="all", help="Which task to run")
     args = parser.parse_args()
 
@@ -1119,6 +1137,9 @@ def main():
 
     if args.task in ("all", "prompt_grade"):
         prompt_loop_grade(db)
+
+    if args.task == "prompt_regrade":
+        prompt_loop_regrade(db)
 
     # LLM stages — never in "all". Critique is two Opus calls and evaluate is
     # ~50 generations, which would blow the hourly job's 10-minute budget and

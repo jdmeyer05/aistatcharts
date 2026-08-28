@@ -31,6 +31,9 @@ on:
         options:
           - prompt_seed
           - prompt_grade
+          # Re-scores rows that ALREADY have a grade. Run after fixing a rule,
+          # so the record the critic reads describes the rules that exist.
+          - prompt_regrade
           - prompt_critique
           - prompt_evaluate
 
