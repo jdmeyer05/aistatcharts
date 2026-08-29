@@ -186,14 +186,15 @@ def critique_cycle(surface: str, min_samples: int = 10) -> dict:
     # (0.9983 vs 0.9983, 100% tie rate) after spending two Opus calls to write
     # it and twenty-four generations to score it. Skipping is self-correcting:
     # if quality ever degrades the mean falls and critique resumes on its own.
-    from src.prompt_health import _CEILING
-    scores = [g["grade"].get("score") for g in graded
-              if g["grade"].get("score") is not None]
-    if scores and sum(scores) / len(scores) >= _CEILING:
-        mean = sum(scores) / len(scores)
-        return {"ok": True, "skipped": f"no measurable headroom (mean rule score "
-                                       f"{mean:.4f} over {len(scores)} outputs) — "
-                                       f"a challenger could not be shown to improve on it"}
+    #
+    # BUT THE MEAN ALONE WAS THE WRONG GATE (2026-08-29). news_digest cleared it
+    # by 0.000094 while breaking its own 70-word cap in 1 output in 10, so the
+    # critic was barred from the surface with a live systematic defect. Headroom
+    # now needs the mean AND the strict pass rate — see prompt_health.has_headroom.
+    from src.prompt_health import has_headroom
+    room, why = has_headroom(graded)
+    if not room:
+        return {"ok": True, "skipped": why}
 
     champ = prompt_registry.champion(surface) or {}
     body = champ.get("body") or prompt_registry.baseline(surface)

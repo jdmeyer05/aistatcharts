@@ -43,7 +43,55 @@ _CRITIQUE_MIN = 10        # graded discovery rows, per prompt_loop.critique_cycl
 _REPLAY_MIN = 8           # holdout snapshots, per prompt_replay._MIN_N
 # A surface scoring this well has no headroom the rules can measure, so a
 # challenger cannot demonstrate an improvement and the critique spend is wasted.
+#
+# A MEAN CANNOT CARRY THIS DECISION ALONE. A minor-weighted defect occurring in
+# 12% of outputs moves a weighted mean by ~0.0024, so news_digest cleared this
+# ceiling by 0.000094 (0.995094) while breaking its own 70-word cap in 1 output
+# in 10 — and the critic was barred from the one surface with a live systematic
+# defect. The mean is structurally insensitive in exactly the region where it is
+# used as a gate (extremal Goodhart: the rules were calibrated on bad output, and
+# nothing ever observed their proxy-vs-quality relation above 0.99).
+#
+# So headroom now requires BOTH: a mean at the ceiling AND a strict pass rate at
+# _STRICT_CEILING. Strict pass = share of outputs with ZERO findings of any
+# severity — IFEval's prompt-level strict accuracy, the published answer to this
+# exact failure, where one violated constraint zeroes the whole item.
+# Measured 2026-08-29: es_audit mean 0.9979 / strict 0.950; news_digest 0.9958 /
+# strict 0.900. Both had real headroom; both were being skipped.
 _CEILING = 0.995
+_STRICT_CEILING = 0.98    # fewer than 1 defective output in 50
+
+
+def strict_pass(graded: list[dict]) -> float | None:
+    """Share of graded outputs with no finding at all. None if nothing graded.
+
+    Reported BESIDE the mean, never instead of it: the mean says how bad the
+    defects are, this says how often there is one, and they answer different
+    questions. A surface can read 0.94 and still be defective 10 times in 11.
+    """
+    rows = [g for g in graded if g.get("grade") is not None]
+    if not rows:
+        return None
+    clean = sum(1 for g in rows if not (g["grade"].get("findings") or []))
+    return clean / len(rows)
+
+
+def has_headroom(graded: list[dict]) -> tuple[bool, str]:
+    """(headroom?, why). A surface is 'done' only on BOTH statistics."""
+    scores = [g["grade"].get("score") for g in graded
+              if g.get("grade") and g["grade"].get("score") is not None]
+    if not scores:
+        return True, "no graded outputs yet"
+    mean = sum(scores) / len(scores)
+    sp = strict_pass(graded)
+    if mean >= _CEILING and sp is not None and sp >= _STRICT_CEILING:
+        return False, (f"no measurable headroom (mean {mean:.4f} over {len(scores)} "
+                       f"outputs, strict pass {sp:.1%}) — a challenger could not be "
+                       f"shown to improve on it")
+    if mean >= _CEILING:
+        return True, (f"mean {mean:.4f} is at the ceiling but strict pass is only "
+                      f"{sp:.1%} — a systematic defect the mean cannot see")
+    return True, f"mean {mean:.4f} over {len(scores)} outputs"
 
 
 def _db():
@@ -163,6 +211,7 @@ def readiness(days: int = 30) -> dict:
         scores = [g["grade"].get("score") for g in graded
                   if g["grade"].get("score") is not None]
         mean = sum(scores) / len(scores) if scores else None
+        sp = strict_pass(graded)
 
         last = max(s["created_at"] for s in snaps)
         age_h = (datetime.now(timezone.utc)
@@ -173,15 +222,17 @@ def readiness(days: int = 30) -> dict:
             blocks.append(f"critique needs {_CRITIQUE_MIN - len(graded)} more graded discovery rows")
         if len(hold) < _REPLAY_MIN:
             blocks.append(f"replay needs {_REPLAY_MIN - len(hold)} more holdout rows")
-        if mean is not None and mean >= _CEILING:
-            blocks.append(f"no measurable headroom (mean score {mean:.4f}) — "
-                          "a challenger cannot demonstrate an improvement")
+        if graded:
+            room, why = has_headroom(graded)
+            if not room:
+                blocks.append(why)
         if len(snaps) - len(graded) - len(hold) > 20:
             blocks.append("large ungraded backlog")
 
         rec = {"surface": surface, "snapshots": len(snaps), "discovery": len(disc),
                "holdout": len(hold), "graded_discovery": len(graded),
                "mean_score": round(mean, 4) if mean is not None else None,
+               "strict_pass": round(sp, 4) if sp is not None else None,
                "hours_since_last": round(age_h, 1), "blocked_by": blocks}
         if age_h > 72:
             problems.append(f"{surface}: no snapshot for {age_h:.0f}h")
@@ -209,9 +260,12 @@ def report(days: int = 30) -> dict:
 
     if r.get("ok"):
         for s in r["surfaces"]:
+            sp = s.get("strict_pass")
             msg = (f"prompt_health: {s['surface']} — {s['snapshots']} snaps "
                    f"({s['graded_discovery']} graded disc / {s['holdout']} holdout), "
-                   f"mean {s['mean_score']}, last {s['hours_since_last']}h ago")
+                   f"mean {s['mean_score']}, "
+                   f"strict {f'{sp:.1%}' if sp is not None else 'n/a'}, "
+                   f"last {s['hours_since_last']}h ago")
             logger.info(msg + (f" | BLOCKED: {'; '.join(s['blocked_by'])}"
                                if s["blocked_by"] else " | ready"))
         for p in r["problems"]:

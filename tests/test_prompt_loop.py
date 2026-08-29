@@ -762,3 +762,61 @@ def test_a_ceilinged_surface_is_not_critiqued(monkeypatch):
                                          for _ in range(20)])
     res = prompt_loop.critique_cycle("es_audit")
     assert "headroom" in res.get("skipped", "")
+
+
+# ── the mean was not the gate (audit 2026-08-29) ──────────────────
+
+def _rows(n_clean, n_defective, clean=1.0, defective=0.9583):
+    """Graded rows shaped like production: a finding is what makes a row dirty."""
+    return ([{"snapshot": {}, "grade": {"score": clean, "findings": []}}
+             for _ in range(n_clean)]
+            + [{"snapshot": {}, "grade": {"score": defective,
+                                          "findings": [{"rule": "digest_too_long",
+                                                        "severity": "minor"}]}}
+               for _ in range(n_defective)])
+
+
+def test_strict_pass_counts_rows_not_severity():
+    from src import prompt_health
+    assert abs(prompt_health.strict_pass(_rows(45, 6)) - 45 / 51) < 1e-9
+    assert prompt_health.strict_pass([]) is None
+
+
+def test_the_news_digest_ceiling_was_a_false_ceiling():
+    """The real numbers that motivated the change.
+
+    news_digest discovery: 51 rows, 6 breaking the 70-word cap, mean 0.99509 —
+    which cleared the 0.995 ceiling by 0.000094 and barred the critic from the
+    one surface with a live systematic defect.
+    """
+    from src import prompt_health
+    graded = _rows(45, 6)
+    scores = [g["grade"]["score"] for g in graded]
+    assert sum(scores) / len(scores) >= prompt_health._CEILING   # old gate: "done"
+    room, why = prompt_health.has_headroom(graded)
+    assert room is True                                          # new gate: not done
+    assert "strict pass" in why
+
+
+def test_a_genuinely_finished_surface_still_skips():
+    """Both statistics have to agree before the critique spend is skipped."""
+    from src import prompt_health
+    room, why = prompt_health.has_headroom(_rows(199, 1))
+    assert room is False
+    assert "no measurable headroom" in why
+
+
+def test_a_mean_can_hide_a_surface_defective_ten_times_in_eleven():
+    """home_interpret pre-fix: mean 0.9394 reads like a B-plus; strict was 9.1%."""
+    from src import prompt_health
+    graded = _rows(1, 10, defective=0.9333)
+    assert abs(prompt_health.strict_pass(graded) - 1 / 11) < 1e-9
+    assert prompt_health.has_headroom(graded)[0] is True
+
+
+def test_a_defective_surface_is_critiqued(monkeypatch):
+    from src import prompt_loop
+    monkeypatch.setattr(prompt_loop, "_open_challenger", lambda s: None)
+    monkeypatch.setattr(prompt_loop, "graded_snapshots", lambda *a, **k: _rows(45, 6))
+    res = prompt_loop.critique_cycle("news_digest")
+    assert "headroom" not in res.get("skipped", "")
