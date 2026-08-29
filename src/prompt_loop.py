@@ -32,10 +32,14 @@ logger = logging.getLogger(__name__)
 
 SURFACES = ("market_driver", "home_interpret", "es_audit", "news_digest")
 
-# Two independent holdout draws, on different days, before anything is served.
-_WINS_TO_PROMOTE = 2
-# A challenger that has lost twice is not coming back; stop paying to re-test it.
-_LOSSES_TO_REJECT = 2
+# RETIRED 2026-08-29 — counting verdicts instead of pairs. "Two rejects and a
+# challenger is not coming back" sounded prudent and was the single most costly
+# rule in the loop: it destroyed ~72% of challengers that never lost a pair
+# (because a nightly test with 3 discordant pairs cannot return a win at all),
+# while giving a worthless challenger two independent shots at a 5% fluke. Worse
+# on both error rates at once, which is the signature of a rule that was never
+# derived from anything. Promotion and retirement are now decided by an
+# accumulating test martingale over PAIRS — see src/prompt_evidence.
 
 
 def _db():
@@ -253,7 +257,7 @@ def _open_challenger(surface: str) -> dict | None:
 
 def evaluate_cycle(surface: str, n: int = 24) -> dict:
     """Score the open challenger against the champion on holdout payloads."""
-    from src import prompt_registry, prompt_replay
+    from src import prompt_registry, prompt_replay, prompt_evidence
 
     chall = _open_challenger(surface)
     if not chall:
@@ -274,13 +278,49 @@ def evaluate_cycle(surface: str, n: int = 24) -> dict:
 
     experiment_id = _record_experiment(surface, champ_version, chall_version, result)
 
-    wins = sum(1 for e in prior if e.get("verdict") == "promote") + \
-        (1 if result.get("verdict") == "win" else 0)
-    losses = sum(1 for e in prior if e.get("verdict") == "reject") + \
-        (1 if result.get("verdict") == "reject" else 0)
+    # ── the accumulating gate ──────────────────────────────────────
+    # We used to count VERDICTS: two "reject" verdicts retired a challenger for
+    # good. That destroyed ~72% of challengers that never lost a single pair,
+    # because a nightly test with 3 discordant pairs cannot return "win" at all
+    # (exact sign-test floor 0.125). Now we count PAIRS, across every night this
+    # challenger has run, and let a test martingale decide. Looking every night
+    # is free under Ville's inequality -- that is the whole point of the change.
+    # INVALIDATED RUNS DO NOT ACCUMULATE. Experiments 5, 6 and 8 were graded
+    # under the `invented_ticker` rule that had 0/18 precision in production and
+    # were explicitly voided on 2026-08-28. Banking their pairs would import the
+    # very defect the regrade removed — an accumulating gate makes stale evidence
+    # more dangerous, not less, because it never ages out.
+    usable = [e for e in prior if e.get("verdict") != "invalidated"]
+    if len(usable) < len(prior):
+        logger.info(f"prompt_loop: {surface} v{chall_version} — excluded "
+                    f"{len(prior) - len(usable)} invalidated run(s) from the record")
+    runs = [_run_counts(e.get("metrics") or {}) for e in usable]
+    runs.append(_run_counts(result))
+    e_max, cum = 1.0, {"wins": 0, "losses": 0, "n": 0, "sum_d": 0.0, "sum_d2": 0.0}
+    for r in runs:
+        for k in cum:
+            cum[k] += r[k]
+        # Ville bounds the RUNNING MAXIMUM, so promotion reads e_max while
+        # retirement reads the current E -- a challenger that dipped must be
+        # able to recover, a challenger that crossed must stay crossed.
+        e_max = max(e_max, prompt_evidence.evalue(cum["wins"], cum["losses"]))
+
+    stat_verdict, why = prompt_evidence.verdict(
+        cum["wins"], cum["losses"], e_max,
+        n=cum["n"], sum_d=cum["sum_d"], sum_d2=cum["sum_d2"])
+
+    # A substantive fault from THIS run still vetoes outright: the regression
+    # gate, extra criticals, or failing to generate are facts about the prompt,
+    # not statistics that need a bigger sample.
+    if result.get("verdict") == "reject":
+        stat_verdict = "reject"
+        why = "; ".join(result.get("reasons") or []) or why
+
+    wins, losses = cum["wins"], cum["losses"]
+    logger.info(f"prompt_loop: {surface} v{chall_version} — {stat_verdict}: {why}")
 
     decision = "hold"
-    if result.get("verdict") == "win" and wins >= _WINS_TO_PROMOTE:
+    if stat_verdict == "win":
         if prompt_registry.promote(surface, chall_version, metrics=result):
             decision = "promoted"
             # Stamp the experiment that actually triggered it, so the dashboard's
@@ -291,13 +331,53 @@ def evaluate_cycle(surface: str, n: int = 24) -> dict:
                     _db().table("prompt_experiments").update({"promoted": True})                         .eq("id", experiment_id).execute()
                 except Exception as e:
                     logger.debug(f"prompt_loop: promotion stamp failed: {e}")
-    elif losses >= _LOSSES_TO_REJECT:
-        prompt_registry.reject(surface, chall_version, metrics=result,
-                               note="; ".join(result.get("reasons") or []))
-        decision = "rejected"
+    elif stat_verdict in ("reject", "equivalent", "trivial", "futile"):
+        # RETIREMENT NOW REQUIRES EVIDENCE, not two non-significant nights.
+        # "reject" means the martingale fell to 1/20 against the challenger;
+        # "equivalent" means TOST put the difference inside the ROPE, so there
+        # is nothing to gain; "futile" means the budget is spent. Each of those
+        # is a finding. "insufficient_data" and "collecting" are NOT, and they
+        # no longer retire anything -- that conflation is what killed v3.
+        prompt_registry.reject(surface, chall_version, metrics=result, note=why)
+        decision = "retired"
+    else:
+        need = prompt_evidence.pairs_to_promote(cum["losses"])
+        logger.info(f"prompt_loop: {surface} v{chall_version} stays open — "
+                    f"{cum['wins']}W-{cum['losses']}L over {len(runs)} run(s), "
+                    f"~{max(0, need - cum['wins'])} more clean wins to cross")
 
     return {"ok": True, "surface": surface, "decision": decision,
-            "wins": wins, "losses": losses, **result}
+            "verdict": stat_verdict, "why": why,
+            "cumulative": {**cum, "e_value": round(e_max, 4),
+                           "anytime_p": round(prompt_evidence.anytime_p(e_max), 4),
+                           "runs": len(runs)},
+            "wins": wins, "losses": losses,
+            **{k: v for k, v in result.items() if k != "verdict"}}
+
+
+def _run_counts(metrics: dict) -> dict:
+    """Per-run paired counts from a replay result or a stored experiment.
+
+    Rows written before 2026-08-29 carry only rates, so reconstruct integers
+    from win_rate/tie_rate/n rather than dropping that history on the floor —
+    the accumulating gate exists precisely so earlier evidence still counts.
+    """
+    n = int(metrics.get("n") or 0)
+    if not n:
+        return {"wins": 0, "losses": 0, "n": 0, "sum_d": 0.0, "sum_d2": 0.0}
+    if metrics.get("wins") is not None:
+        wins = int(metrics["wins"])
+        losses = int(metrics.get("losses") or 0)
+    else:
+        wins = round(float(metrics.get("win_rate") or 0) * n)
+        ties = round(float(metrics.get("tie_rate") or 0) * n)
+        losses = max(0, n - wins - ties)
+    sum_d = metrics.get("sum_d")
+    if sum_d is None:
+        # Old rows kept only the mean. n*mean is the sum exactly.
+        sum_d = float(metrics.get("mean_diff") or 0) * n
+    return {"wins": wins, "losses": losses, "n": n,
+            "sum_d": float(sum_d), "sum_d2": float(metrics.get("sum_d2") or 0.0)}
 
 
 def _experiments(surface: str, challenger_version: int) -> list[dict]:

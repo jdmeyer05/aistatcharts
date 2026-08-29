@@ -361,11 +361,19 @@ def _pair(champ_score, chall_score, regressions=None, counts_a=None, counts_b=No
     }
 
 
-def test_gate_promotes_a_clear_consistent_win():
+def test_gate_passes_a_clean_run_to_the_accumulating_gate():
+    """No substantive fault means the run is 'pending', not 'win'.
+
+    Since 2026-08-29 _summarise decides only the per-run facts (regressions,
+    criticals, generation failures). Promote/retire is decided by the e-value
+    over the challenger's whole life — a single night cannot carry it.
+    """
     pairs = [_pair(0.7, 0.9) for _ in range(20)]
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
-    assert res["verdict"] == "win", res["reasons"]
+    assert res["verdict"] == "pending", res["reasons"]
+    assert res["reasons"] == []
     assert res["mean_diff"] > 0
+    assert res["wins"] == 20 and res["losses"] == 0 and res["ties"] == 0
 
 
 def test_gate_rejects_a_win_that_reintroduces_a_known_defect():
@@ -388,7 +396,7 @@ def test_gate_does_not_charge_the_challenger_for_the_champions_defect():
                    champ_regressions=["invented_ticker"]) for _ in range(20)]
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, pairs)
     assert res["regressions"] == []
-    assert res["verdict"] == "win", res["reasons"]
+    assert res["verdict"] == "pending", res["reasons"]
 
 
 def test_gate_still_rejects_a_defect_the_challenger_makes_more_common():
@@ -402,18 +410,46 @@ def test_gate_still_rejects_a_defect_the_challenger_makes_more_common():
     assert any("20 vs champion 10" in r for r in res["reasons"])
 
 
-def test_gate_rejects_a_tiny_improvement_that_is_merely_significant():
+def test_a_reliable_but_trivial_improvement_is_not_shipped():
+    """30 straight wins of +0.005 each: statistically certain, practically nil.
+
+    The sign test detects DIRECTION, not magnitude, so this crosses any evidence
+    threshold. The old gate caught it with _MIN_MARGIN and called it 'reject' —
+    indistinguishable from a challenger that was actually worse, and two of those
+    retired it. The honest verdict is 'trivial': real, and too small to ship.
+    """
+    from src import prompt_evidence
     pairs = [_pair(0.70, 0.705) for _ in range(30)]
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
-    assert res["verdict"] == "reject"
-    assert any("margin" in r for r in res["reasons"])
+    assert res["verdict"] == "pending"      # no substantive fault
+    v, why = prompt_evidence.verdict(res["wins"], res["losses"],
+                                     prompt_evidence.evalue(res["wins"], res["losses"]),
+                                     n=res["n"], sum_d=res["sum_d"], sum_d2=res["sum_d2"])
+    assert v == "trivial", why
+    assert "does not matter" in why
 
 
-def test_gate_rejects_a_noisy_wash():
+def test_a_real_improvement_of_shippable_size_still_wins():
+    """The control for the test above: same 30 pairs, a gain that clears ROPE."""
+    from src import prompt_evidence
+    pairs = [_pair(0.70, 0.85) for _ in range(30)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    v, why = prompt_evidence.verdict(res["wins"], res["losses"],
+                                     prompt_evidence.evalue(res["wins"], res["losses"]),
+                                     n=res["n"], sum_d=res["sum_d"], sum_d2=res["sum_d2"])
+    assert v == "win", why
+
+
+def test_a_noisy_wash_does_not_accumulate_evidence():
+    """A challenger that wins half and loses half must never cross."""
+    from src import prompt_evidence
     scores = [(0.6, 0.9), (0.9, 0.5), (0.7, 0.8), (0.8, 0.6)] * 5
     pairs = [_pair(a, b) for a, b in scores]
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
-    assert res["verdict"] == "reject"
+    assert res["wins"] == 10 and res["losses"] == 10
+    e = prompt_evidence.evalue(res["wins"], res["losses"])
+    assert e < 1.0, e
+    assert prompt_evidence.verdict(res["wins"], res["losses"], e)[0] == "collecting"
 
 
 def _dead_pair(champ_why=None, chall_why=None):
@@ -435,7 +471,7 @@ def test_a_vendor_outage_cannot_reject_a_winning_challenger():
              + [_dead_pair(champ_why="api_error")])
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, pairs)
     assert res["generation_failures"]["vendor_discounted"] == 4
-    assert res["verdict"] == "win", res["reasons"]
+    assert res["verdict"] == "pending", res["reasons"]
 
     # A challenger that genuinely fails to parse more often is still rejected.
     prompt_broken = ([_pair(0.90, 0.94) for _ in range(14)]
@@ -457,8 +493,11 @@ def test_a_vendor_ruined_sample_is_inconclusive_not_a_rejection():
     pairs = ([_pair(a, b) for a, b in noisy]
              + [_dead_pair(chall_why="api_error") for _ in range(15)])
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 3}, pairs)
-    assert res["verdict"] == "inconclusive", res["reasons"]
-    assert "rerun" in res["reasons"][0]
+    # No substantive fault, so nothing is charged to the prompt. And the pairs
+    # the outage left are now BANKED rather than discarded, which is the deeper
+    # fix — a ruined night costs sample size, not a strike.
+    assert res["verdict"] == "pending", res["reasons"]
+    assert res["wins"] == 5 and res["losses"] == 3
 
 
 def test_a_ruined_sample_still_rejects_on_a_substantive_fault():
@@ -820,3 +859,70 @@ def test_a_defective_surface_is_critiqued(monkeypatch):
     monkeypatch.setattr(prompt_loop, "graded_snapshots", lambda *a, **k: _rows(45, 6))
     res = prompt_loop.critique_cycle("news_digest")
     assert "headroom" not in res.get("skipped", "")
+
+
+# ── the accumulating gate (fix #2, 2026-08-29) ────────────────────
+
+def test_the_evalue_is_a_true_martingale():
+    """THE ENTIRE GUARANTEE RESTS ON THIS. E_H0[E_t] must be exactly 1 at every
+    t, or Ville's inequality does not apply and 'look every night for free' is
+    not licensed. Checked against the Binomial(t, 1/2) null directly."""
+    from math import comb
+    from src import prompt_evidence
+    for t in (1, 2, 3, 5, 11, 24, 60):
+        expectation = sum(comb(t, w) * 0.5 ** t * prompt_evidence.evalue(w, t - w)
+                          for w in range(t + 1))
+        assert abs(expectation - 1.0) < 1e-9, (t, expectation)
+
+
+def test_our_actual_run_is_insufficient_data_not_a_rejection():
+    """Experiment 9: 11 pairs, 3 wins, 8 ties, 0 losses — the run that left v3
+    unresolved. Three discordant pairs cannot resolve anything (exact sign-test
+    floor 0.125), so the honest verdict is 'keep collecting'. Under the old rule
+    this counted as a strike, and two strikes retired the challenger."""
+    from src import prompt_evidence
+    e = prompt_evidence.evalue(3, 0)
+    assert abs(e - 2.85) < 0.01, e          # matches the published derivation
+    v, why = prompt_evidence.verdict(3, 0, e)
+    assert v == "insufficient_data"
+    assert "not a reject" in why
+
+
+def test_evidence_accumulates_across_nights():
+    """Three nights of 3-0 is 9-0, not three separate non-significant runs."""
+    from src import prompt_evidence
+    assert prompt_evidence.evalue(9, 0) > prompt_evidence.evalue(3, 0) * 3
+    # Still under the 11-pair floor, so still not a verdict — but the evidence
+    # is banked, which is the whole difference from three fresh bootstraps.
+    assert prompt_evidence.verdict(9, 0, prompt_evidence.evalue(9, 0))[0] == "insufficient_data"
+    e11 = prompt_evidence.evalue(11, 0)
+    assert prompt_evidence.verdict(11, 0, e11)[0] == "win"
+    # A mixed record keeps collecting rather than being retired.
+    assert prompt_evidence.verdict(12, 4, prompt_evidence.evalue(12, 4))[0] == "collecting"
+
+
+def test_eleven_straight_wins_is_the_earliest_possible_promotion():
+    """Below this the threshold is unreachable, so no verdict may be returned."""
+    from src import prompt_evidence
+    assert prompt_evidence.pairs_to_promote(0) == 11
+    assert prompt_evidence.evalue(10, 0) < prompt_evidence._T_PROMOTE
+    assert prompt_evidence.evalue(11, 0) >= prompt_evidence._T_PROMOTE
+
+
+def test_a_losing_challenger_is_retired_on_evidence():
+    from src import prompt_evidence
+    v, why = prompt_evidence.verdict(0, 29, prompt_evidence.evalue(0, 29))
+    assert v == "reject"
+    assert "not absence of evidence" in why
+
+
+def test_old_experiment_rows_still_count(monkeypatch):
+    """Rows written before this change carry rates, not integers. Reconstruct
+    them rather than discarding the history the new gate exists to accumulate."""
+    from src import prompt_loop
+    old = {"n": 20, "win_rate": 0.3, "tie_rate": 0.7, "mean_diff": 0.048}
+    got = prompt_loop._run_counts(old)
+    assert got["wins"] == 6 and got["losses"] == 0 and got["n"] == 20
+    assert abs(got["sum_d"] - 0.96) < 1e-9
+    new = {"n": 11, "wins": 3, "losses": 0, "ties": 8, "sum_d": 0.418, "sum_d2": 0.058}
+    assert prompt_loop._run_counts(new)["wins"] == 3

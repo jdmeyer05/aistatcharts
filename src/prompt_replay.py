@@ -62,7 +62,20 @@ _MIN_N = 8
 # The margin a challenger must clear on top of statistical significance. With
 # small samples a difference can be significant and still be worth nothing;
 # this is a declared floor, not an estimate.
+#
+# NO LONGER A GATE (2026-08-29). It is now the ROPE half-width in
+# prompt_evidence, where the same 0.02 answers a question this design can
+# actually resolve: a challenger inside +/-0.02 is EQUIVALENT (or, if it also
+# crossed the evidence threshold, TRIVIAL — reliably better by an amount that
+# does not matter). The old gate collapsed both into "reject", which was
+# indistinguishable from a challenger that was genuinely worse, and two of those
+# retired it.
 _MIN_MARGIN = 0.02
+# The bootstrap CI is kept as a DESCRIPTIVE statistic on the run and no longer
+# decides anything. It could not: with 8 of 11 differences at zero the 2.5th
+# percentile is pinned at exactly 0.000 by (8/11)**11 = 3.01% > 2.5%, so its
+# lower bound was arithmetic rather than evidence. A percentile bootstrap needs
+# at least 4 discordant pairs to EVER exclude zero, at any n.
 _BOOTSTRAP = 2000
 # Share of the drawn payloads that must survive generation for a statistical
 # rejection to mean anything. DECLARED, not estimated — like _MIN_MARGIN above.
@@ -407,13 +420,20 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
     if blamed_b > blamed_a:
         faults.append(f"failed to generate more often ({blamed_b} vs {blamed_a}, "
                       "vendor errors excluded)")
-    if lo <= 0:
-        thin.append(f"95% CI on the paired difference includes zero [{lo:.3f}, {hi:.3f}]")
-    if mean_diff < _MIN_MARGIN:
-        thin.append(f"improvement {mean_diff:+.3f} is under the {_MIN_MARGIN} margin")
-
-    reasons = faults + thin
-    verdict = "reject" if reasons else "win"
+    # THE STATISTICAL DECISION NO LONGER LIVES HERE. It used to: a nightly
+    # percentile bootstrap CI plus a margin, both recomputed from scratch and
+    # both discarded afterwards. That gate could not return "win" on our actual
+    # data no matter how good the challenger was -- with 3 discordant pairs the
+    # exact sign-test floor is 0.125, and the bootstrap's lower bound was pinned
+    # at 0.000 by (8/11)**11 = 3.01% > 2.5%. See src/prompt_evidence.
+    #
+    # What stays here is the part that IS a per-run fact about this prompt: the
+    # regression veto, more criticals, and failing to generate. Those are
+    # substantive faults and they reject on whatever pairs survived. The
+    # accumulating evidence -- and therefore promote/retire -- is decided by
+    # prompt_loop.evaluate_cycle over the challenger's whole life.
+    reasons = list(faults)
+    verdict = "reject" if faults else "pending"
 
     # A RUN THE VENDOR RUINED IS NOT A VERDICT ON THE PROMPT. Discounting a 503
     # from the failure count still lets it decide the outcome the other way: it
@@ -451,6 +471,18 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
                                 "vendor_discounted": infra},
         "win_rate": round(sum(1 for d in diffs if d > 0) / n, 4),
         "tie_rate": round(sum(1 for d in diffs if d == 0) / n, 4),
+        # RAW COUNTS, because rates lose the sample size and the accumulating
+        # gate needs integers. Ties are carried for the record but are not
+        # evidence -- a tied pair says nothing about which prompt is better,
+        # which is exactly why 8 of our 11 pairs did nothing but inflate n.
+        "wins": sum(1 for d in diffs if d > 0),
+        "losses": sum(1 for d in diffs if d < 0),
+        "ties": sum(1 for d in diffs if d == 0),
+        # Sufficient statistics for the equivalence arm, so "these prompts are
+        # the same" can be distinguished from "not enough data yet" without
+        # storing every pair.
+        "sum_d": round(sum(diffs), 6),
+        "sum_d2": round(sum(d * d for d in diffs), 6),
     }
 
 
