@@ -143,9 +143,21 @@ def _deterministic(brief: dict) -> list[dict]:
     return out
 
 
-def _payload(brief: dict) -> dict:
+def _digest_text(brief: dict) -> str | None:
+    """The one field in this payload that is another model's prose."""
+    d = brief.get("news_digest")
+    return (d or {}).get("text") if isinstance(d, dict) else None
+
+
+def _payload(brief: dict, include_digest: bool = True) -> dict:
     """Only the parts that make CLAIMS. A model handed the whole brief spends its
-    attention on the ladder, which cannot contradict anything."""
+    attention on the ladder, which cannot contradict anything.
+
+    `include_digest=False` returns the MEASURED card only. Everything here is
+    computed — `attribution_headline` reads like prose but is a deterministic
+    f-string over measured values, and the headlines are vendor titles. The
+    single generated field is `news_digest`, which is why it is the only thing
+    the blind pass drops."""
     def txt(*path, default=None):
         cur = brief
         for p in path:
@@ -203,7 +215,7 @@ def _payload(brief: dict) -> dict:
         "rest_of_session": {k: (brief.get("rest_of_session") or {}).get(k)
                             for k in ("p_new_high", "p_close_above", "band", "regime", "n")},
         "attribution_headline": txt("attribution", "headline"),
-        "news_digest": txt("news_digest", "text"),
+        **({"news_digest": txt("news_digest", "text")} if include_digest else {}),
         # AGE TRAVELS WITH THE HEADLINE, for the same reason. Titles alone had
         # the auditor flag "Exxon and Chevron profits surge on rising oil prices"
         # as contradicting a crude break — a two-day-old earnings story about a
@@ -220,55 +232,94 @@ def _payload(brief: dict) -> dict:
 from src.prompt_defaults import ES_AUDIT_SYSTEM as _SYSTEM  # noqa: E402
 
 
+def _model_pass(system: str, payload: dict) -> list[dict]:
+    """One audit call. Raises on failure; callers isolate their own pass."""
+    import anthropic
+    from src.api_keys import get_secret
+    api_key = get_secret("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("no ANTHROPIC_API_KEY")
+    client = anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model=_MODEL,
+        # Sonnet 5 runs adaptive thinking when `thinking` is omitted and
+        # max_tokens caps thinking AND the answer together, so this is
+        # headroom for both rather than for the JSON alone.
+        max_tokens=3000,
+        # Medium rather than low: cross-referencing a dozen blocks for
+        # claims that cannot both hold is a reasoning task, unlike the
+        # digest's summarising. `fallbacks` is an Opus-5/Fable-5
+        # parameter and Sonnet 5 rejects it with a 400 — do not add it.
+        output_config={"effort": "medium"},
+        system=system,
+        messages=[{"role": "user",
+                   "content": "Audit this payload:\n```json\n"
+                              + json.dumps(payload, indent=1, default=str)[:14000]
+                              + "\n```"}],
+    )
+    raw = "".join(b.text for b in resp.content
+                  if getattr(b, "type", "") == "text").strip()
+    txt = (raw or "").strip()
+    if "```" in txt:
+        txt = txt.split("```")[1].removeprefix("json").strip()
+    parsed = json.loads(txt)
+    return [f for f in (parsed.get("findings") or []) if f.get("finding")][:_MAX_FINDINGS]
+
+
 def audit_card(brief: dict, with_model: bool = True) -> dict:
-    """Deterministic checks always; the model only for what rules cannot express."""
+    """Deterministic checks always; the model only for what rules cannot express.
+
+    TWO MODEL PASSES, NOT ONE (2026-08-29). The payload carries seventeen
+    MEASURED fields and one that is another model's PROSE — `news_digest`.
+    Checking that prose against the measured fields is this auditor's most
+    valuable output and is not being dropped. But it was happening in the same
+    call that checks the measured fields against each other, so every
+    measured-vs-measured judgement was formed while holding a sibling model's
+    narrative in context.
+
+    A judge that can see another model's output loses roughly half its error
+    corrections and flips about a tenth of its correct ones, and the effect
+    survives both chain-of-thought and an explicit instruction to disregard —
+    so quarantine by instruction is not available, only quarantine by
+    construction. (That literature measures judges shown prior SCORES of the
+    thing they are judging; ours is shown a sibling artifact that is itself an
+    audit target, so the transfer is by analogy, not exact. The split is cheap
+    and the cost of being wrong about it is one extra call.)
+
+    Pass A audits the measured card blind. Pass B is handed the digest together
+    with the measured fields. They are recorded as separate surfaces so the loop
+    grades each for what it actually is.
+    """
     rules = _deterministic(brief)
     model_findings: list[dict] = []
+    digest_findings: list[dict] = []
     model_used = None
-    audit_payload = _payload(brief)
+    measured_payload = _payload(brief, include_digest=False)
+    digest_payload = _payload(brief, include_digest=True)
     # Champion text for this surface, or the git baseline on any DB trouble.
     from src.prompt_registry import active as _active_prompt
     audit_system, audit_version = _active_prompt("es_audit")
 
     if with_model:
         try:
-            import anthropic
-            from src.api_keys import get_secret
-            api_key = get_secret("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise RuntimeError("no ANTHROPIC_API_KEY")
-            client = anthropic.Anthropic(api_key=api_key)
-            resp = client.messages.create(
-                model=_MODEL,
-                # Sonnet 5 runs adaptive thinking when `thinking` is omitted and
-                # max_tokens caps thinking AND the answer together, so this is
-                # headroom for both rather than for the JSON alone.
-                max_tokens=3000,
-                # Medium rather than low: cross-referencing a dozen blocks for
-                # claims that cannot both hold is a reasoning task, unlike the
-                # digest's summarising. `fallbacks` is an Opus-5/Fable-5
-                # parameter and Sonnet 5 rejects it with a 400 — do not add it.
-                output_config={"effort": "medium"},
-                system=audit_system,
-                messages=[{"role": "user",
-                           "content": "Audit this payload:\n```json\n"
-                                      + json.dumps(audit_payload, indent=1,
-                                                   default=str)[:14000]
-                                      + "\n```"}],
-            )
-            raw = "".join(b.text for b in resp.content
-                          if getattr(b, "type", "") == "text").strip()
-            txt = (raw or "").strip()
-            if "```" in txt:
-                txt = txt.split("```")[1].removeprefix("json").strip()
-            parsed = json.loads(txt)
-            model_findings = [f for f in (parsed.get("findings") or [])
-                              if f.get("finding")][:_MAX_FINDINGS]
+            model_findings = _model_pass(audit_system, measured_payload)
             model_used = _MODEL
         except Exception as e:
-            logger.warning(f"card auditor model pass failed: {e}")
+            logger.warning(f"card auditor measured pass failed: {e}")
+        # INDEPENDENT, so one failure does not silently delete the other half.
+        # Skipped entirely when there is no digest — a pass with nothing to
+        # check would record as a clean audit and inflate the surface's score
+        # with rows where the model had no work to do.
+        if _digest_text(brief):
+            try:
+                digest_findings = _model_pass(audit_system, digest_payload)
+                model_used = model_used or _MODEL
+            except Exception as e:
+                logger.warning(f"card auditor digest pass failed: {e}")
 
-    findings = rules + [{**f, "source": "model"} for f in model_findings]
+    findings = (rules
+                + [{**f, "source": "model"} for f in model_findings]
+                + [{**f, "source": "model:digest"} for f in digest_findings])
     for f in findings:
         f.setdefault("source", "rule")
     order = {"high": 0, "medium": 1, "low": 2}
@@ -281,23 +332,35 @@ def audit_card(brief: dict, with_model: bool = True) -> dict:
     # A failed model pass would otherwise be recorded as an output with no
     # findings, which grades as a clean pass and quietly inflates the score for
     # this surface with rows where the model never spoke.
+    # ONE SNAPSHOT PER PASS, under its own surface. Recording both under
+    # `es_audit` would mix two different tasks in one graded population — the
+    # blind measured audit and the digest cross-check are asked different
+    # questions and should be scored, critiqued and rewritten separately. They
+    # share a rule set because a finding is a finding either way.
     if with_model and model_used:
-        try:
-            from src import prompt_snapshots
-            prompt_snapshots.record(
-                "es_audit", audit_payload,
-                {"findings": model_findings},
-                prompt_version=audit_version, model=model_used,
-                meta={"n_rule": len(rules)},
-            )
-        except Exception as e:
-            logger.debug(f"es_audit snapshot skipped: {e}")
+        from src import prompt_snapshots
+        for surface, payload, out in (
+            ("es_audit", measured_payload, model_findings),
+            ("es_audit_digest", digest_payload, digest_findings),
+        ):
+            if surface == "es_audit_digest" and not _digest_text(brief):
+                continue
+            try:
+                prompt_snapshots.record(
+                    surface, payload, {"findings": out},
+                    prompt_version=audit_version, model=model_used,
+                    meta={"n_rule": len(rules)},
+                )
+            except Exception as e:
+                logger.debug(f"{surface} snapshot skipped: {e}")
 
     return {
         "available": True,
-        "findings": findings[:_MAX_FINDINGS + len(rules)],
+        "findings": findings[:2 * _MAX_FINDINGS + len(rules)],
         "n_rule": len(rules),
-        "n_model": len(model_findings),
+        "n_model": len(model_findings) + len(digest_findings),
+        "n_model_measured": len(model_findings),
+        "n_model_digest": len(digest_findings),
         "model": model_used,
         "clean": not findings,
         "note": ("Nothing on the card contradicts anything else on it."

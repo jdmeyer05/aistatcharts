@@ -597,6 +597,11 @@ _GRADERS = {
     "market_driver": grade_market_driver,
     "home_interpret": grade_home_interpret,
     "es_audit": grade_es_audit,
+    # The digest cross-check is the auditor's second pass — same finding shape,
+    # same rules, but its own graded population so the blind measured audit and
+    # the prose cross-check are scored and rewritten as the different questions
+    # they are.
+    "es_audit_digest": grade_es_audit,
     "news_digest": grade_news_digest,
 }
 
