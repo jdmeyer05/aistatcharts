@@ -19,36 +19,91 @@ import re
 # Extract numeric-looking tokens from Claude's interpretation so we can check
 # each one appears in the data payload. Handles plain numbers, thousands
 # commas, percentages, and $B/$M/$K suffixes.
+# A SCALE SUFFIX MUST BE A SUFFIX, NOT THE NEXT WORD (fixed 2026-08-29).
+#
+# The previous pattern ended `\s*[%xBMKTbmkt]?`, which consumed the first letter
+# of whatever English word followed the number — and `_normalize_num` then read
+# that letter as a multiplier. Straight from production:
+#
+#   "watch for SPY support near 765.00 to hold"  -> "765.00 t" -> 765 TRILLION
+#   "the index at 7702 basis"                    -> "7702 b"   -> 7.7 trillion
+#   "DXY at 99.50 today"                         -> "99.50 t"  -> 99.5 trillion
+#
+# English is full of words starting with t/b/m/k, so any number followed by
+# "to", "today", "the", "but", "basis", "market", "keeps"... was compared to the
+# payload after being scaled by 1e9 or 1e12. Nothing could ever match, and the
+# rule reported "does not trace to any payload value" — a true statement about
+# the corrupted number and a meaningless one about the prose. Same family as the
+# invented_ticker incident: findings that read plausibly while the internals are
+# broken, which is why the evidence column showed "765.00 t" and "7702 b".
+#
+# The lookahead is the fix: a suffix counts only when not followed by another
+# letter. Spelled-out scales are listed explicitly so that losing the greedy
+# single letter does not silently UNDER-scale "2.5 billion".
 _NUM_TOKEN = re.compile(
-    r"""\$?\s*-?\d+(?:,\d{3})*(?:\.\d+)?\s*[%xBMKTbmkt]?""",
+    r"""\$?\s*-?\d+(?:,\d{3})*(?:\.\d+)?"""
+    r"""(?:\s*(?:%|bn|mm|trillion|billion|million|thousand|[xbmkt])(?![A-Za-z]))?""",
+    re.IGNORECASE,
+)
+
+# Longest first, so "b" does not eat "bn" and "bn" does not eat "billion".
+_SCALE_SUFFIXES = (
+    ("trillion", 1e12), ("billion", 1e9), ("million", 1e6), ("thousand", 1e3),
+    ("bn", 1e9), ("mm", 1e6),
+    ("t", 1e12), ("b", 1e9), ("m", 1e6), ("k", 1e3),
 )
 
 
+# A ratio someone would actually write. "1.37x" is a derivation; "765x" is not
+# a claim anyone makes, so treating 765 as a possible quotient of two payload
+# fields is not verification, it is a licence to invent.
+_RATIO_MIN = 0.05
+_RATIO_MAX = 50.0
+
+
+def _tolerance(value: float, is_pct: bool) -> float:
+    """How far a stated number may sit from a payload value and still count.
+
+    A SINGLE TOLERANCE IS WRONG, and ours was 2% of the value for everything.
+    On a price that is enormous: 2% of 765 is 15.3, so "support near 765.00"
+    matched an index at 769.245 — and would equally have matched 750 or 780.
+    The looseness was invisible while the tokenizer was corrupting scales
+    (nothing matched anyway); fixing that exposed it, and the two bugs had been
+    cancelling. A rule can be wrong in both directions at once.
+
+    So: tight and relative on levels, absolute on percents and small ratios.
+    0.1% is the WirelessBench convention, chosen there explicitly to "separate
+    benign numerical imprecision from catastrophic unit/magnitude errors" —
+    which is exactly the distinction we need. It accepts 7702 for a real 7701.25
+    (0.0097% off) and rejects 765.00 for a real 769.245 (0.55% off).
+
+    The 0.05 floor for percents and small ratios is one-decimal rounding: a note
+    saying "-0.2%" for a payload's -0.24 is rounding, not invention.
+    """
+    if is_pct or abs(value) < 10:
+        return 0.05
+    return max(abs(value) * 0.001, 0.01)
+
+
 def _normalize_num(token: str) -> tuple[float | None, bool]:
-    """Turn a token like '$1.2B', '15%', '1,500', '1.37x', '$3.2T' into a float.
-    Returns (value, is_percent). is_percent tells the grounding check to also
-    try the decimal form when matching against payload numbers (since data
+    """Turn a token like '$1.2B', '15%', '1,500', '1.37x', '2.5 billion' into a
+    float. Returns (value, is_percent). is_percent tells the grounding check to
+    also try the decimal form when matching against payload numbers (since data
     often stores percentages as decimals — 0.153 vs "15.3%")."""
-    s = token.strip().replace("$", "").replace(",", "").replace(" ", "")
+    s = token.strip().replace("$", "").replace(",", "").replace(" ", "").lower()
     mult = 1.0
     is_percent = False
     if s.endswith("%"):
         s = s[:-1]
         is_percent = True
-    elif s.lower().endswith("t"):
+    elif s.endswith("x"):
         s = s[:-1]
-        mult = 1e12
-    elif s.lower().endswith("b"):
-        s = s[:-1]
-        mult = 1e9
-    elif s.lower().endswith("m"):
-        s = s[:-1]
-        mult = 1e6
-    elif s.lower().endswith("k"):
-        s = s[:-1]
-        mult = 1e3
-    elif s.lower().endswith("x"):
-        s = s[:-1]
+    else:
+        for suffix, factor in _SCALE_SUFFIXES:
+            if s.endswith(suffix) and len(s) > len(suffix):
+                s = s[:-len(suffix)]
+                mult = factor
+                break
     try:
         return float(s) * mult, is_percent
     except (ValueError, TypeError):
@@ -122,8 +177,7 @@ def _check_grounding(interpretation: str, data: dict) -> dict:
             candidates.append(n / 100.0)
         matched = False
         for c in candidates:
-            tolerance = max(abs(c) * 0.02, 0.01)
-            if any(abs(c - p) <= tolerance for p in payload_nums):
+            if any(abs(c - p) <= _tolerance(c, is_pct) for p in payload_nums):
                 matched = True
                 break
         if matched:
@@ -132,8 +186,22 @@ def _check_grounding(interpretation: str, data: dict) -> dict:
 
         # Ratio check: is this a derivation of two payload numbers?
         # Covers cases like "1.37x" when payload has {purchases: 177, sales: 129}.
+        #
+        # THIS PATH GROUNDED 98% OF EVERYTHING (measured 2026-08-29). It searched
+        # all ordered pairs — 64 payload numbers is 4,032 candidate ratios — and
+        # accepted any within 2%. On a real payload, 293 of 300 randomly invented
+        # numbers in (0.01, 1000) came back "grounded". The rule could not flag a
+        # number below 1000 at all, which is why every token it ever caught in
+        # production (250K, 240K, 1.3M) is above that line.
+        #
+        # Two constraints, per the data-to-text literature's advice that a
+        # derivation must be NAMEABLE rather than searched for: a ratio has to
+        # look like a ratio (nobody writes "765x"), and it gets the same tight
+        # tolerance as everything else. The matching pair is recorded so a
+        # spurious match is auditable rather than invisible.
         ratio_match = False
-        if 0.01 < abs(n) < 1000:
+        if _RATIO_MIN <= abs(n) <= _RATIO_MAX:
+            tol = _tolerance(n, is_pct)
             nums_list = list(payload_nums)
             for i, a in enumerate(nums_list):
                 if a == 0:
@@ -141,8 +209,7 @@ def _check_grounding(interpretation: str, data: dict) -> dict:
                 for j, b in enumerate(nums_list):
                     if i == j:
                         continue
-                    r = b / a
-                    if abs(r - n) <= abs(n) * 0.02:
+                    if abs(b / a - n) <= tol:
                         ratio_match = True
                         break
                 if ratio_match:
