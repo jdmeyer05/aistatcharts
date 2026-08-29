@@ -390,6 +390,13 @@ def scoreboard(surface: str = "market_driver", days: int = 90,
     means the calls were worth exactly what the calendar was worth; negative
     means stating the base rate would have been better. A hit rate alone cannot
     distinguish those three.
+
+    `n` COUNTS CLAIMS, NOT SESSIONS, and those are far apart here — see
+    `_cluster_ci`. The `clustered` block carries the day count and an interval
+    that does not assume independence. Brier and Brier skill are means over the
+    same non-independent rows, so they inherit the same problem: read them as
+    point estimates whose uncertainty is the clustered interval's, not the
+    naive one's.
     """
     from src.db import get_client
     db = get_client()
@@ -441,6 +448,10 @@ def scoreboard(surface: str = "market_driver", days: int = 90,
         "n": n,
         "hit_rate": round(hits / n, 4),
         "hit_rate_ci95": [round(lo, 4), round(hi, 4)],
+        # The interval above assumes independent draws and this one does not.
+        # Both ship: a reader comparing them can see how much of the apparent
+        # precision was an artefact of counting reloads as evidence.
+        "clustered": _cluster_ci(rows),
         "base_rate": round(_mean([float(r["base_rate"]) for r in with_br]), 4) if with_br else None,
         "n_with_base_rate": len(with_br),
         "brier": round(brier, 4) if brier is not None else None,
@@ -486,7 +497,12 @@ def _mean(xs):
 
 
 def _wilson(hits: int, n: int, z: float = 1.96) -> tuple[float, float]:
-    """Wilson interval — the small-n case is exactly where this loop operates."""
+    """Wilson interval — the small-n case is exactly where this loop operates.
+
+    Assumes the n draws are independent. For this loop's claims they are not;
+    see `_cluster_ci`. Kept and still reported so the naive and the clustered
+    interval sit side by side — the gap between them is the thing worth seeing.
+    """
     if n == 0:
         return (0.0, 1.0)
     p = hits / n
@@ -494,3 +510,114 @@ def _wilson(hits: int, n: int, z: float = 1.96) -> tuple[float, float]:
     centre = (p + z * z / (2 * n)) / d
     half = (z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5)) / d
     return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+def _session_day(stated_at: str | None) -> str:
+    """The ET calendar day a claim was made on — the cluster key.
+
+    ET, not UTC: a claim stated at 20:00 ET is 01:00 UTC the following day, and
+    grouping on UTC would split one evening across two clusters, understating
+    exactly the dependence this exists to measure.
+    """
+    if not stated_at:
+        return "unknown"
+    try:
+        from zoneinfo import ZoneInfo
+        t = datetime.fromisoformat(str(stated_at).replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return str(t.astimezone(ZoneInfo("America/New_York")).date())
+    except Exception:
+        return str(stated_at)[:10]
+
+
+def _cluster_ci(rows: list[dict], b: int = 2000, seed: int = 20260829) -> dict:
+    """Day-clustered interval for the hit rate, plus the equal-weight variant.
+
+    WHY THIS IS NOT OPTIONAL RIGOUR. The home interpretation runs with
+    `autoRun`, so it fires once per page load, and its payload carries a live
+    price and an `as_of` — the cache key therefore changes every few minutes
+    and each reload produces a fresh snapshot with a fresh set of claims. One
+    session can contribute a dozen claims that are all restatements of the same
+    bet about the same market state. Wilson counts them as a dozen independent
+    draws and returns an interval roughly sqrt(m) too narrow, m being claims
+    per day. That is the overlapping-window problem this project already
+    handles with Newey-West in the swing screen, and the same discipline
+    belongs on the number the loop uses to judge itself.
+
+    METHOD. Resample DAYS with replacement and recompute — the cluster
+    bootstrap. It assumes nothing about the within-day correlation structure,
+    which matters, because there is no reason the correlation between two 10:00
+    claims should match that between a 10:00 and a 15:30 one. Seeded, so the
+    figure on the page does not drift on its own between reads.
+
+    TWO ESTIMATES, DELIBERATELY. `pooled` weights each CLAIM equally, so a day
+    the page was loaded forty times counts forty times — that is the number the
+    loop has always reported. `by_day` weights each DAY equally. When the two
+    disagree the record is being driven by traffic rather than by forecasting.
+    """
+    import random
+
+    by_day: dict[str, list[bool]] = {}
+    for r in rows:
+        by_day.setdefault(_session_day(r.get("stated_at")), []).append(bool(r.get("correct")))
+
+    days = sorted(by_day)
+    k = len(days)
+    n = sum(len(v) for v in by_day.values())
+    if k == 0 or n == 0:
+        return {"n_days": 0}
+
+    day_rates = [sum(by_day[d]) / len(by_day[d]) for d in days]
+    pooled = sum(sum(by_day[d]) for d in days) / n
+    mean_by_day = sum(day_rates) / k
+
+    # One day is one cluster: there is nothing to resample, and an interval
+    # from a single cluster is a statement about that day rather than about the
+    # surface. Say so instead of returning a spuriously tight range.
+    if k < 2:
+        return {
+            "n_days": k,
+            "claims_per_day": round(n / k, 2),
+            "hit_rate_pooled": round(pooled, 4),
+            "hit_rate_by_day": round(mean_by_day, 4),
+            "ci95_clustered": None,
+            "note": "one session in the window — no between-day variation to measure",
+        }
+
+    rng = random.Random(seed)
+    pooled_draws: list[float] = []
+    byday_draws: list[float] = []
+    for _ in range(b):
+        pick = [days[rng.randrange(k)] for _ in range(k)]
+        num = sum(sum(by_day[d]) for d in pick)
+        den = sum(len(by_day[d]) for d in pick)
+        if den:
+            pooled_draws.append(num / den)
+        byday_draws.append(sum(sum(by_day[d]) / len(by_day[d]) for d in pick) / k)
+
+    def _pct(xs: list[float], q: float) -> float:
+        if not xs:
+            return 0.0
+        s = sorted(xs)
+        i = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+        return s[i]
+
+    naive_lo, naive_hi = _wilson(sum(sum(by_day[d]) for d in days), n)
+    clo, chi = _pct(pooled_draws, 0.025), _pct(pooled_draws, 0.975)
+    return {
+        "n_days": k,
+        "claims_per_day": round(n / k, 2),
+        "hit_rate_pooled": round(pooled, 4),
+        "hit_rate_by_day": round(mean_by_day, 4),
+        "ci95_clustered": [round(clo, 4), round(chi, 4)],
+        "ci95_by_day": [round(_pct(byday_draws, 0.025), 4),
+                        round(_pct(byday_draws, 0.975), 4)],
+        # The honest headline of the whole block: how much narrower the
+        # independence assumption was making the answer look.
+        "width_ratio_vs_naive": (
+            round((chi - clo) / (naive_hi - naive_lo), 2)
+            if (naive_hi - naive_lo) > 0 else None
+        ),
+        "bootstrap_draws": b,
+    }

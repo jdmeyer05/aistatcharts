@@ -28,6 +28,9 @@ import type {
   SectorRrg,
   SpValuation,
   EsBrief,
+  EsGateTrackRecord,
+  FedProbabilities,
+  TsmomBook,
 } from "@/lib/api";
 import { normalizeOilBundle } from "@/lib/api";
 
@@ -110,9 +113,40 @@ export function fetchEsBriefServer() {
   return serverFetch<EsBrief>("/api/market/es-brief", 20_000);
 }
 
-export function fetchSectorRrgServer(tailWeeks = 4) {
+export function fetchSectorRrgServer(tailWeeks = 8) {
   // ~4s cold across 12 yfinance series; cached 45 min server-side.
+  //
+  // DEFAULT IS 8, NOT 4 — a bug fix rather than a preference. The RRG card asks
+  // for an 8-week tail and caches under ["sector-rrg", 8]. This defaulted to 4
+  // and `app/page.tsx` seeded ["sector-rrg", 4], so the one board on this page
+  // whose cold fetch is measured in seconds was the one board the server-side
+  // prefetch never served: the card waterfalled a client fetch on every visit
+  // while the prefetched payload sat under a key nothing read. The startup
+  // pre-warm was warming 4 as well.
   return serverFetch<SectorRrg>(`/api/sectors/rrg?tail_weeks=${tailWeeks}`, 15_000);
+}
+
+export function fetchFedProbabilitiesServer(nMeetings = 4) {
+  // Daily ZQ settlements behind a 30-min server cache. It was the only home
+  // card left out of the prefetch, so it alone paid a client round-trip before
+  // showing a number.
+  return serverFetch<FedProbabilities>(
+    `/api/market/fed-probabilities?n_meetings=${nMeetings}`, 15_000);
+}
+
+export function fetchEsGateTrackRecordServer() {
+  // Cheap while it is still refusing — it reads the snapshot log and returns a
+  // count. Prefetched so the "N of 30 sessions" line is in the first paint
+  // rather than appearing a round-trip later: a countdown that shows up late is
+  // a countdown the reader scrolls past.
+  return serverFetch<EsGateTrackRecord>("/api/market/es-track-record-gate", 15_000);
+}
+
+export function fetchTsmomBookServer() {
+  // 32 yfinance fetches cold, behind a 12h cache and a startup pre-warm, so in
+  // practice this is a cache read. The rule rebalances monthly; nothing in it
+  // moves faster than daily.
+  return serverFetch<TsmomBook>("/api/market/tsmom-book", 20_000);
 }
 
 export function fetchCtaFlowsServer(code = "13874A") {

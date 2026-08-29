@@ -34,6 +34,14 @@ somebody remembers to run some SQL is a logger that never starts.
 
 WRITES MUST NEVER AFFECT THE CARD. This is bookkeeping. Every failure path is
 swallowed at debug level, and the caller fires it without waiting.
+
+WHO CALLS THIS, AND WHY IT DECIDES WHAT THE RECORD MEANS. Originally only the
+`/es-brief` route handler did — so a mark was logged only if somebody had the
+page open at that moment, and the eventual record would have been a sample of
+WATCHED sessions rather than of sessions. `api.main._gate_log_ticker` now fires
+it once per mark on a schedule. The route call is kept because it costs nothing
+and fills a mark marginally earlier when the page is open anyway; both write the
+same upsert key, so they cannot double-count.
 """
 
 from __future__ import annotations
@@ -195,9 +203,15 @@ def gate_track_record(min_sessions: int = 30) -> dict:
         if d not in done or d not in by_day:
             continue
         o = by_day[d]
-        if not o["normal"] or o["normal"] <= 0:
+        norm = o["normal"]
+        # `not norm` does NOT catch NaN — `not float('nan')` is False and
+        # `nan <= 0` is also False, so a session whose trailing-20 median had
+        # not filled yet fell straight through and produced actual_x = NaN.
+        # The median then silently skipped it while `(x >= 1.3).mean()` counted
+        # it as a non-wide day, understating every wide_pct on the board.
+        if norm is None or norm != norm or norm <= 0:
             continue
-        rows.append({"verdict": s.get("verdict"), "score": s.get("score"),
+        rows.append({"session_day": d, "verdict": s.get("verdict"), "score": s.get("score"),
                      "actual_x": o["rng"] / o["normal"],
                      "closed_up": bool(o["close"] > o["open"])})
     if not rows:
@@ -207,14 +221,32 @@ def gate_track_record(min_sessions: int = 30) -> dict:
     buckets = []
     for v in ("favourable", "workable", "poor", "stand aside"):
         b = df[df["verdict"] == v]
-        if len(b) < 10:
+        # ONE SESSION IS ONE OBSERVATION, not one snapshot. A session is logged
+        # at up to eleven marks, and every mark carries the SAME outcome — the
+        # day's range and close are properties of the day. Counting marks made
+        # `n` look like a sample size when it was a measure of how long the
+        # verdict stood, and eleven copies of one session cannot tell you
+        # anything eleven different sessions could. So the outcome columns are
+        # collapsed to one row per session before anything is computed, and the
+        # gate on sufficiency is on distinct sessions.
+        if b.empty:
+            continue
+        per_session = b.drop_duplicates(subset="session_day")
+        if len(per_session) < 10:
             continue
         buckets.append({
-            "verdict": v, "n": int(len(b)),
-            "median_range_x": round(float(b["actual_x"].median()), 2),
-            "wide_pct": round(float((b["actual_x"] >= 1.3).mean()) * 100, 1),
-            "closed_up_pct": round(float(b["closed_up"].mean()) * 100, 1),
+            "verdict": v,
+            "n_sessions": int(len(per_session)),
+            # Kept and labelled rather than dropped: how many marks a verdict
+            # stood for says how persistent it was, which is a real question —
+            # it is just not a sample size.
+            "n_marks": int(len(b)),
+            "median_range_x": round(float(per_session["actual_x"].median()), 2),
+            "wide_pct": round(float((per_session["actual_x"] >= 1.3).mean()) * 100, 1),
+            "closed_up_pct": round(float(per_session["closed_up"].mean()) * 100, 1),
         })
+
+    per_session_all = df.drop_duplicates(subset="session_day")
 
     return {
         "available": True,
@@ -222,14 +254,20 @@ def gate_track_record(min_sessions: int = 30) -> dict:
         "sessions": len(done),
         "snapshots": len(snaps),
         "buckets": buckets,
-        "base_wide_pct": round(float((df["actual_x"] >= 1.3).mean()) * 100, 1),
-        "base_up_pct": round(float(df["closed_up"].mean()) * 100, 1),
+        # Base rates over DISTINCT SESSIONS, for the same reason the buckets
+        # are. Computed over marks these were weighted by how many times each
+        # session happened to be logged.
+        "base_wide_pct": round(float((per_session_all["actual_x"] >= 1.3).mean()) * 100, 1),
+        "base_up_pct": round(float(per_session_all["closed_up"].mean()) * 100, 1),
+        "scored_sessions": int(len(per_session_all)),
         "caveat": (
             "Scored from snapshots taken at the time, not reconstructed — the gate "
             "reads dealer gamma and an options-implied range, neither of which is "
             "retained historically, so it cannot be replayed the way the character "
             "read can. The verdict is about CONDITIONS, so the range column is the "
             "one that speaks to it; the direction column is there to confirm it "
-            "carries none."
+            "carries none. One session counts once per bucket however many marks it "
+            "was logged at — a verdict that stood all day is one observation, not "
+            "eleven."
         ),
     }

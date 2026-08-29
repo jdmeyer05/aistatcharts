@@ -733,14 +733,63 @@ export async function fetchHeatmap(
   return apiFetch(`/api/market/heatmap?group=${group}`);
 }
 
+/** How much wider than a normal session a release has ACTUALLY made the tape,
+ *  measured over 3,677 sessions in `research/market_movers/`.
+ *
+ *  This exists because `impact` does not answer the question the calendar card
+ *  was using it to answer. `impact` is assigned by judgement and is about
+ *  TIMING — "a scheduled discontinuity lands at 08:30". This is measured and
+ *  is about SIZING. They disagree hard: CPI is `high` on the first axis and
+ *  1.06x, 12th of 23, on the second; quad witching is 0.94x — NARROWER than an
+ *  ordinary day, once SPY's quarterly ex-dividend stops masquerading as a
+ *  price move. */
+export interface EventMeasuredImpact {
+  /** Median |close-to-close| on the print over that session's own trailing
+   *  60-session median. 1.00 = an ordinary day. */
+  multiplier: number;
+  ci95: [number, number];
+  n: number;
+  p: number;
+  /** 23 events were tested, and one p=0.03 among 23 is what a null family
+   *  looks like — so this, not the p-value, decides whether a number means
+   *  anything. True for Nonfarm payrolls and nothing else. */
+  survives_fdr: boolean;
+  rank: number;
+  of: number;
+  /** Multiplier on the FOLLOWING session. Every one is near 1.0: nothing
+   *  carries past the print. */
+  next_session: number;
+  share_over_1_5x: number;
+  /** SD of the event's yearly rank, out of ~21 places. Large for everything
+   *  except payrolls, which is why one multiplier is not a fixed property of
+   *  the event. */
+  rank_sd?: number | null;
+  share_in_top_k?: number | null;
+  /** False when the calendar event is a subset of what was measured — the SEP
+   *  meetings were never split out of the pooled FOMC sample. */
+  exact: boolean;
+  study_event?: string;
+  band: "established" | "unconfirmed" | "none";
+  headline: string;
+  caveat?: string;
+}
+
 export interface CalendarEvent {
   name: string;
   date: string;
   days_away: number;
-  /** Ranks typical ES range expansion on the print, not economic importance.
-   *  Present so consumers prioritise by what moves the tape — a date-ordered
-   *  slice drops payrolls and CPI, which sit furthest out. */
+  /** TIMING, assigned by judgement: is this a scheduled discontinuity to be at
+   *  the screen for. Drives the ES card's scheduled-risk block. Do NOT read it
+   *  as a range forecast — `measured` is that. */
   impact?: "high" | "medium" | "low" | string | null;
+  /** SIZING, measured. `null` means the event was never in the study's
+   *  universe (U-Mich preliminary, consumer confidence, the EIA report), which
+   *  is a different statement from "measured, and ordinary". */
+  measured?: EventMeasuredImpact | null;
+  note?: string | null;
+  time_et?: string | null;
+  source?: string | null;
+  derived?: boolean;
 }
 
 export async function fetchEvents(): Promise<{ events: CalendarEvent[] }> {
@@ -2975,7 +3024,14 @@ export interface EsScheduleItem {
   /** Absolute ET instant of the release. Countdowns derive from this, so they
    *  stay correct when the session's schedule is on the next calendar day. */
   when?: string;
+  /** TIMING, assigned: is this a scheduled discontinuity to be at the screen
+   *  for. Drives the countdown and `high_impact_today`. */
   impact: EsImpact;
+  /** SIZING, measured. Same block as `CalendarEvent.measured` — see
+   *  `EventMeasuredImpact`. Null on single-name earnings and on the handful of
+   *  releases that were never in the study's universe, which is a different
+   *  statement from "measured, and ordinary". */
+  measured?: EventMeasuredImpact | null;
   note: string;
   /** Rule-derived date rather than a published one — can slip a day. */
   derived?: boolean;
@@ -3426,6 +3482,48 @@ export async function fetchEsTrackRecord(): Promise<EsTrackRecord> {
   return apiFetch("/api/market/es-track-record");
 }
 
+/** The conditions gate scored against completed sessions.
+ *
+ *  Separate from `EsTrackRecord` because it is a different KIND of record. The
+ *  character read is a pure function of price, so its whole history could be
+ *  replayed the day it shipped. The gate reads dealer gamma and an
+ *  options-implied range, neither of which is retained, so it can only be
+ *  scored forward from the day logging started — and until 30 sessions have
+ *  accumulated it reports `available: false` with the count rather than
+ *  quoting a number computed on five days.
+ *
+ *  The refusing state is worth rendering. The gate LEADS the ES card, on the
+ *  argument that standing aside is the decision that saves the most money, and
+ *  it was the one module on the page with no visible score at all. */
+export interface EsGateTrackRecord {
+  available: boolean;
+  reason?: string;
+  logging_since?: string | null;
+  /** Completed sessions logged so far. */
+  sessions?: number;
+  /** How many more are needed before this reports. */
+  needed?: number;
+  snapshots?: number;
+  scored_sessions?: number;
+  buckets?: Array<{
+    verdict: string;
+    /** Distinct sessions — the sample size. */
+    n_sessions: number;
+    /** 30-minute marks the verdict stood for. Persistence, not sample size. */
+    n_marks: number;
+    median_range_x: number;
+    wide_pct: number;
+    closed_up_pct: number;
+  }>;
+  base_wide_pct?: number;
+  base_up_pct?: number;
+  caveat?: string;
+}
+
+export async function fetchEsGateTrackRecord(): Promise<EsGateTrackRecord> {
+  return apiFetch("/api/market/es-track-record-gate", { timeoutMs: 30_000 });
+}
+
 /** One historical session that resembled today, and what it went on to do. */
 export interface EsAnalogSession {
   date: string;
@@ -3490,6 +3588,88 @@ export interface EsAnalogs {
 
 export async function fetchEsAnalogs(): Promise<EsAnalogs> {
   return apiFetch("/api/market/es-analogs", { timeoutMs: 45_000 });
+}
+
+// ── TSMOM book state ─────────────────────────────────────────────────
+/** Bookkeeping for the 12-month time-series momentum system, not a signal.
+ *
+ *  Every other block on the home page describes the market. This one describes
+ *  a position book already committed to: what the last month-end set, what the
+ *  rule would say if rebalanced today, and when those get reconciled. The
+ *  distinction matters — the rule rebalances MONTHLY and holds in between, and
+ *  trading the daily drift is a different (worse) system: daily 0.62 vs
+ *  monthly 0.72-0.74. */
+export interface TsmomRow {
+  ticker: string;
+  asset_class: string;
+  return_12m_pct: number;
+  ann_vol_pct: number | null;
+  side: "long" | "short" | "flat";
+  weight_pct: number;
+  /** |12m return| / annualised vol. The median split on this beat a de Prado
+   *  meta-labelling classifier built for the same job (0.62 -> 0.68). */
+  trend_strength: number | null;
+  above_strength_median: boolean | null;
+}
+
+export interface TsmomExposure {
+  gross_long_pct: number;
+  gross_short_pct: number;
+  net_pct: number;
+  total_gross_pct: number;
+  n_long: number;
+  n_short: number;
+  n_flat: number;
+}
+
+export interface TsmomBook {
+  available: boolean;
+  reason?: string;
+  asof?: string;
+  generated_utc?: string;
+  n_markets?: number;
+  /** Portfolio vol scaler today, and the one in force when the book was set.
+   *  They differ by the month's vol drift; quoting today's on last month's
+   *  weights would describe a book nobody holds. */
+  portfolio_scale?: number;
+  portfolio_scale_held?: number;
+  portfolio_scale_capped?: boolean;
+  last_rebalance?: string | null;
+  held?: { rows: TsmomRow[]; exposure: TsmomExposure };
+  live?: { rows: TsmomRow[]; exposure: TsmomExposure };
+  /** Markets whose signal has changed sign since the book was set. Carries
+   *  `trend_strength` because a flip on a 12m return of +0.1% is a coin landing
+   *  on its edge, and reduced to "TLT: short → long" it looks like conviction. */
+  flips_since_rebalance?: Array<{
+    ticker: string; from: string; to: string;
+    return_12m_pct: number; trend_strength: number | null;
+  }>;
+  next_rebalance?: {
+    estimated_date: string; sessions_away: number;
+    sessions_this_month: number; note: string;
+  };
+  trend_strength_median?: number | null;
+  research?: {
+    sharpe_backtest: number;
+    sharpe_posterior: number;
+    sharpe_posterior_ci95: [number, number];
+    ann_return_pct: number;
+    ann_vol_pct: number;
+    max_drawdown_pct: number;
+    spy_sharpe: number;
+    spy_max_drawdown_pct: number;
+    turnover_per_year: number;
+    capital_floor_usd: number;
+    worst_episode: string;
+    source: string;
+    eras_positive: string;
+  };
+  rule?: Record<string, unknown>;
+  caveats?: string[];
+}
+
+export async function fetchTsmomBook(): Promise<TsmomBook> {
+  return apiFetch("/api/market/tsmom-book", { timeoutMs: 45_000 });
 }
 
 /** Internal contradictions on the card. Claims about THIS PAGE, never about the
@@ -4965,6 +5145,31 @@ export interface PromptCalibration {
   brier?: number | null;
   brier_base_rate?: number | null;
   brier_skill?: number | null;
+  /** The same hit rate without the independence assumption.
+   *
+   *  `n` counts CLAIMS and the home interpretation auto-runs once per page
+   *  load against a payload carrying a live price — so one session contributes
+   *  a dozen claims that are restatements of the same bet about the same market
+   *  state. Wilson treats them as a dozen independent draws and returns an
+   *  interval roughly sqrt(claims-per-day) too narrow. This resamples DAYS.
+   *  Brier and Brier skill are means over the same non-independent rows, so
+   *  they inherit the problem and should be read against this interval rather
+   *  than the naive one. */
+  clustered?: {
+    n_days: number;
+    claims_per_day?: number;
+    hit_rate_pooled?: number;
+    /** Each DAY weighted equally. When this and `hit_rate_pooled` disagree, the
+     *  record is being driven by traffic rather than by forecasting. */
+    hit_rate_by_day?: number;
+    ci95_clustered?: [number, number] | null;
+    ci95_by_day?: [number, number];
+    /** How much wider than the naive interval. Above 1 is the size of the
+     *  precision the independence assumption was inventing. */
+    width_ratio_vs_naive?: number | null;
+    bootstrap_draws?: number;
+    note?: string;
+  };
   by_op?: Record<string, { n: number; hits: number; hit_rate: number | null; base_rate: number | null }>;
   by_subject?: Record<string, { n: number; hits: number; hit_rate: number | null; base_rate: number | null }>;
 }

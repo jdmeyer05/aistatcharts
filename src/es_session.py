@@ -257,6 +257,16 @@ def todays_schedule(now: pd.Timestamp | None = None) -> list[dict]:
             "when": when.isoformat(),
             "time_et": ev.get("time_et") or f"{hh:02d}:{mm:02d}",
             "impact": ev.get("impact") or "low",
+            # TWO AXES, BOTH CARRIED. `impact` is an assigned TIMING label — "a
+            # scheduled discontinuity lands at a known minute" — and it is what
+            # the countdown and `high_impact_today` key off. `measured` is the
+            # measured range expansion from `src.event_impact`, and the two
+            # disagree hard: CPI is `high` on the first axis and 1.06x, 12th of
+            # 23, on the second. Dropping it here would leave the ES card sizing
+            # a session off a judgement call while the measurement sat on
+            # another page. `None` for events never in the study, which is a
+            # different statement from "measured, and ordinary".
+            "measured": ev.get("measured"),
             "note": ev.get("note") or "",
             # A rule-derived date can slip a day; a published one can't. The UI
             # hedges the wording on these.

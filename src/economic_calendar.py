@@ -31,10 +31,28 @@ SIGN CONVENTION: ``days_away`` is positive for the future, negative for the
 past, everywhere. (It used to be inverted for the NFP branch, which made
 "upcoming events" filters silently drop the jobs report.)
 
-Last reviewed: 2026-07-31
+TWO DIFFERENT QUESTIONS, TWO DIFFERENT FIELDS
+---------------------------------------------
+``impact`` (high/medium/low) is assigned by judgement and answers a TIMING
+question: is this a scheduled discontinuity you need to be at the screen for.
+A 14:00 FOMC statement is high on that axis whatever the tape then does, which
+is why the ES card's scheduled-risk block and ``high_impact_today`` key off it.
+
+``measured`` is attached from ``src.event_impact`` and answers a SIZING
+question: how much wider than a normal session has this release actually made
+the tape, over 3,677 sessions. The two disagree sharply — CPI is ``high`` on
+timing but 1.06x on sizing and ranked 12th of 23, while only Nonfarm payrolls
+survives the multiple-comparison correction, at 1.39x.
+
+Do not collapse them into one field. The home calendar previously read the
+timing label as though it were the sizing answer, which is how CPI, PCE and NFP
+came to be rendered identically.
+
+Last reviewed: 2026-08-29
 Sources:
 - FOMC: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
 - Releases: https://fred.stlouisfed.org/docs/api/fred/releases_dates.html
+- Measured multipliers: research/market_movers/ (see src/event_impact.py)
 """
 
 from __future__ import annotations
@@ -74,15 +92,16 @@ FOMC_SEP_DATES = [
 # importance — GDP matters more to an economist than it does to the tape.
 _FRED_RELEASES: dict[int, tuple[str, int, int, str, str]] = {
     10:  ("CPI", 8, 30, "high",
-          "The most-watched inflation print — but measured, CPI sessions run only ~1.0x a "
-          "normal full-session range (10y, 5y and 3y windows all agree). The violence is in "
-          "the first half hour and often retraces; don't size the whole day for it."),
+          "The most-watched inflation print, and the clearest gap between billing and "
+          "measurement on this calendar. The violence is in the first half hour and often "
+          "retraces; the `measured` block carries the whole-session figure."),
     50:  ("Nonfarm payrolls", 8, 30, "high",
-          "Revisions matter as much as the headline. Measured at ~1.1-1.2x a normal session "
-          "range — the widest of the regular monthly prints."),
+          "Revisions matter as much as the headline. The one release on this calendar whose "
+          "range expansion survives correction across the 23 events tested."),
     54:  ("PCE / personal income", 8, 30, "high",
-          "The Fed's preferred inflation gauge, but it lands weeks after the CPI "
-          "that already telegraphed it — so it moves ES less than its billing."),
+          "The Fed's preferred inflation gauge. The intuition that it moves less than CPI "
+          "because CPI already telegraphed it is not what the tape did: measured, PCE ranks "
+          "ahead of CPI. Neither survives correction."),
     46:  ("PPI", 8, 30, "medium",
           "Feeds the PCE nowcast more than it moves ES directly."),
     53:  ("GDP", 8, 30, "medium",
@@ -272,7 +291,10 @@ def _derived_events(start: _date, end: _date) -> list[dict]:
         if m in (3, 6, 9, 12):
             add(_nth_weekday(y, m, 4, 3), "Quad witching (OpEx)", 9, 30, "medium",
                 "Index futures, index options, single-stock futures and options all "
-                "expire — volume spikes and pinning distorts the close.")
+                "expire — volume spikes and pinning distorts the close. Volume, not "
+                "range: measured on dividend-adjusted closes it is a NARROWER than "
+                "normal session. The reputation for wide witching days comes from "
+                "SPY's quarterly ex-dividend landing on the same date.")
 
     # EIA petroleum status: Wednesday 10:30, shifting to Thursday when a
     # holiday lands earlier in the week.
@@ -325,8 +347,12 @@ def macro_events(start: str | _date, end: str | _date) -> list[dict]:
     """Every known macro event in [start, end], sorted by date then time.
 
     Each event: name, date, time_et, hour, minute, impact, note, source,
-    derived. FRED-published dates win over a rule-derived one for the same
-    event on the same day.
+    derived, measured. FRED-published dates win over a rule-derived one for the
+    same event on the same day.
+
+    `measured` is the measured range-expansion block (or None where the event
+    was never in the study's universe) — see the module docstring for why it is
+    a separate axis from `impact` rather than a replacement for it.
     """
     s = start if isinstance(start, _date) else datetime.strptime(str(start)[:10], "%Y-%m-%d").date()
     e = end if isinstance(end, _date) else datetime.strptime(str(end)[:10], "%Y-%m-%d").date()
@@ -344,9 +370,19 @@ def macro_events(start: str | _date, end: str | _date) -> list[dict]:
         if k not in best or (best[k].get("derived") and not ev.get("derived")):
             best[k] = ev
 
-    return sorted(best.values(),
-                  key=lambda x: (x["date"], x["hour"], x["minute"],
-                                 _IMPACT_RANK.get(x["impact"], 3)))
+    ordered = sorted(best.values(),
+                     key=lambda x: (x["date"], x["hour"], x["minute"],
+                                    _IMPACT_RANK.get(x["impact"], 3)))
+
+    # Attached last so every path out of this function carries it — the ES card,
+    # the alert worker and the home calendar all read `macro_events`, and a
+    # block that only some callers received would be worse than none.
+    try:
+        from src.event_impact import attach
+        return attach(ordered)
+    except Exception as e:  # pragma: no cover — the calendar must still work
+        logger.warning(f"measured impact unavailable, calendar served without it: {e}")
+        return [{**ev, "measured": None} for ev in ordered]
 
 
 def find_events_near_date(date_str: str, window_days: int = 5) -> list[dict]:

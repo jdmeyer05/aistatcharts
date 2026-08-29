@@ -1,28 +1,32 @@
 "use client";
 
 /**
- * Home — real-time market dashboard (client island).
+ * Home — real-time market dashboard (client islands).
  *
- * Layout (desktop, stacks on mobile):
- *   1. Market Pulse Strip       (30s refetch)
- *   2. ES Session Briefing      (3 min refetch — levels develop intraday)
- *   3. What's Driving Markets   (5 min refetch, backend caches 15 min)
- *   4. Sector Relative  |  Vol Landscape Snapshot     (60s / 5min)
- *   5. S&P Valuation strip                             (60 min refetch)
- *   6. Sector Rotation  |  CTA Positioning             (30 min / 30 min)
- *   7. Macro Pressure — equity-impact scorecard        (30 min refetch)
- *   8. News             |  Trump / Tweet Watch         (derived / 2min)
- *   9. Macro Calendar — next 14 days                   (10 min refetch)
+ * GROUPED BY HOW FAST THINGS MOVE, not by topic. Counting honestly, one card
+ * here changes intraday (the ES briefing), three change daily, five change over
+ * weeks to months, and the valuation strip describes something that moves on a
+ * quarterly earnings cycle — while sitting on a 60-minute refetch. Every card
+ * wore identical live styling, so the page read as uniformly current when it
+ * was current in one place. The bands say which is which, and they collapse
+ * (remembered per reader) so the slow half can be folded away — never folded by
+ * default, because hiding built work behind a chevron is not an improvement.
  *
- * The briefing leads because this page is used as an intraday ES cockpit:
- * it is the only card scoped to the current session, and everything below it
- * runs on a swing horizon.
+ * SPLIT INTO TWO ISLANDS. `HomeFast` is the pulse strip and the ES briefing —
+ * the two things a session actually turns on. `HomeSwing` is everything else,
+ * and `app/page.tsx` streams it behind a Suspense boundary so one slow upstream
+ * cannot hold up the price at the top of the page.
  *
- * The page shell is a Server Component (`app/page.tsx`) which prefetches
- * all eleven endpoints in parallel and ships dehydrated query state via
- * HydrationBoundary. This component picks up the cache instantly on
- * hydration — no fetch waterfall on first paint — then refetches on its
- * normal cadence in the background.
+ *   HomeFast
+ *     Market Pulse Strip                          (30s)
+ *     ES Session Briefing                         (3 min — levels develop)
+ *   HomeSwing
+ *     At an extreme today                         (derived from cached cards)
+ *     One interpretation for the whole page
+ *     TODAY:            driver · sector relative | vol landscape · news | tweets
+ *     WEEKS TO MONTHS:  rotation | CTA · macro pressure | Fed · valuation
+ *     THE BOOK:         12-month trend book
+ *     SCHEDULED AHEAD:  macro calendar
  */
 
 import Link from "next/link";
@@ -37,6 +41,7 @@ import {
   fetchTrumpMonitor,
   type MarketDriverResponse,
   type TrumpPost,
+  type CalendarEvent,
 } from "@/lib/api";
 import { PULSE_TICKERS, PULSE_LABELS, ordinal } from "@/lib/home-constants";
 import EsBriefing from "@/components/home/es-briefing";
@@ -46,6 +51,9 @@ import MacroPressure from "@/components/home/macro-pressure";
 import SectorRrgCard from "@/components/home/sector-rrg";
 import SpValuationStrip from "@/components/home/sp-valuation";
 import FedProbabilitiesCard from "@/components/home/fed-probabilities";
+import TsmomBookCard from "@/components/home/tsmom-book";
+import UnusualToday from "@/components/home/unusual-today";
+import { CardHeader, HorizonBand, Takeaway } from "@/components/home/primitives";
 
 function fmtAgo(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -75,6 +83,21 @@ function pctClass(n: number | undefined | null): string {
   return n > 0 ? "text-gain" : "text-loss";
 }
 
+/** One definition of the driver query, used by the card and by the news panel.
+ *
+ *  It was declared twice with identical options in two places. React Query
+ *  deduped the request so nothing broke, but the two cadences could drift apart
+ *  in a later edit and the symptom — one copy refetching on a schedule the
+ *  other did not expect — would be close to invisible. */
+function useMarketDriver() {
+  return useQuery({
+    queryKey: ["market-driver"],
+    queryFn: fetchMarketDriver,
+    refetchInterval: 5 * 60_000,
+    staleTime: 3 * 60_000,
+  });
+}
+
 /* ─── Market Pulse Strip ──────────────────────────────────────── */
 
 function MarketPulse() {
@@ -87,10 +110,32 @@ function MarketPulse() {
   // `change` is genuinely optional: when no prior close can be established the
   // backend omits it rather than publishing a confident 0.00%. The render below
   // already treats null as "no percentage to show".
-  const data: Record<string, { price: number; change?: number; prev_close?: number }> = q.data ?? {};
+  //
+  // Memoised because the `?? {}` fallback minted a fresh object every render,
+  // and the summary below depends on it — unmemoised, that read recomputed on
+  // every render including the once-per-second ones.
+  const data: Record<string, { price: number; change?: number; prev_close?: number }> =
+    useMemo(() => q.data ?? {}, [q.data]);
+
+  // What the strip amounts to, instead of eight numbers to read across. Counted
+  // over the tickers that actually reported a change — a missing percentage is
+  // not a flat one, and folding the two together is how "0.00%" gets published
+  // for an instrument nobody could price.
+  const read = useMemo(() => {
+    const pairs: Array<{ tk: string; change: number }> = [];
+    for (const tk of PULSE_TICKERS) {
+      const c = data[tk]?.change;
+      if (typeof c === "number") pairs.push({ tk, change: c });
+    }
+    if (pairs.length === 0) return null;
+    const up = pairs.filter((p) => p.change > 0).length;
+    const down = pairs.filter((p) => p.change < 0).length;
+    const widest = [...pairs].sort((a, b) => Math.abs(b.change) - Math.abs(a.change))[0];
+    return { n: pairs.length, up, down, biggest: widest.change, biggestTk: widest.tk };
+  }, [data]);
 
   return (
-    <div className="card card-compact">
+    <div className="card card-compact space-y-1.5">
       <div className="flex flex-wrap gap-x-5 gap-y-2 items-center">
         {PULSE_TICKERS.map((tk) => {
           const s = data[tk] || { price: 0, change: 0 };
@@ -111,6 +156,23 @@ function MarketPulse() {
           {q.isFetching ? "updating…" : q.dataUpdatedAt ? `as of ${new Date(q.dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}
         </div>
       </div>
+      {read && (
+        <div className="text-[0.58rem] text-text-muted leading-snug border-t border-border pt-1.5">
+          {read.up} up / {read.down} down of {read.n} reporting
+          {" · widest is "}
+          <span className="text-text">{PULSE_LABELS[read.biggestTk] ?? read.biggestTk}</span>
+          {" at "}
+          <span className={`tabular-nums ${pctClass(read.biggest)}`}>
+            {read.biggest > 0 ? "+" : ""}{read.biggest.toFixed(2)}%
+          </span>
+          {read.n < PULSE_TICKERS.length && (
+            <span className="text-text-muted/70">
+              {" "}· {PULSE_TICKERS.length - read.n} could not be priced against a prior close and
+              are excluded rather than counted flat
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -135,14 +197,16 @@ function DriverPill({ label, source }: { label: string; source: string }) {
 }
 
 function MarketDriverCard() {
-  const q = useQuery({
-    queryKey: ["market-driver"],
-    queryFn: fetchMarketDriver,
-    refetchInterval: 5 * 60_000,
-    staleTime: 3 * 60_000,
-  });
+  const q = useMarketDriver();
   const d = q.data;
   const asOf = d?.as_of_utc ? fmtAgo(d.as_of_utc) : "";
+
+  // MEASURED, not narrated. `drivers` is the cross-asset attribution — a
+  // regression, not another model's prose — and it rode along in the payload
+  // for the interpretation panel without ever being rendered on the card whose
+  // request carries it. It is the only part of this card that can be checked.
+  const attribution = d?.drivers;
+  const topDriver = attribution?.available ? attribution.ranking?.[0] : null;
 
   return (
     <div className="card space-y-3">
@@ -235,6 +299,40 @@ function MarketDriverCard() {
               ))}
             </div>
           )}
+
+          {/* The prose above is a model's reading. This is a regression, and the
+              only part of the card that can be wrong in a checkable way — so it
+              says itself rather than sitting in the payload for another panel. */}
+          {topDriver && attribution && (
+            <Takeaway
+              label="Measured, not narrated"
+              headline={
+                `Over the last ${attribution.window_sessions} sessions, ${topDriver.driver} ` +
+                `(${topDriver.ticker}) is the most closely linked cross-asset driver at ` +
+                `${(topDriver.share_of_variance * 100).toFixed(0)}% of explained variance — ` +
+                /* THE SIGN HAS TO BE SPOKEN, not just printed. The ranking is by
+                   share of variance, which is unsigned, so the top driver is
+                   routinely an INVERSE one. Saying "has moved with the S&P" over
+                   a correlation of −0.52 states the opposite of what was
+                   measured, in the one block on this card that is a regression
+                   rather than prose. */
+                `moving ${topDriver.corr_with_spy < 0 ? "INVERSELY to" : "with"} it, correlation ` +
+                `${topDriver.corr_with_spy > 0 ? "+" : ""}${topDriver.corr_with_spy.toFixed(2)}.`
+              }
+              detail={
+                `The macro drivers together explain ${(attribution.explained_share * 100).toFixed(0)}% of the index's ` +
+                `daily variance` +
+                (attribution.explained_share_a_year_ago != null
+                  ? `, against ${(attribution.explained_share_a_year_ago * 100).toFixed(0)}% a year ago`
+                  : "") +
+                `. ` +
+                (topDriver.rank_a_year_ago != null
+                  ? `${topDriver.driver} ranked ${ordinal(topDriver.rank_a_year_ago)} a year ago — the ranking rotates visibly between windows, so read this as a description of the current one rather than a standing fact. `
+                  : "The ranking rotates visibly between windows, so read this as a description of the current one rather than a standing fact. ") +
+                `"Has moved with", never "drives": every next-day correlation in this set measured inside noise.`
+              }
+            />
+          )}
         </>
       )}
     </div>
@@ -258,12 +356,25 @@ function SectorRelative() {
   );
   const maxAbs = Math.max(0.5, ...sorted.map((s) => Math.abs(s.change || 0)));
 
+  // The spread between best and worst is what says whether today was a sector
+  // day or an index day, and nothing computed it.
+  const read = useMemo(() => {
+    if (sorted.length < 2) return null;
+    const top = sorted[0];
+    const bottom = sorted[sorted.length - 1];
+    const spread = (top.change ?? 0) - (bottom.change ?? 0);
+    const up = sorted.filter((s) => (s.change ?? 0) > 0).length;
+    return { top, bottom, spread, up, n: sorted.length };
+  }, [sorted]);
+
   return (
     <div className="card card-compact space-y-2">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-accent">Sector Relative</h3>
-        <Link href="/sector-analysis" className="text-[0.6rem] text-text-muted hover:text-accent">Full →</Link>
-      </div>
+      <CardHeader
+        title="Sector Relative"
+        href="/sector-analysis"
+        asOf={q.dataUpdatedAt || null}
+        staleAfterMin={15}
+      />
       {q.isLoading && <div className="text-xs text-text-muted">Loading…</div>}
       {/* Without this the card rendered a header over an empty box whenever the
           rows were missing, which reads as "still loading" forever rather than
@@ -314,6 +425,20 @@ function SectorRelative() {
           );
         })}
       </div>
+      {read && (
+        <Takeaway
+          headline={
+            `${read.up} of ${read.n} sectors green, and the spread from ${read.top.label} to ` +
+            `${read.bottom.label} is ${read.spread.toFixed(2)} points.`
+          }
+          detail={
+            `A wide spread means the index move is not the whole story and there is something to ` +
+            `pick between sectors; a narrow one means everything moved together. This is today's ` +
+            `dispersion in isolation — where it sits against its own history is on the rotation ` +
+            `board, which is the card that keeps a reference set for it.`
+          }
+        />
+      )}
     </div>
   );
 }
@@ -417,10 +542,12 @@ function VolLandscapeSnapshot() {
 
   return (
     <div className="card card-compact space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-accent">Vol Landscape</h3>
-        <Link href="/vol-landscape" className="text-[0.6rem] text-text-muted hover:text-accent">Full →</Link>
-      </div>
+      <CardHeader
+        title="Vol Landscape"
+        href="/vol-landscape"
+        asOf={q.dataUpdatedAt || null}
+        staleAfterMin={30}
+      />
 
       {q.isLoading && <div className="text-xs text-text-muted">Loading…</div>}
 
@@ -556,11 +683,20 @@ function NewsPanel({ citations }: { citations: MarketDriverResponse["citations"]
   );
   return (
     <div className="card card-compact space-y-2">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h3 className="text-xs font-bold uppercase tracking-wider text-accent">Market-Moving News</h3>
+        {/* Stated rather than implied by the heading. This is not a wire — it is
+            the subset of the synthesis's own citations that came from headlines,
+            so its coverage is whatever that model happened to cite this cycle.
+            A reader who thinks they are looking at a feed will read silence here
+            as "nothing happened", which is the one thing it does not mean. */}
+        <span className="text-[0.55rem] text-text-muted shrink-0">cited by the synthesis above</span>
       </div>
       {newsItems.length === 0 ? (
-        <p className="text-xs text-text-muted">No market-moving headlines surfaced in this cycle.</p>
+        <p className="text-xs text-text-muted">
+          The synthesis cited no headlines or releases this cycle — a statement about what it drew
+          on, not about whether news broke.
+        </p>
       ) : (
         <ul className="space-y-1.5 text-sm">
           {newsItems.map((c, i) => (
@@ -617,6 +753,13 @@ function TweetWatch() {
               {latest.interpretation}
             </p>
           )}
+          {/* The sentiment tag is a model's label with no score attached HERE.
+              Saying so costs one line and stops it reading as a measurement; the
+              settled record for this surface lives on the decoder page. */}
+          <p className="text-[0.55rem] text-text-muted/70 leading-snug">
+            Sentiment and interpretation are model-written and unscored on this card — the settled
+            track record for the surface is on the decoder page.
+          </p>
         </>
       )}
       {q.data?.market_alert && (
@@ -630,6 +773,49 @@ function TweetWatch() {
 
 /* ─── Macro Calendar ──────────────────────────────────────────── */
 
+/** The measured range multiplier, or an explicit "not measured".
+ *
+ *  This is what replaces reading `impact` as though it answered the sizing
+ *  question. It does not: `impact` is an assigned TIMING label, and on the
+ *  measured axis CPI is 1.06x and 12th of 23 while quad witching is 0.94x —
+ *  narrower than an ordinary day. Both used to render identically to payrolls,
+ *  which is the only event on this calendar whose expansion survives correction
+ *  across the 23 tested. */
+function MeasuredChip({ ev }: { ev: CalendarEvent }) {
+  const m = ev.measured;
+  if (!m) {
+    return (
+      <span
+        className="text-[0.55rem] px-1 py-0.5 rounded bg-surface-alt text-text-muted/70 shrink-0"
+        title="This release was not in the study's universe, so no measurement exists either way. That is a different statement from 'measured, and ordinary'."
+      >
+        not measured
+      </span>
+    );
+  }
+  const cls =
+    m.band === "established" ? "bg-loss/15 text-loss"
+      : m.band === "unconfirmed" ? "bg-amber-500/15 text-amber-400"
+        : "bg-surface-alt text-text-muted";
+  return (
+    <span
+      className={`text-[0.55rem] px-1 py-0.5 rounded tabular-nums shrink-0 font-semibold ${cls}`}
+      title={
+        `${m.headline}` +
+        ` 95% CI [${m.ci95[0].toFixed(2)}, ${m.ci95[1].toFixed(2)}].` +
+        ` ${(m.share_over_1_5x * 100).toFixed(0)}% of these prints ran past 1.5x.` +
+        ` Next session ${m.next_session.toFixed(2)}x — nothing carries past the print.` +
+        (m.rank_sd != null
+          ? ` Its yearly rank moves by ${m.rank_sd.toFixed(1)} places, so one multiplier is not a fixed property of the event.`
+          : "") +
+        (m.caveat ? ` ${m.caveat}` : "")
+      }
+    >
+      {m.multiplier.toFixed(2)}×
+    </span>
+  );
+}
+
 function MacroCalendar() {
   const q = useQuery({
     queryKey: ["events-home"],
@@ -637,88 +823,188 @@ function MacroCalendar() {
     refetchInterval: 10 * 60_000,
     staleTime: 9 * 60_000,
   });
-  // Take EVERY high-impact print first, then fill with the nearest of the rest.
-  // A plain .slice(0, 6) on a date-ordered list dropped Nonfarm payrolls and CPI
-  // — the two widest-range sessions of the month — because they sit furthest
-  // out, so a card titled "Next 2 Weeks" was omitting the only two that change
-  // how you size. Order is restored by date for display.
+
+  // SELECTION BY BOTH AXES, because they answer different questions and
+  // dropping either loses something real. A plain date-ordered slice(0, 6) used
+  // to cut payrolls and CPI — the ones furthest out — so high-impact (timing)
+  // events are taken first. But the measured axis has to be honoured too: an
+  // event whose range expansion is established or even unconfirmed belongs in
+  // the window whether or not anyone labelled it high.
   const events = useMemo(() => {
     const all = q.data?.events ?? [];
-    const high = all.filter((e) => e.impact === "high");
-    const rest = all.filter((e) => e.impact !== "high");
-    return [...high, ...rest.slice(0, Math.max(0, 8 - high.length))]
+    const priority = all.filter(
+      (e) => e.impact === "high" || (e.measured != null && e.measured.band !== "none")
+    );
+    const prioritySet = new Set(priority);
+    const rest = all.filter((e) => !prioritySet.has(e));
+    return [...priority, ...rest.slice(0, Math.max(0, 12 - priority.length))]
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   }, [q.data?.events]);
 
+  const read = useMemo(() => {
+    if (events.length === 0) return null;
+    const measured = events.filter((e) => e.measured != null);
+    const established = measured.filter((e) => e.measured!.survives_fdr);
+    const widest = [...measured].sort(
+      (a, b) => b.measured!.multiplier - a.measured!.multiplier
+    )[0];
+    // Labelled as a scheduled discontinuity but measured indistinguishable from
+    // an ordinary session. This is the specific disagreement the card exists to
+    // surface, so it is named rather than left for the reader to spot.
+    const overbilled = measured.filter(
+      (e) => e.impact === "high" && e.measured!.band === "none"
+    );
+    return { measured, established, widest, overbilled, n: events.length };
+  }, [events]);
+
   return (
     <div className="card card-compact space-y-2">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-bold uppercase tracking-wider text-accent">Next 2 Weeks — Macro Calendar</h3>
-        <Link href="/economic-calendar" className="text-[0.6rem] text-text-muted hover:text-accent">Full →</Link>
-      </div>
+      <CardHeader
+        title="Next 2 Weeks — Macro Calendar"
+        href="/economic-calendar"
+        asOf={q.dataUpdatedAt || null}
+        staleAfterMin={60}
+      />
       {events.length === 0 ? (
-        <p className="text-xs text-text-muted">No scheduled events in window.</p>
+        <p className="text-xs text-text-muted">
+          {q.isLoading ? "Loading…" : "No scheduled events in window."}
+        </p>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
-          {events.map((ev, i) => (
-            <div key={i} className="flex flex-col text-xs">
-              <span className="text-text-muted text-[0.6rem] tabular-nums">
-                {ev.date} · {ev.days_away === 0 ? "today" : `+${ev.days_away}d`}
-              </span>
-              <span className={`font-semibold truncate ${ev.impact === "high" ? "text-text" : "text-text-muted"}`}
-                    title={`${ev.name}${ev.impact ? ` — ${ev.impact} impact` : ""}`}>
-                {ev.impact === "high" && <span className="text-spot mr-0.5">•</span>}
-                {ev.name}
-              </span>
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1">
+            {events.map((ev, i) => (
+              <div key={`${ev.date}-${ev.name}-${i}`} className="flex items-baseline gap-1.5 text-xs min-w-0">
+                <span className="text-text-muted text-[0.6rem] tabular-nums w-[4.5rem] shrink-0">
+                  {ev.date.slice(5)} · {ev.days_away === 0 ? "today" : `+${ev.days_away}d`}
+                </span>
+                <span
+                  className={`truncate min-w-0 flex-1 ${ev.impact === "high" ? "text-text font-semibold" : "text-text-muted"}`}
+                  title={`${ev.name}${ev.note ? ` — ${ev.note}` : ""}`}
+                >
+                  {/* The dot now means TIMING only: a release lands at a known
+                      time and you should be at the screen for it. It used to be
+                      read as "this will be a wide day", which is the question
+                      the chip beside it answers with a measurement. */}
+                  {ev.impact === "high" && (
+                    <span className="text-spot mr-0.5" title="Scheduled discontinuity — a release lands at a known time">•</span>
+                  )}
+                  {ev.name}
+                </span>
+                <MeasuredChip ev={ev} />
+              </div>
+            ))}
+          </div>
+
+          {read && (
+            <Takeaway
+              tone={read.established.length > 0 ? "warn" : "neutral"}
+              headline={
+                read.established.length > 0
+                  ? `${read.established.map((e) => e.name).join(", ")} — the only event in this window whose range expansion survives correction, at ${read.established[0].measured!.multiplier.toFixed(2)}× a normal session over ${read.established[0].measured!.n} prints.`
+                  : read.widest
+                    ? `Nothing in this window has established range expansion. The widest measured is ${read.widest.name} at ${read.widest.measured!.multiplier.toFixed(2)}× a normal session, and it does not survive correction across the 23 events tested.`
+                    : `Nothing in this window has been measured for range expansion.`
+              }
+              detail={
+                `${read.measured.length} of ${read.n} shown events carry a measurement; the rest were never in the study's universe. ` +
+                (read.overbilled.length > 0
+                  ? `${read.overbilled.map((e) => `${e.name} (${e.measured!.multiplier.toFixed(2)}×, ${ordinal(e.measured!.rank)} of ${e.measured!.of})`).join(", ")} ${read.overbilled.length === 1 ? "is" : "are"} marked as a scheduled discontinuity but measured indistinguishable from an ordinary session — a reason to be at the screen, not a reason to size the whole day. `
+                  : "") +
+                `The dot marks timing; the multiplier is measured magnitude. Neither carries direction — the study measured |move| only — and every next-session multiplier sits near 1.0, so a wide print says nothing about the day after it.`
+              }
+            />
+          )}
+        </>
       )}
     </div>
   );
 }
 
-/* ─── Page ────────────────────────────────────────────────────── */
+/* ─── Islands ─────────────────────────────────────────────────── */
 
-export default function HomeClient() {
-  const driverQ = useQuery({
-    queryKey: ["market-driver"],
-    queryFn: fetchMarketDriver,
-    refetchInterval: 5 * 60_000,
-    staleTime: 3 * 60_000,
-  });
-
+/** The two blocks a session actually turns on. Rendered ahead of the Suspense
+ *  boundary in `app/page.tsx` so it paints as soon as its own two fetches
+ *  resolve, rather than waiting on eleven. */
+export function HomeFast() {
   return (
     <div className="space-y-4">
       <MarketPulse />
       <EsBriefing />
-      {/* One interpretation for the whole page, sitting under the ES card
-          because that is the page's spine. It reads every card's cached data,
-          so it is placed high but stays collapsed until asked. */}
+    </div>
+  );
+}
+
+/** Everything on a swing horizon or slower, streamed in behind the fast half. */
+export function HomeSwing() {
+  const driverQ = useMarketDriver();
+
+  return (
+    <div className="space-y-5">
+      {/* Ranks the page by its own percentiles before asking anyone to scroll
+          it. Above the interpretation because "is anything unusual" is a
+          cheaper question than "what does all of this mean". */}
+      <UnusualToday />
+
+      {/* One interpretation for the whole page. It reads every card's cached
+          data, so it lives in THIS island rather than the fast one — firing it
+          before these boards hydrate would have it synthesise a page it cannot
+          see. It also now names the blocks it could not read. */}
       <PageInterpretation />
-      <MarketDriverCard />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <SectorRelative />
-        <VolLandscapeSnapshot />
-      </div>
-      <SpValuationStrip />
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <SectorRrgCard />
-        <CtaFlows />
-      </div>
-      {/* Rate pricing sits beside the macro scorecard because they answer the
-          same swing-horizon question from opposite ends: the scorecard reads
-          the z-score of recent CHANGE in financial conditions, this reads the
-          LEVEL the market expects policy to settle at. */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <MacroPressure />
-        <FedProbabilitiesCard />
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <NewsPanel citations={driverQ.data?.citations} />
-        <TweetWatch />
-      </div>
-      <MacroCalendar />
+
+      <HorizonBand id="today" label="Today" hint="moves through the session, resets overnight">
+        <MarketDriverCard />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <SectorRelative />
+          <VolLandscapeSnapshot />
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <NewsPanel citations={driverQ.data?.citations} />
+          <TweetWatch />
+        </div>
+      </HorizonBand>
+
+      <HorizonBand
+        id="swing"
+        label="Weeks to months"
+        hint="unchanged since this morning — worth re-reading when the week turns"
+      >
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <SectorRrgCard />
+          <CtaFlows />
+        </div>
+        {/* Rate pricing sits beside the macro scorecard because they answer the
+            same swing-horizon question from opposite ends: the scorecard reads
+            the z-score of recent CHANGE in financial conditions, this reads the
+            LEVEL the market expects policy to settle at. */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <MacroPressure />
+          <FedProbabilitiesCard />
+        </div>
+        <SpValuationStrip />
+      </HorizonBand>
+
+      <HorizonBand
+        id="book"
+        label="The book"
+        hint="a system already committed to — rebalances monthly, issues no signal"
+      >
+        <TsmomBookCard />
+      </HorizonBand>
+
+      <HorizonBand id="ahead" label="Scheduled ahead" hint="known dates, measured magnitudes">
+        <MacroCalendar />
+      </HorizonBand>
+    </div>
+  );
+}
+
+/** Kept so any caller still importing the page as one unit renders the same
+ *  thing, in the same order, without the streaming split. */
+export default function HomeClient() {
+  return (
+    <div className="space-y-5">
+      <HomeFast />
+      <HomeSwing />
     </div>
   );
 }

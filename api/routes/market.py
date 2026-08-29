@@ -736,6 +736,39 @@ async def candle_context_route(
     return await asyncio.to_thread(candle_context, symbol.upper())
 
 
+def _select_calendar_events(items: list[dict], cap: int = 16) -> list[dict]:
+    """Which of the two-week window survives to the response.
+
+    THIS IS WHERE PAYROLLS USED TO DIE. The handler sorted by date and returned
+    the nearest eight — roughly a third of a fourteen-day calendar — and the
+    events that sit furthest out are precisely the ones worth keeping. Nonfarm
+    payrolls lands on the first Friday and is routinely past the eighth-nearest
+    row. The home card and the interpretation payload both do careful two-axis
+    selection, and both were doing it on a list this endpoint had already
+    truncated by date. Fixing the client alone fixed nothing.
+
+    So the priority runs HERE, on the full window, on both axes: anything that
+    is a scheduled discontinuity (`impact == "high"`, a timing judgement) or
+    carries a non-trivial measured expansion survives. The two disagree in both
+    directions and that is the point — CPI is high-impact and measures ordinary,
+    while the trade balance is labelled low and ranks 6th of 23 measured.
+
+    `cap` is 16 rather than 8 because a row is a handful of scalars; truncating
+    hard to save bytes is what created the problem.
+
+    Order is restored by date, then name, so the output is stable.
+    """
+    def priority(e: dict) -> bool:
+        m = e.get("measured")
+        return e.get("impact") == "high" or bool(m and m.get("band") != "none")
+
+    keep = [e for e in items if priority(e)]
+    rest = sorted((e for e in items if not priority(e)), key=lambda x: x.get("days_away", 0))
+    out = keep + rest[: max(0, cap - len(keep))]
+    out.sort(key=lambda x: (x.get("days_away", 0), x.get("name", "")))
+    return out
+
+
 @router.get("/events")
 async def upcoming_events(user: str = Depends(get_current_user)):
     """Get upcoming macro events and FOMC dates."""
@@ -755,12 +788,27 @@ async def upcoming_events(user: str = Depends(get_current_user)):
             days = ev.get("days_away", 0)
             if days < 0:
                 continue
-            # `impact` travels with the event so consumers can prioritise by what
-            # moves the tape rather than by what happens to be nearest. Without
-            # it, a date-ordered slice silently drops payrolls and CPI — the two
-            # widest-range prints of the month — because they sit furthest out.
+            # This handler rebuilds a narrower dict rather than passing the event
+            # through, so ANY field added upstream has to be added here too or it
+            # is silently dropped at the last step. That is what happened to
+            # `measured` on its first pass.
+            #
+            # `impact` is the TIMING axis — a scheduled discontinuity at a known
+            # minute — and it is what stops a date-ordered slice from dropping
+            # payrolls and CPI, the events furthest out. `measured` is the SIZING
+            # axis, measured over 3,677 sessions, and the two disagree hard: CPI
+            # is `high` on the first and 1.06x, 12th of 23, on the second. Both
+            # ship, because they answer different questions.
             items.append({"name": ev["name"], "date": ev.get("date", ""), "days_away": days,
-                          "impact": ev.get("impact")})
+                          "impact": ev.get("impact"),
+                          "measured": ev.get("measured"),
+                          # The note carries the release's own caveats and was
+                          # being dropped here as well; the card renders it as
+                          # text rather than leaving it in a tooltip.
+                          "note": ev.get("note"),
+                          "time_et": ev.get("time_et"),
+                          "source": ev.get("source"),
+                          "derived": ev.get("derived")})
 
         event_dates = {e.get("date", "") for e in events}
         for fd in fomc_dates:
@@ -769,13 +817,20 @@ async def upcoming_events(user: str = Depends(get_current_user)):
                 days = (fd_dt - today).days
                 if days > 0:
                     is_sep = fd in FOMC_SEP_DATES
+                    # Same names the calendar uses, so this fallback row picks up
+                    # a measurement instead of arriving as an unlabelled event.
+                    # It previously said "FOMC Meeting" — a name that matches
+                    # nothing upstream — and carried no impact at all.
+                    name = "FOMC decision + SEP/dot plot" if is_sep else "FOMC decision"
+                    from src.event_impact import measured as _measured
                     items.append({
-                        "name": "FOMC + SEP/Dots" if is_sep else "FOMC Meeting",
-                        "date": fd, "days_away": days,
+                        "name": name, "date": fd, "days_away": days,
+                        "impact": "high",
+                        "measured": _measured(name),
+                        "note": None, "time_et": "14:00", "source": "fomc", "derived": False,
                     })
 
-        items.sort(key=lambda x: x["days_away"])
-        return {"events": items[:8]}
+        return {"events": _select_calendar_events(items)}
     except Exception:
         return {"events": []}
 
@@ -3138,6 +3193,19 @@ def _log_gate_snapshot(brief: dict) -> None:
         logger.debug(f"gate snapshot skipped: {e}")
 
 
+@router.get("/tsmom-book")
+async def tsmom_book_endpoint(user: str = Depends(get_current_user)):
+    """State of the 12-month time-series momentum book.
+
+    Bookkeeping for a system already committed to, not a signal: what the last
+    month-end set, what the rule would say if rebalanced today, and when those
+    two get reconciled. Cached 12h — the rule rebalances monthly and the prices
+    behind it move daily.
+    """
+    from src.tsmom_book import book
+    return await asyncio.to_thread(book)
+
+
 @router.get("/es-track-record-gate")
 async def es_gate_track_record(user: str = Depends(get_current_user)):
     """The conditions gate scored against completed sessions.
@@ -3155,9 +3223,21 @@ async def es_brief_endpoint(user: str = Depends(get_current_user)):
     """Everything needed for the top-of-page ES session briefing, in one call."""
     brief = await asyncio.to_thread(_es_brief_cached)
     # Fire-and-forget: the snapshot is bookkeeping and must never delay or fail
-    # the response the card is waiting on.
+    # the response the card is waiting on. Sent the UNSANITISED brief on purpose
+    # — the logger reads numbers, not JSON, and a None where a NaN was is a
+    # value it would record as real.
     asyncio.get_running_loop().run_in_executor(None, _log_gate_snapshot, brief)
-    return brief
+    # DEFENCE IN DEPTH, and it was missing on the one endpoint that could least
+    # afford it. This assembles thirty-odd independent blocks from a dozen
+    # upstream feeds; a single NaN anywhere in that tree makes Starlette's
+    # JSONResponse (allow_nan=False) raise, and the whole card 500s. That
+    # happened: a peer quote came back NaN on a weekend and took out the lead
+    # block of the home page. `json_safe` maps NaN to None, which every
+    # component here already renders as "not available".
+    #
+    # The root cause is fixed at the source too (src/es_intraday.cross_asset).
+    # This is the layer that stops the NEXT one from being an outage.
+    return json_safe(brief)
 
 
 _CARD_AUDIT_CACHE: dict = {}

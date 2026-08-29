@@ -26,9 +26,11 @@ import {
   fetchEsCardAudit,
   fetchEsTrackRecord,
   fetchEsAnalogs,
+  fetchEsGateTrackRecord,
   type EsBrief,
   type EsCardAudit,
   type EsTrackRecord,
+  type EsGateTrackRecord,
   type EsAnalogs,
   type EsImpact,
   type EsLevel,
@@ -36,6 +38,8 @@ import {
 } from "@/lib/api";
 import CandleContextBlock from "@/components/home/candle-context";
 import OvernightRead from "@/components/home/overnight-read";
+import { Takeaway } from "@/components/home/primitives";
+import { ordinal } from "@/lib/home-constants";
 
 /* ─── formatting ──────────────────────────────────────────────── */
 
@@ -173,10 +177,14 @@ function ScheduleRow({
       </span>
       {/* Same badge, two different derivations — worth saying, because a
           trader reading "high" beside PCE and "high" beside NVDA would
-          reasonably assume they were measured the same way. Macro impact is
-          typical range expansion (your own data has CPI at ~1.0x a normal
-          session); an earnings badge is size, and the event's actual priced
-          cost is the premium below, not this chip. */}
+          reasonably assume they were measured the same way. An earnings badge
+          is size; the event's actual priced cost is the premium below.
+
+          AND THIS BADGE IS NOT A RANGE FORECAST. Its tooltip used to say
+          "typical ES range expansion for this release", which is the exact
+          conflation the measured chip beside it exists to end: on 3,677
+          sessions CPI is `high` here and 1.06x there. This is a TIMING label —
+          a release lands at a known minute — and it says so now. */}
       <span
         className={`px-1.5 py-0.5 rounded text-[0.52rem] font-bold uppercase shrink-0 ${impactClass(
           e.impact
@@ -184,11 +192,40 @@ function ScheduleRow({
         title={
           e.kind === "earnings"
             ? "Ranked by market cap, not by measured range expansion — unlike the macro rows. What the event actually costs is the priced premium below."
-            : "Typical ES range expansion for this release."
+            : "How much of a scheduled discontinuity this is — whether it lands at a known minute and deserves attention on the clock. Not a range forecast: the measured multiplier beside it is that, and the two routinely disagree."
         }
       >
         {e.impact}
       </span>
+      {/* The measured half. Only ever rendered for macro rows: single-name
+          earnings were not in the event study, and quoting a macro multiplier
+          next to NVDA would be inventing one. */}
+      {e.kind !== "earnings" && (
+        e.measured ? (
+          <span
+            className={`px-1 py-0.5 rounded text-[0.52rem] font-bold tabular-nums shrink-0 ${
+              e.measured.band === "established" ? "bg-loss/15 text-loss"
+                : e.measured.band === "unconfirmed" ? "bg-amber-500/15 text-amber-400"
+                  : "bg-surface-alt text-text-muted"
+            }`}
+            title={
+              `${e.measured.headline}` +
+              ` 95% CI [${e.measured.ci95[0].toFixed(2)}, ${e.measured.ci95[1].toFixed(2)}].` +
+              ` Next session ${e.measured.next_session.toFixed(2)}x — nothing carries past the print.` +
+              (e.measured.caveat ? ` ${e.measured.caveat}` : "")
+            }
+          >
+            {e.measured.multiplier.toFixed(2)}×
+          </span>
+        ) : (
+          <span
+            className="px-1 py-0.5 rounded text-[0.52rem] bg-surface-alt text-text-muted/60 shrink-0"
+            title="Never in the event study's universe, so no measurement exists either way — which is a different statement from 'measured, and ordinary'."
+          >
+            —
+          </span>
+        )
+      )}
       {!hideCountdown && (
         <span className="tabular-nums text-text-muted w-[4.5rem] text-right shrink-0">
           {done ? "released" : fmtCountdown(mins)}
@@ -511,6 +548,20 @@ export default function EsBriefing() {
     refetchInterval: false,
   });
 
+  // The conditions gate's own record. Lazy and long-lived for the same reason
+  // as the two above — it is a statement about accumulated sessions, it moves
+  // at most once a day, and it must never sit on the brief's critical path.
+  //
+  // It is fetched even while it is still refusing to report: the refusal
+  // carries the session count, and rendering that is the point (see the block
+  // under the gate).
+  const gateQ = useQuery<EsGateTrackRecord>({
+    queryKey: ["es-track-record-gate"],
+    queryFn: fetchEsGateTrackRecord,
+    staleTime: 6 * 60 * 60_000,
+    refetchInterval: false,
+  });
+
   const d = q.data;
 
   const nowMin = useSyncExternalStore(
@@ -583,6 +634,300 @@ export default function EsBriefing() {
     return rows.sort((a, b) => (b.kind === "last" ? b.value : b.l.value) - (a.kind === "last" ? a.value : a.l.value));
   }, [lv]);
 
+  // SESSION PATH, IN ONE SENTENCE. The table answers WHEN, and the only row a
+  // live reader needs is how much range is typically still ahead from this
+  // hour — which is exactly the row that is hardest to find in a 7-column grid.
+  //
+  // `live` is present ONLY during a cash session and is null on weekends,
+  // holidays and outside 09:30-16:00, because "30% of the range is still to
+  // come" is a lie about a day that is not trading. The takeaway respects that
+  // rather than falling back to the unconditional table and calling it now.
+  const pathRead = useMemo(() => {
+    const p = d?.base_rates?.path;
+    if (!p?.available) return null;
+    const live = p.live;
+    const ib = p.initial_balance;
+
+    if (live) {
+      const left = 100 - live.range_complete_pct;
+      return {
+        tone: "neutral" as const,
+        headline:
+          `By ${live.slot} a typical session has made ${live.range_complete_pct.toFixed(0)}% of its ` +
+          `range, so about ${left.toFixed(0)}% is usually still ahead — and the high is already in ` +
+          `${live.high_in_pct.toFixed(0)}% of the time, the low ${live.low_in_pct.toFixed(0)}%.`,
+        detail:
+          `Measured on ${p.instrument ?? p.source} over ${p.sessions?.toLocaleString()} sessions. ` +
+          `These say WHEN a session tends to get where it is going, never where — nothing in this ` +
+          `table carries direction. The 15:30 bucket is half the width of the others, so its share ` +
+          `of the extremes understates the closing drive minute for minute.`,
+      };
+    }
+
+    return {
+      tone: "neutral" as const,
+      headline: ib
+        ? `The first hour has made ${ib.share_of_day_range_pct.toFixed(0)}% of a typical session's ` +
+          `whole range, and one side of it broke on ${ib.one_sided_pct.toFixed(0)}% of sessions ` +
+          `against ${ib.both_sides_pct.toFixed(0)}% that broke both.`
+        : `Hourly path rates over ${p.sessions?.toLocaleString()} sessions of ${p.instrument ?? p.source}.`,
+      detail:
+        `No live reading — this is outside a cash session, and "x% of the range is still to come" ` +
+        `describes a day that is trading. The table stands as an unconditional prior; it says when ` +
+        `a session tends to get where it is going, never where.`,
+    };
+  }, [d?.base_rates?.path]);
+
+  // BASE RATES, IN ONE SENTENCE — and the one number here that is routinely
+  // misread. The unconditional gap-fill rate describes a session BEFORE it
+  // opens; the live one describes what is left of it, and by late morning the
+  // two diverge by thirty points or more. Quoting the first as though it were
+  // the second is the specific error this study was run to stop, so the
+  // takeaway leads with the live figure whenever there is one.
+  const baseRatesRead = useMemo(() => {
+    const br = d?.base_rates;
+    if (!br?.available) return null;
+    const live = br.gap_fill_live?.available ? br.gap_fill_live : null;
+    const rng = br.range;
+
+    if (live && typeof live.fill_rate === "number") {
+      const uncond = live.unconditional;
+      const gap = typeof uncond === "number" ? live.fill_rate - uncond : null;
+      return {
+        tone: "neutral" as const,
+        headline:
+          live.state === "filled"
+            ? `Today's gap has already filled — the rates below describe sessions that still had one open.`
+            : `Still open at ${live.as_of ?? "now"}, this gap has closed ${(live.fill_rate * 100).toFixed(0)}% of the time from here (n=${live.n}), conditioned on ${live.conditioned_on ?? "the clock"}.`,
+        detail:
+          (gap != null
+            ? `The unconditional whole-session rate is ${(uncond! * 100).toFixed(0)}% — ` +
+              `${Math.abs(gap * 100).toFixed(0)} points ${gap < 0 ? "higher" : "lower"} than what is ` +
+              `left from here. They are different questions and the gap between them widens through ` +
+              `the morning; the live figure is the one that applies to a decision taken now. `
+            : "") +
+          `Measured on ${live.instrument ?? br.instrument ?? "SPY"} over ${live.sessions?.toLocaleString() ?? br.sessions?.toLocaleString()} sessions. ` +
+          `Direction was tested on both windows and came back null, so this says whether, not which way.`,
+      };
+    }
+
+    if (rng?.available) {
+      return {
+        tone: "neutral" as const,
+        headline:
+          `A typical session on this study runs ${rng.median_range_pct?.toFixed(2)}%` +
+          (rng.median_range_handles != null ? ` (${rng.median_range_handles.toFixed(0)} handles)` : "") +
+          `, took the prior high ${rng.took_prior_high_pct?.toFixed(0)}% of the time and the prior low ` +
+          `${rng.took_prior_low_pct?.toFixed(0)}%.`,
+        detail:
+          `These are unconditional priors over ${br.sessions?.toLocaleString()} sessions of ` +
+          `${br.instrument ?? br.source}, not forecasts for today — they are the number a claim has ` +
+          `to beat, not a claim of their own. Three studies appear on this card on three different ` +
+          `instruments and windows; each is labelled where it is used, and they must not be merged.`,
+      };
+    }
+    return null;
+  }, [d?.base_rates]);
+
+  // BREADTH, IN ONE SENTENCE. Four stat tiles that each answer "how many stocks
+  // are going with the index" in a slightly different unit, and the thing worth
+  // knowing is whether they AGREE with the index — which the payload computes
+  // as `divergence` and rendered as a note the eye slides past.
+  const breadthRead = useMemo(() => {
+    const b = d?.breadth;
+    if (!b?.available) return null;
+    const net = b.net_advancers_pct;
+    const divergent = b.divergence?.label === "divergent";
+    const cov =
+      b.universe?.eligible_n && b.universe?.n
+        ? b.universe.n / b.universe.eligible_n
+        : null;
+    const thinCoverage = b.live === true && cov != null && cov < 0.8;
+
+    return {
+      tone: (divergent || thinCoverage ? "warn" : "neutral") as "warn" | "neutral",
+      headline:
+        (typeof net === "number"
+          ? `Net advancers ${net > 0 ? "+" : ""}${net.toFixed(0)}% of ${b.universe?.n?.toLocaleString() ?? "the"} names`
+          : "Breadth") +
+        (divergent
+          ? " — and breadth is DIVERGING from the index, so the move is being carried by fewer names than the tape suggests."
+          /* Name the direction. "Breadth is going with the index, so the move is
+             broad" printed beside net advancers of −35% reads as a bullish
+             sentence about a session where four names in five went down; the
+             claim was right and the wording hid which way. */
+          : typeof net === "number"
+            ? ` — breadth confirms rather than diverges: the ${net >= 0 ? "advance" : "decline"} is broad, not carried by a handful of names.`
+            : " — breadth confirms the index rather than diverging from it."),
+      detail:
+        (thinCoverage
+          ? `Only ${(cov! * 100).toFixed(0)}% of the eligible universe has printed, so these counts are a thin sample of the session rather than a picture of it. `
+          : "") +
+        (b.trin_band?.label
+          ? `TRIN ${b.trin?.toFixed(2)} is ${b.trin_band.label}. `
+          : "") +
+        `Reconstructed from a grouped-daily endpoint, not a consolidated tape feed — the levels are ` +
+        `comparable to themselves across sessions, not to a vendor's TRIN or A/D print.`,
+    };
+  }, [d?.breadth]);
+
+  // SESSION STRUCTURE, IN ONE SENTENCE. Seven label/value rows and no reading.
+  // Participation is the one that changes how the others should be taken —
+  // under about 0.8x relative volume, breaks fail more often — and it was a
+  // row of equal weight beside the naked POC.
+  const structureRead = useMemo(() => {
+    const it = d?.intraday;
+    if (!it?.available) return null;
+    const rv = it.relative_volume?.available ? it.relative_volume.ratio : null;
+    const dayType = it.day_type?.available ? it.day_type.label : null;
+    const inv = it.overnight_inventory?.available ? it.overnight_inventory.skew : null;
+    const magnets: string[] = [];
+    if ((it.naked_pocs ?? []).length > 0) {
+      magnets.push(`a naked POC ${fmtHandles(it.naked_pocs![0].distance)} away`);
+    }
+    if ((it.unfilled_gaps ?? []).length > 0) {
+      magnets.push(`an unfilled gap ${fmtHandles(it.unfilled_gaps![0].distance)} away`);
+    }
+
+    const thin = typeof rv === "number" && rv < 0.8;
+    return {
+      tone: (thin ? "warn" : "neutral") as "warn" | "neutral",
+      headline:
+        (dayType ? `A ${dayType} day so far` : "Structure so far") +
+        (typeof rv === "number"
+          ? ` on ${rv.toFixed(2)}× normal participation${thin ? " — thin, and breaks fail more often on thin volume" : ""}`
+          : "") +
+        (magnets.length > 0 ? `, with ${magnets.join(" and ")}.` : "."),
+      detail:
+        (inv
+          ? `Overnight inventory is ${inv}; a lopsided Globex book often corrects in the first hour, which is a different thing from a trend. `
+          : "") +
+        `The initial balance is the frame the rest of the session is measured against, not a level ` +
+        `in itself. Magnets describe where price has unfinished business, and say nothing about ` +
+        `when or whether it goes there.`,
+    };
+  }, [d?.intraday]);
+
+  // DEALER GAMMA, IN ONE SENTENCE. The regime decides which playbook is
+  // correct and outranks nearly everything else on this card, but it was
+  // rendered as a chip and three price rows — leaving the reader to work out
+  // that the distance to the flip is what says how close the regime is to
+  // inverting. That distance is the number, and it was never stated.
+  const gammaRead = useMemo(() => {
+    const g = d?.gamma;
+    if (!g?.available) return null;
+    const short = g.regime === "short";
+    const dist = g.distance_to_flip;
+    const em = d?.expected_move?.expected_range;
+    const flipShare =
+      typeof dist === "number" && typeof em === "number" && em > 0
+        ? Math.abs(dist) / em
+        : null;
+
+    const proximity =
+      typeof dist === "number"
+        ? flipShare != null
+          ? `The flip is ${Math.abs(dist).toFixed(0)} handles ${g.above_flip ? "below" : "above"} — ` +
+            `${(flipShare * 100).toFixed(0)}% of the session's priced range, so ` +
+            `${flipShare < 0.35 ? "an ordinary session can carry price through it and swap the playbook" : "reaching it would take an unusually large move"}.`
+          : `The flip is ${Math.abs(dist).toFixed(0)} handles ${g.above_flip ? "below" : "above"}.`
+        : "";
+
+    return {
+      tone: (short ? "warn" : "neutral") as "warn" | "neutral",
+      headline:
+        (short
+          ? "Dealers are short gamma: hedging goes WITH the move, so trends extend and fading extremes is the expensive mistake. "
+          : "Dealers are long gamma: hedging leans AGAINST moves, so breakouts fail more often and rotation is the base case. ") +
+        proximity,
+      detail:
+        (g.zero_dte_share != null
+          ? `${g.zero_dte_share.toFixed(0)}% of that gamma expires today and evaporates at the close, so the regime is less durable than the number looks. `
+          : "") +
+        `Dealer inventory is INFERRED from open interest under a standard convention, never ` +
+        `observed — the flip level and the shape carry the information, the absolute total does not.`,
+    };
+  }, [d?.gamma, d?.expected_move?.expected_range]);
+
+  // EXPECTED MOVE, IN ONE SENTENCE. The block carries a sigma, an expected
+  // RANGE about 1.6x larger, a consumed percentage measured against the range,
+  // a vol regime and up to three estimates with different quote sources. Every
+  // one of those is a place to confuse two numbers — and the specific confusion
+  // that costs money is reading the close-to-close sigma as the high-low range,
+  // which understates the room by 60%.
+  const emRead = useMemo(() => {
+    const em = d?.expected_move;
+    if (!em?.available) return null;
+    const consumed = em.consumed?.pct;
+    const settled = (em.estimates ?? []).some((x) => x.quote_source === "settled");
+    const vr = em.vol_regime;
+
+    const left =
+      typeof consumed === "number"
+        ? consumed >= 100
+          ? `The session has already covered ${consumed.toFixed(0)}% of the range priced for it.`
+          : `${(100 - consumed).toFixed(0)}% of the priced range is still unspent.`
+        : "No range has been consumed yet.";
+
+    return {
+      tone: (typeof consumed === "number" && consumed >= 100 ? "warn" : "neutral") as
+        "warn" | "neutral",
+      headline:
+        `Options price a ${em.expected_range?.toFixed(0) ?? "—"}-handle high-to-low range for this ` +
+        `session (${em.expected_handles?.toFixed(0) ?? "—"} handles one sigma close-to-close). ${left}`,
+      detail:
+        `The two numbers are not interchangeable — the expected RANGE runs about 1.6× the sigma, ` +
+        `and the consumed figure is measured against the range, not against the sigma. ` +
+        (vr
+          ? `Implied ${vr.implied.toFixed(1)} against realised ${vr.realized.toFixed(1)} is ${vr.label}: ` +
+            `${vr.ratio >= 1 ? "the market is charging more than has recently been delivered" : "the market is charging less than has recently been delivered"}. `
+          : "") +
+        (settled
+          ? `At least one estimate was priced off settlements with the book shut, so treat the level ` +
+            `as indicative and the ratio as the sturdier number. `
+          : "") +
+        `A range is a magnitude and carries no direction.`,
+    };
+  }, [d?.expected_move]);
+
+  // THE LADDER'S TAKEAWAY. A twelve-row price ladder is a reference, not a
+  // reading: it says where everything is and nothing about which one is in
+  // play. `reach` and `pct_of_expected_range` are computed per level and were
+  // only ever exposed on hover, so the one fact that decides whether the ladder
+  // matters today — how many of these levels price can plausibly get to — was
+  // invisible unless you moused over each row.
+  const ladderRead = useMemo(() => {
+    if (!lv?.available || !lv.levels?.length) return null;
+    const levels = lv.levels;
+    const reachable = levels.filter((l) => l.reach && l.reach !== "beyond a typical session");
+    const nearest = lv.nearest;
+    const withReach = levels.filter((l) => l.reach);
+    return {
+      headline: nearest
+        ? `Nearest reference is ${nearest.label} at ${fmtPx(nearest.value)}, ${fmtHandles(nearest.distance)} away — the first level price has to resolve.`
+        : `${levels.length} reference levels on the ladder, and no nearest could be identified.`,
+      detail:
+        /* The zero case had to be written out. "12 of 12 sit inside a typical
+           session's travel; the other 0 are dimmed" is what a template reads
+           like when nobody checked the boundary — and the all-out-of-reach case
+           is the one actually worth saying plainly. */
+        (withReach.length === 0
+          ? ""
+          : reachable.length === levels.length
+            ? `Every one of the ${levels.length} sits inside a typical session's travel. `
+            : reachable.length === 0
+              ? `NONE of the ${levels.length} sits inside a typical session's travel — every level on ` +
+                `this ladder is further away than a whole expected session's range, which is why they ` +
+                `are all dimmed. `
+              : `${reachable.length} of ${levels.length} sit inside a typical session's travel; the ` +
+                `other ${levels.length - reachable.length} are dimmed because planning a day around ` +
+                `them is the mistake that shading exists to prevent. `) +
+        `Distances are signed from the last price. Overnight levels are made on thin Globex volume ` +
+        `and break more easily than RTH levels made on size, so equal distance does not mean equal ` +
+        `resistance.`,
+    };
+  }, [lv]);
+
   // After 18:00 ET the schedule belongs to the next session, so the heading
   // has to say which one — "today" beside tomorrow's payrolls is a lie.
   const scheduleScope = useMemo(() => {
@@ -607,6 +952,59 @@ export default function EsBriefing() {
     () => intradaySched.filter((e) => liveMins(e) > 0).sort((a, b) => liveMins(a) - liveMins(b)),
     [intradaySched, liveMins]
   );
+
+  // SCHEDULED RISK, ON BOTH AXES. The rows carry an `impact` word and a
+  // countdown, and a reader sizing a session off "high impact" is answering the
+  // sizing question with a timing label. Measured over 3,677 sessions the two
+  // routinely disagree — CPI is a scheduled discontinuity AND runs 1.06x, 12th
+  // of 23 — so this states which of today's prints has measured expansion
+  // behind it and, when none does, says that in numbers rather than by
+  // rendering nothing.
+  const scheduleRead = useMemo(() => {
+    if (intradaySched.length === 0) return null;
+    const measured = intradaySched.filter((e) => e.measured != null);
+    const established = measured.filter((e) => e.measured!.survives_fdr);
+    const widest = [...measured].sort(
+      (a, b) => b.measured!.multiplier - a.measured!.multiplier
+    )[0];
+    const timed = intradaySched.filter((e) => e.impact === "high");
+    const next = upcoming[0];
+    const mins = next ? liveMins(next) : null;
+
+    const clock = next
+      ? `Next on the clock is ${next.name}${mins != null ? ` in ${fmtCountdown(mins)}` : ""}. `
+      : "Everything scheduled for this session has printed. ";
+
+    if (established.length > 0) {
+      const e = established[0];
+      return {
+        tone: "warn" as const,
+        headline:
+          `${clock}${e.name} is the one print today whose range expansion is established — ` +
+          `${e.measured!.multiplier.toFixed(2)}× a normal session over ${e.measured!.n} prints, and the ` +
+          `only event of ${e.measured!.of} tested that survives the correction.`,
+        detail:
+          `Magnitude only: the study measured |move| and carries no direction. ` +
+          `${(e.measured!.share_over_1_5x * 100).toFixed(0)}% of these prints ran past 1.5×, and the ` +
+          `next session came back to ${e.measured!.next_session.toFixed(2)}× — nothing carries past the print.`,
+      };
+    }
+
+    return {
+      tone: "neutral" as const,
+      headline:
+        `${clock}Nothing scheduled for this session has established range expansion behind it.` +
+        (widest
+          ? ` The widest measured is ${widest.name} at ${widest.measured!.multiplier.toFixed(2)}× a normal session (${ordinal(widest.measured!.rank)} of ${widest.measured!.of}), which does not survive correction.`
+          : ""),
+      detail:
+        `${timed.length} of ${intradaySched.length} are flagged as scheduled discontinuities — worth ` +
+        `being at the screen for, which is a different claim from a wider day. ` +
+        `${measured.length} of ${intradaySched.length} carry any measurement at all; the rest are ` +
+        `single-name earnings or releases that were never in the study's universe, and an absent ` +
+        `measurement is not a small one.`,
+    };
+  }, [intradaySched, upcoming, liveMins]);
 
   // With no session running the card has far less to say, and it used to say it
   // at full size anyway — rendering "From here to the close" during the 17:00
@@ -835,6 +1233,92 @@ export default function EsBriefing() {
                   {r.why}
                 </p>
               ))}
+
+              {/* HAS THIS GATE EVER BEEN RIGHT.
+                  The gate leads this card on the argument that standing aside
+                  saves the most money, and it was the one module on the page
+                  with no visible score at all. A record has been accumulating
+                  behind /es-track-record-gate since 2026-08-03 and nothing in
+                  the frontend ever called it.
+
+                  The REFUSING state is rendered on purpose. Below 30 completed
+                  sessions the endpoint declines to quote a number, and that
+                  refusal — carrying the count — is far more informative than
+                  silence: silence reads as "scored, unremarkable", which is
+                  exactly what an unscored module gets assumed to be. It also
+                  puts the countdown somewhere it cannot be forgotten.
+
+                  Why it cannot be replayed the way the character read was: the
+                  gate reads dealer gamma and an options-implied range and
+                  neither is retained. Four of its eight factors are replayable;
+                  scoring those four and calling it the gate would be a track
+                  record for a different, weaker instrument. */}
+              {gateQ.data && (
+                <div className="mt-2 pt-2 border-t border-border/60">
+                  {gateQ.data.available ? (
+                    <>
+                      <div className="text-[0.55rem] font-bold uppercase tracking-wider text-text-muted">
+                        How this verdict has actually done
+                      </div>
+                      <div className="mt-1 space-y-0.5">
+                        {(gateQ.data.buckets ?? []).map((b) => (
+                          <div
+                            key={b.verdict}
+                            className={`flex items-baseline gap-2 text-[0.62rem] tabular-nums ${
+                              b.verdict === d.conditions!.verdict
+                                ? "text-text font-semibold"
+                                : "text-text-muted"
+                            }`}
+                          >
+                            <span className="w-20 shrink-0 uppercase">{b.verdict}</span>
+                            <span className="w-14 text-right" title="Median session range as a multiple of a normal one.">
+                              {b.median_range_x.toFixed(2)}×
+                            </span>
+                            <span className="w-16 text-right" title="Share of those sessions that ran 1.3× or wider.">
+                              {b.wide_pct.toFixed(0)}% wide
+                            </span>
+                            <span
+                              className="w-14 text-right text-text-muted/70"
+                              title="Share that closed up. The gate makes no directional claim, so this should sit at the base rate — showing it lets you confirm that rather than take the disclaimer on trust."
+                            >
+                              {b.closed_up_pct.toFixed(0)}% up
+                            </span>
+                            <span
+                              className="text-text-muted/60"
+                              title={`${b.n_sessions} distinct sessions. The verdict stood for ${b.n_marks} thirty-minute marks across them — persistence, not sample size. One session counts once.`}
+                            >
+                              n={b.n_sessions}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[0.55rem] text-text-muted mt-1 leading-snug">
+                        Base rates over the same {gateQ.data.scored_sessions ?? "—"} scored sessions:{" "}
+                        {gateQ.data.base_wide_pct?.toFixed(0)}% ran wide, {gateQ.data.base_up_pct?.toFixed(0)}%
+                        closed up. A bucket that does not separate from those is a verdict not earning
+                        its place.{gateQ.data.caveat ? ` ${gateQ.data.caveat}` : ""}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-[0.55rem] text-text-muted leading-snug">
+                      <span className="font-semibold">This verdict is not yet scored.</span>{" "}
+                      {gateQ.data.sessions != null && gateQ.data.needed != null ? (
+                        <>
+                          Logging since {gateQ.data.logging_since ?? "—"} — {gateQ.data.sessions} completed
+                          session{gateQ.data.sessions === 1 ? "" : "s"} of the {gateQ.data.needed} needed
+                          before a record is worth quoting,{" "}
+                          {Math.max(0, gateQ.data.needed - gateQ.data.sessions)} to go.
+                        </>
+                      ) : (
+                        <>{gateQ.data.reason ?? "No record yet."}</>
+                      )}{" "}
+                      Unlike the session-character read further down, this gate cannot be replayed
+                      backwards — it reads dealer gamma and an options-implied range, and neither is
+                      retained — so the clock started when the logging did.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1272,10 +1756,12 @@ export default function EsBriefing() {
                   )}
                 </div>
               )}
+              {ladderRead && (
+                <Takeaway headline={ladderRead.headline} detail={ladderRead.detail} />
+              )}
               <p className="text-[0.55rem] text-text-muted leading-snug pt-0.5">
-                Distances in handles, signed from the last price. Overnight levels are made on thin Globex
-                volume and break more easily than RTH levels made on size. Rows are dimmed when the level
-                sits further away than a whole expected session&apos;s range — still context, but not a
+                Distances in handles, signed from the last price. Rows are dimmed when the level sits
+                further away than a whole expected session&apos;s range — still context, but not a
                 target for today. Hover any distance for its share of that range.
               </p>
             </div>
@@ -1304,6 +1790,14 @@ export default function EsBriefing() {
                 )}
                 {upcoming.length === 0 && intradaySched.length > 0 && (
                   <p className="text-[0.55rem] text-text-muted">All of today&apos;s prints are out.</p>
+                )}
+
+                {scheduleRead && (
+                  <Takeaway
+                    headline={scheduleRead.headline}
+                    detail={scheduleRead.detail}
+                    tone={scheduleRead.tone}
+                  />
                 )}
 
                 {/* ── after this close ──
@@ -1819,6 +2313,10 @@ export default function EsBriefing() {
                       <span className="text-text">{d.expected_move.vol_regime.label}</span>
                     </p>
                   )}
+
+                  {emRead && (
+                    <Takeaway headline={emRead.headline} detail={emRead.detail} tone={emRead.tone} />
+                  )}
                 </>
               )}
             </div>
@@ -1886,6 +2384,13 @@ export default function EsBriefing() {
                       </div>
                     )}
                   </div>
+                  {gammaRead && (
+                    <Takeaway
+                      headline={gammaRead.headline}
+                      detail={gammaRead.detail}
+                      tone={gammaRead.tone}
+                    />
+                  )}
                   <p className="text-[0.55rem] text-text-muted leading-snug pt-0.5">
                     ES-converted from SPX using the {d.gamma.es_basis?.toFixed(2)} basis. Dealer
                     inventory is inferred from open interest, not observed — treat the flip level
@@ -1986,6 +2491,14 @@ export default function EsBriefing() {
                         ))}
                       </div>
                     </div>
+                  )}
+
+                  {structureRead && (
+                    <Takeaway
+                      headline={structureRead.headline}
+                      detail={structureRead.detail}
+                      tone={structureRead.tone}
+                    />
                   )}
                 </div>
               )}
@@ -2107,6 +2620,14 @@ export default function EsBriefing() {
                   </div>
                 )}
               </div>
+
+              {breadthRead && (
+                <Takeaway
+                  headline={breadthRead.headline}
+                  detail={breadthRead.detail}
+                  tone={breadthRead.tone}
+                />
+              )}
 
               <p className="text-[0.52rem] text-text-muted leading-snug">
                 {d.breadth.reconstruction}
@@ -2258,6 +2779,14 @@ export default function EsBriefing() {
                   )}
                 </div>
               </div>
+
+              {baseRatesRead && (
+                <Takeaway
+                  headline={baseRatesRead.headline}
+                  detail={baseRatesRead.detail}
+                  tone={baseRatesRead.tone}
+                />
+              )}
             </div>
           )}
 
@@ -2388,6 +2917,10 @@ export default function EsBriefing() {
                   </div>
                 )}
               </div>
+
+              {pathRead && (
+                <Takeaway headline={pathRead.headline} detail={pathRead.detail} tone={pathRead.tone} />
+              )}
 
               {d.base_rates.path.initial_balance?.note && (
                 <p className="text-[0.52rem] text-text-muted leading-snug">

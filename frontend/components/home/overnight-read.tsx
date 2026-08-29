@@ -22,16 +22,90 @@
  * between them would otherwise assume one instrument.
  */
 
+import { useMemo } from "react";
 import type { EsOvernight } from "@/lib/api";
+import { Takeaway } from "@/components/home/primitives";
 
 function Pct({ v }: { v: number }) {
   return <span className="font-data tabular-nums font-semibold">{v.toFixed(1)}%</span>;
 }
 
 export default function OvernightRead({ d }: { d?: EsOvernight | null }) {
+  const live = d?.live;
+  const rs = d?.range_survival;
+
+  // THE TAKEAWAY. Twelve numbers across five boxes, and the finding that
+  // actually earns the card — the opening position predicts which side goes,
+  // while the range itself almost never survives — was left for the reader to
+  // assemble. State both, and state the pre-open case AS provisional rather
+  // than letting a stand-in price read like a settled open.
+  //
+  // Declared ahead of the early return below so the hook order is fixed. The
+  // component used to bail out before any hook existed, which is fine right up
+  // until the first one is added and then is a crash.
+  const read = useMemo(() => {
+    if (!d?.available) return null;
+
+    if (!live) {
+      return {
+        tone: "neutral" as const,
+        headline: "No live overnight read this session — the historical study below still stands.",
+        detail: rs
+          ? `Across ${d.sessions ?? "—"} sessions the overnight range held all day only ` +
+            `${rs.held_inside_pct.toFixed(1)}% of the time; one side went ` +
+            `${rs.one_sided_pct.toFixed(1)}% and both went ${rs.both_sides_pct.toFixed(1)}%.`
+          : undefined,
+      };
+    }
+
+    const hi = live.expected?.breaks_on_high_pct;
+    const lo = live.expected?.breaks_on_low_pct;
+    const withheld = live.expected?.withheld;
+
+    if (withheld) {
+      return {
+        tone: "warn" as const,
+        headline:
+          `Price sits ${live.position_in_range_pct.toFixed(0)}% into the overnight range ` +
+          `(${live.band}), but the break expectations are withheld — ${withheld}`,
+        detail:
+          `The base rates are conditioned on a FINISHED overnight range and on where the cash ` +
+          `session actually opens. Quoting them now would attach a measured frequency to a session ` +
+          `that does not exist yet.`,
+      };
+    }
+
+    const sides: string[] = [];
+    if (typeof hi === "number") sides.push(`the high has gone ${hi.toFixed(1)}% of the time`);
+    if (typeof lo === "number") sides.push(`the low has gone ${lo.toFixed(1)}% of the time`);
+    const resolved = live.broke_on_high || live.broke_on_low;
+
+    return {
+      tone: "neutral" as const,
+      headline:
+        sides.length === 0
+          ? "Both sides of the overnight range have already been taken out this session — there is nothing left for the base rates to say."
+          : `${live.open_is_estimated ? "Price sits" : "The session opened"} ` +
+            `${live.position_in_range_pct.toFixed(0)}% into the overnight range (${live.band}), and ` +
+            `from there ${sides.join(" and ")}${live.expected?.n ? ` (n=${live.expected.n})` : ""}.`,
+      detail:
+        (rs
+          ? `The range itself survives a whole session only ${rs.held_inside_pct.toFixed(1)}% of the ` +
+            `time, so the live question is usually which side goes rather than whether one does. `
+          : "") +
+        (resolved
+          ? `A side that has already broken is dropped rather than restated as a probability. `
+          : "") +
+        (live.open_is_estimated
+          ? `Provisional: there is no cash open yet, so this substitutes the last price for the ` +
+            `number the base rates are actually conditioned on. `
+          : "") +
+        `Measured on ${d.instrument ?? "ES futures"} over ${d.sessions ?? "—"} sessions — a ` +
+        `different instrument and window from the SPY path base rates elsewhere on this card.`,
+    };
+  }, [d, live, rs]);
+
   if (!d?.available) return null;
-  const live = d.live;
-  const rs = d.range_survival;
 
   return (
     <div className="card space-y-3">
@@ -50,6 +124,8 @@ export default function OvernightRead({ d }: { d?: EsOvernight | null }) {
           <span className="text-[0.55rem] text-text-muted font-data">{live.contract}</span>
         )}
       </div>
+
+      {read && <Takeaway headline={read.headline} detail={read.detail} tone={read.tone} />}
 
       {live ? (
         <>

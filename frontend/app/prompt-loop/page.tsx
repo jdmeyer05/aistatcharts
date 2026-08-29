@@ -334,14 +334,33 @@ export default function PromptLoopPage() {
           ) : (
             <>
               <div className="card p-4 grid grid-cols-2 md:grid-cols-5 gap-4">
-                <Metric label="Calls settled" value={String(cal.n)} />
+                {/* CALLS, AND THE SESSIONS THEY CAME FROM. Those are far apart:
+                    the home interpretation auto-runs once per page load, so one
+                    session contributes a dozen claims restating the same bet.
+                    Showing the claim count alone invites reading it as a sample
+                    size, which is the whole problem. */}
+                <Metric
+                  label="Calls settled"
+                  value={String(cal.n)}
+                  delta={
+                    cal.clustered?.n_days
+                      ? `across ${cal.clustered.n_days} session${cal.clustered.n_days === 1 ? "" : "s"}` +
+                        (cal.clustered.claims_per_day ? ` · ${cal.clustered.claims_per_day}/day` : "")
+                      : undefined
+                  }
+                />
                 <Metric
                   label="Hit rate"
                   value={pct(cal.hit_rate)}
+                  /* The DAY-CLUSTERED interval, falling back to Wilson only when
+                     there is a single session and nothing to resample. Wilson
+                     assumes the claims are independent draws; they are not. */
                   delta={
-                    cal.hit_rate_ci95
-                      ? `95% CI ${pct(cal.hit_rate_ci95[0], 0)}–${pct(cal.hit_rate_ci95[1], 0)}`
-                      : undefined
+                    cal.clustered?.ci95_clustered
+                      ? `95% CI ${pct(cal.clustered.ci95_clustered[0], 0)}–${pct(cal.clustered.ci95_clustered[1], 0)} (day-clustered)`
+                      : cal.hit_rate_ci95
+                        ? `95% CI ${pct(cal.hit_rate_ci95[0], 0)}–${pct(cal.hit_rate_ci95[1], 0)}`
+                        : undefined
                   }
                 />
                 <Metric
@@ -358,7 +377,7 @@ export default function PromptLoopPage() {
                 />
               </div>
 
-              <div className="card p-4">
+              <div className="card p-4 space-y-2">
                 <p className="text-xs text-text-muted">
                   <strong>Brier skill is the number that matters.</strong> It compares the
                   model&apos;s stated confidences against simply quoting the base rate every
@@ -367,6 +386,33 @@ export default function PromptLoopPage() {
                   above 50% with skill at zero is a model calling things that were going to
                   happen anyway.
                 </p>
+                {/* WHY THIS INTERVAL IS WIDER THAN THE ONE THAT USED TO BE HERE.
+                    Stated rather than quietly applied: the number on this page
+                    moved, and a reader who saw the old one is owed the reason it
+                    was the old one that was wrong. */}
+                {cal.clustered?.n_days != null && cal.clustered.n_days > 1 && (
+                  <p className="text-xs text-text-muted">
+                    <strong>The interval is clustered by session.</strong> The home
+                    interpretation fires once per page load and its payload carries a live
+                    price, so the same market state produces a fresh set of claims every few
+                    minutes. As {cal.n} independent draws they are not independent; as{" "}
+                    {cal.clustered.n_days} sessions they are.
+                    {cal.clustered.width_ratio_vs_naive
+                      ? ` Ignoring that made the interval ${cal.clustered.width_ratio_vs_naive.toFixed(1)}× too narrow.`
+                      : ""}
+                    {cal.clustered.hit_rate_by_day != null &&
+                      cal.clustered.hit_rate_pooled != null && (
+                        <>
+                          {" "}Weighting every session equally rather than every claim gives{" "}
+                          {pct(cal.clustered.hit_rate_by_day)} against{" "}
+                          {pct(cal.clustered.hit_rate_pooled)}; a gap between those two means the
+                          record is measuring traffic rather than forecasting.
+                        </>
+                      )}
+                    {" "}Brier and Brier skill are means over the same rows and inherit the same
+                    dependence.
+                  </p>
+                )}
               </div>
 
               <div className="card p-4 overflow-x-auto">

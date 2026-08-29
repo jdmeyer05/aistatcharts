@@ -13,9 +13,11 @@
  * for years — so scored on change it would read neutral almost permanently.
  */
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSpValuation, type SpValuation } from "@/lib/api";
 import { ordinal } from "@/lib/home-constants";
+import { Takeaway } from "@/components/home/primitives";
 
 function fmt(v: number, unit: string): string {
   return unit === "pct" ? `${v.toFixed(2)}%` : `${v.toFixed(1)}×`;
@@ -30,6 +32,57 @@ export default function SpValuationStrip() {
     staleTime: 55 * 60_000,
   });
   const d = q.data;
+
+  // THE TAKEAWAY, and the one this strip most needed: six multiples and two
+  // rate readings, all of which have sat at an extreme for years, invite
+  // exactly the wrong inference — that an expensive market is a short. It is
+  // not, and the strip's own footer already said "not a timing signal" in
+  // 0.55rem grey. Say it as the reading rather than as fine print, and give
+  // the number that makes it concrete: how long the current state has already
+  // persisted.
+  const read = useMemo(() => {
+    if (!d?.available) return null;
+    const prem = d.median_premium_pct;
+    const rc = d.rate_context;
+    const rich = typeof prem === "number" && prem > 25;
+    const cheap = typeof prem === "number" && prem < -25;
+
+    const headline =
+      typeof prem !== "number"
+        ? "The multiples loaded, but no median premium could be computed against their own history."
+        : rich
+          ? `The index sits ${prem > 0 ? "+" : ""}${prem}% above the median of its own long-run range across the six multiples.`
+          : cheap
+            ? `The index sits ${prem}% below the median of its own long-run range across the six multiples.`
+            : `The index sits ${prem > 0 ? "+" : ""}${prem}% against the median of its own long-run range — inside the ordinary band.`;
+
+    const parts: string[] = [];
+    if (rc?.erp_streak_months != null && rc.erp_negative_share_pct != null) {
+      parts.push(
+        `The index has yielded ${rc.erp_streak_is_negative ? "less" : "more"} than the 10-year for ` +
+        `${rc.erp_streak_months} straight months, and that sign has held in ` +
+        `${rc.erp_negative_share_pct.toFixed(0)}% of months since 1986 — the run is the unusual part, not the sign.`
+      );
+    }
+    if (rc?.erp_pctile != null && rc.erp_n_months != null) {
+      parts.push(
+        `The risk premium is at the ${ordinal(rc.erp_pctile)} percentile of ${rc.erp_n_months} months.`
+      );
+    }
+    if (rc?.rates_r2 != null && rc.move_per_10bp_pct != null) {
+      parts.push(
+        `Rates currently explain R² ${rc.rates_r2.toFixed(2)} of the index's daily variance, so the ` +
+        `${rc.move_per_10bp_pct > 0 ? "+" : ""}${rc.move_per_10bp_pct.toFixed(2)}% per 10bp sensitivity ` +
+        `${rc.rates_r2 < 0.2 ? "is not currently carrying the tape" : "is being expressed in the tape"}.`
+      );
+    }
+    parts.push(
+      "This is a state variable, not a timing input: valuation has sat at extremes for years at a " +
+      "time and nothing on this strip has been tested as a forecast of the next session, week or quarter."
+    );
+
+    return { headline, detail: parts.join(" ") };
+  }, [d]);
 
   return (
     <div className="card card-compact">
@@ -77,8 +130,14 @@ export default function SpValuationStrip() {
         ))}
 
         {d?.available && (
+          /* The one card on this page with no data timestamp at all. Every
+             other board says how old its numbers are; this one refreshes hourly
+             against a monthly-cadence scrape behind a six-hour server cache, so
+             a stale read looks identical to a live one. `asof` was in the
+             payload the whole time. */
           <span className="ml-auto text-[0.55rem] text-text-muted">
-            vs long-run median · {d.source} · not a timing signal
+            vs long-run median · {d.source}
+            {d.asof ? ` · as of ${d.asof}` : ""} · not a timing signal
           </span>
         )}
       </div>
@@ -88,6 +147,12 @@ export default function SpValuationStrip() {
           reported side by side but NOT joined: the obvious link between them
           was tested and rejected — see SpRateContext in lib/api.ts. */}
       {d?.available && d.rate_context && rc(d.rate_context)}
+
+      {read && (
+        <div className="mt-2">
+          <Takeaway headline={read.headline} detail={read.detail} />
+        </div>
+      )}
     </div>
   );
 }

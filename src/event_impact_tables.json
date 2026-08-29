@@ -1,0 +1,362 @@
+{
+  "generated": "2026-08-29 21:27 UTC",
+  "study_generated": "2026-08-18 22:22",
+  "sample": {
+    "ticker": "SPY",
+    "sessions": 3677,
+    "first": "2012-01-03",
+    "last": "2026-08-18"
+  },
+  "n_events_ranked": 23,
+  "quiet_day_median": 0.8834,
+  "metric": "Median absolute close-to-close move on the event date, divided by that session's trailing 60-session median absolute move \u2014 'x a day that was normal at the time'. Magnitude only, no direction. Null distribution is the whole event calendar rotated to a random phase; BH-FDR at 0.10 across all events.",
+  "unmeasured": [
+    "Consumer confidence",
+    "EIA petroleum status",
+    "U-Mich sentiment (prelim)"
+  ],
+  "events": {
+    "CPI": {
+      "study_event": "CPI",
+      "exact": true,
+      "multiplier": 1.056,
+      "ci95": [
+        0.867,
+        1.27
+      ],
+      "n": 175,
+      "p": 0.2774,
+      "survives_fdr": false,
+      "rank": 12,
+      "next_session": 1.063,
+      "share_over_1_5x": 0.371,
+      "rank_sd": 6.32,
+      "share_in_top_k": 0.533,
+      "years": 15
+    },
+    "Nonfarm payrolls": {
+      "study_event": "Nonfarm payrolls",
+      "exact": true,
+      "multiplier": 1.393,
+      "ci95": [
+        1.198,
+        1.623
+      ],
+      "n": 175,
+      "p": 0.0015,
+      "survives_fdr": true,
+      "rank": 1,
+      "next_session": 0.835,
+      "share_over_1_5x": 0.457,
+      "rank_sd": 4.04,
+      "share_in_top_k": 0.867,
+      "years": 15
+    },
+    "PCE / personal income": {
+      "study_event": "PCE price index",
+      "exact": true,
+      "multiplier": 1.192,
+      "ci95": [
+        0.957,
+        1.343
+      ],
+      "n": 151,
+      "p": 0.0445,
+      "survives_fdr": false,
+      "rank": 5,
+      "next_session": 0.829,
+      "share_over_1_5x": 0.351,
+      "rank_sd": 5.25,
+      "share_in_top_k": 0.733,
+      "years": 15
+    },
+    "PPI": {
+      "study_event": "PPI",
+      "exact": true,
+      "multiplier": 1.121,
+      "ci95": [
+        1.019,
+        1.401
+      ],
+      "n": 174,
+      "p": 0.1349,
+      "survives_fdr": false,
+      "rank": 8,
+      "next_session": 1.091,
+      "share_over_1_5x": 0.374,
+      "rank_sd": 5.41,
+      "share_in_top_k": 0.667,
+      "years": 15
+    },
+    "GDP": {
+      "study_event": "GDP",
+      "exact": true,
+      "multiplier": 1.024,
+      "ci95": [
+        0.817,
+        1.239
+      ],
+      "n": 171,
+      "p": 0.3513,
+      "survives_fdr": false,
+      "rank": 14,
+      "next_session": 1.167,
+      "share_over_1_5x": 0.286,
+      "rank_sd": 5.96,
+      "share_in_top_k": 0.333,
+      "years": 15
+    },
+    "Initial jobless claims": {
+      "study_event": "Initial jobless claims",
+      "exact": true,
+      "multiplier": 0.996,
+      "ci95": [
+        0.893,
+        1.092
+      ],
+      "n": 757,
+      "p": 0.3993,
+      "survives_fdr": false,
+      "rank": 17,
+      "next_session": 1.087,
+      "share_over_1_5x": 0.34,
+      "rank_sd": 3.9,
+      "share_in_top_k": 0.2,
+      "years": 15
+    },
+    "Retail sales": {
+      "study_event": "Retail sales",
+      "exact": true,
+      "multiplier": 1.079,
+      "ci95": [
+        0.783,
+        1.343
+      ],
+      "n": 174,
+      "p": 0.1924,
+      "survives_fdr": false,
+      "rank": 11,
+      "next_session": 1.09,
+      "share_over_1_5x": 0.374,
+      "rank_sd": 6.73,
+      "share_in_top_k": 0.467,
+      "years": 15
+    },
+    "JOLTS job openings": {
+      "study_event": "JOLTS job openings",
+      "exact": true,
+      "multiplier": 0.925,
+      "ci95": [
+        0.724,
+        1.095
+      ],
+      "n": 162,
+      "p": 0.7061,
+      "survives_fdr": false,
+      "rank": 22,
+      "next_session": 0.89,
+      "share_over_1_5x": 0.315,
+      "rank_sd": 5.38,
+      "share_in_top_k": 0.333,
+      "years": 15
+    },
+    "Industrial production": {
+      "study_event": "Industrial production",
+      "exact": true,
+      "multiplier": 1.091,
+      "ci95": [
+        0.937,
+        1.318
+      ],
+      "n": 175,
+      "p": 0.1679,
+      "survives_fdr": false,
+      "rank": 10,
+      "next_session": 0.92,
+      "share_over_1_5x": 0.331,
+      "rank_sd": 4.69,
+      "share_in_top_k": 0.467,
+      "years": 15
+    },
+    "Housing starts": {
+      "study_event": "Housing starts",
+      "exact": true,
+      "multiplier": 1.038,
+      "ci95": [
+        0.742,
+        1.26
+      ],
+      "n": 171,
+      "p": 0.3298,
+      "survives_fdr": false,
+      "rank": 13,
+      "next_session": 0.823,
+      "share_over_1_5x": 0.31,
+      "rank_sd": 6.54,
+      "share_in_top_k": 0.4,
+      "years": 15
+    },
+    "Trade balance": {
+      "study_event": "Trade balance",
+      "exact": true,
+      "multiplier": 1.165,
+      "ci95": [
+        0.967,
+        1.428
+      ],
+      "n": 173,
+      "p": 0.051,
+      "survives_fdr": false,
+      "rank": 6,
+      "next_session": 1.078,
+      "share_over_1_5x": 0.393,
+      "rank_sd": 6.14,
+      "share_in_top_k": 0.533,
+      "years": 15
+    },
+    "Empire State manufacturing": {
+      "study_event": "Empire State manufacturing",
+      "exact": true,
+      "multiplier": 1.234,
+      "ci95": [
+        0.921,
+        1.459
+      ],
+      "n": 150,
+      "p": 0.022,
+      "survives_fdr": false,
+      "rank": 4,
+      "next_session": 0.849,
+      "share_over_1_5x": 0.373,
+      "rank_sd": 4.65,
+      "share_in_top_k": 0.615,
+      "years": 13
+    },
+    "Philly Fed manufacturing": {
+      "study_event": "Philly Fed manufacturing",
+      "exact": true,
+      "multiplier": 1.008,
+      "ci95": [
+        0.802,
+        1.269
+      ],
+      "n": 134,
+      "p": 0.4078,
+      "survives_fdr": false,
+      "rank": 15,
+      "next_session": 0.769,
+      "share_over_1_5x": 0.351,
+      "rank_sd": 6.99,
+      "share_in_top_k": 0.417,
+      "years": 12
+    },
+    "ISM manufacturing PMI": {
+      "study_event": "ISM manufacturing",
+      "exact": true,
+      "multiplier": 1.134,
+      "ci95": [
+        0.893,
+        1.296
+      ],
+      "n": 176,
+      "p": 0.1,
+      "survives_fdr": false,
+      "rank": 7,
+      "next_session": 1.074,
+      "share_over_1_5x": 0.375,
+      "rank_sd": 6.66,
+      "share_in_top_k": 0.6,
+      "years": 15
+    },
+    "ISM services PMI": {
+      "study_event": "ISM services",
+      "exact": true,
+      "multiplier": 1.252,
+      "ci95": [
+        0.983,
+        1.416
+      ],
+      "n": 176,
+      "p": 0.016,
+      "survives_fdr": false,
+      "rank": 2,
+      "next_session": 1.083,
+      "share_over_1_5x": 0.386,
+      "rank_sd": 5.75,
+      "share_in_top_k": 0.733,
+      "years": 15
+    },
+    "U-Mich sentiment (final)": {
+      "study_event": "U. Michigan sentiment (final)",
+      "exact": true,
+      "multiplier": 0.996,
+      "ci95": [
+        0.8,
+        1.281
+      ],
+      "n": 162,
+      "p": 0.4423,
+      "survives_fdr": false,
+      "rank": 18,
+      "next_session": 0.811,
+      "share_over_1_5x": 0.315,
+      "rank_sd": 5.98,
+      "share_in_top_k": 0.4,
+      "years": 15
+    },
+    "Quad witching (OpEx)": {
+      "study_event": "Triple witching",
+      "exact": true,
+      "multiplier": 0.942,
+      "ci95": [
+        0.611,
+        1.333
+      ],
+      "n": 58,
+      "p": 0.6127,
+      "survives_fdr": false,
+      "rank": 21,
+      "next_session": 1.181,
+      "share_over_1_5x": 0.31,
+      "rank_sd": null,
+      "share_in_top_k": null,
+      "years": null
+    },
+    "FOMC decision": {
+      "study_event": "FOMC decision",
+      "exact": true,
+      "multiplier": 1.247,
+      "ci95": [
+        0.786,
+        1.621
+      ],
+      "n": 123,
+      "p": 0.032,
+      "survives_fdr": false,
+      "rank": 3,
+      "next_session": 1.163,
+      "share_over_1_5x": 0.439,
+      "rank_sd": 7.65,
+      "share_in_top_k": 0.5,
+      "years": 14
+    },
+    "FOMC decision + SEP/dot plot": {
+      "study_event": "FOMC decision",
+      "exact": false,
+      "multiplier": 1.247,
+      "ci95": [
+        0.786,
+        1.621
+      ],
+      "n": 123,
+      "p": 0.032,
+      "survives_fdr": false,
+      "rank": 3,
+      "next_session": 1.163,
+      "share_over_1_5x": 0.439,
+      "rank_sd": 7.65,
+      "share_in_top_k": 0.5,
+      "years": 14
+    }
+  }
+}

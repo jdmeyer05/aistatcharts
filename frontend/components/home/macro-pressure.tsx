@@ -16,6 +16,7 @@
 import Link from "next/link";
 import { Fragment, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Takeaway } from "@/components/home/primitives";
 import {
   fetchMacroPressure,
   type MacroPressureBoard,
@@ -182,21 +183,39 @@ export default function MacroPressure() {
 
       {d?.available && (
         <>
+          {/* THE TAKEAWAY. The two extremes were already surfaced; what was
+              missing beneath them was COVERAGE. A net score built from four
+              surviving factors reads identically to one built from fourteen,
+              and this board deliberately excludes stale series from the net —
+              so the count belongs beside the verdict rather than buried in the
+              row list. */}
           {(d.biggest_headwind || d.biggest_support) && (
-            <div className="border-l-2 border-l-accent bg-accent/5 px-3 py-2 rounded-r text-[0.68rem] leading-snug">
-              {d.biggest_headwind && (
-                <p className="text-text">
-                  <span className="font-semibold">Heaviest drag:</span>{" "}
-                  {d.biggest_headwind.label} — {d.biggest_headwind.why}
-                </p>
-              )}
-              {d.biggest_support && (
-                <p className="text-text mt-1">
-                  <span className="font-semibold">Strongest support:</span>{" "}
-                  {d.biggest_support.label} — {d.biggest_support.why}
-                </p>
-              )}
-            </div>
+            <Takeaway
+              headline={[
+                d.biggest_headwind
+                  ? `Heaviest drag is ${d.biggest_headwind.label} — ${d.biggest_headwind.why}`
+                  : null,
+                d.biggest_support
+                  ? `Strongest support is ${d.biggest_support.label} — ${d.biggest_support.why}`
+                  : null,
+              ].filter(Boolean).join(" ")}
+              detail={
+                (d.net_label
+                  ? `Net reads ${d.net_label}` +
+                    (typeof d.net_score === "number" ? ` at ${d.net_score.toFixed(2)}` : "") +
+                    (d.net_from_n != null && d.net_total_n != null
+                      ? `, averaged over the ${d.net_from_n} of ${d.net_total_n} factors that actually reported`
+                      : "") +
+                    (d.net_excluded_stale
+                      ? ` — ${d.net_excluded_stale} excluded as stale, because a change window comparing one print to itself is missing data rather than evidence of neutrality`
+                      : "") +
+                    ". "
+                  : "") +
+                `Every score is the z-score of recent CHANGE in financial conditions, not of the ` +
+                `level: a factor sitting at a decade extreme but not moving scores zero here. Swing ` +
+                `horizon — nothing on this board resolves inside a session.`
+              }
+            />
           )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-1">

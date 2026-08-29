@@ -24,6 +24,7 @@ than assumed.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import time as dtime
 
 import numpy as np
@@ -417,7 +418,22 @@ def cross_asset() -> dict:
                 return None
             last = float(h["Close"].iloc[-1])
             prev = float(h["Close"].iloc[-2])
-            if prev <= 0:
+            # NaN SLIPS `prev <= 0`, AND IT TOOK THE WHOLE CARD DOWN.
+            #
+            # yfinance returns a placeholder row with a NaN close often enough —
+            # weekends, halted names, a futures symbol between sessions — and
+            # `float(nan)` does not raise, it returns nan. `nan <= 0` is False,
+            # so the guard passed; `round(nan, 2)` is nan; the row shipped with
+            # NaN prices and `available: True`. Starlette's JSONResponse
+            # serialises with allow_nan=False, so that one unusable peer quote
+            # raised "Out of range float values are not JSON compliant" and
+            # 500'd the ENTIRE es-brief response — the lead card of the home
+            # page, taken out by a confirmation number it did not need.
+            #
+            # Same shape as the NaN that slipped `not norm` in the gate scorer:
+            # every comparison against NaN is False, so a bounds check is never
+            # a null check. Test finiteness explicitly.
+            if not math.isfinite(last) or not math.isfinite(prev) or prev <= 0:
                 return None
             return {
                 "symbol": sym, "label": label, "why": why,

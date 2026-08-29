@@ -22,6 +22,7 @@ import Link from "next/link";
 import { useTheme } from "next-themes";
 import { useQuery } from "@tanstack/react-query";
 import { Plot } from "@/components/plot";
+import { Takeaway } from "@/components/home/primitives";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { fetchCtaFlows, type CtaBias, type CtaFlowBoard } from "@/lib/api";
 
@@ -275,13 +276,11 @@ export default function CtaFlows() {
           </div>
 
           {/* Derived read — pure arithmetic on the payload, always present so the
-              card is never just numbers without a takeaway. */}
-          {read && (
-            <div className="border-l-2 border-l-accent bg-accent/5 px-3 py-2 rounded-r">
-              <p className="text-xs text-text font-semibold leading-snug">{read.headline}</p>
-              <p className="text-[0.65rem] text-text-muted leading-snug mt-1">{read.detail}</p>
-            </div>
-          )}
+              card is never just numbers without a takeaway. Rendered through the
+              shared primitive now: this was the only card that had one, so the
+              pattern read as a local flourish rather than the general rule it
+              was meant to be. */}
+          {read && <Takeaway headline={read.headline} detail={read.detail} />}
 
           {/* Methodology, collapsed — explains the concept without displacing data. */}
           <details className="group">

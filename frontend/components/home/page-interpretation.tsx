@@ -25,6 +25,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AIInterpretation } from "@/components/ai-interpretation";
+import { minutesSince, useMinuteClock } from "@/components/home/primitives";
 import {
   fetchEsBrief,
   fetchMarketDriver,
@@ -46,22 +47,101 @@ import {
   type CalendarEvent,
 } from "@/lib/api";
 
-/** Subscribe to a cached query without ever triggering a fetch. */
+/** Subscribe to a cached query without ever triggering a fetch.
+ *
+ *  `dataUpdatedAt` comes back too, and it is not decoration. The horizon bands
+ *  collapse, and collapsing one unmounts its cards — which stops their refetch
+ *  intervals while a cache-only observer like this keeps the entry alive.
+ *  Without an age, a board that stopped updating an hour ago is indistinguish-
+ *  able here from one that just refreshed and did not move, and this panel
+ *  would describe the older reading in the present tense. */
 function useCached<T>(queryKey: unknown[], queryFn: () => Promise<T>) {
-  return useQuery<T>({ queryKey, queryFn, enabled: false }).data;
+  const q = useQuery<T>({ queryKey, queryFn, enabled: false });
+  return { data: q.data, updatedAt: q.dataUpdatedAt };
 }
 
+
 export default function PageInterpretation() {
-  const brief = useCached<EsBrief>(["es-brief"], fetchEsBrief);
-  const driver = useCached<MarketDriverResponse>(["market-driver"], fetchMarketDriver);
-  const heatmap = useCached<{ group: string; items: HeatmapItem[] }>(
+  const briefQ = useCached<EsBrief>(["es-brief"], fetchEsBrief);
+  const driverQ = useCached<MarketDriverResponse>(["market-driver"], fetchMarketDriver);
+  const heatmapQ = useCached<{ group: string; items: HeatmapItem[] }>(
     ["heatmap", "sectors"], () => fetchHeatmap("sectors"));
-  const vol = useCached<VolLandscapeScan>(["vol-landscape-home"], fetchVolLandscape);
-  const events = useCached<{ events: CalendarEvent[] }>(["events-home"], fetchEvents);
-  const cta = useCached<CtaFlowBoard>(["cta-flows", "13874A"], () => fetchCtaFlows("13874A"));
-  const macro = useCached<MacroPressureBoard>(["macro-pressure"], fetchMacroPressure);
-  const rrg = useCached<SectorRrg>(["sector-rrg", 4], () => fetchSectorRrg(4));
-  const valuation = useCached<SpValuation>(["sp-valuation"], fetchSpValuation);
+  const volQ = useCached<VolLandscapeScan>(["vol-landscape-home"], fetchVolLandscape);
+  const eventsQ = useCached<{ events: CalendarEvent[] }>(["events-home"], fetchEvents);
+  const ctaQ = useCached<CtaFlowBoard>(["cta-flows", "13874A"], () => fetchCtaFlows("13874A"));
+  const macroQ = useCached<MacroPressureBoard>(["macro-pressure"], fetchMacroPressure);
+  // 8, matching the card and the server prefetch. This read ["sector-rrg", 4]
+  // while the card wrote ["sector-rrg", 8], so the two looked at different
+  // tails of the same board — and once the seeded 4-week payload aged, nothing
+  // refreshed it: this query is `enabled: false` and no other consumer of that
+  // key existed.
+  const rrgQ = useCached<SectorRrg>(["sector-rrg", 8], () => fetchSectorRrg(8));
+  const valuationQ = useCached<SpValuation>(["sp-valuation"], fetchSpValuation);
+
+  const brief = briefQ.data;
+  const driver = driverQ.data;
+  const heatmap = heatmapQ.data;
+  const vol = volQ.data;
+  const events = eventsQ.data;
+  const cta = ctaQ.data;
+  const macro = macroQ.data;
+  const rrg = rrgQ.data;
+  const valuation = valuationQ.data;
+
+  /** Blocks whose data is materially older than the cadence they claim.
+   *
+   *  The threshold is each card's own refetch interval doubled — one missed
+   *  cycle is noise, two means the card is not running. Reported by name and
+   *  age so the write-up can say "the CTA board has not refreshed in 90
+   *  minutes" instead of describing a ninety-minute-old number in the present
+   *  tense. */
+  const nowMin = useMinuteClock();
+  const stale = useMemo(() => {
+    const checks: Array<[string, number, number]> = [
+      ["market_driver", driverQ.updatedAt, 10],
+      ["sector_heatmap", heatmapQ.updatedAt, 5],
+      ["vol_landscape", volQ.updatedAt, 15],
+      ["macro_calendar", eventsQ.updatedAt, 30],
+      ["cta_flows", ctaQ.updatedAt, 90],
+      ["macro_pressure", macroQ.updatedAt, 90],
+      ["sector_rotation", rrgQ.updatedAt, 90],
+      ["sp_valuation", valuationQ.updatedAt, 180],
+    ];
+    return checks
+      .map(([name, at, limit]) => [name, minutesSince(at, nowMin), limit] as const)
+      .filter(([, age, limit]) => age != null && age > limit)
+      .map(([name, age]) => ({ block: name, minutes_old: age as number }));
+  }, [
+    driverQ.updatedAt, heatmapQ.updatedAt, volQ.updatedAt, eventsQ.updatedAt,
+    ctaQ.updatedAt, macroQ.updatedAt, rrgQ.updatedAt, valuationQ.updatedAt, nowMin,
+  ]);
+
+  /** THE BLOCKS THIS PANEL COULD NOT READ.
+   *
+   *  Every field below degrades to `null` when its card has not loaded — which
+   *  is correct, and was also the bug: a `null` from "this board reports
+   *  unavailable today" is indistinguishable from a `null` because the server
+   *  prefetch hit its 8-second timeout and `page.tsx` (rightly) declined to
+   *  seed a bad payload. The panel then auto-ran over the hole and said nothing
+   *  about it — an absence rendered as a calm, which is the failure mode this
+   *  project keeps finding in new places.
+   *
+   *  Naming the gap is cheap and it changes what the model can honestly write.
+   *  Sent as part of the payload so the prompt can refuse to characterise a
+   *  board it was never given. */
+  const missing = useMemo(() => {
+    const checks: Array<[string, boolean]> = [
+      ["market_driver", driver == null],
+      ["sector_heatmap", heatmap == null],
+      ["vol_landscape", vol == null],
+      ["macro_calendar", events == null],
+      ["cta_flows", cta == null || cta.available === false],
+      ["macro_pressure", macro == null || macro.available === false],
+      ["sector_rotation", rrg == null || rrg.available === false],
+      ["sp_valuation", valuation == null || valuation.available === false],
+    ];
+    return checks.filter(([, isMissing]) => isMissing).map(([name]) => name);
+  }, [driver, heatmap, vol, events, cta, macro, rrg, valuation]);
 
   const payload = useMemo(() => {
     // The ES briefing is the spine of this page; without it there is nothing
@@ -348,12 +428,39 @@ export default function PageInterpretation() {
       // cut Nonfarm payrolls and CPI out of the payload entirely, which is why
       // the model asserted "no other events in the two-week window" while the
       // calendar card on the same page listed both.
+      //
+      // TWO AXES, BOTH SENT. `impact` is an assigned TIMING label; `measured`
+      // is the measured range expansion over 3,677 sessions. Sending only the
+      // first told the model CPI was "high impact" when the platform's own
+      // study puts it at 1.06x and 12th of 23 — so it could write "CPI could
+      // widen the range" in perfect good faith, contradicted by a measurement
+      // sitting one card below. Selection honours both axes for the same
+      // reason the card's does.
       upcoming_events_2w: (() => {
         const all = events?.events ?? [];
-        const high = all.filter((e) => e.impact === "high");
-        const rest = all.filter((e) => e.impact !== "high");
-        return [...high, ...rest.slice(0, Math.max(0, 8 - high.length))];
+        const priority = all.filter(
+          (e) => e.impact === "high" || (e.measured != null && e.measured.band !== "none")
+        );
+        const prioritySet = new Set(priority);
+        const rest = all.filter((e) => !prioritySet.has(e));
+        return [...priority, ...rest.slice(0, Math.max(0, 10 - priority.length))].map((e) => ({
+          name: e.name,
+          date: e.date,
+          days_away: e.days_away,
+          scheduled_discontinuity: e.impact === "high",
+          measured_range_multiplier: e.measured?.multiplier ?? null,
+          measured_survives_correction: e.measured?.survives_fdr ?? null,
+          measured_rank: e.measured ? `${e.measured.rank} of ${e.measured.of}` : null,
+          // Explicitly distinguished from "measured, and ordinary".
+          never_measured: e.measured == null,
+        }));
       })(),
+      event_measurement_note:
+        "measured_range_multiplier is median |close-to-close| on the print over that " +
+        "session's own trailing 60-session median — 1.00 is an ordinary day, magnitude " +
+        "only, no direction. 23 events were tested and only Nonfarm payrolls survives the " +
+        "multiple-comparison correction, so treat any other multiplier as unestablished. " +
+        "Every event's next-session multiplier is near 1.0: nothing carries past the print.",
 
       // Only the regime label and citations from the driver card. Its own
       // paragraphs are another model's prose, and feeding them back would
@@ -367,8 +474,30 @@ export default function PageInterpretation() {
       // a measurement rather than another model's prose, so feeding it back is
       // not an echo.
       drivers: driver?.drivers ?? null,
+
+      // WHAT IS MISSING, SAID OUT LOUD. Without this the model cannot tell a
+      // board that reported "unavailable today" from one whose fetch timed out,
+      // and it has no way to know it is looking at nine cards instead of
+      // eleven. Named blocks, not a count, so the write-up can say which.
+      blocks_unavailable: missing,
+      // Present but not current. A collapsed horizon band unmounts its cards
+      // and stops their refetch, so "loaded" and "up to date" are separate
+      // facts and both have to travel.
+      blocks_stale: stale,
+      coverage_note:
+        (missing.length === 0
+          ? "Every block on the page loaded."
+          : `${missing.length} of 9 swing blocks did not load and are absent from this payload: ` +
+            `${missing.join(", ")}. Do not characterise them, and do not describe the page as ` +
+            `quiet or aligned on the strength of what is here — their absence is a fetch outcome, ` +
+            `not a reading.`) +
+        (stale.length > 0
+          ? ` ${stale.length} block${stale.length === 1 ? " is" : "s are"} present but not current: ` +
+            `${stale.map((s) => `${s.block} (${s.minutes_old}m old)`).join(", ")}. Their numbers are ` +
+            `real but describe an earlier moment — say so rather than writing them in the present tense.`
+          : ""),
     };
-  }, [brief, driver, heatmap, vol, events, cta, macro, rrg, valuation]);
+  }, [brief, driver, heatmap, vol, events, cta, macro, rrg, valuation, missing, stale]);
 
   return (
     <AIInterpretation

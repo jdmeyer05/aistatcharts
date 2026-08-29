@@ -19,8 +19,10 @@
  */
 
 import Link from "next/link";
+import { useMemo } from "react";
 import { useTheme } from "next-themes";
 import { useQuery } from "@tanstack/react-query";
+import { Takeaway } from "@/components/home/primitives";
 import { Plot } from "@/components/plot";
 import { getChartTheme, getBaseLayout } from "@/lib/chart-theme";
 import { fetchSectorRrg, type SectorRrg, type RrgQuadrant, type RrgMeasure } from "@/lib/api";
@@ -97,7 +99,10 @@ export default function SectorRrgCard() {
     improving: t.accent,
   };
 
-  const rows = d?.rows ?? [];
+  // Memoised because the `?? []` fallback minted a fresh array on every render,
+  // and the takeaway below now depends on it — an unmemoised default would
+  // recompute that read on every render for no reason.
+  const rows = useMemo(() => d?.rows ?? [], [d?.rows]);
 
   // Square the axes around 100. An RRG is only readable if both axes share a
   // scale — an auto-fitted range would distort the quadrant geometry and make
@@ -152,6 +157,69 @@ export default function SectorRrgCard() {
     ];
   });
 
+  // THE TAKEAWAY. Three tiles carrying a value, a band and a percentile still
+  // leave the reader to work out which of the three is the story. Built off the
+  // measure sitting furthest into its own tail, so it cannot claim a
+  // significance the percentiles do not support — and when nothing can be
+  // placed against history it says so rather than vanishing, because a takeaway
+  // that disappears on thin data looks exactly like one that found nothing
+  // notable.
+  const read = useMemo(() => {
+    if (!d?.available) return null;
+    const measures: Array<{ name: string; m?: RrgMeasure; high: string; low: string }> = [
+      {
+        name: "Leadership tilt", m: d.regime?.tilt,
+        high: "the defensive half of the market is leading by an unusual margin",
+        low: "the cyclical half is leading by an unusual margin",
+      },
+      {
+        name: "Dispersion", m: d.regime?.dispersion,
+        high: "leadership is unusually spread out, so the index move is not the whole story",
+        low: "leadership is unusually narrow — the sectors are moving as one block",
+      },
+      {
+        name: "Sector correlation", m: d.regime?.correlation,
+        high: "sectors are moving together to an unusual degree, so sector selection is paying less than usual",
+        low: "pairwise correlation is unusually low, so there is more to pick between sectors than usual",
+      },
+    ];
+    const placed = measures.filter((x) => x.m?.pctile != null);
+    const nQuadrantMoves = rows.filter((r) => r.prev_quadrant !== r.quadrant).length;
+
+    if (placed.length === 0) {
+      const anyN = measures.find((x) => x.m)?.m?.n_history;
+      return {
+        tone: "neutral" as const,
+        headline:
+          "No regime measure can be placed against its own history yet — these are levels, not readings.",
+        detail:
+          `${anyN ?? 0} week${anyN === 1 ? "" : "s"} recorded so far. Until a reference set exists, ` +
+          `nothing here says whether tilt, dispersion or correlation is high or low; the quadrant ` +
+          `map below still describes today's arrangement.`,
+      };
+    }
+
+    const furthest = placed.reduce((a, b) =>
+      Math.abs((b.m!.pctile as number) - 50) > Math.abs((a.m!.pctile as number) - 50) ? b : a
+    );
+    const p = Math.round(furthest.m!.pctile as number);
+    const extreme = p >= 80 || p <= 20;
+    return {
+      tone: "neutral" as const,
+      headline: extreme
+        ? `${furthest.name} is the standout at the ${ordinal(p)} percentile of ${furthest.m!.n_history} weeks — ${p >= 50 ? furthest.high : furthest.low}.`
+        : `Nothing here is at an extreme. The furthest is ${furthest.name} at the ${ordinal(p)} percentile of ${furthest.m!.n_history} weeks — an ordinary rotation environment.`,
+      detail:
+        `${nQuadrantMoves} of ${rows.length} sectors changed quadrant on the latest weekly point. ` +
+        (placed.length < measures.length
+          ? `${measures.length - placed.length} of the ${measures.length} measures still has too little history to place. `
+          : "") +
+        `This describes the environment and forecasts nothing: rotation state was tested against ` +
+        `the next session's direction, range and trend-efficiency over 1,829 day-pairs and predicts ` +
+        `none of them.`,
+    };
+  }, [d, rows]);
+
   return (
     <div className="card space-y-3">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -190,6 +258,10 @@ export default function SectorRrgCard() {
 
       {d?.available && (
         <>
+          {read && (
+            <Takeaway headline={read.headline} detail={read.detail} tone={read.tone} />
+          )}
+
           {/* Regime strip leads the card. These are the measures that persist;
               the quadrant tally below changes far faster than the environment
               it describes, so it is context for the chart, not the headline. */}

@@ -160,10 +160,16 @@ async def _warm_caches() -> None:
 
     def _warm_sector_rrg() -> None:
         """Prefill the sector RRG — ~4s of yfinance on a cold instance, and it
-        renders on the home page."""
+        renders on the home page.
+
+        `8`, not `4`: the card asks for an 8-week tail. Warming 4 filled a
+        cache entry nothing reads and left the card's own request cold, which
+        is the same key mismatch that made the home page's server-side prefetch
+        for this board dead weight.
+        """
         try:
             from api.routes.sectors import _sector_rrg_cached
-            _sector_rrg_cached(4)
+            _sector_rrg_cached(8)
         except Exception as e:
             logger.warning(f"Sector RRG pre-warm failed: {e}")
 
@@ -238,6 +244,15 @@ async def _warm_caches() -> None:
             logger.info("Cross-asset drivers pre-warmed")
         except Exception as e:
             logger.warning(f"Cross-asset driver pre-warm failed: {e}")
+
+    def _warm_tsmom_book() -> None:
+        """Prefill the TSMOM book state — 32 yfinance fetches on a cold
+        instance, behind a 12h cache, and it renders on the home page."""
+        try:
+            from src.tsmom_book import prewarm
+            prewarm()
+        except Exception as e:
+            logger.warning(f"TSMOM book pre-warm failed: {e}")
 
     def _warm_es() -> None:
         _warm_es_brief()
@@ -406,6 +421,7 @@ async def _warm_caches() -> None:
         ("Macro pressure", _warm_macro_pressure),
         ("Cross-asset drivers", _warm_drivers),
         ("Sector RRG", _warm_sector_rrg),
+        ("TSMOM book", _warm_tsmom_book),
         ("S&P valuation", _warm_sp_valuation),
         ("Vol landscape", _warm_vol_landscape),
         ("CFTC", _warm_cftc),
@@ -478,6 +494,78 @@ async def _warm_caches() -> None:
     )
 
 
+async def _gate_log_ticker() -> None:
+    """Log the conditions gate on a schedule instead of on page visits.
+
+    THE SAMPLING BUG THIS FIXES. `log_gate` was only ever reached from the
+    `/es-brief` route handler, so a snapshot existed for a 30-minute mark only
+    if somebody had the home page open at that moment — and the startup
+    pre-warm calls `_es_brief_cached()` directly, which does not log at all.
+    That makes the eventual track record a sample of "marks somebody happened
+    to be watching", which is not a random sample of sessions and plausibly
+    skews toward the active ones. The gate needs 30 completed sessions before
+    it reports anything; assembling those 30 out of a biased sample would
+    produce a number that looks measured and is not.
+
+    Nothing here is retroactive, which is why it goes in now rather than when
+    the record comes due.
+
+    COST. One brief rebuild per mark, eleven marks a session — a schedule, not
+    a poll. Marks already written are tracked in memory, so an instance restart
+    re-logs at most one, and the write is an upsert keyed by (session_day,
+    mark), so two instances converge rather than collide.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    done: set[str] = set()
+
+    try:
+        from src.es_gate_log import _MARKS, _mark, log_gate, snapshot_key
+    except Exception as e:
+        logger.warning(f"Gate log ticker not started: {e}")
+        return
+
+    logger.info(f"Gate log ticker started ({len(_MARKS)} marks per session)")
+    while True:
+        try:
+            now = datetime.now(et)
+            # Cheap guards first — no reason to build a brief outside the cash
+            # session. The authoritative RTH/holiday test is `log_gate`'s own
+            # phase check; this only avoids paying to be told no.
+            if now.weekday() < 5 and 9 <= now.hour <= 16:
+                import pandas as pd
+                ts = pd.Timestamp(now)
+                mark = _mark(ts)
+                # `_mark` returns the LAST mark at or before now, so at 16:05 it
+                # still answers 15.0. Writing then would stamp a 16:05 snapshot
+                # onto the 15:00 slot — a verdict recorded half an hour after the
+                # slot it claims to describe. Only write inside the mark's own
+                # half-hour window; the route-handler call still covers the rest.
+                if mark is not None and (now.hour + now.minute / 60) - mark < 0.5:
+                    key = snapshot_key(str(now.date()), mark)
+                    if key not in done:
+                        from api.routes.market import _es_brief_cached
+                        brief = await asyncio.to_thread(_es_brief_cached)
+                        written = await asyncio.to_thread(log_gate, brief, ts)
+                        # Marked done on ANY resolution, `None` included. A None
+                        # means log_gate declined — holiday, or a phase that is
+                        # not RTH — and retrying every minute would rebuild the
+                        # brief four hundred times to be declined four hundred
+                        # times.
+                        done.add(key)
+                        if written:
+                            logger.info(f"Gate logged {written}")
+            # Clear once the session is well past, so tomorrow starts fresh and
+            # the set cannot grow without bound on a long-lived instance.
+            if now.hour >= 17 and done:
+                done.clear()
+        except Exception as e:
+            logger.debug(f"gate log tick failed: {e}")
+        await asyncio.sleep(60)
+
+
 def _validate_critical_config() -> None:
     """Fail fast on misconfiguration that would silently degrade a subsystem.
 
@@ -501,7 +589,14 @@ async def lifespan(app: FastAPI):
     get_client()  # warm the connection
     # Fire-and-forget background warmup. Don't await — server starts now.
     asyncio.create_task(_warm_caches())
-    yield
+    # Long-lived. Held in a local so the task is not garbage-collected mid-flight
+    # — asyncio only keeps a weak reference, and a dropped task here would fail
+    # silently, which is the exact failure mode the ticker exists to prevent.
+    ticker = asyncio.create_task(_gate_log_ticker())
+    try:
+        yield
+    finally:
+        ticker.cancel()
 
 
 app = FastAPI(

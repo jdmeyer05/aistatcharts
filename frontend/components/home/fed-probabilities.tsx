@@ -15,8 +15,10 @@
  * estimator produced a number instead of having to trust it.
  */
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchFedProbabilities, type FedProbabilities, type FedMeeting } from "@/lib/api";
+import { Takeaway } from "@/components/home/primitives";
 
 function fmtMeetingDate(iso: string): string {
   const d = new Date(`${iso}T12:00:00Z`);
@@ -42,6 +44,49 @@ export default function FedProbabilitiesCard() {
   });
   const d = q.data;
   const priced = (d?.meetings ?? []).filter((m) => !m.error);
+
+  // THE TAKEAWAY. A board of four meetings and a cumulative basis-point figure
+  // does not say which of them is actually carrying the pricing, or how much of
+  // the answer is estimator noise. Both are computable from the payload.
+  //
+  // AND IT SAYS THE NULL. Priced Fed path was tested against forward equity
+  // returns across 24 specifications and predicted none of them. A rates board
+  // on a trading page reads as a signal unless it says otherwise, and the
+  // measurement exists, so it says otherwise.
+  const read = useMemo(() => {
+    if (!d?.available || priced.length === 0) return null;
+
+    const biggest = [...priced].sort(
+      (a, b) => Math.abs(b.delta_bp ?? 0) - Math.abs(a.delta_bp ?? 0)
+    )[0];
+    const cum = d.cumulative_bp;
+    const levered = priced.filter((m) => m.method === "within-month" && (m.leverage ?? 0) >= 5);
+    const worst = levered.sort((a, b) => (b.leverage ?? 0) - (a.leverage ?? 0))[0];
+
+    const dir =
+      typeof cum !== "number" || Math.abs(cum) < 2
+        ? "essentially no change in policy"
+        : cum > 0
+          ? `${cum.toFixed(0)}bp of tightening`
+          : `${Math.abs(cum).toFixed(0)}bp of easing`;
+
+    return {
+      headline:
+        `The strip prices ${dir} across the next ${priced.length} decisions, and ` +
+        `${fmtMeetingDate(biggest.date)} carries the most of it at ` +
+        `${(biggest.delta_bp ?? 0) > 0 ? "+" : ""}${(biggest.delta_bp ?? 0).toFixed(1)}bp.`,
+      detail:
+        (worst
+          ? `Read ${fmtMeetingDate(worst.date)} with care: its within-month solve divides by the ` +
+            `post-meeting days left in the contract month, giving ${worst.leverage!.toFixed(1)}× tick ` +
+            `leverage — one half-basis-point settlement tick moves that figure by several basis ` +
+            `points. `
+          : "") +
+        `This is what is PRICED over months, not a read on today. The priced path was tested ` +
+        `against forward equity returns across 24 specifications and predicted none of them, so ` +
+        `it belongs here as the backdrop a session sits in and nothing more.`,
+    };
+  }, [d, priced]);
 
   return (
     <div className="card space-y-3">
@@ -81,6 +126,8 @@ export default function FedProbabilitiesCard() {
 
       {d?.available && (
         <>
+          {read && <Takeaway headline={read.headline} detail={read.detail} />}
+
           <div className="space-y-1.5">
             {d.meetings?.map((m) => {
               if (m.error) {
