@@ -81,6 +81,44 @@ _BOOTSTRAP = 2000
 # rejection to mean anything. DECLARED, not estimated — like _MIN_MARGIN above.
 _MIN_USABLE_SHARE = 0.6
 
+# ── the floor the critic never sees ───────────────────────────────
+# THE SCORE'S PERFECT OPTIMUM IS SILENCE. Every rule is a penalty subtracted
+# from 1.0: no numbers means no ungrounded numbers, no claims means no causal
+# language, twenty words never breaks a word cap. Nothing in the grader rewards
+# saying anything, and we now run a nightly process whose entire job is to
+# search for higher-scoring instructions on surfaces whose only remaining
+# headroom points that way.
+#
+# The rubric-RL literature is specific about what happens next: the proxy climbs
+# while true quality degrades, and the exploits are found in a predictable order
+# — tone first, then wording, then format. In one measured run rubric judges
+# preferred the trained checkpoint on 85.8% of prompts while rubric-FREE judges
+# preferred the original on 78.4%. A rubric-free comparison was the only thing
+# that saw it.
+#
+# So coverage is measured HERE, in the gate, and never written to `ai_grades`.
+# The critic reads graded rows; anything stored there is something it can learn
+# to game. A metric it cannot see cannot be optimised against — which is the
+# entire point of a hidden anchor, and why this is not simply another rule.
+#
+# The measure is the count of numeric claims that DO trace to the payload:
+# saying more, correctly, scores higher, and saying nothing scores zero. It is
+# deliberately not a ratio — a ratio is maximised by emitting one safe number.
+_COVERAGE_FLOOR = 0.80          # challenger must retain 80% of champion coverage
+_COVERAGE_MIN_BASE = 3.0        # below this the champion says too little to compare
+
+
+def _coverage(output, payload) -> int:
+    """Numeric claims that trace to the payload. Informativeness, not accuracy."""
+    if not output:
+        return 0
+    try:
+        from src.grounding import _check_grounding
+        text = output if isinstance(output, str) else json.dumps(output, default=str)
+        return int(_check_grounding(text, payload or {}).get("grounded_count") or 0)
+    except Exception:
+        return 0
+
 
 # ── generation ────────────────────────────────────────────────────
 
@@ -138,6 +176,16 @@ def _user_message(surface: str, payload: dict) -> str:
 # else — a refusal, a truncation, output that will not parse — is caused by the
 # prompt and is exactly what the gate is supposed to punish.
 _INFRA_FAILURES = {"api_error", "api_fatal", "no_key"}
+
+# ATTRIBUTION IS AN ALLOWLIST, NOT A COMPLEMENT. "Anything that is not infra
+# belongs to the prompt" charges the prompt for every reason nobody thought to
+# record — including a bare `None` from a path that failed before it could say
+# why. That is substituting a default for an unknown, and it is the exact shape
+# of defect this codebase keeps finding. These three are the reasons `_generate`
+# actually emits for output the prompt is responsible for: it refused, it ran
+# past its budget mid-sentence, or what came back would not parse. Anything else
+# — known infra or unknown entirely — is dropped rather than blamed.
+_PROMPT_FAILURES = {"refusal", "max_tokens", "unparseable"}
 
 # Vendor errors worth waiting out. Discounting a 503 from the failure count was
 # not enough on its own: it still deletes the pair, and a deleted pair shrinks
@@ -322,13 +370,48 @@ def run(surface: str, champion_version: int, challenger_version: int,
             "champion_failed": False, "challenger_failed": False,
             "challenger_regressions": prompt_rules.regression_failures(gb.get("findings") or []),
             "champion_regressions": prompt_rules.regression_failures(ga.get("findings") or []),
+            # Computed from the raw generations, kept out of `ai_grades`, and
+            # never shown to the critic. See _COVERAGE_FLOOR.
+            "champion_coverage": _coverage(a, payload),
+            "challenger_coverage": _coverage(b, payload),
         })
 
     return _summarise(surface, champ, chall, pairs)
 
 
 def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dict:
-    scored = [p for p in pairs if p.get("champion") and p.get("challenger")]
+    # A PROMPT THAT CANNOT PRODUCE PARSEABLE OUTPUT IS WORSE, NOT ABSENT.
+    #
+    # Dropping the pair when one arm fails asks "how good is this prompt WHEN IT
+    # WORKS", which is not the question a promotion gate is asking. Every major
+    # benchmark scores an unusable generation as zero rather than excluding it —
+    # SWE-bench gives a failed patch 0, OpenAI's simple-evals and EleutherAI's
+    # harness both compare an unextractable answer against gold and score it
+    # wrong, HumanEval's pass@k has no exclude branch at all. It is also the
+    # intention-to-treat principle: the payload is the randomisation unit, and a
+    # payload that entered the comparison must leave it with a score.
+    #
+    # Arithmetic for why this matters: under DROP, a challenger with a 14%
+    # malformed-output rate at 0.80 win-rate-when-it-works looks IDENTICAL to
+    # one that never fails, and is in fact break-even. The failure was invisible
+    # to the gate precisely because it removed itself from the sample.
+    #
+    # The one exception is a genuinely different mechanism. A 503 lands on
+    # whichever arm called during the spike and says nothing about the prompt,
+    # so infra failures are still dropped (after retries). Malformed, refused,
+    # truncated or unparseable output is the prompt's and scores zero.
+    def _usable(p: dict, side: str) -> bool:
+        """This arm produced something we can score — or failed in a way that IS
+        a score of zero."""
+        if p.get(side):
+            return True
+        return p.get(f"{side}_why") in _PROMPT_FAILURES
+
+    def _score_of(p: dict, side: str) -> float:
+        got = p.get(side)
+        return float((got or {}).get("score") or 0.0) if got else 0.0
+
+    scored = [p for p in pairs if _usable(p, "champion") and _usable(p, "challenger")]
     n = len(scored)
     fails_a = sum(1 for p in pairs if p.get("champion_failed"))
     fails_b = sum(1 for p in pairs if p.get("challenger_failed"))
@@ -339,7 +422,7 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
     def _blamed(side: str) -> int:
         return sum(1 for p in pairs
                    if p.get(f"{side}_failed")
-                   and p.get(f"{side}_why") not in _INFRA_FAILURES)
+                   and p.get(f"{side}_why") in _PROMPT_FAILURES)
 
     blamed_a, blamed_b = _blamed("champion"), _blamed("challenger")
     infra = (fails_a + fails_b) - (blamed_a + blamed_b)
@@ -370,7 +453,7 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
                 "reason": f"only {n} paired generations completed",
                 "generation_failures": {"champion": fails_a, "challenger": fails_b}}
 
-    diffs = [float(p["challenger"]["score"] or 0) - float(p["champion"]["score"] or 0)
+    diffs = [_score_of(p, "challenger") - _score_of(p, "champion")
              for p in scored]
     mean_diff = sum(diffs) / n
     lo, hi = _bootstrap_ci(diffs)
@@ -378,7 +461,7 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
     def _counts(key):
         out = {"critical": 0, "major": 0, "minor": 0}
         for p in scored:
-            for k, v in (p[key].get("counts") or {}).items():
+            for k, v in ((p.get(key) or {}).get("counts") or {}).items():
                 out[k] = out.get(k, 0) + v
         return out
 
@@ -420,6 +503,24 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
     if blamed_b > blamed_a:
         faults.append(f"failed to generate more often ({blamed_b} vs {blamed_a}, "
                       "vendor errors excluded)")
+
+    # THE HIDDEN FLOOR. Non-inferiority on informativeness, checked here and
+    # never stored where the critic can read it. A challenger that scores better
+    # by saying less is the failure mode this objective invites, and it would
+    # otherwise be indistinguishable from a genuine improvement — fewer claims
+    # means fewer chances to break a rule.
+    cov_a = [p.get("champion_coverage") for p in scored if p.get("champion_coverage") is not None]
+    cov_b = [p.get("challenger_coverage") for p in scored if p.get("challenger_coverage") is not None]
+    if cov_a and cov_b:
+        mean_a, mean_b = sum(cov_a) / len(cov_a), sum(cov_b) / len(cov_b)
+        # Below the base the champion says too little for a ratio to mean
+        # anything; two grounded numbers versus one is noise, not a collapse.
+        if mean_a >= _COVERAGE_MIN_BASE and mean_b < _COVERAGE_FLOOR * mean_a:
+            faults.append(
+                f"says materially less: {mean_b:.1f} grounded claims per output "
+                f"against the champion's {mean_a:.1f} "
+                f"({mean_b / mean_a:.0%} of it, floor {_COVERAGE_FLOOR:.0%}) — "
+                f"a higher score bought by covering less is not an improvement")
     # THE STATISTICAL DECISION NO LONGER LIVES HERE. It used to: a nightly
     # percentile bootstrap CI plus a margin, both recomputed from scratch and
     # both discarded afterwards. That gate could not return "win" on our actual
@@ -459,8 +560,8 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
         "reasons": reasons,
         "mean_diff": round(mean_diff, 4),
         "ci95": [round(lo, 4), round(hi, 4)],
-        "champion_score": round(sum(float(p["champion"]["score"] or 0) for p in scored) / n, 4),
-        "challenger_score": round(sum(float(p["challenger"]["score"] or 0) for p in scored) / n, 4),
+        "champion_score": round(sum(_score_of(p, "champion") for p in scored) / n, 4),
+        "challenger_score": round(sum(_score_of(p, "challenger") for p in scored) / n, 4),
         "champion_counts": c_a,
         "challenger_counts": c_b,
         "regressions": regressions,
@@ -483,6 +584,12 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
         # storing every pair.
         "sum_d": round(sum(diffs), 6),
         "sum_d2": round(sum(d * d for d in diffs), 6),
+        # Reported on the run so a rejection is readable, but deliberately absent
+        # from `ai_grades` — the critic must not be able to optimise against it.
+        "coverage": {
+            "champion": round(sum(cov_a) / len(cov_a), 2) if cov_a else None,
+            "challenger": round(sum(cov_b) / len(cov_b), 2) if cov_b else None,
+        },
     }
 
 

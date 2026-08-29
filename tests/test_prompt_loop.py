@@ -530,13 +530,104 @@ def test_a_broken_arm_is_not_reported_as_a_thin_sample():
     assert quiet["verdict"] == "inconclusive"
 
 
+def _dead_arm(side, why, other_score=0.7):
+    """One arm produced nothing, for a stated reason. The other scored."""
+    p = {"snapshot_id": 99,
+         "champion": {"score": other_score, "counts": {"critical": 0, "major": 0, "minor": 0}},
+         "challenger": {"score": other_score, "counts": {"critical": 0, "major": 0, "minor": 0}},
+         "champion_failed": False, "challenger_failed": False,
+         "challenger_regressions": [], "champion_regressions": []}
+    p[side] = None
+    p[f"{side}_failed"] = True
+    p[f"{side}_why"] = why
+    return p
+
+
 def test_gate_rejects_a_challenger_that_fails_to_generate_more_often():
     pairs = [_pair(0.7, 0.9) for _ in range(20)]
-    pairs += [{"snapshot_id": 99, "champion": None, "challenger": None,
-               "champion_failed": False, "challenger_failed": True} for _ in range(4)]
+    pairs += [_dead_arm("challenger", "unparseable") for _ in range(4)]
     res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
     assert res["verdict"] == "reject"
     assert any("failed to generate" in r for r in res["reasons"])
+
+
+def test_unparseable_output_is_scored_as_a_loss_not_dropped():
+    """A prompt that cannot produce parseable output is WORSE, not absent.
+
+    Dropping the pair asks "how good is this prompt when it works", which is not
+    the question a promotion gate is asking. Every major benchmark scores an
+    unusable generation zero — SWE-bench, simple-evals, lm-eval-harness, and
+    HumanEval's pass@k, which has no exclude branch at all. Under DROP, a
+    challenger failing 14% of the time looked identical to one that never fails.
+    """
+    pairs = [_pair(0.9, 0.9) for _ in range(10)]        # dead even
+    pairs += [_dead_arm("challenger", "refusal", other_score=0.9) for _ in range(3)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    assert res["n"] == 13, res["n"]                      # the failures are IN the sample
+    assert res["losses"] == 3                            # and they count against it
+    assert res["challenger_score"] < res["champion_score"]
+
+
+def test_a_failure_with_no_recorded_reason_is_not_blamed_on_the_prompt():
+    """Attribution is an allowlist. "Anything not infra belongs to the prompt"
+    charges it for every reason nobody thought to record, including a bare None
+    from a path that died before it could say why — a default standing in for an
+    unknown, which is this codebase's recurring defect."""
+    pairs = [_pair(0.9, 0.9) for _ in range(10)]
+    pairs += [_dead_arm("challenger", None, other_score=0.9) for _ in range(3)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    assert res["n"] == 10                                # dropped, not scored
+    assert res["losses"] == 0
+    assert res["generation_failures"]["challenger_blamed"] == 0
+
+
+def _cov_pair(champ_score, chall_score, cov_a, cov_b):
+    p = _pair(champ_score, chall_score)
+    p["champion_coverage"], p["challenger_coverage"] = cov_a, cov_b
+    return p
+
+
+def test_a_higher_score_bought_by_saying_less_is_not_an_improvement():
+    """The say-nothing optimum. Our score is a pure penalty, so the highest
+    score is achieved by writing nothing: no numbers means no ungrounded
+    numbers. A challenger that wins by covering less must be caught by something
+    the critic cannot see, or the nightly search will find that direction."""
+    pairs = [_cov_pair(0.90, 0.99, cov_a=10, cov_b=3) for _ in range(20)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    assert res["verdict"] == "reject", res
+    assert any("says materially less" in r for r in res["reasons"]), res["reasons"]
+
+
+def test_a_real_improvement_that_keeps_covering_is_fine():
+    pairs = [_cov_pair(0.90, 0.99, cov_a=10, cov_b=10) for _ in range(20)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    assert res["verdict"] == "pending", res["reasons"]
+    assert res["coverage"] == {"champion": 10.0, "challenger": 10.0}
+
+
+def test_the_coverage_floor_does_not_fire_on_a_terse_champion():
+    """Two grounded claims against one is noise, not a collapse — the ratio only
+    means something once the champion says enough for it to."""
+    pairs = [_cov_pair(0.90, 0.99, cov_a=2, cov_b=1) for _ in range(20)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    assert not any("says materially less" in r for r in res["reasons"])
+
+
+def test_coverage_is_never_written_where_the_critic_can_read_it():
+    """A metric stored in ai_grades is a metric the critic learns to game. The
+    hidden anchor only works while it is hidden."""
+    import inspect
+    from src import prompt_rules
+    src = inspect.getsource(prompt_rules)
+    assert "coverage" not in src, "coverage leaked into the graded record"
+
+
+def test_a_vendor_503_is_still_dropped_not_scored_zero():
+    pairs = [_pair(0.9, 0.9) for _ in range(10)]
+    pairs += [_dead_arm("challenger", "api_error", other_score=0.9) for _ in range(3)]
+    res = prompt_replay._summarise("market_driver", {"version": 1}, {"version": 2}, pairs)
+    assert res["n"] == 10
+    assert res["generation_failures"]["vendor_discounted"] == 3
 
 
 def test_gate_is_inconclusive_below_the_minimum_sample():
@@ -867,11 +958,28 @@ def test_a_mean_can_hide_a_surface_defective_ten_times_in_eleven():
 
 
 def test_a_defective_surface_is_critiqued(monkeypatch):
-    from src import prompt_loop
+    """STUB THE CRITIC. The first version of this test called the real
+    critique_cycle with monkeypatched rows, which made a live Opus call and
+    wrote an actual challenger to the production registry — reasoned from 51
+    fabricated rows. A unit test must not spend money or mutate live state; it
+    only needs to prove the headroom gate lets this surface through.
+    """
+    from src import prompt_loop, prompt_critic
+    reached = {}
+
+    def stub(*a, **k):
+        reached["called"] = True
+        # Clean "nothing to propose": exercises the gate, writes no version,
+        # spends nothing.
+        return {"ok": True, "findings": [], "verdict": "stubbed"}
+
     monkeypatch.setattr(prompt_loop, "_open_challenger", lambda s: None)
     monkeypatch.setattr(prompt_loop, "graded_snapshots", lambda *a, **k: _rows(45, 6))
+    monkeypatch.setattr(prompt_critic, "critique", stub, raising=False)
     res = prompt_loop.critique_cycle("news_digest")
     assert "headroom" not in res.get("skipped", "")
+    assert reached.get("called"), "the gate should have passed control to the critic"
+    assert res.get("findings") == 0
 
 
 # ── the accumulating gate (fix #2, 2026-08-29) ────────────────────

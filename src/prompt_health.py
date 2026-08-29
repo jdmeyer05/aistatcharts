@@ -24,6 +24,7 @@ a good reason and a stage that has silently stopped produce the same quiet log.
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -80,6 +81,39 @@ def strict_pass(graded: list[dict]) -> float | None:
         return None
     clean = sum(1 for g in rows if not g["grade"]["findings"])
     return clean / len(rows)
+
+
+def rule_rates(graded: list[dict]) -> list[dict]:
+    """Per-rule firing rate with a Wilson interval, most frequent first.
+
+    REPORTED BESIDE THE SCORE, NOT INSIDE IT. A minor defect at 12% of outputs
+    moves a weighted mean by ~0.0024 and is invisible; as a rate it is
+    12% +/- 8pp on n=60, over four standard errors from zero and impossible to
+    miss. This is the statistic that would have surfaced the news_digest word
+    cap months before anyone read an output.
+
+    Wilson rather than the normal approximation because these counts are small
+    and near the boundary, where the normal interval famously misbehaves.
+    """
+    rows = [g for g in graded if g.get("grade") is not None]
+    n = len(rows)
+    if not n:
+        return []
+    counts: dict[str, int] = {}
+    for g in rows:
+        for r in {f.get("rule") for f in (g["grade"].get("findings") or []) if f.get("rule")}:
+            counts[r] = counts.get(r, 0) + 1
+    out = []
+    z = 1.96
+    for rule, k in counts.items():
+        p = k / n
+        denom = 1 + z * z / n
+        centre = (p + z * z / (2 * n)) / denom
+        half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+        out.append({"rule": rule, "fired": k, "of": n, "rate": round(p, 4),
+                    "ci95": [round(max(0.0, centre - half), 4),
+                             round(min(1.0, centre + half), 4)]})
+    return sorted(out, key=lambda r: -r["fired"])
 
 
 def has_headroom(graded: list[dict]) -> tuple[bool, str]:
@@ -243,6 +277,7 @@ def readiness(days: int = 30) -> dict:
                "holdout": len(hold), "graded_discovery": len(graded),
                "mean_score": round(mean, 4) if mean is not None else None,
                "strict_pass": round(sp, 4) if sp is not None else None,
+               "rule_rates": rule_rates(graded),
                "hours_since_last": round(age_h, 1), "blocked_by": blocks}
         if age_h > 72:
             problems.append(f"{surface}: no snapshot for {age_h:.0f}h")
@@ -278,6 +313,12 @@ def report(days: int = 30) -> dict:
                    f"last {s['hours_since_last']}h ago")
             logger.info(msg + (f" | BLOCKED: {'; '.join(s['blocked_by'])}"
                                if s["blocked_by"] else " | ready"))
+            # The rate is the statistic a mean cannot carry. Logged per rule so a
+            # systematic minor defect is visible without anyone opening the DB.
+            for rr in s.get("rule_rates") or []:
+                logger.info(f"prompt_health:   {s['surface']}.{rr['rule']} fires on "
+                            f"{rr['fired']}/{rr['of']} = {rr['rate']:.1%} "
+                            f"[{rr['ci95'][0]:.1%}, {rr['ci95'][1]:.1%}]")
         for p in r["problems"]:
             logger.error(f"prompt_health: {p}")
     else:

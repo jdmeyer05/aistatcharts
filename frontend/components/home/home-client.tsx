@@ -160,7 +160,21 @@ function MarketDriverCard() {
             {d?.model ? `${d.model}${d.escalated ? " (escalated)" : ""}` : ""}
             {asOf ? `  ·  ${asOf}` : ""}
             {d?.cache_hit ? "  ·  cached" : ""}
-            {d?.confidence != null ? `  ·  conf ${d.confidence}/10` : ""}
+            {/* The model's self-reported confidence used to render here as
+                "conf 7/10". Removed 2026-08-29: a number with no measured
+                meaning. Over 11 resolved calls this surface is statistically
+                indistinguishable from a model with zero information that simply
+                speaks confidently — its Brier skill sits on the median of that
+                null. And the advice-taking evidence is blunt about what such a
+                number does: when an advisor's track record is unavailable,
+                stated confidence drives how much you believe it while actual
+                accuracy has no measurable effect, and willingness to check the
+                record FALLS as stated confidence rises. It is not neutral
+                decoration — it buys credibility it has not earned and suppresses
+                the audit that would expose that. The falsifiable `calls` behind
+                it are still generated and still settled against price; they were
+                already lifted out server-side and never rendered. The
+                measurement continues, the anchor goes. */}
           </div>
         </div>
         <button
