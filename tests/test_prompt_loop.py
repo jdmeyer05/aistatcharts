@@ -797,10 +797,23 @@ def test_a_ceilinged_surface_is_not_critiqued(monkeypatch):
     from src import prompt_loop
     monkeypatch.setattr(prompt_loop, "_open_challenger", lambda s: None)
     monkeypatch.setattr(prompt_loop, "graded_snapshots",
-                        lambda *a, **k: [{"snapshot": {}, "grade": {"score": 0.998}}
+                        lambda *a, **k: [{"snapshot": {},
+                                          "grade": {"score": 0.998, "findings": []}}
                                          for _ in range(20)])
     res = prompt_loop.critique_cycle("es_audit")
     assert "headroom" in res.get("skipped", "")
+
+
+def test_a_surface_whose_strict_pass_is_unknown_is_never_skipped():
+    """Rows carrying a score but no findings cannot confirm a ceiling. Skipping
+    the critic on a statistic we could not compute is the absence-as-calm bug
+    this whole statistic exists to expose."""
+    from src import prompt_health
+    unknown = [{"snapshot": {}, "grade": {"score": 0.998}} for _ in range(20)]
+    assert prompt_health.strict_pass(unknown) is None
+    room, why = prompt_health.has_headroom(unknown)
+    assert room is True
+    assert "unknown" in why
 
 
 # ── the mean was not the gate (audit 2026-08-29) ──────────────────
@@ -926,3 +939,21 @@ def test_old_experiment_rows_still_count(monkeypatch):
     assert abs(got["sum_d"] - 0.96) < 1e-9
     new = {"n": 11, "wins": 3, "losses": 0, "ties": 8, "sum_d": 0.418, "sum_d2": 0.058}
     assert prompt_loop._run_counts(new)["wins"] == 3
+
+
+def test_a_run_that_scored_no_pairs_contributes_nothing():
+    """A thin or vendor-ruined run must not be banked as LOSSES.
+
+    `_summarise` returns early when n < _MIN_N with only `n` set — no wins, no
+    win_rate. Reconstructing from rates then computed losses = n - 0 - 0 = n, so
+    an outage that left 3 usable pairs recorded 3 defeats. That is the
+    two-strikes failure coming back through the accumulator: the thinner the
+    sample, the harder the challenger is punished for it.
+    """
+    from src import prompt_loop
+    for thin in ({"ok": True, "verdict": "inconclusive", "n": 5},
+                 {"ok": True, "verdict": "inconclusive", "n": 3,
+                  "reason": "only 3 paired generations completed"}):
+        got = prompt_loop._run_counts(thin)
+        assert got["losses"] == 0, got
+        assert got["wins"] == 0 and got["n"] == 0, got

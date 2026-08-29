@@ -363,8 +363,17 @@ def _run_counts(metrics: dict) -> dict:
     the accumulating gate exists precisely so earlier evidence still counts.
     """
     n = int(metrics.get("n") or 0)
+    empty = {"wins": 0, "losses": 0, "n": 0, "sum_d": 0.0, "sum_d2": 0.0}
     if not n:
-        return {"wins": 0, "losses": 0, "n": 0, "sum_d": 0.0, "sum_d2": 0.0}
+        return empty
+    # A RUN THAT SCORED NO PAIRS CONTRIBUTES NOTHING — it must not contribute
+    # LOSSES. `_summarise` returns early when n < _MIN_N with only `n` set and
+    # no wins/win_rate, so the reconstruction below would compute
+    # losses = n - 0 - 0 = n and bank a vendor outage as a run of pure defeats.
+    # That is the two-strikes failure reintroduced through the accumulator: the
+    # thinner the sample, the harder the challenger gets punished for it.
+    if metrics.get("wins") is None and metrics.get("win_rate") is None:
+        return empty
     if metrics.get("wins") is not None:
         wins = int(metrics["wins"])
         losses = int(metrics.get("losses") or 0)

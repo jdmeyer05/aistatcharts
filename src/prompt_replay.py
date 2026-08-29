@@ -410,7 +410,7 @@ def _summarise(surface: str, champ: dict, chall: dict, pairs: list[dict]) -> dic
     # Defects the challenger actually exhibits, versus the sample simply being
     # too thin to tell. The distinction matters because two rejects retire a
     # challenger permanently, and only the first kind is evidence about it.
-    faults, thin = [], []
+    faults: list[str] = []
     if regressions:
         detail = ", ".join(f"{r} ({reg_b.get(r, 0)} vs champion {reg_a.get(r, 0)})"
                            for r in regressions)

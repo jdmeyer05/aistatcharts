@@ -99,6 +99,22 @@ def test_a_genuine_ratio_still_grounds():
     assert _flags("buying ran 1.37x selling", payload) == []
 
 
+# ── the tolerance has to travel with the scale ────────────────────
+
+def test_the_decimal_candidate_does_not_get_a_hundredfold_tolerance():
+    """Payloads store percents as decimals, so a percent token is also tried as
+    n/100. Computing the tolerance from the DIVIDED value made it 100x looser --
+    an absolute 0.05 on 0.45 is five percentage points, so a claimed "45" matched
+    a payload holding 0.42."""
+    assert "45" in _flags("a reading of 45 here", {"x": 0.42})
+
+
+def test_a_correctly_rounded_decimal_percent_still_grounds():
+    """0.153 stored, "15.3%" written — the case the /100 path exists for."""
+    assert _flags("breadth ran 15.3% of names", {"up_pct": 0.153}) == []
+    assert _flags("breadth ran 15.3% of names", {"up_pct": 0.1528}) == []
+
+
 # ── the defect class this surfaced ────────────────────────────────
 
 def test_invented_round_support_levels_are_the_recurring_defect():

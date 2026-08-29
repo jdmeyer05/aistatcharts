@@ -100,3 +100,31 @@ def test_a_finding_carries_which_pass_produced_it(monkeypatch):
     sources = {f.get("source") for f in out["findings"] if f.get("source") != "rule"}
     assert sources == {"model", "model:digest"}
     assert out["n_model_measured"] == 1 and out["n_model_digest"] == 1
+
+
+def test_a_failed_pass_is_not_recorded_as_a_clean_audit(monkeypatch):
+    """Splitting one call into two brings back the bug the single-pass code
+    guarded against: if `model_used` is one flag for both passes, a 503 on the
+    measured pass still records an `es_audit` row with zero findings — and zero
+    findings grades as a perfect audit, inflating the surface with rows where
+    the model never spoke."""
+    recorded = []
+
+    def half_broken(system, payload):
+        if "news_digest" not in payload:
+            raise RuntimeError("measured pass died (503)")
+        return [{"finding": "digest contradiction", "severity": "high"}]
+
+    # Patch the module ATTRIBUTE, not sys.modules: `from src import
+    # prompt_snapshots` reads the already-imported package attribute, so a
+    # sys.modules entry is ignored and the real recorder runs against the live
+    # database. (It did, in the first draft of this test.)
+    from src import prompt_snapshots
+    monkeypatch.setattr(prompt_snapshots, "record",
+                        lambda surface, payload, out, **kw:
+                        recorded.append((surface, len(out["findings"]))))
+    monkeypatch.setattr(es_auditor, "_model_pass", half_broken)
+
+    out = es_auditor.audit_card(_brief(), with_model=True)
+    assert [s for s, _ in recorded] == ["es_audit_digest"], recorded
+    assert out["n_model_measured"] == 0 and out["n_model_digest"] == 1

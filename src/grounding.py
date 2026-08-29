@@ -165,19 +165,26 @@ def _check_grounding(interpretation: str, data: dict) -> dict:
             grounded.append(token)
             continue
 
-        # Fuzzy numeric match within 2% tolerance against any payload number.
-        # For percentage tokens, also check the decimal form — payloads often
-        # store "15.3%" as 0.153. Also try the /100 form for bare integers in
-        # 1..100 (likely implicit percentile / percentage claims like
-        # "95th percentile" when the payload stores 0.95).
-        candidates = [n]
+        # Fuzzy numeric match against any payload number. For percentage tokens
+        # also check the decimal form — payloads often store "15.3%" as 0.153.
+        # Also try the /100 form for bare integers in 1..100 (likely implicit
+        # percentile claims like "95th percentile" when the payload stores 0.95).
+        #
+        # THE TOLERANCE MUST TRAVEL WITH THE SCALE. Computing it from the
+        # divided candidate makes it 100x looser: an absolute 0.05 on 0.153 is
+        # five percentage points, so a claimed "45" matched a payload's 0.42.
+        # The tolerance is fixed on the token as written, then divided by the
+        # same factor the candidate was.
+        base_tol = _tolerance(n, is_pct)
+        candidates = [(n, 1.0)]
         if is_pct:
-            candidates.append(n / 100.0)
+            candidates.append((n / 100.0, 100.0))
         elif "." not in token and "%" not in token and 1 <= n <= 100 and n == int(n):
-            candidates.append(n / 100.0)
+            candidates.append((n / 100.0, 100.0))
         matched = False
-        for c in candidates:
-            if any(abs(c - p) <= _tolerance(c, is_pct) for p in payload_nums):
+        for c, scale in candidates:
+            tol = base_tol / scale
+            if any(abs(c - p) <= tol for p in payload_nums):
                 matched = True
                 break
         if matched:

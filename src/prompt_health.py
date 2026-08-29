@@ -69,10 +69,16 @@ def strict_pass(graded: list[dict]) -> float | None:
     defects are, this says how often there is one, and they answer different
     questions. A surface can read 0.94 and still be defective 10 times in 11.
     """
-    rows = [g for g in graded if g.get("grade") is not None]
+    # A ROW WITH NO `findings` KEY IS UNKNOWN, NOT CLEAN. Defaulting a missing
+    # key to [] would count an ungraded or malformed row as a perfect output and
+    # push the surface toward "no headroom" — an absence rendered as a calm,
+    # which is the failure this whole statistic exists to expose. Such rows are
+    # dropped from the denominator instead of silently flattering it.
+    rows = [g for g in graded
+            if g.get("grade") is not None and g["grade"].get("findings") is not None]
     if not rows:
         return None
-    clean = sum(1 for g in rows if not (g["grade"].get("findings") or []))
+    clean = sum(1 for g in rows if not g["grade"]["findings"])
     return clean / len(rows)
 
 
@@ -89,8 +95,12 @@ def has_headroom(graded: list[dict]) -> tuple[bool, str]:
                        f"outputs, strict pass {sp:.1%}) — a challenger could not be "
                        f"shown to improve on it")
     if mean >= _CEILING:
-        return True, (f"mean {mean:.4f} is at the ceiling but strict pass is only "
-                      f"{sp:.1%} — a systematic defect the mean cannot see")
+        # sp is None when rows carry scores but no findings — unknown, so the
+        # ceiling cannot be confirmed and the surface stays open. Never skip the
+        # critic on a statistic we could not compute.
+        shown = f"{sp:.1%}" if sp is not None else "unknown"
+        return True, (f"mean {mean:.4f} is at the ceiling but strict pass is "
+                      f"{shown} — a systematic defect the mean cannot see")
     return True, f"mean {mean:.4f} over {len(scores)} outputs"
 
 

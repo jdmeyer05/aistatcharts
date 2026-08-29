@@ -300,9 +300,17 @@ def audit_card(brief: dict, with_model: bool = True) -> dict:
     from src.prompt_registry import active as _active_prompt
     audit_system, audit_version = _active_prompt("es_audit")
 
+    # PER-PASS SUCCESS, NOT ONE FLAG FOR BOTH. A single `model_used` set by
+    # whichever pass survived would let the OTHER pass be recorded with zero
+    # findings — and zero findings grades as a perfect audit. So a 503 on the
+    # measured pass would quietly inflate that surface's score with a row where
+    # the model never spoke. This is the failure the original single-pass code
+    # guarded against, and splitting the call is exactly how it comes back.
+    ran = {"es_audit": False, "es_audit_digest": False}
     if with_model:
         try:
             model_findings = _model_pass(audit_system, measured_payload)
+            ran["es_audit"] = True
             model_used = _MODEL
         except Exception as e:
             logger.warning(f"card auditor measured pass failed: {e}")
@@ -313,6 +321,7 @@ def audit_card(brief: dict, with_model: bool = True) -> dict:
         if _digest_text(brief):
             try:
                 digest_findings = _model_pass(audit_system, digest_payload)
+                ran["es_audit_digest"] = True
                 model_used = model_used or _MODEL
             except Exception as e:
                 logger.warning(f"card auditor digest pass failed: {e}")
@@ -343,7 +352,7 @@ def audit_card(brief: dict, with_model: bool = True) -> dict:
             ("es_audit", measured_payload, model_findings),
             ("es_audit_digest", digest_payload, digest_findings),
         ):
-            if surface == "es_audit_digest" and not _digest_text(brief):
+            if not ran[surface]:
                 continue
             try:
                 prompt_snapshots.record(
