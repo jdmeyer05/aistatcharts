@@ -406,3 +406,45 @@ def test_trend_breadth_calendar_span_clears_measured_need_with_margin():
     from src.breadth_trend import _CALENDAR_SPAN, _WINDOWS
     assert _CALENDAR_SPAN >= 293 + 30, "too tight; one extra holiday breaks the measure"
     assert max(_WINDOWS) == 200
+
+
+def test_trend_breadth_anchor_is_stable_across_a_weekend():
+    """Saturday and Sunday describe the same Friday data. An unclamped anchor
+    made them two different keys, so the scheduled refresh saw the anchor move
+    and re-ran a 157-second walk to produce a byte-identical answer — every
+    weekend, and repeatedly."""
+    import datetime as dt
+    import pandas as pd
+    from src.breadth_trend import _last_completed_session as last
+
+    def et(s):
+        return pd.Timestamp(s, tz="America/New_York")
+
+    friday = dt.date(2026, 8, 28)
+    assert last(et("2026-08-28 16:20")) == friday      # Friday after the close
+    assert last(et("2026-08-29 12:00")) == friday      # Saturday
+    assert last(et("2026-08-30 12:00")) == friday      # Sunday
+    assert last(et("2026-08-31 10:00")) == friday      # Monday, mid-session
+
+
+def test_trend_breadth_refresh_keys_on_the_anchor_not_the_data_date():
+    """Comparing the cached `asof` to the candidate date would never settle on a
+    market holiday: the newest data is legitimately older than the candidate, so
+    the check stays true and the walk re-runs every minute."""
+    import inspect
+    from src import breadth_trend
+    src = inspect.getsource(breadth_trend.refresh_due)
+    assert 'cur.get("anchor")' in src
+    assert 'cur.get("asof")' not in src
+
+
+def test_trend_breadth_never_computes_on_the_request_path():
+    """A miss on the request path is ~157s against the ES brief's 20s server
+    timeout — the card would not render slowly, it would not render."""
+    import inspect
+    from src import breadth_trend, es_breadth
+    assert "cached_only=True" in inspect.getsource(es_breadth._trend_or_none)
+    assert "cached_only" in inspect.signature(breadth_trend.trend_breadth).parameters
+    # And cached_only must never fall through to _compute.
+    src = inspect.getsource(breadth_trend.trend_breadth)
+    assert src.index("if cached_only:") < src.index("out = _compute(")

@@ -592,6 +592,21 @@ async def _gate_log_ticker() -> None:
             # the set cannot grow without bound on a long-lived instance.
             if now.hour >= 17 and done:
                 done.clear()
+
+            # THE 50/200-DAY BREADTH REFRESH RIDES HERE rather than getting its
+            # own loop. It is a ~157s walk that must never run on a request —
+            # the ES brief's fetch gives up at 20s — and a startup pre-warm
+            # alone does not cover a long-lived instance whose 12h cache
+            # expires mid-day. `refresh_due` is true only when the cached
+            # answer's anchor is behind the latest completed session, so this
+            # fires once per session day and is a no-op every other minute.
+            try:
+                from src.breadth_trend import refresh_due, trend_breadth
+                if refresh_due(now):
+                    logger.info("Trend breadth refresh due — walking 200 sessions")
+                    await asyncio.to_thread(trend_breadth)
+            except Exception as e:
+                logger.debug(f"trend breadth refresh skipped: {e}")
         except Exception as e:
             logger.debug(f"gate log tick failed: {e}")
         await asyncio.sleep(60)

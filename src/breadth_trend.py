@@ -75,11 +75,23 @@ def _accumulate(anchor: _date, max_window: int):
     """
     from src.es_breadth import _grouped
 
-    sums = {w: {} for w in _WINDOWS}
-    counts = {w: {} for w in _WINDOWS}
+    import pandas as pd
+
+    # PANDAS SERIES, NOT DICTS. The first version folded each day with a Python
+    # loop over ~12,000 tickers — ~2.4M interpreter-level operations. Series.add
+    # is the same arithmetic in C, with less GIL time and less allocation churn.
+    #
+    # It is NOT why the walk takes as long as it does, and I changed this
+    # believing it was. Measured either way: 143s before, 147s after. The cost
+    # is 200 sequential HTTP fetches at roughly 0.7s each — the walk is network
+    # bound, spends nearly all of it waiting with the GIL released, and does not
+    # starve request handling. Worth knowing before anyone optimises the wrong
+    # end of it again: to make this faster, fetch the days concurrently.
+    sums = {w: None for w in _WINDOWS}
+    counts = {w: None for w in _WINDOWS}
     latest_close = latest_vol = None
     sessions = 0
-    first_day = None
+    first_day = latest_day = None
     d = anchor
 
     while sessions < max_window and (anchor - d).days < _CALENDAR_SPAN:
@@ -92,24 +104,34 @@ def _accumulate(anchor: _date, max_window: int):
                 if latest_close is None:
                     latest_close = df["close"]
                     latest_vol = df["vol"]
+                    latest_day = d.isoformat()
                 sessions += 1
                 first_day = d.isoformat()
-                closes = df["close"]
+                closes = df["close"].astype("float64")
+                ones = pd.Series(1.0, index=closes.index)
                 for w in _WINDOWS:
                     if sessions <= w:
-                        s, c = sums[w], counts[w]
-                        for tk, px in closes.items():
-                            s[tk] = s.get(tk, 0.0) + float(px)
-                            c[tk] = c.get(tk, 0) + 1
+                        sums[w] = closes if sums[w] is None else sums[w].add(closes, fill_value=0.0)
+                        counts[w] = ones if counts[w] is None else counts[w].add(ones, fill_value=0.0)
         d -= timedelta(days=1)
 
-    return latest_close, latest_vol, sums, counts, sessions, first_day
+    return latest_close, latest_vol, sums, counts, sessions, first_day, latest_day
 
 
-def trend_breadth(anchor: _date | None = None, force: bool = False) -> dict:
+def trend_breadth(anchor: _date | None = None, force: bool = False,
+                  cached_only: bool = False) -> dict:
     """Share of the liquid universe trading above its 50- and 200-day average.
 
     Cached 12h: the inputs are daily bars and the answer changes once a session.
+
+    `cached_only` IS WHAT KEEPS THIS OFF THE REQUEST PATH, and the request path
+    must use it. The walk is ~200 grouped-daily fetches, measured at 157s cold.
+    The ES brief's server-side fetch gives up at 20s, so a request that triggers
+    a compute does not merely run slowly — it loses the whole card. Observed
+    live at 18.1s against a normally-0.16s endpoint, on a partially warm cache.
+    A startup pre-warm alone is not enough cover: the TTL expires once a day on
+    a long-lived instance, and the next reader would pay for it. `refresh_due`
+    below is the scheduled path that keeps the cache filled.
     """
     from time import time as _now
 
@@ -133,6 +155,11 @@ def trend_breadth(anchor: _date | None = None, force: bool = False) -> dict:
                     return value
         except Exception as e:
             logger.debug(f"trend breadth cache read failed: {e}")
+
+    if cached_only:
+        return {"available": False,
+                "reason": "not computed yet — the 200-session walk runs on a "
+                          "schedule, never on a request"}
 
     try:
         out = _compute(anchor)
@@ -171,6 +198,14 @@ def _last_completed_session(now=None) -> _date:
     d = now.date()
     if now.hour * 60 + now.minute < 16 * 60 + 15:
         d -= timedelta(days=1)
+    # CLAMPED TO A WEEKDAY. Without this Saturday and Sunday are two different
+    # anchors describing the same Friday data, so the scheduled refresh sees a
+    # moved anchor and re-runs a 157-second walk to produce a byte-identical
+    # answer — every weekend, and on Sunday every minute until it happened to
+    # match. Holidays still shift the anchor once and cost one redundant walk;
+    # a holiday calendar here would buy little and drift.
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
     return d
 
 
@@ -178,7 +213,7 @@ def _compute(anchor: _date | None = None) -> dict:
     from src.es_breadth import _MIN_DOLLAR_VOL
 
     anchor = anchor or _last_completed_session()
-    close, vol, sums, counts, sessions, first_day = _accumulate(anchor, max(_WINDOWS))
+    close, vol, sums, counts, sessions, first_day, latest_day = _accumulate(anchor, max(_WINDOWS))
 
     if close is None or sessions < min(_WINDOWS):
         return {"available": False,
@@ -192,7 +227,14 @@ def _compute(anchor: _date | None = None) -> dict:
 
     out: dict = {
         "available": True,
-        "asof": anchor.isoformat(),
+        # The newest session the data actually came from — NOT the anchor. On a
+        # weekend the anchor is a Friday the walk agrees with, but on a holiday
+        # they differ, and quoting the anchor would date the reading to a day
+        # the market never traded.
+        "asof": latest_day,
+        # The clock-derived anchor, kept so `refresh_due` has a stable key that
+        # moves exactly once per session day.
+        "anchor": anchor.isoformat(),
         "sessions_used": sessions,
         "from": first_day,
         "universe": {
@@ -205,7 +247,11 @@ def _compute(anchor: _date | None = None) -> dict:
     }
 
     for w in _WINDOWS:
-        s, c = sums[w], counts[w]
+        s = sums[str(w)] if str(w) in sums else sums[w]
+        c = counts[str(w)] if str(w) in counts else counts[w]
+        if s is None or c is None:
+            continue
+        s, c = s.to_dict(), c.to_dict()
         above = below = 0
         for tk in liquid:
             # A name must have the FULL window of history. Averaging a 200-day
@@ -252,6 +298,26 @@ def _compute(anchor: _date | None = None) -> dict:
         out["history"] = {}
 
     return out
+
+
+def refresh_due(now=None) -> bool:
+    """True when the cached answer is not for the latest completed session.
+
+    Called from the API's minute ticker. The measure changes once a session, so
+    "due" simply means the anchor moved — no cron expression to drift out of
+    step with the market calendar.
+    """
+    try:
+        import pandas as pd
+        want = _last_completed_session(now or pd.Timestamp.now(tz="America/New_York"))
+        cur = trend_breadth(cached_only=True)
+        # Compared on the ANCHOR. Comparing on `asof` would never settle on a
+        # holiday: the newest data is legitimately older than the candidate
+        # date, so the check would stay true and re-run the walk every minute.
+        return not (cur.get("available") and cur.get("anchor") == want.isoformat())
+    except Exception as e:
+        logger.debug(f"trend breadth refresh check failed: {e}")
+        return False
 
 
 def prewarm() -> None:

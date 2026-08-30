@@ -266,7 +266,10 @@ def _trend_or_none() -> dict | None:
     200-session walk failing must not cost the reader today's advance/decline."""
     try:
         from src.breadth_trend import trend_breadth
-        t = trend_breadth()
+        # CACHE ONLY. A miss here would put a ~157s walk on the request path,
+        # against the ES brief's 20s server-side timeout — the card would not
+        # render slowly, it would not render. The scheduled refresh fills it.
+        t = trend_breadth(cached_only=True)
         return t if t.get("available") else None
     except Exception as e:
         logger.debug(f"trend breadth unavailable: {e}")
