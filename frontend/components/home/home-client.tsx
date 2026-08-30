@@ -749,8 +749,19 @@ function TweetWatch() {
         <>
           <div className="text-[0.6rem] text-text-muted flex items-center gap-2">
             <span className="font-semibold">@realDonaldTrump</span>
-            <span>·</span>
-            <span>{fmtAgo(latest.timestamp, nowMin)}</span>
+            {/* Both the separator and the age are gated on the age existing.
+                An always-rendered "·" beside a span that goes from empty to
+                filled is the same server/client text difference the ES card's
+                headline rows had. */}
+            {(() => {
+              const age = fmtAgo(latest.timestamp, nowMin);
+              return age ? (
+                <>
+                  <span>·</span>
+                  <span>{age}</span>
+                </>
+              ) : null;
+            })()}
             <span className={`ml-auto ${sentimentColor(latest.sentiment)}`}>{latest.sentiment}</span>
           </div>
           <p className="text-sm text-text leading-snug line-clamp-4">{latest.text}</p>

@@ -278,7 +278,12 @@ export default function UnusualToday() {
             className={`ml-auto text-[0.55rem] tabular-nums ${oldest > 90 ? "text-amber-400" : "text-text-muted"}`}
             title="Age of the OLDEST board feeding this ribbon. A summary of four boards is only as current as its stalest member."
           >
-            oldest input {oldest < 1 ? "just now" : oldest < 60 ? `${oldest}m` : `${Math.floor(oldest / 60)}h`} old
+            {/* "oldest input just now old" is what a template reads like when
+                the zero case was never looked at. The whole phrase varies, not
+                just the number. */}
+            {oldest < 1
+              ? "all inputs current"
+              : `oldest input ${oldest < 60 ? `${oldest}m` : `${Math.floor(oldest / 60)}h`} old`}
           </span>
         )}
       </div>

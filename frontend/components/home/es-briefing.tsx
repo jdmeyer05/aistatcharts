@@ -2060,7 +2060,16 @@ export default function EsBriefing() {
                         )}
                         <span className="text-text-muted ml-1 text-[0.55rem] whitespace-nowrap">
                           {n.source}
-                          {n.published ? ` · ${fmtAgo(n.published, nowMin)}` : ""}
+                          {/* Separator INSIDE the conditional. `fmtAgo` returns "" until the
+                              clock has a value, so ` · ${...}` emitted a dangling "·"
+                              on the server against "· 1h ago" on the client — which is
+                              the text mismatch that was still firing React #418 after
+                              every time string had already been removed from the SSR.
+                              Same shape as the "bars" label; fixed there, missed here. */}
+                          {(() => {
+                            const age = n.published ? fmtAgo(n.published, nowMin) : "";
+                            return age ? ` · ${age}` : "";
+                          })()}
                         </span>
                       </li>
                     ))}
