@@ -116,7 +116,7 @@ function plainRead(d: CtaFlowBoard): { headline: string; detail: string } | null
       ? `Over a week, a 2σ drop (−${move2sig}%) implies ${signed(down)} pts of exposure change and a 2σ rally (+${move2sig}%) implies ${signed(up)}.`
       : `Over a week, a 2σ drop implies ${signed(down)} pts of exposure change and a 2σ rally implies ${signed(up)}.`) +
     (nearest && nearestLabel
-      ? ` Nearest flip level is the ${nearestLabel.toLowerCase()} pivot at ${nearest[1]!.level.toLocaleString()} ` +
+      ? ` Nearest flip level is the ${nearestLabel.toLowerCase()} pivot at ${nearest[1]!.level.toLocaleString("en-US")} ` +
         `(${signed(nearest[1]!.distance_pct, 2)}% away)` +
         (typeof sig1w === "number" && Math.abs(nearest[1]!.distance_pct) <= sig1w
           ? " — inside a 1σ week, so it is live on this horizon."
@@ -255,7 +255,7 @@ export default function CtaFlows() {
       {d?.available && (
         <>
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-[0.65rem] text-text-muted">
-            <span>Spot <span className="text-text font-semibold tabular-nums">{d.last_price.toLocaleString()}</span></span>
+            <span>Spot <span className="text-text font-semibold tabular-nums">{d.last_price.toLocaleString("en-US")}</span></span>
             <span>Current exposure <span className="text-text font-semibold tabular-nums">{signed(d.current_exposure)}</span></span>
             {/* Both sigmas, because the table quotes both horizons — showing only
                 the 20d one leaves the 1W column unanchored to any price move. */}
@@ -399,7 +399,7 @@ export default function CtaFlows() {
                       <div key={key} className="flex items-baseline justify-between text-[0.68rem]">
                         <span className="text-text-muted">{label}</span>
                         <span className="tabular-nums">
-                          <span className="text-text font-semibold">{p.level.toLocaleString()}</span>
+                          <span className="text-text font-semibold">{p.level.toLocaleString("en-US")}</span>
                           <span className={`ml-1.5 ${p.distance_pct < 0 ? "text-loss" : "text-gain"}`}>
                             {signed(p.distance_pct, 2)}%
                           </span>

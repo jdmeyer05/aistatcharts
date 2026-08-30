@@ -494,6 +494,33 @@ async def _warm_caches() -> None:
     )
 
 
+def _due_mark(now) -> float | None:
+    """The 30-minute mark that should be logged right now, or None.
+
+    EXTRACTED SO IT CAN BE TESTED. The ticker only runs during cash hours, so
+    the branch deciding what it writes would otherwise first execute in
+    production, unobserved, on a Monday morning. Every rule it encodes is a rule
+    that was wrong once:
+
+      * weekdays only, and only around the cash session — cheap guards before
+        paying to build a brief that `log_gate` will decline anyway.
+      * `_mark` returns the LAST mark at or before now, so at 16:05 it still
+        answers 15.0. Writing then stamps a 16:05 snapshot onto the 15:00 slot —
+        a verdict recorded half an hour after the slot it claims to describe.
+        Hence the half-hour window test.
+
+    Returns the mark to write, or None to skip this tick.
+    """
+    if now.weekday() >= 5 or not (9 <= now.hour <= 16):
+        return None
+    import pandas as pd
+    from src.es_gate_log import _mark
+    mark = _mark(pd.Timestamp(now))
+    if mark is None:
+        return None
+    return mark if (now.hour + now.minute / 60) - mark < 0.5 else None
+
+
 async def _gate_log_ticker() -> None:
     """Log the conditions gate on a schedule instead of on page visits.
 
@@ -522,7 +549,7 @@ async def _gate_log_ticker() -> None:
     done: set[str] = set()
 
     try:
-        from src.es_gate_log import _MARKS, _mark, log_gate, snapshot_key
+        from src.es_gate_log import _MARKS, log_gate, snapshot_key
     except Exception as e:
         logger.warning(f"Gate log ticker not started: {e}")
         return
@@ -534,29 +561,21 @@ async def _gate_log_ticker() -> None:
             # Cheap guards first — no reason to build a brief outside the cash
             # session. The authoritative RTH/holiday test is `log_gate`'s own
             # phase check; this only avoids paying to be told no.
-            if now.weekday() < 5 and 9 <= now.hour <= 16:
-                import pandas as pd
-                ts = pd.Timestamp(now)
-                mark = _mark(ts)
-                # `_mark` returns the LAST mark at or before now, so at 16:05 it
-                # still answers 15.0. Writing then would stamp a 16:05 snapshot
-                # onto the 15:00 slot — a verdict recorded half an hour after the
-                # slot it claims to describe. Only write inside the mark's own
-                # half-hour window; the route-handler call still covers the rest.
-                if mark is not None and (now.hour + now.minute / 60) - mark < 0.5:
-                    key = snapshot_key(str(now.date()), mark)
-                    if key not in done:
-                        from api.routes.market import _es_brief_cached
-                        brief = await asyncio.to_thread(_es_brief_cached)
-                        written = await asyncio.to_thread(log_gate, brief, ts)
-                        # Marked done on ANY resolution, `None` included. A None
-                        # means log_gate declined — holiday, or a phase that is
-                        # not RTH — and retrying every minute would rebuild the
-                        # brief four hundred times to be declined four hundred
-                        # times.
-                        done.add(key)
-                        if written:
-                            logger.info(f"Gate logged {written}")
+            mark = _due_mark(now)
+            if mark is not None:
+                key = snapshot_key(str(now.date()), mark)
+                if key not in done:
+                    import pandas as pd
+                    from api.routes.market import _es_brief_cached
+                    brief = await asyncio.to_thread(_es_brief_cached)
+                    written = await asyncio.to_thread(log_gate, brief, pd.Timestamp(now))
+                    # Marked done on ANY resolution, `None` included. A None
+                    # means log_gate declined — holiday, or a phase that is not
+                    # RTH — and retrying every minute would rebuild the brief
+                    # four hundred times to be declined four hundred times.
+                    done.add(key)
+                    if written:
+                        logger.info(f"Gate logged {written}")
             # Clear once the session is well past, so tomorrow starts fresh and
             # the set cannot grow without bound on a long-lived instance.
             if now.hour >= 17 and done:

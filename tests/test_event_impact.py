@@ -280,3 +280,45 @@ def test_priority_events_are_never_dropped_even_past_the_cap():
     items = [_ev(f"Big {i}", i, impact="high") for i in range(1, 11)]
     out = _select_calendar_events(items, cap=4)
     assert len(out) == 10
+
+
+# ── the gate ticker's decision, which otherwise first runs unobserved ──
+
+def _et(day, hh, mm):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime(2026, 9, day, hh, mm, tzinfo=ZoneInfo("America/New_York"))
+
+
+def test_ticker_writes_inside_the_marks_own_window():
+    """A Tuesday at 10:05 belongs to the 10:00 mark."""
+    from api.main import _due_mark
+    assert _due_mark(_et(1, 10, 5)) == 10.0
+    assert _due_mark(_et(1, 10, 35)) == 10.5
+    assert _due_mark(_et(1, 15, 10)) == 15.0
+
+
+def test_ticker_refuses_a_mark_that_has_already_passed():
+    """`_mark` returns the LAST mark at or before now, so at 16:05 it still
+    answers 15.0 — writing then stamps a 16:05 snapshot onto the 15:00 slot, a
+    verdict recorded half an hour after the slot it claims to describe."""
+    from api.main import _due_mark
+    assert _due_mark(_et(1, 16, 5)) is None
+    assert _due_mark(_et(1, 15, 45)) is None      # 45 min past the 15:00 mark
+
+
+def test_ticker_skips_outside_the_cash_session_and_on_weekends():
+    from api.main import _due_mark
+    assert _due_mark(_et(1, 9, 45)) is None       # before the first mark
+    assert _due_mark(_et(1, 3, 0)) is None        # overnight
+    assert _due_mark(_et(5, 10, 5)) is None       # Saturday
+    assert _due_mark(_et(6, 10, 5)) is None       # Sunday
+
+
+def test_ticker_covers_every_mark_the_logger_defines():
+    """Each of the eleven marks must be reachable, or the record is built from
+    a subset of the session without anyone noticing."""
+    from api.main import _due_mark
+    from src.es_gate_log import _MARKS
+    hit = {_due_mark(_et(1, int(m), int(round((m % 1) * 60)))) for m in _MARKS}
+    assert hit == set(_MARKS), f"unreachable marks: {set(_MARKS) - hit}"

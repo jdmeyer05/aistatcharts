@@ -125,7 +125,7 @@ function RangeBars({ d }: { d: EsCandleContext }) {
           </span>
         )}
         <span className="ml-auto tabular-nums">
-          {f.prob_exceeds_1_atr.toFixed(0)}% exceed 1 ATR · n={f.n.toLocaleString()}
+          {f.prob_exceeds_1_atr.toFixed(0)}% exceed 1 ATR · n={f.n.toLocaleString("en-US")}
         </span>
       </div>
     </div>
@@ -210,7 +210,7 @@ export default function CandleContextBlock({ d }: { d: EsCandleContext | null | 
               const shade = 14 + (curve.length - 1 - i) * 9;
               return (
                 <div key={b.bucket} className="flex-1 min-w-0"
-                     title={`Closed ${CLV_LABELS[b.bucket] ?? b.bucket}: up ${b.next_up_pct.toFixed(1)}% next session over ${b.n.toLocaleString()} instances, median ${b.median_next_ret_pct >= 0 ? "+" : ""}${b.median_next_ret_pct.toFixed(3)}%.`}>
+                     title={`Closed ${CLV_LABELS[b.bucket] ?? b.bucket}: up ${b.next_up_pct.toFixed(1)}% next session over ${b.n.toLocaleString("en-US")} instances, median ${b.median_next_ret_pct >= 0 ? "+" : ""}${b.median_next_ret_pct.toFixed(3)}%.`}>
                   <div
                     className={`h-6 rounded-sm flex items-end justify-center ${b.is_today ? "ring-1 ring-accent" : ""}`}
                     style={{ background: `color-mix(in oklab, var(--color-accent) ${shade}%, transparent)` }}

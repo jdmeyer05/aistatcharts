@@ -101,7 +101,7 @@ function impactClass(i: EsImpact): string {
 
 function fmtCap(c?: number): string | null {
   if (!c) return null;
-  return c >= 1e12 ? `$${(c / 1e12).toFixed(2)}T` : `$${Math.round(c / 1e9).toLocaleString()}B`;
+  return c >= 1e12 ? `$${(c / 1e12).toFixed(2)}T` : `$${Math.round(c / 1e9).toLocaleString("en-US")}B`;
 }
 
 /** One row of the scheduled-risk list.
@@ -637,7 +637,7 @@ export default function EsBriefing() {
           `range, so about ${left.toFixed(0)}% is usually still ahead — and the high is already in ` +
           `${live.high_in_pct.toFixed(0)}% of the time, the low ${live.low_in_pct.toFixed(0)}%.`,
         detail:
-          `Measured on ${p.instrument ?? p.source} over ${p.sessions?.toLocaleString()} sessions. ` +
+          `Measured on ${p.instrument ?? p.source} over ${p.sessions?.toLocaleString("en-US")} sessions. ` +
           `These say WHEN a session tends to get where it is going, never where — nothing in this ` +
           `table carries direction. The 15:30 bucket is half the width of the others, so its share ` +
           `of the extremes understates the closing drive minute for minute.`,
@@ -650,7 +650,7 @@ export default function EsBriefing() {
         ? `The first hour has made ${ib.share_of_day_range_pct.toFixed(0)}% of a typical session's ` +
           `whole range, and one side of it broke on ${ib.one_sided_pct.toFixed(0)}% of sessions ` +
           `against ${ib.both_sides_pct.toFixed(0)}% that broke both.`
-        : `Hourly path rates over ${p.sessions?.toLocaleString()} sessions of ${p.instrument ?? p.source}.`,
+        : `Hourly path rates over ${p.sessions?.toLocaleString("en-US")} sessions of ${p.instrument ?? p.source}.`,
       detail:
         `No live reading — this is outside a cash session, and "x% of the range is still to come" ` +
         `describes a day that is trading. The table stands as an unconditional prior; it says when ` +
@@ -686,7 +686,7 @@ export default function EsBriefing() {
               `left from here. They are different questions and the gap between them widens through ` +
               `the morning; the live figure is the one that applies to a decision taken now. `
             : "") +
-          `Measured on ${live.instrument ?? br.instrument ?? "SPY"} over ${live.sessions?.toLocaleString() ?? br.sessions?.toLocaleString()} sessions. ` +
+          `Measured on ${live.instrument ?? br.instrument ?? "SPY"} over ${live.sessions?.toLocaleString("en-US") ?? br.sessions?.toLocaleString("en-US")} sessions. ` +
           `Direction was tested on both windows and came back null, so this says whether, not which way.`,
       };
     }
@@ -700,7 +700,7 @@ export default function EsBriefing() {
           `, took the prior high ${rng.took_prior_high_pct?.toFixed(0)}% of the time and the prior low ` +
           `${rng.took_prior_low_pct?.toFixed(0)}%.`,
         detail:
-          `These are unconditional priors over ${br.sessions?.toLocaleString()} sessions of ` +
+          `These are unconditional priors over ${br.sessions?.toLocaleString("en-US")} sessions of ` +
           `${br.instrument ?? br.source}, not forecasts for today — they are the number a claim has ` +
           `to beat, not a claim of their own. Three studies appear on this card on three different ` +
           `instruments and windows; each is labelled where it is used, and they must not be merged.`,
@@ -728,7 +728,7 @@ export default function EsBriefing() {
       tone: (divergent || thinCoverage ? "warn" : "neutral") as "warn" | "neutral",
       headline:
         (typeof net === "number"
-          ? `Net advancers ${net > 0 ? "+" : ""}${net.toFixed(0)}% of ${b.universe?.n?.toLocaleString() ?? "the"} names`
+          ? `Net advancers ${net > 0 ? "+" : ""}${net.toFixed(0)}% of ${b.universe?.n?.toLocaleString("en-US") ?? "the"} names`
           : "Breadth") +
         (divergent
           ? " — and breadth is DIVERGING from the index, so the move is being carried by fewer names than the tape suggests."
@@ -1504,7 +1504,7 @@ export default function EsBriefing() {
                 </span>
                 <span className="text-[0.55rem] text-text-muted">
                   nearest {analogQ.data.k_scored} of{" "}
-                  {analogQ.data.n_history?.toLocaleString()}
+                  {analogQ.data.n_history?.toLocaleString("en-US")}
                   {analogQ.data.mode === "intraday blend"
                     ? ` · re-matched at ${analogQ.data.slot}`
                     : " · prior structure + shape + vol"}
@@ -2567,9 +2567,9 @@ export default function EsBriefing() {
                   Breadth
                 </h3>
                 <span className="text-[0.55rem] text-text-muted" title={d.breadth.universe?.note}>
-                  {d.breadth.universe?.n?.toLocaleString()}
+                  {d.breadth.universe?.n?.toLocaleString("en-US")}
                   {d.breadth.universe?.eligible_n
-                    ? ` of ${d.breadth.universe.eligible_n.toLocaleString()}`
+                    ? ` of ${d.breadth.universe.eligible_n.toLocaleString("en-US")}`
                     : ""}{" "}
                   names · {d.breadth.live ? "live" : `last session ${d.breadth.session ?? ""}`}
                 </span>
@@ -2611,8 +2611,8 @@ export default function EsBriefing() {
                     {d.breadth.net_advancers_pct?.toFixed(0)}%
                   </div>
                   <div className="text-[0.55rem] text-text-muted tabular-nums">
-                    {d.breadth.advancers?.toLocaleString()} up ·{" "}
-                    {d.breadth.decliners?.toLocaleString()} down
+                    {d.breadth.advancers?.toLocaleString("en-US")} up ·{" "}
+                    {d.breadth.decliners?.toLocaleString("en-US")} down
                   </div>
                 </div>
 
@@ -2698,7 +2698,7 @@ export default function EsBriefing() {
                      of them unlabelled and a reader merges them into one. */
                   <span className="text-[0.55rem] text-text-muted">
                     {d.base_rates.instrument ?? d.base_rates.source} ·{" "}
-                    {d.base_rates.sessions?.toLocaleString()} sessions ·{" "}
+                    {d.base_rates.sessions?.toLocaleString("en-US")} sessions ·{" "}
                     {d.base_rates.from} to {d.base_rates.to}
                   </span>
                 }
@@ -2707,7 +2707,7 @@ export default function EsBriefing() {
                 <p className="text-[0.55rem] text-text-muted leading-snug">
                   Intraday path rates below are measured on{" "}
                   <span className="text-text">{d.base_rates.path.instrument}</span>,{" "}
-                  {d.base_rates.path.sessions?.toLocaleString()} sessions
+                  {d.base_rates.path.sessions?.toLocaleString("en-US")} sessions
                   {d.base_rates.path.from ? ` (${d.base_rates.path.from} to ${d.base_rates.path.to})` : ""}
                   {d.base_rates.path.instrument_note ? ` — ${d.base_rates.path.instrument_note}` : "."}
                 </p>
@@ -2760,7 +2760,7 @@ export default function EsBriefing() {
                     <p className="text-[0.55rem] text-text-muted leading-snug">
                       Conditioned on the {g.conditioned_on}. Measured on{" "}
                       <span className="text-text">{g.instrument}</span>,{" "}
-                      {g.sessions?.toLocaleString()} sessions ({g.from} to {g.to}) — a
+                      {g.sessions?.toLocaleString("en-US")} sessions ({g.from} to {g.to}) — a
                       different series and a shorter window than the daily rates above.
                     </p>
                   </div>
@@ -2850,7 +2850,7 @@ export default function EsBriefing() {
                   /* Its own window — shorter than the daily study above, and
                      labelling it with those sessions would overstate it. */
                   <span className="text-[0.55rem] text-text-muted">
-                    {d.base_rates.path.source} · {d.base_rates.path.sessions?.toLocaleString()} sessions ·{" "}
+                    {d.base_rates.path.source} · {d.base_rates.path.sessions?.toLocaleString("en-US")} sessions ·{" "}
                     {d.base_rates.path.from} to {d.base_rates.path.to}
                   </span>
                 }

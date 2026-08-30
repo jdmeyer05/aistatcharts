@@ -380,12 +380,16 @@ def grade_market_driver(payload: dict, output: dict) -> list[dict]:
 # idea). With the instruction no longer asking for it, a directive IS a
 # violation, so this is `major`.
 #
-# SEQUENCING, worth knowing if findings spike: the prompt override lands in the
-# git baseline and promotes on the next `--task prompt_seed` run. Until that
-# run, the serving version is still the old text, so its output will be graded
-# major against an instruction it was not given. That is the correct signal —
-# the output does violate the house rule — and it is exactly what should drive
-# the rewrite, but it will look like a sudden regression on the scorecard.
+# NO SEQUENCING GAP, and I first wrote the opposite here. The override lives in
+# `PAGE_CONTEXT["home_page"]`, which is read per request — only the SYSTEM text
+# goes through `prompt_registry`. So the instruction and this severity change
+# ship in the same deploy and take effect together; nothing is graded against an
+# instruction it was not given. `_interpret_cache_key` also hashes PAGE_CONTEXT,
+# so the edit invalidates cached answers by itself.
+#
+# Expect a step in `directive_wording` on the day this lands: the detector went
+# from matching 1 of 7 real violations to 12 of 12, so historical rows re-graded
+# under it will look worse. That is the measurement improving, not the output.
 #
 # WIDENED 2026-08-29 because it was nominally graded and effectively unenforced.
 # The previous pattern matched 1 of 7 violations found in live output: it caught

@@ -49,7 +49,7 @@ function netClass(label?: string): string {
 
 function fmtLevel(r: MacroFactorRow): string {
   const n = r.display_level;
-  const v = Math.abs(n) >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 })
+  const v = Math.abs(n) >= 1000 ? n.toLocaleString("en-US", { maximumFractionDigits: 0 })
                                 : n.toFixed(2);
   return r.display_unit === "$T" ? `$${v}T` : `${v}${r.display_unit}`;
 }

@@ -128,7 +128,7 @@ function MarketPulse() {
             <div key={tk} className="flex items-baseline gap-1.5 min-w-0">
               <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">{label}</span>
               <span className="text-sm font-semibold tabular-nums">
-                {s.price ? s.price.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
+                {s.price ? s.price.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
               </span>
               <span className={`text-xs tabular-nums ${pctClass(s.change)}`}>
                 {s.change == null ? "" : `${s.change > 0 ? "+" : ""}${s.change.toFixed(2)}%`}
