@@ -64,6 +64,14 @@ _CALENDAR_SPAN = 340
 _CACHE: dict = {}
 _TTL_S = 12 * 3600
 
+#: When the last walk was ATTEMPTED, successful or not. A failed compute does
+#: not cache, so without this the minute ticker would see `refresh_due` stay
+#: true and re-run a ~147-second walk every sixty seconds for as long as the
+#: upstream stayed down — hammering Polygon and pinning a worker, on the exact
+#: day the data provider is having a bad morning.
+_last_attempt: float = 0.0
+_RETRY_AFTER_S = 30 * 60
+
 
 def _accumulate(anchor: _date, max_window: int):
     """Fold grouped-daily frames newest-first into per-ticker running sums.
@@ -161,6 +169,8 @@ def trend_breadth(anchor: _date | None = None, force: bool = False,
                 "reason": "not computed yet — the 200-session walk runs on a "
                           "schedule, never on a request"}
 
+    global _last_attempt
+    _last_attempt = _now()
     try:
         out = _compute(anchor)
     except Exception as e:
@@ -307,6 +317,9 @@ def refresh_due(now=None) -> bool:
     "due" simply means the anchor moved — no cron expression to drift out of
     step with the market calendar.
     """
+    from time import time as _now
+    if _now() - _last_attempt < _RETRY_AFTER_S:
+        return False
     try:
         import pandas as pd
         want = _last_completed_session(now or pd.Timestamp.now(tz="America/New_York"))

@@ -448,3 +448,36 @@ def test_trend_breadth_never_computes_on_the_request_path():
     # And cached_only must never fall through to _compute.
     src = inspect.getsource(breadth_trend.trend_breadth)
     assert src.index("if cached_only:") < src.index("out = _compute(")
+
+
+def test_trend_breadth_failed_walk_does_not_retry_every_minute(monkeypatch):
+    """A failed compute does not cache, so `refresh_due` stays true. Without a
+    throttle the minute ticker would re-run a ~147-second walk every sixty
+    seconds for as long as the upstream stayed down — hammering the provider on
+    exactly the morning it is already having trouble."""
+    import time
+    from src import breadth_trend as bt
+
+    monkeypatch.setattr(bt, "_CACHE", {})
+    # No cached answer at all -> genuinely due.
+    monkeypatch.setattr(bt, "trend_breadth",
+                        lambda *a, **k: {"available": False, "reason": "down"})
+    monkeypatch.setattr(bt, "_last_attempt", 0.0)
+    assert bt.refresh_due() is True, "a cold, uncached measure should be due"
+
+    # Immediately after an attempt, it must back off rather than re-run.
+    monkeypatch.setattr(bt, "_last_attempt", time.time())
+    assert bt.refresh_due() is False
+
+    # And come back once the window passes.
+    monkeypatch.setattr(bt, "_last_attempt", time.time() - bt._RETRY_AFTER_S - 1)
+    assert bt.refresh_due() is True
+
+
+def test_trend_breadth_records_the_attempt_even_when_it_fails():
+    """The throttle only works if the timestamp is set BEFORE the compute, so a
+    raise still counts as an attempt."""
+    import inspect
+    from src import breadth_trend as bt
+    src = inspect.getsource(bt.trend_breadth)
+    assert src.index("_last_attempt = _now()") < src.index("out = _compute(")
