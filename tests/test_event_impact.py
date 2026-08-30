@@ -184,6 +184,36 @@ def test_single_day_refuses_an_interval():
     assert "note" in out
 
 
+def test_too_few_clusters_refuses_rather_than_quoting_an_artefact():
+    """CAUGHT LIVE ON /prompt-loop. A bootstrap over 3 days resamples from ten
+    distinct multisets, so the interval it returns is shaped by having three
+    days — it came back NARROWER than the naive Wilson interval it exists to
+    widen, and the page rendered the self-contradictory "0.8x too narrow".
+    Below the floor the interval is withheld and the point estimates stand."""
+    from src.prompt_claims import _cluster_ci, _MIN_CLUSTERS
+    rows = [{"stated_at": f"2026-08-{d:02d}T15:00:00Z", "correct": d % 2 == 0}
+            for d in range(1, 4) for _ in range(7)]
+    out = _cluster_ci(rows, b=200)
+    assert out["n_days"] == 3
+    assert out["ci95_clustered"] is None
+    assert out["min_clusters"] == _MIN_CLUSTERS
+    assert "too few" in out["note"]
+    # The point estimates are still real and still reported.
+    assert out["hit_rate_pooled"] is not None
+    assert out["hit_rate_by_day"] is not None
+
+
+def test_at_the_floor_the_interval_is_quoted_and_widens():
+    """Above the floor the clustering does what it is for: the interval comes
+    back WIDER than naive, not narrower."""
+    from src.prompt_claims import _cluster_ci, _MIN_CLUSTERS
+    rows = [{"stated_at": f"2026-08-{d:02d}T15:00:00Z", "correct": d % 2 == 0}
+            for d in range(1, _MIN_CLUSTERS + 1) for _ in range(6)]
+    out = _cluster_ci(rows, b=400)
+    assert out["ci95_clustered"] is not None
+    assert out["width_ratio_vs_naive"] > 1
+
+
 def test_pooled_and_by_day_diverge_when_traffic_is_lopsided():
     """A day the page was loaded forty times should not outvote thirty-nine
     other days. When these two disagree, the record is measuring traffic."""

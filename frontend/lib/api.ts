@@ -5162,7 +5162,10 @@ export interface PromptCalibration {
     /** Each DAY weighted equally. When this and `hit_rate_pooled` disagree, the
      *  record is being driven by traffic rather than by forecasting. */
     hit_rate_by_day?: number;
+    /** Null below `min_clusters` — a bootstrap over three days returns a number
+     *  shaped by having three days. `note` says which case it is. */
     ci95_clustered?: [number, number] | null;
+    min_clusters?: number;
     ci95_by_day?: [number, number];
     /** How much wider than the naive interval. Above 1 is the size of the
      *  precision the independence assumption was inventing. */

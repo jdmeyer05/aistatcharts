@@ -355,11 +355,16 @@ export default function PromptLoopPage() {
                   /* The DAY-CLUSTERED interval, falling back to Wilson only when
                      there is a single session and nothing to resample. Wilson
                      assumes the claims are independent draws; they are not. */
+                  /* No naive fallback. Wilson assumes independent draws, and
+                     these are not — printing it when the clustered one is
+                     unavailable would quote the exact interval the clustering
+                     exists to replace, and the reader has no way to tell which
+                     they are looking at. Say the sample is too thin instead. */
                   delta={
                     cal.clustered?.ci95_clustered
                       ? `95% CI ${pct(cal.clustered.ci95_clustered[0], 0)}–${pct(cal.clustered.ci95_clustered[1], 0)} (day-clustered)`
-                      : cal.hit_rate_ci95
-                        ? `95% CI ${pct(cal.hit_rate_ci95[0], 0)}–${pct(cal.hit_rate_ci95[1], 0)}`
+                      : cal.clustered?.n_days != null
+                        ? `interval withheld — ${cal.clustered.n_days} of ${cal.clustered.min_clusters ?? 10} sessions needed`
                         : undefined
                   }
                 />
@@ -390,16 +395,36 @@ export default function PromptLoopPage() {
                     Stated rather than quietly applied: the number on this page
                     moved, and a reader who saw the old one is owed the reason it
                     was the old one that was wrong. */}
-                {cal.clustered?.n_days != null && cal.clustered.n_days > 1 && (
+                {cal.clustered?.n_days != null && (
                   <p className="text-xs text-text-muted">
-                    <strong>The interval is clustered by session.</strong> The home
-                    interpretation fires once per page load and its payload carries a live
-                    price, so the same market state produces a fresh set of claims every few
-                    minutes. As {cal.n} independent draws they are not independent; as{" "}
-                    {cal.clustered.n_days} sessions they are.
-                    {cal.clustered.width_ratio_vs_naive
-                      ? ` Ignoring that made the interval ${cal.clustered.width_ratio_vs_naive.toFixed(1)}× too narrow.`
-                      : ""}
+                    <strong>Claims are not independent draws.</strong> The home interpretation
+                    fires once per page load and its payload carries a live price, so the same
+                    market state produces a fresh set of claims every few minutes. {cal.n} claims
+                    across {cal.clustered.n_days} session{cal.clustered.n_days === 1 ? "" : "s"} is{" "}
+                    {cal.clustered.n_days} pieces of evidence, not {cal.n}.
+                    {/* THE INTERVAL IS ONLY QUOTED WHEN IT MEANS SOMETHING. Below
+                        the cluster floor the backend returns null and says why —
+                        a bootstrap over three days returns a number shaped by
+                        having three days, and it came back NARROWER than the
+                        naive interval it exists to widen. */}
+                    {cal.clustered.ci95_clustered ? (
+                      <>
+                        {" "}The interval above is bootstrapped over sessions rather than claims.
+                        {cal.clustered.width_ratio_vs_naive
+                          ? cal.clustered.width_ratio_vs_naive > 1
+                            ? ` Treating the claims as independent made it ${cal.clustered.width_ratio_vs_naive.toFixed(1)}× too narrow.`
+                            : ` Here it lands close to the naive interval (${cal.clustered.width_ratio_vs_naive.toFixed(2)}× its width), so the dependence is not currently costing much precision.`
+                          : ""}
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        <span className="text-warn">No clustered interval yet</span>
+                        {cal.clustered.note ? ` — ${cal.clustered.note}` : "."} The hit rate itself
+                        stands; treat its precision as unknown rather than as the naive interval
+                        suggests.
+                      </>
+                    )}
                     {cal.clustered.hit_rate_by_day != null &&
                       cal.clustered.hit_rate_pooled != null && (
                         <>

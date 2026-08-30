@@ -531,6 +531,12 @@ def _session_day(stated_at: str | None) -> str:
         return str(stated_at)[:10]
 
 
+#: Days needed before a cluster bootstrap is quoted at all. Below this the
+#: interval is a function of how few clusters there are rather than of the
+#: data — see the refusal branch in `_cluster_ci`.
+_MIN_CLUSTERS = 10
+
+
 def _cluster_ci(rows: list[dict], b: int = 2000, seed: int = 20260829) -> dict:
     """Day-clustered interval for the hit rate, plus the equal-weight variant.
 
@@ -572,17 +578,34 @@ def _cluster_ci(rows: list[dict], b: int = 2000, seed: int = 20260829) -> dict:
     pooled = sum(sum(by_day[d]) for d in days) / n
     mean_by_day = sum(day_rates) / k
 
-    # One day is one cluster: there is nothing to resample, and an interval
-    # from a single cluster is a statement about that day rather than about the
-    # surface. Say so instead of returning a spuriously tight range.
-    if k < 2:
+    # TOO FEW CLUSTERS TO BOOTSTRAP, and this refusal is load-bearing.
+    #
+    # The cluster bootstrap resamples DAYS, so its resolution is bounded by how
+    # many days exist. At k=3 there are only ten distinct multisets to draw
+    # from and the interval it returns is an artefact of that coarseness, not a
+    # measurement — on live data it came back NARROWER than the naive Wilson
+    # interval it was supposed to widen, which is the tell. The literature
+    # wants dozens of clusters; ten is already generous.
+    #
+    # So below the floor this reports the day count and the two point estimates
+    # and refuses the interval, exactly as the conditions gate refuses below 30
+    # sessions. A wrong interval quoted confidently is worse than an absent one,
+    # and this is the module whose whole purpose is not overstating precision.
+    if k < _MIN_CLUSTERS:
         return {
             "n_days": k,
             "claims_per_day": round(n / k, 2),
             "hit_rate_pooled": round(pooled, 4),
             "hit_rate_by_day": round(mean_by_day, 4),
             "ci95_clustered": None,
-            "note": "one session in the window — no between-day variation to measure",
+            "min_clusters": _MIN_CLUSTERS,
+            "note": (
+                "one session in the window — no between-day variation to measure"
+                if k < 2 else
+                f"{k} sessions is too few to bootstrap over; {_MIN_CLUSTERS} are needed "
+                f"before a day-clustered interval means anything. The point estimates "
+                f"stand; the interval does not."
+            ),
         }
 
     rng = random.Random(seed)

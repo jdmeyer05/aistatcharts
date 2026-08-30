@@ -53,7 +53,7 @@ import SpValuationStrip from "@/components/home/sp-valuation";
 import FedProbabilitiesCard from "@/components/home/fed-probabilities";
 import TsmomBookCard from "@/components/home/tsmom-book";
 import UnusualToday from "@/components/home/unusual-today";
-import { CardHeader, HorizonBand, Takeaway } from "@/components/home/primitives";
+import { CardHeader, HorizonBand, Takeaway, useMinuteClock } from "@/components/home/primitives";
 
 function fmtAgo(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -101,6 +101,9 @@ function useMarketDriver() {
 /* ─── Market Pulse Strip ──────────────────────────────────────── */
 
 function MarketPulse() {
+  // Null on the server, a real minute in the browser. Used only to gate the
+  // locale-formatted timestamp below — see the comment there.
+  const nowMin = useMinuteClock();
   const q = useQuery({
     queryKey: ["pulse", PULSE_TICKERS.join(",")],
     queryFn: () => fetchSnapshot([...PULSE_TICKERS]),
@@ -152,8 +155,27 @@ function MarketPulse() {
             </div>
           );
         })}
+        {/* THE ONLY HYDRATION MISMATCH ON THIS PAGE, and it printed a wrong
+            number rather than just warning.
+
+            `toLocaleTimeString` formats in whatever timezone the renderer sits
+            in. Cloud Run runs UTC and the reader does not, so the server-
+            rendered HTML said "as of 12:16:21" where the browser then said
+            "as of 07:16:50" — the same instant, five hours apart. React logged
+            error #418 and re-rendered, but for the frames before hydration the
+            strip showed a quote age that was five hours wrong, on the one card
+            whose entire job is saying how fresh the price is.
+
+            Gating on the clock fixes it at the root: `useMinuteClock` returns
+            null on the server, so the server renders nothing here and the
+            browser fills in its own local time after hydration. Nothing is ever
+            formatted in a timezone the reader is not in. */}
         <div className="ml-auto text-[0.6rem] text-text-muted">
-          {q.isFetching ? "updating…" : q.dataUpdatedAt ? `as of ${new Date(q.dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}
+          {q.isFetching
+            ? "updating…"
+            : nowMin != null && q.dataUpdatedAt
+              ? `as of ${new Date(q.dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+              : ""}
         </div>
       </div>
       {read && (
