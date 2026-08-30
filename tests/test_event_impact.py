@@ -375,3 +375,34 @@ def test_trend_breadth_shares_the_history_routine_rather_than_copying_it():
     assert "tracked" in inspect.signature(vol_history.percentiles).parameters
     src = inspect.getsource(breadth_trend._compute)
     assert "from src.vol_history import percentiles, record" in src
+
+
+def test_trend_breadth_never_anchors_on_a_session_in_progress():
+    """Polygon's grouped-daily serves the CURRENT day's aggregate while the
+    market trades. Anchoring there takes a partial close and a partial volume as
+    the newest bar — and volume is the liquidity filter, so the universe would
+    shrink at the open and grow through the day, drifting the percentage for a
+    mechanical reason. That is the exact failure es_breadth documents for its
+    own filter."""
+    import pandas as pd
+    from src.breadth_trend import _last_completed_session as last
+
+    def et(s):
+        return pd.Timestamp(s, tz="America/New_York")
+
+    # Mid-session on a Tuesday -> Monday.
+    assert last(et("2026-09-01 10:00")) == __import__("datetime").date(2026, 8, 31)
+    assert last(et("2026-09-01 09:00")) == __import__("datetime").date(2026, 8, 31)
+    # After the tape has settled -> today.
+    assert last(et("2026-09-01 16:20")) == __import__("datetime").date(2026, 9, 1)
+    # 16:00 exactly is NOT settled; the consolidated tape prints late.
+    assert last(et("2026-09-01 16:00")) == __import__("datetime").date(2026, 8, 31)
+
+
+def test_trend_breadth_calendar_span_clears_measured_need_with_margin():
+    """200 trading days spanned 293 calendar days when measured. Running short
+    does not degrade gracefully — it returns available:false — so the bound
+    needs real margin over one extra market holiday, not seven days of it."""
+    from src.breadth_trend import _CALENDAR_SPAN, _WINDOWS
+    assert _CALENDAR_SPAN >= 293 + 30, "too tight; one extra holiday breaks the measure"
+    assert max(_WINDOWS) == 200

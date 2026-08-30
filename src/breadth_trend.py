@@ -54,9 +54,12 @@ TRACKED = ("pct_above_50dma", "pct_above_200dma")
 #: be comparable to anything a reader has seen elsewhere.
 _WINDOWS = (50, 200)
 
-#: Calendar days to walk back to collect 200 trading days. 200 sessions is about
-#: 40 weeks; 300 calendar days leaves room for holidays without over-fetching.
-_CALENDAR_SPAN = 300
+#: Calendar days to walk back to collect 200 trading days. Measured: 200
+#: sessions spanned 293 calendar days from 2026-08-30. 300 left seven days of
+#: margin, which one extra market holiday would eat — and running short does not
+#: degrade gracefully, it returns `available: False`. 340 is still bounded and
+#: costs nothing extra, because the walk stops on the session count.
+_CALENDAR_SPAN = 340
 
 _CACHE: dict = {}
 _TTL_S = 12 * 3600
@@ -110,19 +113,23 @@ def trend_breadth(anchor: _date | None = None, force: bool = False) -> dict:
     """
     from time import time as _now
 
-    hit = _CACHE.get("v")
+    # Keyed on the anchor. Without this an explicit `anchor=` would be handed
+    # the cached default-anchor answer — a caller asking about a specific
+    # session getting a different one, silently.
+    ck = (anchor or _last_completed_session()).isoformat()
+    hit = _CACHE.get(ck)
     if hit and not force and (_now() - hit[0]) < _TTL_S:
         return hit[1]
 
     if not force:
         try:
             from src._cache_util import _supabase_get
-            got = _supabase_get("breadth_trend:v1")
+            got = _supabase_get(f"breadth_trend:v1:{ck}")
             if got:
                 updated, value = got
                 if ((datetime.utcnow() - updated).total_seconds() < _TTL_S
                         and isinstance(value, dict) and value.get("available")):
-                    _CACHE["v"] = (_now(), value)
+                    _CACHE[ck] = (_now(), value)
                     return value
         except Exception as e:
             logger.debug(f"trend breadth cache read failed: {e}")
@@ -134,19 +141,43 @@ def trend_breadth(anchor: _date | None = None, force: bool = False) -> dict:
         return {"available": False, "reason": str(e)}
 
     if out.get("available"):
-        _CACHE["v"] = (_now(), out)
+        _CACHE[ck] = (_now(), out)
         try:
             from src._cache_util import _supabase_put
-            _supabase_put("breadth_trend:v1", out)
+            _supabase_put(f"breadth_trend:v1:{ck}", out)
         except Exception as e:
             logger.debug(f"trend breadth cache write failed: {e}")
     return out
 
 
+def _last_completed_session(now=None) -> _date:
+    """The most recent date whose cash session has finished.
+
+    THE WALK MUST NOT START ON A SESSION IN PROGRESS. Polygon's grouped-daily
+    endpoint serves the current day's aggregate while the market trades, so
+    anchoring on today during RTH would take a PARTIAL close and a PARTIAL
+    volume as the newest bar. The volume is the liquidity filter, so the
+    universe would shrink at the open and grow through the day, and the
+    percentage above the 200-day would drift for a purely mechanical reason —
+    which is the exact failure `es_breadth` documents and guards against for its
+    own filter. This measure is defined on completed closes and is recorded once
+    per session day, so waiting for the close costs nothing it needs.
+
+    16:15 ET rather than 16:00: the consolidated tape prints late, and a bar
+    read at 16:00:30 is not reliably final.
+    """
+    import pandas as pd
+    now = now or pd.Timestamp.now(tz="America/New_York")
+    d = now.date()
+    if now.hour * 60 + now.minute < 16 * 60 + 15:
+        d -= timedelta(days=1)
+    return d
+
+
 def _compute(anchor: _date | None = None) -> dict:
     from src.es_breadth import _MIN_DOLLAR_VOL
 
-    anchor = anchor or datetime.now(timezone.utc).date()
+    anchor = anchor or _last_completed_session()
     close, vol, sums, counts, sessions, first_day = _accumulate(anchor, max(_WINDOWS))
 
     if close is None or sessions < min(_WINDOWS):
