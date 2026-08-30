@@ -53,30 +53,11 @@ import SpValuationStrip from "@/components/home/sp-valuation";
 import FedProbabilitiesCard from "@/components/home/fed-probabilities";
 import TsmomBookCard from "@/components/home/tsmom-book";
 import UnusualToday from "@/components/home/unusual-today";
-import { CardHeader, HorizonBand, Takeaway, useMinuteClock } from "@/components/home/primitives";
+import { CardHeader, HorizonBand, Takeaway, fmtAgo, useMinuteClock } from "@/components/home/primitives";
 
-function fmtAgo(iso: string | null | undefined): string {
-  if (!iso) return "";
-  // The try/catch here caught nothing useful: an unparseable date does not
-  // THROW, it yields NaN, and every comparison below then falls through to the
-  // last line — which rendered a literal "NaNd ago" on the card. The Trump
-  // monitor's timestamp is model-written and routinely carries a trailing gloss
-  // ("2026-08-01T12:42:00Z (approx 3 hours ago ET)") that Date rejects outright,
-  // so pull the ISO prefix out when there is one, and refuse to print anything
-  // when there genuinely is no valid instant.
-  const m = String(iso).match(
-    /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/
-  );
-  const t = new Date(m ? m[0] : iso).getTime();
-  if (!Number.isFinite(t)) return "";
-  const min = Math.floor((Date.now() - t) / 60000);
-  // A future stamp means clock skew or a bad parse, not a negative age.
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
-}
+// `fmtAgo` moved to primitives and now takes the minute clock. It used to call
+// `Date.now()` during render, which on an ISR-cached page is wrong by
+// construction — see the function's own comment.
 
 function pctClass(n: number | undefined | null): string {
   if (n == null || n === 0) return "text-text-muted";
@@ -221,7 +202,9 @@ function DriverPill({ label, source }: { label: string; source: string }) {
 function MarketDriverCard() {
   const q = useMarketDriver();
   const d = q.data;
-  const asOf = d?.as_of_utc ? fmtAgo(d.as_of_utc) : "";
+  // Null on the server, so no relative age is baked into the cached HTML.
+  const nowMin = useMinuteClock();
+  const asOf = fmtAgo(d?.as_of_utc, nowMin);
 
   // MEASURED, not narrated. `drivers` is the cross-asset attribution — a
   // regression, not another model's prose — and it rode along in the payload
@@ -736,6 +719,7 @@ function NewsPanel({ citations }: { citations: MarketDriverResponse["citations"]
 /* ─── Tweet Watch (Trump for now; Fed/Treasury RSS later) ──────── */
 
 function TweetWatch() {
+  const nowMin = useMinuteClock();
   const q = useQuery({
     queryKey: ["trump-monitor-home"],
     queryFn: fetchTrumpMonitor,
@@ -766,7 +750,7 @@ function TweetWatch() {
           <div className="text-[0.6rem] text-text-muted flex items-center gap-2">
             <span className="font-semibold">@realDonaldTrump</span>
             <span>·</span>
-            <span>{fmtAgo(latest.timestamp)}</span>
+            <span>{fmtAgo(latest.timestamp, nowMin)}</span>
             <span className={`ml-auto ${sentimentColor(latest.sentiment)}`}>{latest.sentiment}</span>
           </div>
           <p className="text-sm text-text leading-snug line-clamp-4">{latest.text}</p>

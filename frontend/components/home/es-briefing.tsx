@@ -19,7 +19,7 @@
  * easiest way to make this card actively misleading.
  */
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchEsBrief,
@@ -38,7 +38,7 @@ import {
 } from "@/lib/api";
 import CandleContextBlock from "@/components/home/candle-context";
 import OvernightRead from "@/components/home/overnight-read";
-import { Takeaway } from "@/components/home/primitives";
+import { Takeaway, fmtAgo, useMinuteClock } from "@/components/home/primitives";
 import { ordinal } from "@/lib/home-constants";
 
 /* ─── formatting ──────────────────────────────────────────────── */
@@ -64,31 +64,15 @@ function fmtCountdown(mins: number): string {
   return mins >= 0 ? `in ${body}` : `${body} ago`;
 }
 
-function fmtAgo(iso: string | null): string {
-  if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(ms)) return "";
-  const min = Math.floor(ms / 60000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  return hr < 24 ? `${hr}h ago` : `${Math.floor(hr / 24)}d ago`;
-}
+// `fmtAgo` lives in primitives and takes the minute clock. Calling `Date.now()`
+// during render bakes a RELATIVE age into HTML that `revalidate` then serves
+// from cache, so the client always recomputes a different string — React #418
+// on every load. See the shared implementation for the full reasoning.
 
 
-/** Wall clock as an external store, so countdowns stay live between server
- *  refreshes without a setState-in-effect cascade. Quantised to the minute so
- *  React's identity check settles instead of changing on every render. The
- *  server snapshot is null, so SSR and hydration use the server-computed
- *  `minutes_away` and there is no timestamp mismatch to reconcile. */
-const CLOCK = {
-  subscribe(onChange: () => void) {
-    const t = setInterval(onChange, 30_000);
-    return () => clearInterval(t);
-  },
-  getSnapshot: (): number | null => Math.floor(Date.now() / 60_000),
-  getServerSnapshot: (): number | null => null,
-};
+// The wall clock lives in primitives now. This file had its own copy of the
+// same external store — two intervals, two implementations, and the fix for the
+// stuck server snapshot would have had to be made twice.
 
 /** One measured figure with its label. Deliberately plain — these are readings,
  *  not verdicts, and styling them like alerts would imply a call the numbers do
@@ -564,11 +548,7 @@ export default function EsBriefing() {
 
   const d = q.data;
 
-  const nowMin = useSyncExternalStore(
-    CLOCK.subscribe,
-    CLOCK.getSnapshot,
-    CLOCK.getServerSnapshot
-  );
+  const nowMin = useMinuteClock();
 
   // Counts down from the release's absolute instant. Falls back to the
   // server's figure before mount, or if an older API build sent no `when`.
@@ -1089,7 +1069,15 @@ export default function EsBriefing() {
                 : "Age of the last 5-minute bar."
             }
           >
-            {lv?.asof ? `bars ${fmtAgo(lv.asof)}` : d?.asof ? fmtAgo(d.asof) : ""}
+            {/* The label sits INSIDE the conditional, not outside it. `fmtAgo`
+                returns "" until the clock has a value, so `bars ${...}` would
+                render a bare "bars" for the first frames — a label with nothing
+                to label. */}
+            {(() => {
+              const age = lv?.asof ? fmtAgo(lv.asof, nowMin) : fmtAgo(d?.asof, nowMin);
+              if (!age) return "";
+              return lv?.asof ? `bars ${age}` : age;
+            })()}
           </span>
           <button
             type="button"
@@ -2072,7 +2060,7 @@ export default function EsBriefing() {
                         )}
                         <span className="text-text-muted ml-1 text-[0.55rem] whitespace-nowrap">
                           {n.source}
-                          {n.published ? ` · ${fmtAgo(n.published)}` : ""}
+                          {n.published ? ` · ${fmtAgo(n.published, nowMin)}` : ""}
                         </span>
                       </li>
                     ))}
@@ -2354,7 +2342,7 @@ export default function EsBriefing() {
                     <p className="text-[0.58rem] text-text-muted leading-snug">
                       SPX cash is shut
                       {d.gamma.spx_spot_asof
-                        ? ` (last printed ${new Date(d.gamma.spx_spot_asof).toLocaleDateString("en-US", { month: "short", day: "numeric" })} at ${d.gamma.spx_spot?.toFixed(2)})`
+                        ? ` (last printed ${new Date(d.gamma.spx_spot_asof).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })} at ${d.gamma.spx_spot?.toFixed(2)})`
                         : ""}
                       {d.gamma.spx_spot_effective != null && (
                         <> , so the book is read at <span className="text-text tabular-nums">

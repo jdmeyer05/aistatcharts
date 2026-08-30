@@ -138,7 +138,19 @@ const CLOCK = {
         for (const fn of clockListeners) fn();
       }, 30_000);
     }
+    // Nudge once on subscribe so the first real value lands as early as
+    // possible rather than on the first 30-second tick.
+    //
+    // NOT a correctness fix — React does re-read `getSnapshot` after hydration
+    // on its own, which is verifiable in production where this hook already
+    // renders "oldest input 3m old" without it. It matters because
+    // `getServerSnapshot` is null by design (nothing time-dependent may be
+    // baked into cached HTML) and `fmtAgo` deliberately has no fallback, so
+    // until the clock produces a number every relative age on the page is
+    // blank. This closes that gap to one frame instead of leaving it to timing.
+    const t = setTimeout(onChange, 0);
     return () => {
+      clearTimeout(t);
       clockListeners.delete(onChange);
       if (clockListeners.size === 0 && clockTimer != null) {
         clearInterval(clockTimer);
@@ -163,6 +175,45 @@ export function minutesSince(updatedAt: number | undefined, nowMin: number | nul
   const age = nowMin - Math.floor(updatedAt / 60_000);
   // A negative age is clock skew, not a stamp from the future.
   return age < 0 ? 0 : age;
+}
+
+/**
+ * "3m ago" from an ISO instant — the one canonical implementation.
+ *
+ * WHY IT TAKES A CLOCK INSTEAD OF CALLING `Date.now()`. A RELATIVE time
+ * rendered on the server is wrong by construction on this page: `revalidate`
+ * makes the HTML edge-cacheable, so the document a browser hydrates was
+ * rendered seconds — under stale-while-revalidate, much longer — before the
+ * client recomputes the same string. The server said "12h ago" where the client
+ * said "10h ago", which is React error #418 on every load, and a stale age
+ * shown to the reader until the re-render lands.
+ *
+ * Returning "" while `nowMin` is null means the SERVER RENDERS NOTHING and the
+ * browser fills every age in after hydration. There is then no server text to
+ * disagree with. That is also why this cannot be "fixed" by formatting more
+ * carefully — an absolute timestamp would still be formatted in the renderer's
+ * timezone. The only thing that works is not rendering time on the server.
+ *
+ * The regex is load-bearing: the Trump monitor's timestamp is model-written and
+ * routinely carries a trailing gloss ("2026-08-01T12:42:00Z (approx 3 hours ago
+ * ET)") that `Date` rejects outright. An unparseable date does not THROW, it
+ * yields NaN, and every comparison below would fall through to the last line —
+ * which is where a literal "NaNd ago" on the card came from.
+ */
+export function fmtAgo(iso: string | null | undefined, nowMin: number | null): string {
+  if (!iso || nowMin == null) return "";
+  const m = String(iso).match(
+    /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/
+  );
+  const t = new Date(m ? m[0] : iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const min = nowMin - Math.floor(t / 60_000);
+  // A future stamp means clock skew or a bad parse, not a negative age.
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
 }
 
 /* ─── takeaway ────────────────────────────────────────────────── */
