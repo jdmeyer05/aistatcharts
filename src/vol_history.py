@@ -50,10 +50,10 @@ TRACKED = ("avg_iv", "avg_ivhv", "avg_skew", "median_skew",
            "n_inverted", "n_steep_skew", "impl_corr")
 
 
-def _load() -> list[dict]:
+def _load(key: str = _KEY) -> list[dict]:
     try:
         from src._cache_util import _supabase_get
-        hit = _supabase_get(_KEY)
+        hit = _supabase_get(key)
         if not hit:
             return []
         rows = hit[1]
@@ -63,17 +63,23 @@ def _load() -> list[dict]:
         return []
 
 
-def _save(rows: list[dict]) -> None:
+def _save(rows: list[dict], key: str = _KEY) -> None:
     try:
         from src._cache_util import _supabase_put
-        _supabase_put(_KEY, rows)
+        _supabase_put(key, rows)
     except Exception as e:
         logger.debug(f"vol history save failed: {e}")
 
 
 def record(summary: dict, session_date: date | None = None,
-           healthy: bool = True) -> list[dict]:
+           healthy: bool = True, *, key: str = _KEY,
+           tracked: tuple[str, ...] = TRACKED) -> list[dict]:
     """Append (or replace) today's observation and return the full history.
+
+    `key` and `tracked` are parameters so a second measure set can share this
+    routine rather than copy it. Breadth records its own series under its own
+    key; duplicating the append-and-percentile logic is how two copies of a
+    statistical rule drift apart, and the caller's defaults are unchanged.
 
     One row per session day, latest write wins — the scan runs many times a day
     behind a cache and every run would otherwise land as a separate observation,
@@ -84,24 +90,26 @@ def record(summary: dict, session_date: date | None = None,
     distort every percentile computed against it afterwards.
     """
     if not healthy or not summary:
-        return _load()
+        return _load(key)
 
     d = (session_date or datetime.now(timezone.utc).date()).isoformat()
     row = {"date": d}
-    for k in TRACKED:
+    for k in tracked:
         v = summary.get(k)
         row[k] = float(v) if isinstance(v, (int, float)) else None
 
-    rows = [r for r in _load() if r.get("date") != d]
+    rows = [r for r in _load(key) if r.get("date") != d]
     rows.append(row)
     rows.sort(key=lambda r: r.get("date") or "")
     rows = rows[-_MAX_ROWS:]
-    _save(rows)
+    _save(rows, key)
     return rows
 
 
 def percentiles(rows: list[dict], summary: dict,
-                session_date: date | None = None) -> dict:
+                session_date: date | None = None, *,
+                tracked: tuple[str, ...] = TRACKED,
+                min_history: int = _MIN_HISTORY) -> dict:
     """Where each tracked measure sits in its own recorded history.
 
     Excludes today's own observation from the reference set, so the answer is
@@ -117,10 +125,10 @@ def percentiles(rows: list[dict], summary: dict,
     out: dict = {}
     today = (session_date or datetime.now(timezone.utc).date()).isoformat()
     prior = [r for r in rows if r.get("date") != today]
-    for k in TRACKED:
+    for k in tracked:
         cur = summary.get(k)
         vals = [r[k] for r in prior if isinstance(r.get(k), (int, float))]
-        if not isinstance(cur, (int, float)) or len(vals) < _MIN_HISTORY:
+        if not isinstance(cur, (int, float)) or len(vals) < min_history:
             out[k] = {"pctile": None, "n_history": len(vals)}
             continue
         below = sum(1 for v in vals if v < cur)

@@ -322,3 +322,56 @@ def test_ticker_covers_every_mark_the_logger_defines():
     from src.es_gate_log import _MARKS
     hit = {_due_mark(_et(1, int(m), int(round((m % 1) * 60)))) for m in _MARKS}
     assert hit == set(_MARKS), f"unreachable marks: {set(_MARKS) - hit}"
+
+
+# ── trend breadth: the one measure worth taking from Finviz's front page ──
+
+def test_trend_breadth_windows_are_string_keyed():
+    """A JSON round-trip through the Supabase cache turns int keys into strings,
+    so a fresh compute and a cached read would hand callers dicts keyed
+    differently depending on cache state — a KeyError on one path and not the
+    other, weeks later."""
+    import json
+    from src import breadth_trend
+    sample = {
+        "available": True, "windows": {}, "universe": {"n": 10, "note": ""},
+    }
+    # Mirror what _compute writes, without the 200 network calls.
+    for w in breadth_trend._WINDOWS:
+        sample["windows"][str(w)] = {"above": 1, "below": 1, "n": 2,
+                                     "pct_above": 50.0, "excluded_short_history": 0}
+    assert all(isinstance(k, str) for k in sample["windows"])
+    assert list(json.loads(json.dumps(sample))["windows"]) == list(sample["windows"])
+    # And the source writes string keys — the thing that actually broke. Without
+    # this the test passes on a fixture I built correctly by hand.
+    import inspect
+    assert 'out["windows"][str(w)]' in inspect.getsource(breadth_trend._compute)
+
+
+def test_trend_breadth_excludes_names_without_the_full_window():
+    """Averaging a 200-day over 80 sessions is a different measure wearing the
+    same name, and it would quietly shift the percentage as new listings age in."""
+    import inspect
+    from src import breadth_trend
+    src = inspect.getsource(breadth_trend._compute)
+    assert "c.get(tk, 0) < w" in src, "the short-history guard is the point of this measure"
+
+
+def test_trend_breadth_walk_does_not_pollute_the_shared_grouped_cache():
+    """The first version left 209 frames and 2.4M rows resident for six hours
+    while its own docstring claimed constant memory. The walk must pass
+    cache=False."""
+    import inspect
+    from src import breadth_trend
+    assert "cache=False" in inspect.getsource(breadth_trend._accumulate)
+
+
+def test_trend_breadth_shares_the_history_routine_rather_than_copying_it():
+    """Two implementations of a percentile rule drift. vol_history's record and
+    percentiles are parameterised by key/tracked so this can reuse them."""
+    import inspect
+    from src import breadth_trend, vol_history
+    assert "key" in inspect.signature(vol_history.record).parameters
+    assert "tracked" in inspect.signature(vol_history.percentiles).parameters
+    src = inspect.getsource(breadth_trend._compute)
+    assert "from src.vol_history import percentiles, record" in src

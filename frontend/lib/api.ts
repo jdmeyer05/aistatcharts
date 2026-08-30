@@ -3401,6 +3401,31 @@ export interface EsBreadth {
   volume_ratio?: number | null;
   trin?: number | null;
   trin_band?: { label: string; why: string } | null;
+  /** Share of the universe above its own 50- and 200-day average.
+   *
+   *  A DIFFERENT QUESTION from every other field here. Those ask whether TODAY
+   *  was broad; this asks whether the market is broadly in an uptrend, and an
+   *  index can close green with most of its names below their own 200-day.
+   *  Null when the 200-session walk has not completed or failed — absent rather
+   *  than degrading the counts beside it.
+   *
+   *  `history` carries the percentile against its own recorded sessions, null
+   *  until 60 have accumulated. A level with no reference set is a fact about
+   *  nothing, and backfilling would cost 200 grouped fetches per point. */
+  trend?: {
+    available: boolean;
+    asof?: string;
+    sessions_used?: number;
+    from?: string;
+    universe?: { n: number; note: string };
+    windows?: Record<string, {
+      above: number; below: number; n: number;
+      pct_above: number | null; excluded_short_history: number;
+    }>;
+    pct_above_50dma?: number | null;
+    pct_above_200dma?: number | null;
+    history?: Record<string, { pctile: number | null; n_history: number }>;
+  } | null;
   equal_vs_cap?: {
     available: boolean;
     equal_weight?: number; cap_weight?: number; spread_pct?: number;

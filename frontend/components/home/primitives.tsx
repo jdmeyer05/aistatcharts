@@ -340,6 +340,62 @@ export function CardHeader({
   );
 }
 
+/* ─── a two-sided ratio, as one bar ───────────────────────────── */
+
+/**
+ * Left share vs right share, drawn as a single split bar.
+ *
+ * WHY A BAR AND NOT TWO NUMBERS. A ratio of two complementary counts is one
+ * fact, and rendering it as two stat tiles makes the reader do the subtraction
+ * to see which side is winning and by how much. Finviz's front page gets this
+ * right and it is the only piece of layout there worth taking: four of these
+ * stacked communicate more, faster, than the twelve numbers they contain.
+ *
+ * Both sides are labelled with their own count, because the percentage alone
+ * hides the denominator — "52% above" over 3,445 names and over 40 names are
+ * different statements, and the second one is not worth reading.
+ */
+export function SplitBar({
+  leftLabel, rightLabel, leftValue, rightValue, leftPct, title, right,
+}: {
+  leftLabel: string;
+  rightLabel: string;
+  leftValue: string;
+  rightValue: string;
+  /** 0-100, the left side's share. */
+  leftPct: number | null | undefined;
+  title?: string;
+  /** Optional trailing note — a percentile, usually. */
+  right?: React.ReactNode;
+}) {
+  const p = typeof leftPct === "number" && Number.isFinite(leftPct)
+    ? Math.max(0, Math.min(100, leftPct))
+    : null;
+  return (
+    <div className="space-y-0.5" title={title}>
+      <div className="flex items-baseline justify-between gap-2 text-[0.58rem] tabular-nums">
+        <span className="text-gain">
+          {leftLabel} <span className="font-semibold">{leftValue}</span>
+        </span>
+        {right}
+        <span className="text-loss">
+          <span className="font-semibold">{rightValue}</span> {rightLabel}
+        </span>
+      </div>
+      {p == null ? (
+        /* No bar rather than a half-filled one. A 50/50 default is a reading,
+           and it is the reading a broken measure produces. */
+        <div className="h-1.5 rounded bg-border" />
+      ) : (
+        <div className="flex h-1.5 rounded overflow-hidden bg-border">
+          <div className="bg-gain/70" style={{ width: `${p}%` }} />
+          <div className="bg-loss/70" style={{ width: `${100 - p}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── a collapsible section INSIDE a card ─────────────────────── */
 
 /**

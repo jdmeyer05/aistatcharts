@@ -1122,8 +1122,12 @@ def _stub_store(monkeypatch, initial=None):
     """In-memory stand-in for the Supabase key/value row."""
     import src.vol_history as vh
     box = {"rows": list(initial or [])}
-    monkeypatch.setattr(vh, "_load", lambda: list(box["rows"]))
-    monkeypatch.setattr(vh, "_save", lambda rows: box.__setitem__("rows", list(rows)))
+    # `_load`/`_save` take the storage key now that a second measure set (market
+    # breadth) shares this routine rather than copying it. The double accepts and
+    # ignores it: these tests are about the append-and-percentile rule, which is
+    # the part that must not be duplicated, and it is key-independent.
+    monkeypatch.setattr(vh, "_load", lambda key=None: list(box["rows"]))
+    monkeypatch.setattr(vh, "_save", lambda rows, key=None: box.__setitem__("rows", list(rows)))
     return box
 
 

@@ -38,7 +38,7 @@ import {
 } from "@/lib/api";
 import CandleContextBlock from "@/components/home/candle-context";
 import OvernightRead from "@/components/home/overnight-read";
-import { CardSection, Takeaway, fmtAgo, useMinuteClock } from "@/components/home/primitives";
+import { CardSection, SplitBar, Takeaway, fmtAgo, useMinuteClock } from "@/components/home/primitives";
 import { ordinal } from "@/lib/home-constants";
 
 /* ─── formatting ──────────────────────────────────────────────── */
@@ -745,6 +745,18 @@ export default function EsBriefing() {
           : "") +
         (b.trin_band?.label
           ? `TRIN ${b.trin?.toFixed(2)} is ${b.trin_band.label}. `
+          : "") +
+        /* The trend rows answer a different question from everything above, so
+           the takeaway has to name which one it just answered. An index can
+           close green on a day when most of its names sit below their 200-day. */
+        (b.trend?.available && b.trend.pct_above_200dma != null
+          ? `Separately from today: ${b.trend.pct_above_200dma.toFixed(0)}% of the ` +
+            `${b.trend.universe?.n?.toLocaleString("en-US")} names are above their own 200-day and ` +
+            `${b.trend.pct_above_50dma?.toFixed(0)}% above their 50-day — a statement about the trend ` +
+            `the market is in, not about this session. ` +
+            (b.trend.history?.pct_above_200dma?.pctile == null
+              ? `No reference set for those yet (${b.trend.history?.pct_above_200dma?.n_history ?? 0} of 60 sessions recorded), so they are levels rather than readings. `
+              : "")
           : "") +
         `Reconstructed from a grouped-daily endpoint, not a consolidated tape feed — the levels are ` +
         `comparable to themselves across sessions, not to a vendor's TRIN or A/D print.`,
@@ -2596,6 +2608,74 @@ export default function EsBriefing() {
                   {d.breadth.divergence.note}
                 </p>
               )}
+
+              {/* THE TWO-SIDED MEASURES, AS BARS. Advancing-vs-declining and
+                  up-vs-down volume are each ONE fact about a split, and drawing
+                  them as separate stat tiles makes the reader subtract to see
+                  which side is winning and by how much. The 50/200-day rows
+                  below answer a different question entirely — not "was today
+                  broad" but "is the market broadly in an uptrend" — and those
+                  two diverge exactly when an index is carried by a few names. */}
+              <div className="space-y-1.5">
+                <SplitBar
+                  leftLabel="Advancing" rightLabel="Declining"
+                  leftValue={d.breadth.advancers?.toLocaleString("en-US") ?? "—"}
+                  rightValue={d.breadth.decliners?.toLocaleString("en-US") ?? "—"}
+                  leftPct={
+                    d.breadth.advancers != null && d.breadth.decliners != null &&
+                    (d.breadth.advancers + d.breadth.decliners) > 0
+                      ? (d.breadth.advancers / (d.breadth.advancers + d.breadth.decliners)) * 100
+                      : null
+                  }
+                  title="Advancing vs declining names in the liquid universe. Unchanged names are excluded from the split rather than assigned a side."
+                />
+                <SplitBar
+                  leftLabel="Up volume" rightLabel="Down volume"
+                  leftValue={d.breadth.up_volume_pct != null ? `${d.breadth.up_volume_pct.toFixed(0)}%` : "—"}
+                  rightValue={d.breadth.up_volume_pct != null ? `${(100 - d.breadth.up_volume_pct).toFixed(0)}%` : "—"}
+                  leftPct={d.breadth.up_volume_pct ?? null}
+                  title="Share of traded volume in advancing names. Volume disagrees with the count when a few heavily-traded names move against the majority."
+                />
+                {d.breadth.trend?.available && [50, 200].map((w) => {
+                  const tr = d.breadth!.trend!;
+                  const win = tr.windows?.[String(w)];
+                  const h = tr.history?.[`pct_above_${w}dma`];
+                  if (!win || win.pct_above == null) return null;
+                  return (
+                    <SplitBar
+                      key={w}
+                      leftLabel={`Above ${w}DMA`} rightLabel="Below"
+                      leftValue={`${win.pct_above.toFixed(1)}% (${win.above.toLocaleString("en-US")})`}
+                      rightValue={`${(100 - win.pct_above).toFixed(1)}% (${win.below.toLocaleString("en-US")})`}
+                      leftPct={win.pct_above}
+                      title={
+                        `Share of the ${tr.universe?.n?.toLocaleString("en-US")}-name liquid universe closing above its own ${w}-day average, ` +
+                        `built from ${tr.sessions_used} sessions back to ${tr.from}. ` +
+                        `${win.excluded_short_history.toLocaleString("en-US")} names are excluded for not having ${w} sessions of history — ` +
+                        `averaging a ${w}-day over fewer would be a different measure. ${tr.universe?.note ?? ""}`
+                      }
+                      right={
+                        /* RELATIVE TO WHAT. "63% above the 200-day" is a level;
+                           whether that is high or low needs its own history,
+                           which starts accumulating today. The shortfall is
+                           rendered as a count, never as a middle value. */
+                        h?.pctile != null ? (
+                          <span className="text-[0.55rem] text-text-muted">
+                            {ordinal(Math.round(h.pctile))} of {h.n_history}
+                          </span>
+                        ) : (
+                          <span
+                            className="text-[0.55rem] text-text-muted/60"
+                            title={`No reference set yet — ${h?.n_history ?? 0} sessions recorded and 60 are needed. Until then this is a level, not a reading: nothing here says whether it is high or low.`}
+                          >
+                            {h?.n_history ?? 0}/60
+                          </span>
+                        )
+                      }
+                    />
+                  );
+                })}
+              </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-[0.6rem]">
                 <div title="Advancing minus declining names, as a share of the universe. Self-normalising, so it is comparable across sessions.">

@@ -105,8 +105,17 @@ def _snapshot() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _grouped(day: str) -> pd.DataFrame:
-    """Every US ticker's daily bar for one date. Empty on weekends and holidays."""
+def _grouped(day: str, cache: bool = True) -> pd.DataFrame:
+    """Every US ticker's daily bar for one date. Empty on weekends and holidays.
+
+    `cache=False` for deep-history walks. This module's cache is unbounded and
+    each frame is ~12,000 rows, which is free when the caller wants the last two
+    sessions repeatedly — the live breadth path — and is not free at all when a
+    caller wants two hundred. `breadth_trend` walks 200 days once every twelve
+    hours and folds each frame into running sums immediately; caching those
+    would pin ~2.4M rows for the six-hour TTL to serve a read that will not come
+    again. Measured: 209 entries, 2,412,389 rows retained after one such walk.
+    """
     from time import time as _now
     hit = _CACHE.get(("grouped", day))
     if hit and (_now() - hit[0]) < _DAILY_TTL_S:
@@ -123,7 +132,8 @@ def _grouped(day: str) -> pd.DataFrame:
         res = r.json().get("results", [])
         df = (pd.DataFrame(res).rename(columns={"T": "ticker", "c": "close", "v": "vol"})
               .set_index("ticker")[["close", "vol"]]) if res else pd.DataFrame()
-        _CACHE[("grouped", day)] = (_now(), df)
+        if cache:
+            _CACHE[("grouped", day)] = (_now(), df)
         return df
     except Exception as e:
         logger.warning(f"grouped daily {day} failed: {e}")
@@ -251,6 +261,18 @@ def _equal_vs_cap(snap: pd.DataFrame | None = None) -> dict:
         return {"available": False}
 
 
+def _trend_or_none() -> dict | None:
+    """Trend breadth, or nothing. Never raises into the live breadth path — a
+    200-session walk failing must not cost the reader today's advance/decline."""
+    try:
+        from src.breadth_trend import trend_breadth
+        t = trend_breadth()
+        return t if t.get("available") else None
+    except Exception as e:
+        logger.debug(f"trend breadth unavailable: {e}")
+        return None
+
+
 def market_breadth(now: pd.Timestamp | None = None,
                    index_change_pct: float | None = None) -> dict:
     """Advance/decline, up/down volume and TRIN, live if the market is trading.
@@ -258,6 +280,14 @@ def market_breadth(now: pd.Timestamp | None = None,
     `index_change_pct` is the index move to compare breadth against — pass it and
     the divergence read below becomes available. Without it the counts still
     stand on their own.
+
+    `trend` carries the share of the universe above its 50- and 200-day average,
+    from `breadth_trend`. It answers a DIFFERENT question from everything else
+    here — those all ask whether today was broad, this asks whether the market
+    is broadly in an uptrend — and the two diverge precisely when an index is
+    being carried by a handful of names. Behind a 12h cache and a startup warm,
+    so it never runs on the request path; a failure leaves it absent rather than
+    degrading the counts.
     """
     snap = _snapshot()
     live = False
@@ -367,6 +397,12 @@ def market_breadth(now: pd.Timestamp | None = None,
         },
         **{k: v for k, v in stats.items() if k != "universe_n"},
         "equal_vs_cap": eq,
+        # A DIFFERENT QUESTION FROM EVERYTHING ABOVE. These counts ask whether
+        # today was broad; this asks whether the market is broadly in an
+        # uptrend, and an index can be green on the day with most of its names
+        # below their own 200-day. Cached 12h and pre-warmed, so it is never on
+        # the request path; absent rather than degrading if it fails.
+        "trend": _trend_or_none(),
         "divergence": divergence,
         "tick": {
             "available": False,

@@ -245,6 +245,17 @@ async def _warm_caches() -> None:
         except Exception as e:
             logger.warning(f"Cross-asset driver pre-warm failed: {e}")
 
+    def _warm_trend_breadth() -> None:
+        """Prefill the 50/200-day breadth — ~200 grouped-daily fetches cold,
+        measured at 157s, behind a 12h cache. It hangs off the ES card's breadth
+        block, so an unwarmed instance would make the first visitor of the day
+        wait on a walk that only needs doing once."""
+        try:
+            from src.breadth_trend import prewarm
+            prewarm()
+        except Exception as e:
+            logger.warning(f"Trend breadth pre-warm failed: {e}")
+
     def _warm_tsmom_book() -> None:
         """Prefill the TSMOM book state — 32 yfinance fetches on a cold
         instance, behind a 12h cache, and it renders on the home page."""
@@ -422,6 +433,7 @@ async def _warm_caches() -> None:
         ("Cross-asset drivers", _warm_drivers),
         ("Sector RRG", _warm_sector_rrg),
         ("TSMOM book", _warm_tsmom_book),
+        ("Trend breadth", _warm_trend_breadth),
         ("S&P valuation", _warm_sp_valuation),
         ("Vol landscape", _warm_vol_landscape),
         ("CFTC", _warm_cftc),
