@@ -38,7 +38,7 @@ import {
 } from "@/lib/api";
 import CandleContextBlock from "@/components/home/candle-context";
 import OvernightRead from "@/components/home/overnight-read";
-import { Takeaway, fmtAgo, useMinuteClock } from "@/components/home/primitives";
+import { CardSection, Takeaway, fmtAgo, useMinuteClock } from "@/components/home/primitives";
 import { ordinal } from "@/lib/home-constants";
 
 /* ─── formatting ──────────────────────────────────────────────── */
@@ -941,7 +941,24 @@ export default function EsBriefing() {
   // behind it and, when none does, says that in numbers rather than by
   // rendering nothing.
   const scheduleRead = useMemo(() => {
-    if (intradaySched.length === 0) return null;
+    // AN EMPTY CALENDAR IS A READING, not a reason to render nothing. This
+    // returned null when nothing was scheduled, so the section said "Nothing
+    // timed inside next session" and stopped — the one sentence a reader can
+    // actually act on (there is no timed catalyst, so nothing here argues for
+    // holding size back for a specific minute) never appeared. That is an
+    // absence rendered as a calm, in the block whose job is scheduled risk.
+    if (intradaySched.length === 0) {
+      return {
+        tone: "neutral" as const,
+        headline: `Nothing is timed inside ${scheduleScope.label} — no release to plan an entry or a pause around.`,
+        detail:
+          (afterClose.length > 0
+            ? `${afterClose.length} report${afterClose.length === 1 ? " lands" : "s land"} after the bell, which sizes the cost of carrying a position overnight rather than the range of the session in front of you. `
+            : "") +
+          `A quiet calendar is not the same as a quiet session: the measured base rates below describe ` +
+          `sessions without a catalyst too, and they are the number any claim about today has to beat.`,
+      };
+    }
     const measured = intradaySched.filter((e) => e.measured != null);
     const established = measured.filter((e) => e.measured!.survives_fdr);
     const widest = [...measured].sort(
@@ -984,7 +1001,7 @@ export default function EsBriefing() {
         `single-name earnings or releases that were never in the study's universe, and an absent ` +
         `measurement is not a small one.`,
     };
-  }, [intradaySched, upcoming, liveMins]);
+  }, [intradaySched, upcoming, liveMins, scheduleScope, afterClose]);
 
   // With no session running the card has far less to say, and it used to say it
   // at full size anyway — rendering "From here to the close" during the 17:00
@@ -1169,9 +1186,17 @@ export default function EsBriefing() {
                 <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
                   Conditions
                 </span>
-                <span className="text-xs font-bold uppercase tracking-wide">
-                  {d.conditions.verdict}
-                </span>
+                {/* Not repeated when it only echoes the phase badge. On a shut
+                    market "MARKET CLOSED" appeared three times in the first
+                    screen — the badge beside the price, this verdict, and the
+                    subtitle's "ES is closed for the weekend". Three restatements
+                    of one fact crowd out the part that is actually specific to
+                    the state, which is the note beside it. */}
+                {d.conditions.verdict.toLowerCase() !== (session?.label ?? "").toLowerCase() && (
+                  <span className="text-xs font-bold uppercase tracking-wide">
+                    {d.conditions.verdict}
+                  </span>
+                )}
                 {d.conditions.score != null && (
                   <span className="text-[0.6rem] tabular-nums text-text-muted">
                     score {d.conditions.score > 0 ? "+" : ""}{d.conditions.score}
@@ -2046,6 +2071,22 @@ export default function EsBriefing() {
                         putting the list under the synthesis. */}
                     {(d.news ?? []).slice(0, Math.max(8, d.news_digest?.n_headlines ?? 0)).map((n, i) => (
                       <li key={i} className="text-[0.65rem] leading-snug">
+                        {/* THE ORDER IS TIER FIRST, THEN RECENCY — deliberately,
+                            so an FOMC line from yesterday outranks colour from
+                            an hour ago. `tier` was computed server-side and
+                            never rendered, so the only ordering cue on screen
+                            was the age, and a correctly-ordered list read as a
+                            broken one: 3h · 4h · 9h · 1d · 2d · 3d · 1h · 5h.
+                            Marking the index-movers makes the sort legible
+                            without re-sorting it. */}
+                        {n.tier === 1 && (
+                          <span
+                            className="text-spot mr-1"
+                            title="A headline type that has moved the index. The list is ordered by this first, then by recency — not by time alone."
+                          >
+                            •
+                          </span>
+                        )}
                         {n.url ? (
                           <a
                             href={n.url}
@@ -2074,6 +2115,13 @@ export default function EsBriefing() {
                       </li>
                     ))}
                   </ul>
+                  {/* Says the ordering rule out loud, because a list whose sort
+                      key is invisible looks unsorted however correct it is. */}
+                  <p className="text-[0.52rem] text-text-muted leading-snug pt-1">
+                    <span className="text-spot">•</span> marks headline types that have moved the
+                    index. Ordered by that first, then by recency — so an older policy line
+                    outranks fresher market colour. Nothing older than five days is carried.
+                  </p>
                 </div>
               )}
             </div>
@@ -2635,22 +2683,26 @@ export default function EsBriefing() {
 
           {/* ── measured base rates ── */}
           {d.base_rates?.available && (
-            <div className="border-t border-border pt-3 space-y-1.5">
-              <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                  Measured base rates
-                </h3>
-                {/* This header describes the DAILY study. The intraday path
-                    rates below run on SPY 5-minute bars over a shorter window,
-                    and the overnight study elsewhere on this card is ES futures
-                    over two years — three instruments, three windows. Any one of
-                    them unlabelled and a reader merges them into one number. */}
-                <span className="text-[0.55rem] text-text-muted">
-                  {d.base_rates.instrument ?? d.base_rates.source} ·{" "}
-                  {d.base_rates.sessions?.toLocaleString()} sessions ·{" "}
-                  {d.base_rates.from} to {d.base_rates.to}
-                </span>
-              </div>
+            <div className="border-t border-border pt-3">
+              {/* Foldable: this and the session-path table below are the two
+                  largest blocks on a card measured at 3,967px, and they are
+                  unconditional history rather than anything about today. */}
+              <CardSection
+                id="baserates"
+                title="Measured base rates"
+                subtitle={
+                  /* This label describes the DAILY study. The intraday path
+                     rates below run on SPY 5-minute bars over a shorter window,
+                     and the overnight study elsewhere on this card is ES futures
+                     over two years — three instruments, three windows. Any one
+                     of them unlabelled and a reader merges them into one. */
+                  <span className="text-[0.55rem] text-text-muted">
+                    {d.base_rates.instrument ?? d.base_rates.source} ·{" "}
+                    {d.base_rates.sessions?.toLocaleString()} sessions ·{" "}
+                    {d.base_rates.from} to {d.base_rates.to}
+                  </span>
+                }
+              >
               {d.base_rates.path?.available && d.base_rates.path.instrument && (
                 <p className="text-[0.55rem] text-text-muted leading-snug">
                   Intraday path rates below are measured on{" "}
@@ -2784,23 +2836,25 @@ export default function EsBriefing() {
                   tone={baseRatesRead.tone}
                 />
               )}
+              </CardSection>
             </div>
           )}
 
           {/* ── intraday path: WHEN the session gets there ── */}
           {d.base_rates?.path?.available && (
-            <div className="border-t border-border pt-3 space-y-2">
-              <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                  Session path
-                </h3>
-                {/* Its own window — shorter than the daily study above, and
-                    labelling it with those sessions would overstate it. */}
-                <span className="text-[0.55rem] text-text-muted">
-                  {d.base_rates.path.source} · {d.base_rates.path.sessions?.toLocaleString()} sessions ·{" "}
-                  {d.base_rates.path.from} to {d.base_rates.path.to}
-                </span>
-              </div>
+            <div className="border-t border-border pt-3">
+              <CardSection
+                id="sessionpath"
+                title="Session path"
+                subtitle={
+                  /* Its own window — shorter than the daily study above, and
+                     labelling it with those sessions would overstate it. */
+                  <span className="text-[0.55rem] text-text-muted">
+                    {d.base_rates.path.source} · {d.base_rates.path.sessions?.toLocaleString()} sessions ·{" "}
+                    {d.base_rates.path.from} to {d.base_rates.path.to}
+                  </span>
+                }
+              >
 
               {d.base_rates.path.live && (
                 <p className="text-[0.65rem] text-text border-l-2 border-l-accent pl-2">
@@ -2926,6 +2980,7 @@ export default function EsBriefing() {
                     " * 15:30 covers 30 minutes, half the width of the other buckets."}
                 </p>
               )}
+              </CardSection>
             </div>
           )}
 

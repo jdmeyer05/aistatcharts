@@ -340,6 +340,55 @@ export function CardHeader({
   );
 }
 
+/* ─── a collapsible section INSIDE a card ─────────────────────── */
+
+/**
+ * One foldable block within a card, remembered per reader.
+ *
+ * WHY THE ES CARD NEEDED THIS. Measured, that card is 3,967px — 37% of the
+ * whole page and about four screens — across eleven sections, of which two
+ * were foldable. The horizon bands were applied to the page and never to the
+ * single largest thing on it, so the reader got navigation everywhere except
+ * where the scrolling actually is.
+ *
+ * Open by default, like the bands, for the same reason: folding work away by
+ * default hides it. What this buys is that a reader who never looks at the
+ * base-rate tables can fold them once and keep the card at a usable height.
+ */
+export function CardSection({
+  id, title, subtitle, children, defaultOpen = true,
+}: {
+  id: string;
+  title: string;
+  subtitle?: React.ReactNode;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useStickyBoolean(`home.essec.${id}`, defaultOpen);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          className="flex items-baseline gap-1.5 group text-left"
+        >
+          <span className={`text-[0.55rem] text-text-muted transition-transform ${open ? "rotate-90" : ""}`}>
+            ▸
+          </span>
+          <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted group-hover:text-accent">
+            {title}
+          </h3>
+          {!open && <span className="text-[0.55rem] text-text-muted/70">show</span>}
+        </button>
+        {open && subtitle}
+      </div>
+      {open && children}
+    </div>
+  );
+}
+
 /* ─── horizon band ────────────────────────────────────────────── */
 
 /**

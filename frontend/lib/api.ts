@@ -3156,6 +3156,19 @@ export interface EsNewsItem {
   title: string;
   url: string | null;
   published: string | null;
+  /** 1 moves the index, 2 is market-wide colour, 3 is everything else.
+   *
+   *  THE LIST IS ORDERED BY THIS, then by recency within it — deliberately, so
+   *  a colour piece from an hour ago cannot outrank an FOMC line from
+   *  yesterday. It was computed and never rendered, so the only ordering cue on
+   *  screen was the age, and a correctly-ordered list read as an unsorted one:
+   *  `3h · 4h · 9h · 1d · 2d · 3d · 1h · 5h · 4d`. */
+  tier?: number;
+  /** "since last close" | "earlier" — bucketed against the prior cash close, so
+   *  a Monday read treats the whole weekend as one bucket rather than as three
+   *  degrees of old. */
+  age?: string | null;
+  hours_ago?: number | null;
 }
 
 /** One estimate of the day's range. `sigma_handles` is a one-sigma

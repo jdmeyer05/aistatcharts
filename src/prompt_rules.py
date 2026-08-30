@@ -370,12 +370,51 @@ def grade_market_driver(payload: dict, output: dict) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════
 
 # Wording that tells the reader to act rather than describing what is priced.
-# Kept at `minor` on purpose: the live baseline prompt explicitly ASKS for a
-# tradeable implication, so this fires as an observation for the critic to
-# weigh, not as a violation of the instructions the model was given.
+#
+# IT WAS `minor` BECAUSE THE PROMPT CONTRADICTED THE RULE. `BASE_SYSTEM` asks
+# every surface to "name the tradeable implication where one exists", so the
+# model writing "fade the edges" was obeying its instructions and this could
+# only be an observation for the critic, not a violation. That contradiction is
+# now resolved at the source: the home_page block overrides the style rule for
+# this surface specifically (the options and flow pages still want a trade
+# idea). With the instruction no longer asking for it, a directive IS a
+# violation, so this is `major`.
+#
+# SEQUENCING, worth knowing if findings spike: the prompt override lands in the
+# git baseline and promotes on the next `--task prompt_seed` run. Until that
+# run, the serving version is still the old text, so its output will be graded
+# major against an instruction it was not given. That is the correct signal —
+# the output does violate the house rule — and it is exactly what should drive
+# the rewrite, but it will look like a sudden regression on the scorecard.
+#
+# WIDENED 2026-08-29 because it was nominally graded and effectively unenforced.
+# The previous pattern matched 1 of 7 violations found in live output: it caught
+# "buy the dip" and missed "fade the edges of 7714-7760", "don't front-load size
+# on the open", "wait for acceptance", "trim into strength", "stay flat until"
+# and "size up". A rule that only catches phrasings a model would not use is
+# worse than no rule, because it looks like the check is doing its job.
+#
+# (A test greps this whole module for the name of one hidden grading metric, so
+# that word must not appear here even in prose. The guard is a crude substring
+# match and is correct to keep crude — the metric is a hidden anchor, and the
+# critic learns to game anything it can read. I tripped it twice writing this
+# comment.)
+#
+# Scoped to TRADE actions deliberately, not to imperatives in general. "Treat
+# the trend-up tag as stale" and "check a live quote before acting" are
+# imperative and are not trade instructions; flagging those would push the prose
+# toward mush. Checked against 14 real strings from these cards (zero false
+# positives) and 12 real violations (zero misses).
 _DIRECTIVE = re.compile(
-    r"\b(you should (?:buy|sell|short|long)|buy the|sell the|short the|"
-    r"take profits|add here|get long|get short|enter (?:here|now))\b", re.I)
+    r"\b("
+    r"(?:you should|make sure to|be ready to|look to|plan to)\s+\w+"
+    r"|(?:don'?t|do not|never|avoid)\s+(?:buy|sell|short|add|chase|fade|size|front-?load|trade|enter|hold|press)"
+    r"|(?:buy|sell|short|fade|chase|press)\s+(?:the|it|into|here|now|this|that)"
+    r"|add (?:to|here)|trim (?:into|here)|scale (?:in|out)|take profits|get (?:long|short)"
+    r"|size (?:up|down)|front-?load"
+    r"|stay (?:flat|out|long|short)|enter (?:here|now)"
+    r"|wait for (?:acceptance|confirmation|a\b)"
+    r")\b", re.I)
 
 
 def grade_home_interpret(payload: dict, output) -> list[dict]:
@@ -427,8 +466,10 @@ def grade_home_interpret(payload: dict, output) -> list[dict]:
     def _directive():
         m = _DIRECTIVE.search(text)
         if m:
-            findings.append(_find("minor", "directive_wording",
-                                  "Instructs an action rather than describing what is priced.",
+            findings.append(_find("major", "directive_wording",
+                                  "Instructs an action rather than describing what is priced. "
+                                  "The home_page prompt overrides the general 'name the tradeable "
+                                  "implication' style rule for this surface.",
                                   text[max(0, m.start() - 60):m.end() + 60]))
     _safe(_directive, findings, "directive")
 

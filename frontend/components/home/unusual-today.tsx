@@ -258,9 +258,32 @@ export default function UnusualToday() {
     return { extremes: ext, placed: all.length, unplaced: cannotPlace };
   }, [vol, rrg, macro, valuation]);
 
-  // Before any card has hydrated there is genuinely nothing to say, and a
+  // Before the boards have loaded there is genuinely nothing to say, and a
   // "nothing is unusual" banner over an empty page would be a lie by timing.
-  if (placed === 0 && unplaced === 0) return null;
+  //
+  // But this now sits at the TOP of the page, so returning null would collapse
+  // the space and drop the ES card up by its own height, then shove it back
+  // down a second later. Render the shell at its real height and say plainly
+  // that it is still reading — which is true, and is a different statement from
+  // "nothing is unusual".
+  if (placed === 0 && unplaced === 0) {
+    return (
+      <div className="card card-compact space-y-2">
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-accent">
+            At an extreme today
+          </h3>
+          <span className="text-[0.55rem] text-text-muted">
+            readings past the {ordinal(HIGH)} or under the {ordinal(LOW)} percentile of their own history
+          </span>
+        </div>
+        <p className="text-[0.68rem] text-text-muted leading-snug">
+          Reading the boards — vol landscape, sector rotation, macro pressure and valuation.
+          Nothing is claimed until they answer.
+        </p>
+      </div>
+    );
+  }
 
   const shown = extremes.slice(0, 6);
 

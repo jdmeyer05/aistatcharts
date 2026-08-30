@@ -946,6 +946,18 @@ export function HomeFast() {
   return (
     <div className="space-y-4">
       <MarketPulse />
+      {/* RANKS THE PAGE, SO IT HAS TO BE AT THE TOP OF IT.
+          Measured, this block is 137px and the ES card below it is 3,967px, so
+          living in the swing island put the one component whose job is "where
+          should I look" four screens down — you had to scroll past the largest
+          card on the page to reach the thing that tells you whether scrolling
+          is worth it.
+          It can live here because it no longer depends on the swing island:
+          its queries are enabled and carry each shadowed card's own cadence, so
+          it stays live even when a horizon band is collapsed and its cards
+          unmount. The cost is four extra client requests on first load, all of
+          them server-cached and pre-warmed reads. */}
+      <UnusualToday />
       <EsBriefing />
     </div>
   );
@@ -957,11 +969,6 @@ export function HomeSwing() {
 
   return (
     <div className="space-y-5">
-      {/* Ranks the page by its own percentiles before asking anyone to scroll
-          it. Above the interpretation because "is anything unusual" is a
-          cheaper question than "what does all of this mean". */}
-      <UnusualToday />
-
       {/* One interpretation for the whole page. It reads every card's cached
           data, so it lives in THIS island rather than the fast one — firing it
           before these boards hydrate would have it synthesise a page it cannot
