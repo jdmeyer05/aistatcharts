@@ -12,3 +12,4 @@ data/gdelt_events/
 data/acled_events.csv
 .claude/
 *.log
+*.bak
