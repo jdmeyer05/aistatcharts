@@ -35,6 +35,27 @@ usual 2. Silence — "calibrated within noise" — is a real and common answer, 
 scorecard that always finds something to fix is a scorecard tuning itself into
 the sample.
 
+THE CONTROL IS THE POINT, AND IT IS NOT FLATTERING. This read predicts a
+session's FINAL efficiency class from a partial reading of the SAME session, and
+those windows overlap: by 15:00 most of the final number has already been
+observed. So a good score here can be arithmetic rather than insight, and the
+only way to tell is to run the identical pipeline over sessions built to contain
+nothing.
+
+The control keeps each real session's MAGNITUDE sequence exactly and randomises
+only the signs. Volatility clustering, the intraday volatility smile and the fat
+tails all survive; direction and persistence do not. Measured: the control
+delivers 81.7% where the real read delivers 77.4% on confident trendy, 71.3%
+against 71.2% on confident choppy, and 50.4% against 50.9% overall. The read does
+not beat sessions that cannot contain a signal. Its calibration is honest and its
+skill is arithmetic — a partly-finished session mostly determines its own final
+class, and a random walk knows that about itself too.
+
+That is not a reason to delete the read: "this session has gone nowhere" is a
+true and useful description, which is what the card claims. It is a reason to
+ship the control number beside the delivered one forever, so nobody reads a
+calibration table as an edge.
+
 SHRINKAGE WAS TESTED AND REJECTED — do not retry it. The top of the reliability
 curve runs about three points hot, which is the signature of a winner's curse:
 the band with the highest observed rate is partly high BECAUSE it was highest.
@@ -69,6 +90,10 @@ _TTL_S = 12 * 3600
 
 _MIN_TRAIN = 500        # sessions before anything is scored
 _REFIT_EVERY = 21       # roughly monthly, the standard walk-forward cadence
+
+# Seeds for the sign-randomised control. Fixed so the scorecard does not wobble,
+# and several because one randomisation is a sample rather than the truth.
+_CONTROL_SEEDS = (20260831, 20260901, 20260902)
 
 # The record must score what production actually does, so it uses the same
 # rolling fit window. Scoring an expanding fit would grade a module that is not
@@ -131,8 +156,27 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
         if panel.empty or len(panel) < _MIN_TRAIN + 100:
             return {"available": False, "reason": "not enough history to score"}
 
+        # The control panel: same magnitudes, random signs, same grid. Seeded so
+        # the scorecard does not wobble between loads.
+        def _control_panel(src: pd.DataFrame, seed: int) -> pd.DataFrame:
+            rng = np.random.default_rng(seed)
+            out = []
+            for _, g in src.groupby(src.index.normalize()):
+                c = g["Close"].to_numpy(dtype=float)
+                if len(c) < 3:
+                    continue
+                d_ = np.diff(c)
+                flip = rng.choice([-1.0, 1.0], size=len(d_)) * np.abs(d_)
+                out.append(pd.DataFrame(
+                    {"Close": np.concatenate([[c[0]], c[0] + np.cumsum(flip)])},
+                    index=g.index))
+            return _panel(pd.concat(out)) if out else pd.DataFrame()
+
         rows = []                      # one per (session, mark) actually scored
         n = len(panel)
+        # NOTE the control is scored by this same loop, below, so the two can
+        # never drift apart. A control that runs through different code is not a
+        # control.
         for start in range(_MIN_TRAIN, n, _REFIT_EVERY):
             tr = panel.iloc[max(0, start - _FIT_WINDOW):start]
             te = panel.iloc[start:start + _REFIT_EVERY]
@@ -163,6 +207,48 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
             return {"available": False, "reason": "nothing scored"}
         r = pd.DataFrame(rows)
         total = len(r)
+
+        def _score(pan: pd.DataFrame) -> pd.DataFrame:
+            out = []
+            for st in range(_MIN_TRAIN, len(pan), _REFIT_EVERY):
+                tr_ = pan.iloc[max(0, st - _FIT_WINDOW):st]
+                te_ = pan.iloc[st:st + _REFIT_EVERY]
+                if te_.empty or len(tr_) < 400:
+                    break
+                q_ = tr_["final"].dropna().quantile([1 / 3, 2 / 3])
+                lo_, hi_ = float(q_.iloc[0]), float(q_.iloc[1])
+                for mk in _MARKS:
+                    c_ = tr_[[mk, "final"]].dropna()
+                    if len(c_) < 200:
+                        continue
+                    th_, tf_ = c_[mk].to_numpy(float), c_["final"].to_numpy(float)
+                    for _, rr in te_.iterrows():
+                        e_, fi_ = rr.get(mk), rr.get("final")
+                        if not (np.isfinite(e_) and np.isfinite(fi_)):
+                            continue
+                        lb_, sd_, p_ = _label_for(e_, th_, tf_, lo_, hi_, _EDGES,
+                                                  _CONFIDENT, _LIKELY, _MIN_CELL)
+                        ac_ = ("choppy" if fi_ < lo_
+                               else "trendy" if fi_ >= hi_ else "mixed")
+                        out.append({"label": lb_,
+                                    "hit": (sd_ == ac_) if lb_ != "mixed"
+                                           else (ac_ == "mixed")})
+            return pd.DataFrame(out)
+
+        # Averaged over several draws. One sign-randomisation is itself a sample:
+        # two seeds moved the control's overall score by 3.5 points, which is
+        # larger than any effect being argued about here.
+        try:
+            src_ = fine[fine.index.normalize() != today]
+            parts = []
+            for seed in _CONTROL_SEEDS:
+                cp = _control_panel(src_, seed)
+                if not cp.empty:
+                    parts.append(_score(cp))
+            ctrl = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+        except Exception as e:                      # a missing control is not a failure
+            logger.warning(f"chop control failed: {e}")
+            ctrl = pd.DataFrame()
 
         def _floor(lbl: str):
             if lbl.startswith("confident"):
@@ -208,6 +294,14 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
                 # must never drive a tuning decision — see the module docstring.
                 "calibration_pp": (lambda c: round(c[0], 1) if c[0] is not None else None)(_calib(s)),
                 "calibration_z": (lambda c: round(c[1], 2) if c[1] is not None else None)(_calib(s)),
+                # What sessions that CANNOT contain a signal score under the same
+                # label. If this matches the delivered figure, the delivered
+                # figure is arithmetic.
+                "control_pct": (round(float(ctrl[ctrl.label == lbl].hit.mean() * 100), 1)
+                                if not ctrl.empty and (ctrl.label == lbl).any() else None),
+                "beats_control_pp": (
+                    round(delivered - float(ctrl[ctrl.label == lbl].hit.mean() * 100), 1)
+                    if not ctrl.empty and (ctrl.label == lbl).any() else None),
             })
 
         # A reliability curve, which is the diagnostic a per-label table cannot
@@ -289,6 +383,23 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
                          f"{worst[0]} at {worst[2]:+.1f}pp ({worst[1]:.1f} SE, and the bar is "
                          f"{Z_BAR:.1f} across five labels). No threshold change is supported by "
                          f"this window.")
+        # Weighted by how often the READ emits each label, so the two are compared
+        # on the same mix rather than on whichever mix each happened to produce.
+        _mix_matched_edge, _ctrl_sweeps = None, None
+        if not ctrl.empty:
+            num = den = 0.0
+            sweeps = True
+            for row in out_rows:
+                if row.get("never_fired") or row.get("beats_control_pp") is None:
+                    continue
+                num += row["beats_control_pp"] * row["n"]
+                den += row["n"]
+                if row["label"] != "mixed" and row["beats_control_pp"] > 0:
+                    sweeps = False
+            if den > 0:
+                _mix_matched_edge = round(num / den, 1)
+                _ctrl_sweeps = bool(sweeps)
+
         mixed = next((x for x in out_rows if x["label"] == "mixed"), None)
         if mixed and mixed.get("coverage_pct", 0) >= 50:
             notes.append(f"The read declines to call {mixed['coverage_pct']:.0f}% of "
@@ -314,6 +425,35 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
             "train_min": _MIN_TRAIN,
             "refit_every": _REFIT_EVERY,
             "improvements": notes,
+            "control": ({
+                "overall_pct": round(float(ctrl.hit.mean() * 100), 1),
+                "real_pct": round(float(r.hit.mean() * 100), 1),
+                # MIX-MATCHED, and the raw difference is kept only as a warning.
+                # Comparing the two pooled accuracies is Simpson's paradox waiting
+                # to happen and duly happened: the control beat the real read on
+                # every directional label while the pooled figure said the read
+                # was 4 points ahead, purely because the read says "mixed" more
+                # often and scores better when it does. The honest comparison
+                # weights each label's difference by how often the READ emits it.
+                "edge_pp": _mix_matched_edge,
+                "edge_pp_unmatched": round(
+                    float((r.hit.mean() - ctrl.hit.mean()) * 100), 1),
+                "beaten_on_every_directional_label": _ctrl_sweeps,
+                "n": int(len(ctrl)),
+                "verdict": ("no measurable edge over a random walk"
+                            if (_mix_matched_edge is None or _mix_matched_edge < 2.0)
+                            else "beats a random walk"),
+                "note": (
+                    "Sessions keeping every real magnitude and randomising only the "
+                    "signs, scored by this same walk-forward. They cannot contain a "
+                    "market signal. Where the read matches them, its accuracy is the "
+                    "arithmetic of a partly-finished session rather than an edge — a "
+                    "session that is most of the way through largely determines its "
+                    "own final class, and a random walk knows that about itself too. "
+                    "The read stays on the card as a DESCRIPTION of the session so "
+                    "far, which is what it claims to be."
+                ),
+            } if not ctrl.empty else None),
             "hourly_scored": False,
             "hourly_reason": (
                 "The hourly rows make no prediction — they report what an hour did, "

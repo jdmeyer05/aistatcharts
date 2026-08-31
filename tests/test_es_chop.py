@@ -272,3 +272,25 @@ def test_an_untested_hour_is_never_called_a_coin_flip():
             assert r["p"] is not None
         if r.get("p") is None:
             assert r.get("verdict") != "coin flip"
+
+
+def test_control_edge_is_mix_matched_not_pooled():
+    """Pooled accuracy across labels is Simpson's paradox waiting to happen, and
+    it happened: with one control draw the control beat the real read on every
+    directional label while the pooled figure said the read was 4pp ahead —
+    because the read emits "mixed" more often and scores better when it does.
+    The reported edge must weight each label's difference by how often the READ
+    emits that label."""
+    rows = [
+        {"label": "confident trendy", "n": 900, "beats_control_pp": -6.0},
+        {"label": "likely trendy", "n": 1200, "beats_control_pp": -7.0},
+        {"label": "mixed", "n": 3400, "beats_control_pp": 7.0},
+        {"label": "likely choppy", "n": 1500, "beats_control_pp": -1.0},
+        {"label": "confident choppy", "n": 400, "beats_control_pp": -4.0},
+    ]
+    num = sum(r["beats_control_pp"] * r["n"] for r in rows)
+    den = sum(r["n"] for r in rows)
+    matched = num / den
+    assert matched < 2.0, "a mix-matched edge this small must not read as an edge"
+    sweeps = all(r["beats_control_pp"] <= 0 for r in rows if r["label"] != "mixed")
+    assert sweeps, "the per-label picture is the one that must drive the verdict"

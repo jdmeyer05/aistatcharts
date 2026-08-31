@@ -4221,6 +4221,8 @@ export interface EsChopRecord {
     claimed_floor_pct?: number | null;
     claimed_avg_pct?: number | null;
     clears_floor?: boolean;
+    control_pct?: number | null;
+    beats_control_pp?: number | null;
     margin_pp?: number | null;
     calibration_pp?: number | null;
     calibration_z?: number | null;
@@ -4249,6 +4251,21 @@ export interface EsChopRecord {
   /** Per-label calibration: delivered minus CLAIMED, and its sampling
    *  z-score. `margin_pp` compares against the floor instead and must not
    *  drive tuning — a floor is a minimum, not a forecast. */
+  /** The negative control: the same pipeline over sessions that keep every real
+   *  move size and randomise only the directions, averaged over several draws
+   *  (one randomisation moved individual labels by 6-7pp, so one is not enough).
+   *  `edge_pp` is MIX-MATCHED — comparing the two pooled accuracies is Simpson's
+   *  paradox and duly produced a sign flip against the per-label picture. */
+  control?: {
+    overall_pct: number;
+    real_pct: number;
+    edge_pp: number | null;
+    edge_pp_unmatched: number;
+    beaten_on_every_directional_label: boolean | null;
+    n: number;
+    verdict: string;
+    note: string;
+  } | null;
   /** Measured statements about what would improve the read — only where the
    *  numbers support a direction. Empty is a valid, documented answer. */
   improvements?: string[];

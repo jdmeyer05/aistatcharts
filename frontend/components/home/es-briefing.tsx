@@ -2648,7 +2648,41 @@ export default function EsBriefing() {
                           65% bar average far above it, so scoring them against 65% reads a
                           shortfall as headroom.
                         </p>
-                        {/* The improvement lever, printed rather than acted on.
+                        {/* THE CONTROL, and it is the most important number in
+                          this block. The read predicts a session's FINAL class
+                          from a partial reading of the SAME session, and those
+                          windows overlap — by 15:00 most of the final number is
+                          already observed. So a good score here can be
+                          arithmetic. Sessions that keep every real magnitude and
+                          randomise only the signs cannot contain a market
+                          signal, and they score the same. The read stays because
+                          "this session has gone nowhere" is a true description;
+                          the control stays so nobody reads a calibration table
+                          as an edge. */}
+                      {chopRecQ.data.control && (
+                        <p className="text-[0.55rem] text-text-muted leading-snug">
+                          <span className="uppercase tracking-wider">Against a control: </span>
+                          sessions with every real move size kept and only their directions
+                          randomised score{" "}
+                          <span className="text-text tabular-nums">
+                            {chopRecQ.data.control.overall_pct?.toFixed(1)}%
+                          </span>{" "}
+                          through this same pipeline, against{" "}
+                          <span className="text-text tabular-nums">
+                            {chopRecQ.data.control.real_pct?.toFixed(1)}%
+                          </span>{" "}
+                          for the real tape — a mix-matched edge of{" "}
+                          <span className="text-text tabular-nums">
+                            {chopRecQ.data.control.edge_pp != null
+                              ? `${chopRecQ.data.control.edge_pp > 0 ? "+" : ""}${chopRecQ.data.control.edge_pp.toFixed(1)}pp`
+                              : "—"}
+                          </span>
+                          . {chopRecQ.data.control.verdict === "no measurable edge over a random walk"
+                            ? "So the accuracy above is the arithmetic of a session that is most of the way through, not a forecasting edge — a random walk predicts its own endpoint just as well. This read describes the session behind you, which is all it claims."
+                            : "So the accuracy above is not simply arithmetic."}
+                        </p>
+                      )}
+                      {/* The improvement lever, printed rather than acted on.
                             Retuning a threshold using the same window that scored
                             it would spend the out-of-sample evidence that makes
                             the score worth reading. */}
