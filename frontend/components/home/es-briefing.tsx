@@ -2306,6 +2306,22 @@ export default function EsBriefing() {
                             <span className="text-[0.55rem] uppercase tracking-wider text-text-muted/80">
                               at {d.chop_trend.mark}
                             </span>
+                            {/* The mark is the last 30-minute boundary the FEED
+                                has bars for, which on this plan runs roughly
+                                twenty minutes behind the wall clock. Without
+                                this the card reads "at 11:30" at ten past noon
+                                and looks frozen, when it is simply refusing to
+                                score a mark whose bars have not arrived. */}
+                            {d.chop_trend.last_bar && d.chop_trend.last_bar !== d.chop_trend.mark && (
+                              <span className="text-[0.55rem] tabular-nums text-text-muted/80">
+                                bars through {d.chop_trend.last_bar}
+                              </span>
+                            )}
+                            {d.chop_trend.bars_stale && (
+                              <span className="text-[0.55rem] uppercase tracking-wider text-amber-400">
+                                cached bars
+                              </span>
+                            )}
                           </div>
                           {/* The efficiency ratio falls mechanically with bar
                               count, so the raw figure is meaningless without the

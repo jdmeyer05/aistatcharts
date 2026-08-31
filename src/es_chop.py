@@ -72,6 +72,7 @@ _MARKS = ("10:00", "10:30", "11:00", "11:30", "12:00", "12:30",
 _FULL_BARS = 78          # 09:30-16:00 inclusive on a 5-minute grid
 _MIN_BARS = _FULL_BARS - 2
 _MIN_CELL = 40           # below this a band is widened rather than quoted
+_TODAY_TTL_S = 60        # today's bars are the live half; history is not
 
 # Percentile band edges. Fine in the tails, where the reading actually separates,
 # and one wide band through the middle, where it does not.
@@ -81,6 +82,60 @@ _EDGES = (0.0, 0.10, 0.20, 1 / 3, 2 / 3, 0.80, 0.90, 1.0)
 # the same numbers — the asymmetry lives in the data, not in the thresholds.
 _CONFIDENT = 0.65
 _LIKELY = 0.45
+
+
+def _today_bars(day: pd.Timestamp) -> pd.DataFrame | None:
+    """Today's 5-minute bars, fetched fresh on a 60-second TTL.
+
+    WHY THIS EXISTS RATHER THAN SLICING THE SHARED FRAME. `es_baserates._fine()`
+    caches five years of bars for TWELVE HOURS, which is right for the thing it
+    was built for — history does not change during a session. But this module
+    reads the running session out of that same frame, and a container that first
+    fetched at 09:45 would then serve a frame ending at 09:45 until the evening:
+    the mark would sit at 09:30 all afternoon while the clock advanced past it,
+    and the card would report a stale reading as a current one. The history half
+    still comes from the 12-hour cache, which is free and correct; only the live
+    half is refetched, and it is a single un-paged request for one day.
+
+    Returns None on any failure, which the caller treats as "fall back to the
+    shared frame" rather than as an empty session — those are different states.
+    """
+    from time import time as _t
+    hit = _CACHE.get("today")
+    if hit and hit[1] == day and (_t() - hit[0]) < _TODAY_TTL_S:
+        return hit[2]
+    try:
+        from src.api_keys import get_secret
+        import requests
+        key = get_secret("MASSIVE_API_KEY")
+        if not key:
+            return None
+        iso = day.date().isoformat()
+        r = requests.get(
+            f"https://api.polygon.io/v2/aggs/ticker/SPY/range/5/minute/{iso}/{iso}",
+            params={"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": key},
+            timeout=20)
+        if r.status_code != 200:
+            return None
+        res = r.json().get("results") or []
+        if not res:
+            return None
+        b = pd.DataFrame(res)
+        b.index = pd.to_datetime(b["t"], unit="ms", utc=True).dt.tz_convert(_TZ)
+        b = b.rename(columns={"o": "Open", "h": "High", "l": "Low", "c": "Close"})
+        b = b[["Open", "High", "Low", "Close"]].sort_index()
+        b = b[~b.index.duplicated(keep="first")].dropna()
+        # RTH only, matching the frame this is standing in for. A pre-market bar
+        # would shift every index into the session by one and silently move the
+        # mark the reading is attributed to.
+        b = b[[_time(9, 30) <= t.time() < _time(16, 0) for t in b.index]]
+        if b.empty:
+            return None
+        _CACHE["today"] = (_t(), day, b)
+        return b
+    except Exception as e:
+        logger.warning(f"session_chop: today fetch failed: {e}")
+        return None
 
 
 def _er(closes: np.ndarray) -> float:
@@ -155,8 +210,14 @@ def session_chop(fine: pd.DataFrame | None = None,
         clock = clock.tz_localize(_TZ) if clock.tzinfo is None else clock.tz_convert(_TZ)
 
         today = clock.normalize()
-        sess = fine[fine.index.normalize() == today]
-        if sess.empty:
+        # The live half is refetched; the shared frame stands in only if that
+        # fails, and it is then explicitly stale rather than silently so.
+        sess = _today_bars(today)
+        stale = False
+        if sess is None:
+            sess = fine[fine.index.normalize() == today]
+            stale = True
+        if sess is None or sess.empty:
             return {"available": False, "reason": "no bars for this session yet"}
 
         # The latest mark that has fully elapsed AND has a bar. Using the wall
@@ -297,6 +358,8 @@ def session_chop(fine: pd.DataFrame | None = None,
             "n_band": n_band,
             "sessions": int(len(col)),
             "instrument": "SPY 5-minute closes, cash session",
+            "bars_stale": stale,
+            "last_bar": sess.index[-1].strftime("%H:%M"),
             "forward": fwd,
             "note": note,
             "method": (

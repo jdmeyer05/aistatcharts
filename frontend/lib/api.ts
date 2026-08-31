@@ -4219,6 +4219,13 @@ export interface EsChopTrend {
   n_band?: number;
   sessions?: number;
   instrument?: string;
+  /** Newest bar the feed has returned. The mark trails it, and both trail
+   *  the wall clock by the vendor delay — so a mark that looks stuck is
+   *  usually a mark whose bars have not printed yet. */
+  last_bar?: string;
+  /** True when the live fetch failed and the 12-hour shared frame stood in.
+   *  The reading is then genuinely old and says so on the card. */
+  bars_stale?: boolean;
   /** The forward test, on the DISJOINT remainder of the session. It comes back
    *  null at every mark; it is carried in the payload so the card prints the
    *  null rather than letting a descriptive label read as a forecast. */
