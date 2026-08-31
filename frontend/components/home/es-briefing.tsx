@@ -1662,6 +1662,20 @@ export default function EsBriefing() {
                 ))}
               </div>
 
+              {/* The × column changed meaning on 2026-08-30 and an unlabelled
+                  number that quietly means something new is worse than no
+                  number. It is now measured against a normal bar FOR THAT TIME
+                  OF DAY, not against one median for the whole session — the
+                  09:30 bar runs 1.65× the scale of a midday bar, so a flat
+                  yardstick was over-reporting the open and missing the middle
+                  of the day. */}
+              {(d.attribution.moves?.length ?? 0) > 0 && (
+                <p className="text-[0.55rem] text-text-muted/80 mt-1 leading-snug">
+                  × is against a normal bar for that time of day, not a flat session
+                  median — the opening bar runs 1.65× the scale of a midday one.
+                </p>
+              )}
+
               {(d.attribution.event_impacts?.length ?? 0) > 0 && (
                 <div className="mt-2 pt-1.5 border-t border-border space-y-0.5">
                   {d.attribution.event_impacts?.map((e, i) => (
@@ -2210,7 +2224,12 @@ export default function EsBriefing() {
                       session AHEAD, so after 09:30 it is decreasingly about the
                       session being measured. Saying "frozen" told the reader a
                       number was anchored when nothing anchors it. */}
-                  {d.regime?.path_implied?.available && (
+                  {/* Gated on EITHER instrument. It used to require the path
+                      estimate, which left this whole block blank from the
+                      pre-open until the first bucket closed at 10:30 — the one
+                      window a reader most wants a number, and the exact hole
+                      the HAR prior was added to fill. */}
+                  {(d.regime?.path_implied?.available || d.regime?.har?.available) && (
                     <div className="pt-1.5 mt-1.5 border-t border-border space-y-0.5">
                       <div className="flex items-baseline gap-1.5">
                         <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
@@ -2224,9 +2243,19 @@ export default function EsBriefing() {
                         >
                           {d.regime.character}
                         </span>
-                        {d.regime.path_implied.multiplier != null && (
+                        {(d.regime.path_implied?.available
+                          ? d.regime.path_implied.multiplier
+                          : d.regime.har?.multiplier) != null && (
                           <span className="text-[0.6rem] tabular-nums text-text font-semibold">
-                            {d.regime.path_implied.multiplier.toFixed(2)}× normal
+                            {(d.regime.path_implied?.available
+                              ? d.regime.path_implied.multiplier!
+                              : d.regime.har!.multiplier!
+                            ).toFixed(2)}× normal
+                          </span>
+                        )}
+                        {!d.regime.path_implied?.available && (
+                          <span className="text-[0.55rem] uppercase tracking-wider text-text-muted/80">
+                            pre-open prior
                           </span>
                         )}
                       </div>
@@ -2237,7 +2266,49 @@ export default function EsBriefing() {
                           forecast language to a measured fact, and quoting the
                           estimator's out-of-sample error alongside it is worse:
                           a measurement has no forecast error. */}
-                      {sessionComplete ? (
+                      {!d.regime.path_implied?.available ? (
+                        /* PRE-OPEN / FIRST HOUR. Deliberately worded as a prior
+                           rather than a forecast of today: it is built only from
+                           sessions that have already closed, so it cannot see a
+                           catalyst that has not traded yet. */
+                        <>
+                          {/* `implied_range` is null whenever no trailing normal
+                              range was passed in. Rendering it unguarded prints
+                              "implies  handles against a normal" — an absence
+                              shown as a calm, which is the failure mode this
+                              card keeps hitting. Fall back to the multiplier,
+                              which always exists when `available` is true. */}
+                          <div className="text-[0.6rem] text-text-muted tabular-nums">
+                            {d.regime.har?.implied_range != null ? (
+                              <>
+                                Last night&apos;s realised volatility implies{" "}
+                                <span className="text-text">
+                                  {d.regime.har.implied_range.toFixed(0)}
+                                </span>{" "}
+                                handles against a normal{" "}
+                                {d.regime.har.normal_range?.toFixed(0)} · no range delivered yet
+                              </>
+                            ) : (
+                              <>
+                                Last night&apos;s realised volatility implies{" "}
+                                <span className="text-text">
+                                  {d.regime.har?.multiplier?.toFixed(2)}×
+                                </span>{" "}
+                                a normal session · no range delivered yet
+                              </>
+                            )}
+                          </div>
+                          <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                            A pre-open prior, not a read on today. Realised variance on its own
+                            1-, 5- and 22-day averages, measured over{" "}
+                            {d.regime.har?.sessions?.toLocaleString()} sessions — median error{" "}
+                            {d.regime.har?.oos_mae_pct?.toFixed(0)}% out of sample against{" "}
+                            40% for the trailing median it replaces. It does not see today&apos;s
+                            catalyst, and nothing fitted on yesterday forecasts the widest days.
+                            Once the first bucket closes at 10:30 the path estimate takes over.
+                          </p>
+                        </>
+                      ) : sessionComplete ? (
                         <>
                           <div className="text-[0.6rem] text-text-muted tabular-nums">
                             Delivered {d.regime.path_implied.implied_range?.toFixed(0)} handles
@@ -2293,6 +2364,31 @@ export default function EsBriefing() {
                           </p>
                         </>
                       )}
+
+                      {/* THE SESSION AGAINST ITS OWN PRE-OPEN PRIOR. Only shown
+                          once both instruments exist. A day running well past
+                          what last night's volatility implied is the signature
+                          this module was built for — an unscheduled catalyst has
+                          no calendar slot, so nothing else on the card can say
+                          it. Stated as what the tape has done, never as what it
+                          will do next. */}
+                      {d.regime?.divergence?.ratio != null &&
+                        (d.regime.divergence.ratio >= 1.25 ||
+                          d.regime.divergence.ratio <= 0.8) && (
+                          <div className="text-[0.6rem] text-text-muted tabular-nums">
+                            Running{" "}
+                            <span
+                              className={
+                                d.regime.divergence.ratio >= 1.25 ? "text-loss" : "text-accent"
+                              }
+                            >
+                              {d.regime.divergence.ratio.toFixed(2)}×
+                            </span>{" "}
+                            what last night&apos;s volatility implied (
+                            {d.regime.divergence.har_multiplier?.toFixed(2)}× prior vs{" "}
+                            {d.regime.divergence.path_multiplier?.toFixed(2)}× delivered)
+                          </div>
+                        )}
 
                       {/* HOW THIS READ HAS ACTUALLY DONE. Sits against the number
                           it scores rather than on a separate page — a track

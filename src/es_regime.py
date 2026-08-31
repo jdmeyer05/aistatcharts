@@ -17,7 +17,7 @@ The gap is architectural rather than a tuning problem. Release-day multipliers
 already exist (PPI 1.15x, NFP 1.10x) — but only the CALENDAR can populate them,
 so an unscheduled event has no slot to occupy.
 
-TWO INSTRUMENTS, DELIBERATELY UNEQUAL
+THREE INSTRUMENTS, DELIBERATELY UNEQUAL
 ─────────────────────────────────────
 1. PATH-IMPLIED RANGE — primary, and the only one that earns a number.
    Inverts the session-path table the card already publishes: if a typical
@@ -34,12 +34,33 @@ TWO INSTRUMENTS, DELIBERATELY UNEQUAL
        path-implied 11:30   20.7%         59.6%
        path-implied 12:30   16.7%         85.9%
 
-   On the top decile of WIDE days the static forecast lands within 25% on
-   0.0% of them — it never gets a wide day right, which is the whole failure.
    As a >=1.3x flag it runs 70.4% precision against a 29.3% base rate by the
    10:30 bucket, a 2.40x lift, stable across both halves.
 
-2. CROSS-ASSET DISPERSION — a pre-open FLAG, never a multiplier.
+   CORRECTED 2026-08-30. This block used to claim the static forecast lands
+   within 25% on 0.0% of the widest decile — "it never gets a wide day right".
+   That figure was CIRCULAR: the decile had been cut on the actual/static
+   RATIO, which selects precisely the days static got most wrong. Cut the
+   decile on the ACTUAL range and static scores 19.5%. Path-implied still wins,
+   by less than was claimed. Two related corrections from the same re-run:
+     - The +/-25% hit rate is NOT comparable across time of day. A session that
+       stops expanding scores exactly 1/f - 1, which crosses 0.25 as the median
+       fraction f passes 0.800 — between the 12:30 and 13:30 marks. 27.6% of
+       sessions never expand after 13:30 and all flip to "hit" at once, which
+       is why that column jumps 61.3% -> 84.7% while MAE moves smoothly. Read
+       the MAE column, not the hit rate, when comparing marks.
+     - NOTHING fitted on yesterday rescues the widest days. HAR lifts the wide
+       decile only 19.5% -> 24.1% and still under-forecasts it by ~38%. Only
+       the developing path repairs a wide day, which is the case for keeping
+       path-implied primary.
+
+2. HAR-RV — the pre-open prior, added 2026-08-30.
+   Realised variance on its own daily/weekly/monthly averages (Corsi 2009).
+   Answers the window path-implied cannot reach, every day rather than a dozen
+   times a year. Measured on THIS module's own input: MAE 33.7% against the
+   static 20-day median's 40.0%. See the block above `har_range_forecast`.
+
+3. CROSS-ASSET DISPERSION — a pre-open FLAG, never a multiplier.
    Path-implied says nothing until range has developed, so this fills the hour
    before it. A macro or geopolitical shock shows up first in the assets nearest
    the catalyst, not in the index. Measured on the OVERNIGHT GAP only — prior
@@ -225,6 +246,206 @@ def path_implied_range(range_so_far: float | None,
 # history calls on an already-heavy cold path — and, worse, let two blocks on
 # one card quote different sigmas for the same asset if a cache refreshed
 # between them. One fetch, one answer.
+#
+# ---------------------------------------------------------------------------
+# HAR-RV — the pre-open forecast, and the only instrument here that speaks
+# before the session has delivered anything.
+# ---------------------------------------------------------------------------
+#
+# Path-implied cannot answer until a bucket has closed, which is why dispersion
+# was bolted on to cover the first hour. But dispersion is a weak flag — roughly
+# a dozen firings a year, and a lift whose size moves between sample halves. The
+# hour was covered rather than answered.
+#
+# HAR (Corsi 2009) answers it every day: realised variance regressed on its own
+# daily, weekly and monthly averages. It has been the standard volatility
+# forecaster for fifteen years and this platform had never been scored against
+# it — the incumbent benchmark was a static 20-day median, which is a weak
+# comparator, and it was hiding real accuracy.
+#
+# MEASURED ON THE PRODUCTION INPUT, not on a research file. The research run
+# used 6,027 sessions of 1-minute history; this module sees ~1,250 sessions of
+# 5-minute Polygon SPY on a rolling five-year window, so it was re-run on that
+# window before shipping. Out of sample, expanding fit, 743 sessions:
+#
+#       forecast              MAE      within +/-25%     QLIKE
+#       static 20d median    40.0%         40.0%         0.718
+#       HAR (calibrated)     33.7%         46.3%         0.461
+#
+# HAR wins in 6 of 6 burn-in/calibration settings tried, by 5.5-6.7pp of MAE,
+# every one at |t| > 4 on the paired per-session loss differential (Newey-West,
+# 9 lags). The pair below is NOT the best cell — it is the one leaving the most
+# usable calibration history, and it scores second-worst of the six, so nothing
+# here is tuned to the backtest.
+_HAR_BURN = 250          # sessions before a fit is attempted
+_HAR_MINOBS = 250        # sessions before the sigma->range constant is trusted
+_HAR_CACHE: dict = {}
+_HAR_TTL_S = 3600        # the panel moves once a day; an hour is generous
+
+
+def _har_panel() -> pd.DataFrame:
+    """One row per completed session: realised variance, and range as a
+    FRACTION of price so the quantity is unit-free and transfers SPY -> ES.
+
+    RV is built from 5-minute returns rather than squared daily returns — a
+    chi-square with one degree of freedom is roughly ten times noisier, and the
+    point of holding intraday bars is not to throw that away.
+    """
+    from src.es_baserates import _fine
+    f = _fine()
+    if f is None or f.empty:
+        return pd.DataFrame()
+    # TODAY MUST NOT BE IN HERE. `_fine` returns bars up to now, so from about
+    # 15:20 a live session has enough bars to pass the completeness filter below
+    # and would enter the panel as though it had closed — which both understates
+    # its own RV and, worse, silently turns the output into a forecast of
+    # TOMORROW while the card presents it as a prior for today. Cut on the
+    # exchange-local date, never `date.today()`: this process runs on Cloud Run
+    # in UTC, where after 20:00 ET "today" is already tomorrow.
+    f = f[f.index < pd.Timestamp.now(tz=_TZ).normalize()]
+    if f.empty:
+        return pd.DataFrame()
+    day = f.index.normalize()
+    r = np.log(f["Close"]).groupby(day).diff()
+    g = pd.DataFrame({"r": r.to_numpy(), "h": f["High"].to_numpy(),
+                      "l": f["Low"].to_numpy(), "c": f["Close"].to_numpy()},
+                     index=day)
+    n = g.groupby(level=0).size()
+    # A half-day makes RV and the range wrong in the same direction, so drop it
+    # rather than patch it — the rule `_hourly` already applies to the path curve.
+    g = g[g.index.isin(n[n >= 70].index)]
+    if g.empty:
+        return pd.DataFrame()
+    grp = g.groupby(level=0)
+    p = pd.DataFrame({
+        "RV": grp["r"].apply(lambda s: float(np.nansum(np.asarray(s, float) ** 2))),
+        "R": (grp["h"].max() - grp["l"].min()) / grp["c"].last(),
+    })
+    return p[(p["RV"] > 0) & (p["R"] > 0)].dropna()
+
+
+def har_range_forecast(normal_range: float | None = None) -> dict:
+    """Pre-open forecast of the session's range, as a multiple of a normal day.
+
+    Unlike `path_implied_range` this needs nothing from the session it
+    describes, so it is available at 09:29 — and for exactly the same reason it
+    cannot see today. Once a bucket has closed the path estimate is better and
+    this becomes context rather than the answer.
+    """
+    from time import time as _t
+    # CACHE THE MODEL, NOT THE ANSWER. `implied_range` is the only field that
+    # depends on the caller's `normal_range`, so caching the whole dict would
+    # hand a second caller with a different instrument the first one's handles.
+    hit = _HAR_CACHE.get("core")
+    if hit and (_t() - hit[0]) < _HAR_TTL_S:
+        return _har_dress(hit[1], normal_range)
+
+    try:
+        p = _har_panel()
+    except Exception as e:                                   # pragma: no cover
+        logger.warning(f"HAR panel failed: {e}")
+        return {"available": False, "reason": "no intraday history"}
+
+    need = _HAR_BURN + _HAR_MINOBS
+    if len(p) < need:
+        return {"available": False,
+                "reason": f"needs {need} completed sessions, has {len(p)}"}
+
+    # `shift(1)` steps to the previous ROW, and dropped half-days mean that is
+    # occasionally not the previous trading day. That is tolerable HERE and was
+    # fatal elsewhere, and the difference is worth stating: RV_{t-1} enters as a
+    # LEVEL, so a gap only mis-weights a persistent series by one session. The
+    # bug this resembles — an adjacency guard built on rows-present rather than
+    # a trading calendar — was destructive because a stale prior close entered a
+    # RETURN, manufacturing multi-day moves labelled as overnight gaps. Roughly
+    # ten sessions in 1,250 are affected and none of them can do that here.
+    rv = p["RV"]
+    d = rv.shift(1)
+    w = rv.rolling(5).mean().shift(1)
+    m = rv.rolling(22).mean().shift(1)
+    X = np.column_stack([np.ones(len(p)), np.log(d), np.log(w), np.log(m)])
+    y = np.log(rv).to_numpy()
+    ok = np.isfinite(X).all(1) & np.isfinite(y)
+    if int(ok.sum()) < need:
+        return {"available": False, "reason": "not enough finite HAR rows"}
+
+    beta, *_ = np.linalg.lstsq(X[ok], y[ok], rcond=None)
+    sigma = np.exp(0.5 * (X @ beta))              # median sigma under log-normal
+
+    # Sigma is not a range. The Gaussian factor is sqrt(8/pi) = 1.5958, but the
+    # tape is not Gaussian, so the constant is MEASURED on this window and the
+    # theoretical value is carried alongside only as a check that they agree.
+    # Mixing a sigma and a range without this factor has produced a real bug on
+    # this platform before (a 113-handle day read as 196% of expected move).
+    ratio = pd.Series(p["R"].to_numpy() / sigma, index=p.index)
+    ratio = ratio.replace([np.inf, -np.inf], np.nan).dropna()
+    if len(ratio) < _HAR_MINOBS:
+        return {"available": False, "reason": "sigma->range constant unresolved"}
+    C = float(ratio.median())
+
+    # TODAY's forecast: yesterday's aggregates carried one step forward. The
+    # panel holds only COMPLETED sessions, so this is causal by construction.
+    a = rv.to_numpy()
+    xn = np.array([1.0, np.log(a[-1]), np.log(a[-5:].mean()), np.log(a[-22:].mean())])
+    if not np.isfinite(xn).all():
+        return {"available": False, "reason": "trailing variance not finite"}
+    frac = float(C * np.exp(0.5 * float(xn @ beta)))
+
+    norm_frac = float(p["R"].tail(20).median())
+    if not np.isfinite(norm_frac) or norm_frac <= 0:
+        return {"available": False, "reason": "no trailing normal range"}
+    mult = frac / norm_frac
+    if not np.isfinite(mult) or mult <= 0:
+        return {"available": False, "reason": "forecast not finite"}
+
+    character = "wide" if mult >= 1.30 else ("compressed" if mult <= 0.75 else "normal")
+
+    core = {
+        "available": True,
+        "multiplier": round(mult, 2),
+        "character": character,
+        "sessions": int(len(p)),
+        "asof": str(p.index[-1].date()),
+        "calibration": round(C, 4),
+        "calibration_theory": round(float(np.sqrt(8 / np.pi)), 4),
+        "persistence": round(float(beta[1:].sum()), 4),
+        "oos_mae_pct": 33.7,
+        "note": (f"Yesterday's volatility complex implies {mult:.2f}x a normal "
+                 f"range for today, measured from realised variance rather than "
+                 f"from what options cost."),
+        "caveat": (
+            "A pre-open prior and nothing more. It is built entirely from "
+            "sessions that have already closed, so it cannot see today's "
+            "catalyst — and it does NOT rescue the widest days, which stay "
+            "under-forecast by every estimator fitted on yesterday. Once a "
+            "bucket has closed, the path estimate is the better number."
+        ),
+        "method": (
+            "Log realised variance regressed on its own 1-day, 5-day and 22-day "
+            "averages (HAR, Corsi 2009), fitted on this window's completed "
+            "sessions, then scaled to a range by the measured median ratio of "
+            "range to sigma."
+        ),
+    }
+    _HAR_CACHE["core"] = (_t(), core)
+    return _har_dress(core, normal_range)
+
+
+def _har_dress(core: dict, normal_range: float | None) -> dict:
+    """Attach the only two fields that depend on the caller's instrument.
+
+    Kept out of the cache so a caller asking in ES handles and one asking in SPY
+    points cannot be served each other's numbers — the same one-fetch-one-answer
+    rule `asset_gap` follows, applied to the half that is NOT shared.
+    """
+    out = dict(core)
+    mult = out.get("multiplier")
+    out["normal_range"] = round(float(normal_range), 2) if normal_range else None
+    out["implied_range"] = (round(mult * float(normal_range), 2)
+                            if (mult and normal_range) else None)
+    return out
+
+
 _GAP_CACHE: dict = {}
 _GAP_TTL_S = 300
 
@@ -328,31 +549,83 @@ def session_character(range_so_far: float | None = None,
                       normal_range: float | None = None,
                       now: pd.Timestamp | None = None,
                       with_dispersion: bool = True) -> dict:
-    """The two instruments together, with the primary one clearly primary."""
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    """The three instruments together, with the primary one clearly primary."""
+    # PRIME THE SHARED FETCH FIRST. Both the path curve and the HAR panel read
+    # `_fine`, whose cache is checked-then-filled with no single-flight guard —
+    # so submitting them together on a cold instance fires the ~20-page Polygon
+    # pull twice in parallel. The ES brief is already the heaviest call on a
+    # fresh revision and the SSR prefetch gives up at 20s, so this one line is
+    # the difference between adding a second fetch and adding none.
+    try:
+        from src.es_baserates import _fine
+        _fine()
+    except Exception as e:                                   # pragma: no cover
+        logger.warning(f"regime prefetch failed: {e}")
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
         f_path = pool.submit(path_implied_range, range_so_far, normal_range, now)
+        f_har = pool.submit(har_range_forecast, normal_range)
         f_disp = pool.submit(cross_asset_dispersion) if with_dispersion else None
         path = f_path.result()
+        har = f_har.result()
         disp = f_disp.result() if f_disp else None
 
-    # Headline prefers the measured path. Dispersion only speaks while the first
-    # bucket is still open, which is the one window path-implied cannot cover.
+    # ORDER OF PRECEDENCE, and the reason for it.
+    #
+    # The path estimate wins whenever it exists: it is measured from the range
+    # this session has actually delivered, and its error halves as the day runs.
+    #
+    # HAR is second and covers the window path cannot — from the pre-open to the
+    # first bucket close. It is a real forecast every day (MAE 33.7% vs 40.0%
+    # for the static median it replaces), which is a different class of object
+    # from the dispersion flag.
+    #
+    # Dispersion is now third and no longer sets the headline number. It fires
+    # roughly a dozen times a year and its lift moves between sample halves; it
+    # earns its place as a note that last night was unusual, not as the estimate.
     if path.get("available"):
         headline, basis = path.get("character"), "path"
+    elif har.get("available"):
+        headline, basis = har.get("character"), "har"
     elif disp and disp.get("available") and disp["sum_z"] >= _DISPERSION_BANDS[1][0]:
         headline, basis = "possibly wide", "dispersion"
     else:
         headline, basis = "unknown", None
 
+    # When both speak, say whether they agree. A pre-open prior that the session
+    # has already overtaken is information — it is the shape of an unscheduled
+    # catalyst, which is the gap this module was built for in the first place.
+    divergence = None
+    if path.get("available") and har.get("available"):
+        pm, hm = path.get("multiplier"), har.get("multiplier")
+        if pm and hm and hm > 0:
+            ratio = pm / hm
+            divergence = {
+                "path_multiplier": pm,
+                "har_multiplier": hm,
+                "ratio": round(ratio, 2),
+                "note": (
+                    f"The session is running {ratio:.2f}x what last night's "
+                    f"volatility implied."
+                    + (" Wider than the pre-open prior expected." if ratio >= 1.25
+                       else (" Narrower than the pre-open prior expected."
+                             if ratio <= 0.8 else " In line with it."))
+                ),
+            }
+
     return {
-        "available": bool(path.get("available") or (disp or {}).get("available")),
+        "available": bool(path.get("available") or har.get("available")
+                          or (disp or {}).get("available")),
         "character": headline,
         "basis": basis,
         "path_implied": path,
+        "har": har,
         "dispersion": disp,
+        "divergence": divergence,
         "disclaimer": (
             "Describes how much room the session is delivering, never which way it "
             "goes. The path estimate is measured from this session's own range; the "
-            "dispersion flag is measured from last night's cross-asset moves."
+            "HAR prior from realised variance in sessions already closed; the "
+            "dispersion flag from last night's cross-asset moves."
         ),
     }

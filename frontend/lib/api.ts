@@ -3839,8 +3839,38 @@ export interface EsRegime {
   available: boolean;
   /** "wide" | "normal" | "compressed" | "possibly wide" | "unknown" */
   character: string;
-  /** Which instrument produced the headline: "path" | "dispersion" | null. */
+  /** Which instrument produced the headline: "path" | "har" | "dispersion" | null.
+   *  Precedence is path, then har, then dispersion — see `session_character`. */
   basis: string | null;
+  /** HAR-RV pre-open prior, added 2026-08-30. Covers the window `path_implied`
+   *  cannot reach — the pre-open to the first bucket close. Built only from
+   *  sessions that have already closed, so it cannot see today's catalyst. */
+  har?: {
+    available: boolean;
+    reason?: string;
+    multiplier?: number | null;
+    implied_range?: number | null;
+    normal_range?: number | null;
+    character?: string;
+    sessions?: number;
+    calibration?: number;
+    calibration_theory?: number;
+    persistence?: number;
+    /** 33.7% measured on this module's own input, against 40.0% for the
+     *  trailing-median benchmark it replaces. */
+    oos_mae_pct?: number;
+    note?: string;
+    caveat?: string;
+    method?: string;
+  } | null;
+  /** Only present once BOTH instruments have spoken: how far the session has
+   *  run against what last night's volatility implied. */
+  divergence?: {
+    path_multiplier?: number | null;
+    har_multiplier?: number | null;
+    ratio?: number | null;
+    note?: string;
+  } | null;
   path_implied: {
     available: boolean;
     reason?: string;
