@@ -156,6 +156,24 @@ def _slot_factors(idx: pd.DatetimeIndex) -> np.ndarray:
         out[ok] = np.asarray(_PERIODICITY, dtype=float)[slot[ok].astype(int)]
     return out
 
+
+def _span_factor(idx: pd.DatetimeIndex) -> float:
+    """The periodicity factor for a RANGE measured across several bars.
+
+    Not the arithmetic mean of the bars' factors. A range over n steps scales
+    with the square root of the summed variances, so the correct multi-bar
+    factor is the ROOT MEAN SQUARE of the per-bar scale factors. RMS >= mean,
+    and the gap is widest exactly where the factors move fastest — across the
+    open, where 1.65 falls to 1.22 inside half an hour. For a single bar the two
+    coincide, which is why this only shows up on merged runs and on the
+    30-minute release windows.
+    """
+    f = _slot_factors(idx)
+    if not len(f):
+        return 1.0
+    v = float(np.sqrt(np.mean(np.square(f))))
+    return v if np.isfinite(v) and v > 0 else 1.0
+
 # SCHEDULED RELEASES ARE MATCHED CAUSALLY, NOT BY PROXIMITY. A release at 10:00
 # can only explain price action that starts at or after 10:00. The first cut
 # windowed symmetrically around the whole move and duly credited ISM at 10:00
@@ -246,7 +264,7 @@ def _moves(bars: pd.DataFrame, median_bar: float) -> list[dict]:
         # In the degenerate branch the yardstick is already flat, so the slot
         # factor must not be reapplied on top of it — otherwise the fallback
         # silently reports a number that is neither deseasonalised nor flat.
-        expected = 1.0 if flat else float(np.mean(_slot_factors(seg.index)))
+        expected = 1.0 if flat else _span_factor(seg.index)
         x_tod = (seg_rng / (adj_median * expected)
                  if adj_median > 0 and expected > 0 else None)
         moves.append({
@@ -348,13 +366,31 @@ def price_attribution(frames: dict | None = None,
         m["start"] = m["start"].strftime("%H:%M")
         m["end"] = m["end"].strftime("%H:%M")
 
-    # Measured impact of each release that has already printed. Compared with the
-    # session's own median 30-minute window, which is a like-for-like unit but
-    # NOT time-of-day adjusted — the opening hour is naturally the widest part of
-    # the session, so a 10:00 release will flatter itself. Said on the card.
+    # Measured impact of each release that has already printed, against the
+    # session's own median 30-minute window — now TIME-OF-DAY ADJUSTED, which it
+    # was not until 2026-08-30.
+    #
+    # This half of the module used to carry the defect its own caveat described:
+    # "the opening hour is naturally the widest part of the session, so a 10:00
+    # release will flatter itself." That is not a small effect here, because
+    # releases are not spread evenly across the clock — they cluster at 08:30,
+    # 10:00 and 14:00, and 10:00-10:30 is the second-richest slot of the session
+    # at 1.57x pooled variance. A 10:00 print was being credited for range that
+    # is simply what 10:00 does.
+    #
+    # Both the yardstick and the measured window are divided by their own span
+    # factor, so the comparison is like-for-like at any hour and does not drift
+    # as the session fills with slots of differing scale.
     win = pd.Timedelta(minutes=_IMPACT_WINDOW_MIN)
     thirty = cur["High"].rolling(6).max() - cur["Low"].rolling(6).min()
     median_30 = float(thirty.median()) if thirty.notna().any() else None
+    # RMS factor of the trailing six bars, matched to `thirty`'s own alignment
+    # (a rolling window labelled at its LAST bar covers the five before it).
+    _f2 = pd.Series(_slot_factors(cur.index) ** 2, index=cur.index)
+    _rms30 = np.sqrt(_f2.rolling(6).mean())
+    thirty_adj = thirty / _rms30.replace(0.0, np.nan)
+    median_30_adj = (float(thirty_adj.median())
+                     if thirty_adj.notna().any() else None)
     impacts = []
     for e in ev:
         if e["when"] > now:
@@ -371,12 +407,19 @@ def price_attribution(frames: dict | None = None,
         if len(seg) < 4:
             continue
         r = float(seg["High"].max() - seg["Low"].min())
+        sf = _span_factor(seg.index)
         impacts.append({
             "name": e["name"], "at": e["when"].strftime("%H:%M"),
             "impact": e["impact"],
             "range": round(r, 2),
             "net": round(float(seg["Close"].iloc[-1] - seg["Open"].iloc[0]), 2),
-            "x_normal_window": round(r / median_30, 2) if median_30 else None,
+            # x a normal 30-minute window AT THIS HOUR. The flat figure is kept
+            # beside it because the card has quoted that number for months and a
+            # silently redefined field is worse than two labelled ones.
+            "x_normal_window": (round((r / sf) / median_30_adj, 2)
+                                if median_30_adj and sf > 0 else None),
+            "x_normal_window_flat": round(r / median_30, 2) if median_30 else None,
+            "tod_factor": round(sf, 2),
         })
 
     unattributed = [m for m in moves if not m["attributed"]]
@@ -418,8 +461,11 @@ def price_attribution(frames: dict | None = None,
             "releases have exact known times and are the stronger link; headlines "
             "carry a wire timestamp that lags the event and sometimes lags the "
             "price, so they are only consulted where no release covers the move. "
-            "The post-release impact windows further down are NOT deseasonalised "
-            "and are still measured against the session's flat median."
+            "The post-release impact windows are deseasonalised on the same "
+            "curve, which matters more there than anywhere: releases cluster at "
+            "08:30, 10:00 and 14:00, and 10:00-10:30 is the second-richest slot "
+            "of the session, so a 10:00 print used to be credited for range that "
+            "is simply what 10:00 does."
         ),
         "unattributed_note": (
             None if not unattributed else

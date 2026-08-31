@@ -3824,7 +3824,11 @@ export interface EsAttribution {
   n_unattributed?: number;
   event_impacts?: Array<{
     name: string; at: string; impact: string;
-    range: number; net: number; x_normal_window: number | null;
+    range: number; net: number;
+    /** x a normal 30-minute window AT THAT HOUR (deseasonalised 2026-08-30). */
+    x_normal_window: number | null;
+    x_normal_window_flat?: number | null;
+    tod_factor?: number | null;
   }>;
   median_bar?: number;
   median_30min?: number | null;

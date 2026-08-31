@@ -1686,7 +1686,7 @@ export default function EsBriefing() {
                       <span className="flex-1 min-w-0 truncate text-text">{e.name}</span>
                       <span className="tabular-nums text-text-muted shrink-0">
                         {e.range.toFixed(1)} in 30m ={" "}
-                        <span className="text-text">{e.x_normal_window?.toFixed(2)}×</span> normal
+                        <span className="text-text">{e.x_normal_window?.toFixed(2)}×</span> normal for that hour
                       </span>
                     </div>
                   ))}
