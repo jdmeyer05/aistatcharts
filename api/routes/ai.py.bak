@@ -1076,19 +1076,6 @@ async def chat(
             # Same grounding check the interpretation panel runs. A chat can
             # invent a number as easily as a panel can, and this is the only
             # automated thing standing between the two.
-            #
-            # EACH ANSWER IS CHECKED AGAINST THE PAGE ALONE, never against what
-            # earlier turns said, and that is deliberate rather than an
-            # oversight. Feeding prior assistant text in would let a number
-            # invented on turn 1 count as grounded for the rest of the
-            # conversation — a hallucination laundering itself through its own
-            # history, which is the precise opposite of the job.
-            #
-            # The cost is real and accepted: a follow-up reusing a derivation
-            # from an earlier turn without restating its inputs shows as not
-            # from the page. Seen live — "60.52" was derived on turn 1 and
-            # carried into turn 2, where the checker could no longer see its
-            # operands. That is an honest description of what it can verify.
             "grounding": _check_grounding(answer, body.data),
             "snapshot_truncated": truncated,
             "answer_truncated": hit_cap,
