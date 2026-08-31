@@ -1393,7 +1393,13 @@ export async function askHomeChat(params: {
   return apiFetch("/api/ai/chat", {
     method: "POST",
     body: JSON.stringify(params),
-    timeoutMs: 120_000,
+    // MEASURED: a demanding synthesis question at effort "high" took 112.4s and
+    // returned 7,797 output tokens. Against the previous 120s that is eight
+    // seconds of headroom — and a timeout there is the worst outcome available,
+    // because the server completes the work and bills it while the reader is
+    // shown a failure. Raised well clear of the measured case; the SDK's own
+    // 10-minute ceiling still bounds it.
+    timeoutMs: 300_000,
   });
 }
 

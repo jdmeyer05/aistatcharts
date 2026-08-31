@@ -118,6 +118,19 @@ export default function HomeChat() {
   const frozen = useRef<{ data: unknown; asOf: string | null } | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
   const [restored, setRestored] = useState(false);
+  // Seconds elapsed on the current request. A hard question at effort "high"
+  // can run near two minutes, and a spinner with no counter reads as broken
+  // long before it reads as slow. Interval rather than a Date.now() in a memo,
+  // which never ticks.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
 
   // Restore after mount, so the server and the first client render agree.
   useEffect(() => {
@@ -289,7 +302,13 @@ export default function HomeChat() {
               </div>
             </div>
           ))}
-          {busy && <div className="text-[0.65rem] text-text-muted">Reading the page…</div>}
+          {busy && (
+            <div className="text-[0.65rem] text-text-muted tabular-nums">
+              Reading the page…
+              {elapsed >= 12 && ` ${elapsed}s`}
+              {elapsed >= 45 && " — a synthesis question at full effort can take a couple of minutes."}
+            </div>
+          )}
         </div>
       )}
 

@@ -242,14 +242,31 @@ def _check_grounding(interpretation: str, data: dict) -> dict:
         # itself committed to, so a reader can check the subtraction on screen.
         # Distances between two quoted levels — the motivating case — all have
         # this shape.
-        diff_tol = _tolerance(n, is_pct)
-        vals = [v for v in (_normalize_num(t)[0] for t in grounded) if v is not None]
-        if any(abs(abs(a - b) - abs(n)) <= diff_tol
-               for i, a in enumerate(vals) for b in vals[i + 1:]):
-            grounded.append(token)
-            continue
-
+        # Deferred to a second pass below: at this point `grounded` holds only
+        # the tokens seen EARLIER in the text, so checking here would ground
+        # "7707.25 and 7560.49, so 146.76 below" and reject the same sentence
+        # written as "146.76 below: 7707.25 against 7560.49". Whether a
+        # derivation verifies must not depend on word order.
         unverified.append(token)
+
+    # SECOND PASS — differences, against every number grounded anywhere in the
+    # answer. See the note on the ratio path above for why the operands are
+    # drawn from the ANSWER and never searched over the payload.
+    if unverified:
+        vals = [v for v in (_normalize_num(t)[0] for t in grounded) if v is not None]
+        if len(vals) >= 2:
+            still: list[str] = []
+            for token in unverified:
+                n, is_pct = _normalize_num(token)
+                tol = _tolerance(n, is_pct) if n is not None else 0.0
+                if n is not None and any(
+                    abs(abs(a - b) - abs(n)) <= tol
+                    for i, a in enumerate(vals) for b in vals[i + 1:]
+                ):
+                    grounded.append(token)
+                else:
+                    still.append(token)
+            unverified = still
 
     return {
         "grounded_count": len(grounded),
