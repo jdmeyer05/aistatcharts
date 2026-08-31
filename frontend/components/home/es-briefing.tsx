@@ -2279,32 +2279,39 @@ export default function EsBriefing() {
                               card keeps hitting. Fall back to the multiplier,
                               which always exists when `available` is true. */}
                           <div className="text-[0.6rem] text-text-muted tabular-nums">
+                            {/* Named from `asof`, never "last night" or "today".
+                                This block is most visible exactly when the
+                                market is SHUT, and on a Saturday the last
+                                session was Friday and there is no today — so
+                                both of those words are simply false. */}
                             {d.regime.har?.implied_range != null ? (
                               <>
-                                Last night&apos;s realised volatility implies{" "}
+                                Realised variance through{" "}
+                                {d.regime.har.asof ?? "the last session"} implies{" "}
                                 <span className="text-text">
                                   {d.regime.har.implied_range.toFixed(0)}
                                 </span>{" "}
-                                handles against a normal{" "}
-                                {d.regime.har.normal_range?.toFixed(0)} · no range delivered yet
+                                handles for the next session, against a normal{" "}
+                                {d.regime.har.normal_range?.toFixed(0)}
                               </>
                             ) : (
                               <>
-                                Last night&apos;s realised volatility implies{" "}
+                                Realised variance through{" "}
+                                {d.regime.har?.asof ?? "the last session"} implies{" "}
                                 <span className="text-text">
                                   {d.regime.har?.multiplier?.toFixed(2)}×
                                 </span>{" "}
-                                a normal session · no range delivered yet
+                                a normal session for the next one
                               </>
                             )}
                           </div>
                           <p className="text-[0.55rem] text-text-muted/80 leading-snug">
-                            A pre-open prior, not a read on today. Realised variance on its own
+                            A pre-open prior, not a read on the session itself. Realised variance on its own
                             1-, 5- and 22-day averages, measured over{" "}
                             {d.regime.har?.sessions?.toLocaleString()} sessions — median error{" "}
                             {d.regime.har?.oos_mae_pct?.toFixed(0)}% out of sample against{" "}
-                            40% for the trailing median it replaces. It does not see today&apos;s
-                            catalyst, and nothing fitted on yesterday forecasts the widest days.
+                            40% for the trailing median it replaces. It cannot see the coming session&apos;s
+                            catalyst, and nothing fitted on closed sessions forecasts the widest days.
                             Once the first bucket closes at 10:30 the path estimate takes over.
                           </p>
                         </>

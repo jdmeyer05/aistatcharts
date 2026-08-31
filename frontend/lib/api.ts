@@ -3857,6 +3857,8 @@ export interface EsRegime {
     normal_range?: number | null;
     character?: string;
     sessions?: number;
+    /** Last COMPLETED session in the panel; the forecast is for the one after it. */
+    asof?: string | null;
     calibration?: number;
     calibration_theory?: number;
     persistence?: number;

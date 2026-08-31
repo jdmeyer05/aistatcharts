@@ -410,13 +410,23 @@ def har_range_forecast(normal_range: float | None = None) -> dict:
         "calibration_theory": round(float(np.sqrt(8 / np.pi)), 4),
         "persistence": round(float(beta[1:].sum()), 4),
         "oos_mae_pct": 33.7,
-        "note": (f"Yesterday's volatility complex implies {mult:.2f}x a normal "
-                 f"range for today, measured from realised variance rather than "
-                 f"from what options cost."),
+        # "for today" is wrong on any day the market is shut, and on a Saturday
+        # "yesterday" is wrong too — the last session was Friday. Both are named
+        # from `asof` instead, which is always the last COMPLETED session, so the
+        # sentence is accurate in every state without needing a calendar. Before
+        # the open, "the next session" IS today; after it, the path estimate has
+        # taken over and this is no longer the headline.
+        # Day built by hand: `%-d` is a glibc extension that works on Cloud Run
+        # and raises ValueError on Windows, so it would pass in production and
+        # break local dev — the worst direction for a portability bug.
+        "note": (f"Realised variance through {p.index[-1]:%a} {p.index[-1].day} "
+                 f"{p.index[-1]:%b} implies {mult:.2f}x a normal range for the "
+                 f"next session, measured from the tape rather than from what "
+                 f"options cost."),
         "caveat": (
             "A pre-open prior and nothing more. It is built entirely from "
-            "sessions that have already closed, so it cannot see today's "
-            "catalyst — and it does NOT rescue the widest days, which stay "
+            "sessions that have already closed, so it cannot see the coming "
+            "session's catalyst — and it does NOT rescue the widest days, which stay "
             "under-forecast by every estimator fitted on yesterday. Once a "
             "bucket has closed, the path estimate is the better number."
         ),
