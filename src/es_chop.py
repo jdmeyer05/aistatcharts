@@ -102,6 +102,13 @@ _MIN_CELL = 40           # below this a band is widened rather than quoted
 _FIT_WINDOW = 750        # sessions; the cuts track the tape rather than average it
 _TODAY_TTL_S = 60        # today's bars are the live half; history is not
 
+# Above this the sign-flip null is sampled rather than enumerated. The bound is
+# about MEMORY, not accuracy: enumeration allocates 2^(n-1) x (n-1) floats, which
+# is 0.2 MB at n=12, 3.9 MB at n=16 and 80 MB at n=20. An hour holds 11 returns
+# so the cap is never approached in practice — which is exactly why it needs to
+# be set deliberately rather than left where nothing happens to reach it.
+_EXACT_MAX_N = 16
+
 # Percentile band edges. Fine in the tails, where the reading actually separates,
 # and one wide band through the middle, where it does not.
 _EDGES = (0.0, 0.10, 0.20, 1 / 3, 2 / 3, 0.80, 0.90, 1.0)
@@ -173,7 +180,12 @@ def _today_bars(day: pd.Timestamp) -> pd.DataFrame | None:
 # as every bucket does, and its readings are never compared with the rest.
 _HOUR_BUCKETS = ("09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30")
 _BUCKET_BARS = {b: (12 if b != "15:30" else 6) for b in _HOUR_BUCKETS}
-_BUCKET_MIN_FRAC = 0.8      # an hour missing a fifth of its bars is not an hour
+# An hour is scored only when EVERY bar of it has arrived. The old rule accepted
+# four fifths, which quietly reintroduced the one bias this module exists to
+# avoid: efficiency falls with bar count, so a 10-bar hour ranked against a
+# population of 12-bar hours reads systematically more trending than it was. The
+# 5-minute grid is fixed and SPY trades every bucket, so a short hour means the
+# feed has not caught up yet, not that the hour was short.
 
 
 def _bucket_of(ts) -> str | None:
@@ -193,46 +205,6 @@ def _bucket_idx(index: pd.DatetimeIndex) -> np.ndarray:
     ok = (m >= 570) & (m < 960)
     idx[ok] = np.minimum((m[ok] - 570) // 60, 6)
     return idx
-
-
-def _agreement(jk: np.ndarray, label: str, lo: float, hi: float) -> float:
-    """Share of leave-one-out replicates that keep `label`. Vectorised."""
-    good = jk[np.isfinite(jk)]
-    if not len(good):
-        return float("nan")
-    if label == "choppy":
-        return float((good < lo).mean())
-    if label == "trendy":
-        return float((good >= hi).mean())
-    return float(((good >= lo) & (good < hi)).mean())
-
-
-def _hour_er(closes: np.ndarray) -> tuple[float, float, int]:
-    """Efficiency of one hour, plus how much of it survives dropping any one bar.
-
-    Returns (efficiency, leave-one-out agreement in RATIO terms, bar count). The
-    agreement is computed in closed form — dropping return i changes the ratio to
-    |S - r_i| / (A - |r_i|) — so this costs nothing over the reading itself.
-
-    WHY LEAVE-ONE-OUT AND NOT A BOOTSTRAP. A finished hour has no sampling
-    uncertainty: efficiency is a deterministic function of its returns, and it is
-    invariant to permuting them, so there is nothing to resample. What can still
-    be wrong is the CLASSIFICATION — whether "choppy" survives the hour being
-    marginally different — and dropping one bar at a time measures exactly that.
-    An hour whose character rests on a single large bar is fragile; one built
-    from twelve consistent bars is not.
-    """
-    c = np.asarray(closes, dtype=float)
-    if len(c) < 3:
-        return float("nan"), float("nan"), 0
-    r = np.diff(c)
-    S, A = float(r.sum()), float(np.abs(r).sum())
-    if not np.isfinite(A) or A <= 0:
-        return float("nan"), float("nan"), len(r)
-    denom = A - np.abs(r)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        jk = np.where(denom > 0, np.abs(S - r) / denom, np.nan)
-    return abs(S) / A, jk, len(r)
 
 
 def _er(closes: np.ndarray) -> float:
@@ -308,7 +280,7 @@ def _sign_flip_p(r: np.ndarray) -> tuple[float, float]:
     if a_ <= 0:
         return float("nan"), float("nan")
     obs = abs(float(r.sum())) / a_
-    if n <= 20:
+    if n <= _EXACT_MAX_N:
         # bit i of k gives the sign of return i; the first sign is fixed at +1
         # because flipping every sign leaves |sum| unchanged.
         k = np.arange(1 << (n - 1), dtype=np.int64)
@@ -323,17 +295,14 @@ def _sign_flip_p(r: np.ndarray) -> tuple[float, float]:
 
 
 def _hour_panel(fine: pd.DataFrame) -> dict:
-    """Per-bucket history: the efficiency distribution, and how robust each class
-    typically is in that bucket.
+    """Per-bucket efficiency history — one distribution per hourly slot.
 
-    The second half is what stops the confidence word from being a synonym for
-    the label. Measured over this sample, leave-one-out agreement is 1.00 for
-    52% of TRENDY hours and for 0% of choppy ones — a straight line stays
-    straight when you drop a bar, while a choppy hour's ratio is a small
-    difference of large numbers and swings. An absolute agreement threshold
-    would therefore print "confident" on trendy hours and never on choppy ones,
-    which restates the label instead of qualifying it. So each class is scored
-    against its OWN typical robustness.
+    Only the distribution survives. This used to carry class cuts and a
+    per-class robustness score for a confidence word, all of which went when the
+    hourly labels did: an hour cannot be shown to have trended, so nothing built
+    to qualify that claim has anything left to qualify. What remains is the
+    ranking the card still prints, and the buckets stay separate because the
+    15:30 slot is half the width of the others.
     """
     out: dict = {}
     day = fine.index.normalize()
@@ -345,29 +314,18 @@ def _hour_panel(fine: pd.DataFrame) -> dict:
         c = g["Close"].to_numpy(dtype=float)
         for j, k in enumerate(_HOUR_BUCKETS):
             cc = c[bi == j]
-            if len(cc) < _BUCKET_BARS[k] * _BUCKET_MIN_FRAC:
+            if len(cc) < _BUCKET_BARS[k]:
                 continue
-            e, jk, _ = _hour_er(cc)
+            e = _er(cc)
             if np.isfinite(e):
-                per[k].append((e, jk))
+                per[k].append(e)
 
     for k, rows in per.items():
         if len(rows) < 200:
             continue
-        er = np.array([r[0] for r in rows], dtype=float)
+        er = np.array(rows, dtype=float)
         lo, hi = np.quantile(er, [1 / 3, 2 / 3])
-        d10, d90 = np.quantile(er, [0.10, 0.90])
-        # Typical robustness per class, so "confident" means robust FOR ITS KIND.
-        agree_by_class: dict = {}
-        for name, mask in (("choppy", er < lo), ("trendy", er >= hi),
-                           ("mixed", (er >= lo) & (er < hi))):
-            vals = [_agreement(np.asarray(rows[i][1], dtype=float), name, lo, hi)
-                    for i in np.where(mask)[0]]
-            v = np.array([x for x in vals if np.isfinite(x)], dtype=float)
-            agree_by_class[name] = float(np.median(v)) if len(v) else float("nan")
-        out[k] = {"er": er, "lo": float(lo), "hi": float(hi),
-                  "d10": float(d10), "d90": float(d90),
-                  "agree_median": agree_by_class, "n": len(er)}
+        out[k] = {"er": er, "lo": float(lo), "hi": float(hi), "n": len(er)}
     return out
 
 
@@ -406,8 +364,7 @@ def _hourly_rows(sess: pd.DataFrame, hp: dict) -> list:
         if not h:
             continue
         cc = c[bi == j]
-        need = _BUCKET_BARS[k] * _BUCKET_MIN_FRAC
-        if len(cc) < need:
+        if len(cc) < _BUCKET_BARS[k]:
             rows.append({"bucket": k, "state": "pending" if len(cc) else "not_started",
                          "bars": int(len(cc)), "bars_expected": _BUCKET_BARS[k]})
             continue
@@ -424,14 +381,18 @@ def _hourly_rows(sess: pd.DataFrame, hp: dict) -> list:
         # A verdict, not a label. "Coin flip" is the answer roughly nine times in
         # ten and is stated plainly rather than dressed as "mixed", which reads
         # like a measurement of something in between.
-        if np.isfinite(p_trend) and p_trend < 0.10:
+        if not (np.isfinite(p_trend) and np.isfinite(p_chop)):
+            # NOT a coin flip. "Coin flip" is a result — the null was run and the
+            # hour did not beat it. When the test could not run at all, saying so
+            # is a different statement, and collapsing the two prints an absence
+            # as a measurement.
+            verdict, p = "untested", float("nan")
+        elif p_trend < 0.10:
             verdict, p = "trended", p_trend
-        elif np.isfinite(p_chop) and p_chop < 0.10:
+        elif p_chop < 0.10:
             verdict, p = "chopped", p_chop
         else:
-            verdict, p = "coin flip", (min(p_trend, p_chop)
-                                       if np.isfinite(p_trend) and np.isfinite(p_chop)
-                                       else float("nan"))
+            verdict, p = "coin flip", min(p_trend, p_chop)
 
         rows.append({
             "bucket": k, "state": "complete",
@@ -443,7 +404,8 @@ def _hourly_rows(sess: pd.DataFrame, hp: dict) -> list:
             "efficiency": round(e, 4),
             "pctile": round(pct, 1),
             "median_at_bucket": round(float(np.median(h["er"])), 4),
-            "bars": int(len(r)), "bars_expected": _BUCKET_BARS[k],
+            "bars": int(len(cc)), "bars_expected": _BUCKET_BARS[k],
+            "returns": int(len(r)),
             "n_history": h["n"],
         })
     return rows

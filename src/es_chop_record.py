@@ -114,7 +114,7 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
     """Walk-forward scorecard for the cumulative chop/trend read."""
     try:
         from src.es_chop import (_panel, _MARKS, _EDGES, _CONFIDENT, _LIKELY,
-                                 _MIN_CELL)
+                                 _MIN_CELL, _FIT_WINDOW)
         if fine is None:
             from src.es_baserates import _fine
             fine = _fine()
@@ -134,7 +134,6 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
         rows = []                      # one per (session, mark) actually scored
         n = len(panel)
         for start in range(_MIN_TRAIN, n, _REFIT_EVERY):
-            from src.es_chop import _FIT_WINDOW
             tr = panel.iloc[max(0, start - _FIT_WINDOW):start]
             te = panel.iloc[start:start + _REFIT_EVERY]
             if te.empty:
@@ -302,10 +301,9 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
                              f"half than the earlier one — the fit is drifting, so refitting "
                              f"matters more than retuning.")
 
-        from src.es_chop import _FIT_WINDOW as _FIT_WINDOW_DOC
         out = {
             "available": True,
-            "fit_window": _FIT_WINDOW_DOC,
+            "fit_window": _FIT_WINDOW,
             "rows": out_rows,
             "eras": eras,
             "reliability": reliability,
@@ -323,7 +321,7 @@ def chop_track_record(fine: pd.DataFrame | None = None) -> dict | None:
                 "them would dress a measurement as a forecast."
             ),
             "method": (
-                f"Walk-forward on the same rolling {_FIT_WINDOW_DOC}-session window "
+                f"Walk-forward on the same rolling {_FIT_WINDOW}-session window "
                 f"production fits on, refitted every {_REFIT_EVERY} sessions after a "
                 f"{_MIN_TRAIN}-session warm-up, each session scored only against sessions "
                 "before it. The tercile class cuts are refitted with the rest, since cutting "

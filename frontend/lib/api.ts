@@ -4307,7 +4307,9 @@ export interface EsChopTrend {
     /** Sign-flip verdict. "coin flip" on roughly nine hours in ten, which is the
      *  measured finding rather than a gap: an hour of this tape is not
      *  distinguishable from a random walk at 5-minute OR 1-minute resolution. */
-    verdict?: "trended" | "chopped" | "coin flip";
+    /** "untested" when the hour holds too few returns for the null to run —
+     *  distinct from "coin flip", which means the null RAN and was not beaten. */
+    verdict?: "trended" | "chopped" | "coin flip" | "untested";
     p?: number | null;
     p_trend?: number | null;
     p_chop?: number | null;
@@ -4316,8 +4318,11 @@ export interface EsChopTrend {
     efficiency?: number;
     pctile?: number;
     median_at_bucket?: number;
+    /** Closes in the bucket; `returns` is one fewer. Both are reported because
+     *  the two were once conflated in a single field. */
     bars?: number;
     bars_expected?: number;
+    returns?: number;
     n_history?: number;
   }>;
   /** Sign-flip test on the session so far. The hourly rows almost never clear

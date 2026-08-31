@@ -3395,7 +3395,8 @@ export default function EsBriefing() {
                           <td className="text-text-muted py-0.5 pl-2">vs a coin flip</td>
                           {(d.base_rates.path.extremes ?? []).map((e) => {
                             const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
-                            if (!h || h.state !== "complete" || !h.verdict) {
+                            if (!h || h.state !== "complete" || !h.verdict ||
+                                h.verdict === "untested") {
                               return <td key={e.slot} className="text-right px-1 text-text-muted/60">—</td>;
                             }
                             const real = h.verdict !== "coin flip";
@@ -3420,7 +3421,11 @@ export default function EsBriefing() {
                         </tr>
                       </>
                     )}
-                    {d.chop_trend?.hourly_forecast && (
+                    {/* Gated on the rows it annotates. On its own, under a
+                        table with no hourly readings in it, "nothing here
+                        forecasts the next hour" refers to nothing. */}
+                    {d.chop_trend?.hourly_forecast &&
+                      (d.chop_trend?.hourly ?? []).some((h) => h.state === "complete") && (
                       <tr>
                         <td
                           className="text-[0.55rem] text-text-muted/80 leading-snug pt-1"
