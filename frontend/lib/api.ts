@@ -4304,22 +4304,40 @@ export interface EsChopTrend {
   hourly?: Array<{
     bucket: string;
     state: "complete" | "pending" | "not_started" | "flat";
-    label?: "choppy" | "mixed" | "trendy";
-    confidence?: "confident" | "likely" | "none";
-    read?: string;
+    /** Sign-flip verdict. "coin flip" on roughly nine hours in ten, which is the
+     *  measured finding rather than a gap: an hour of this tape is not
+     *  distinguishable from a random walk at 5-minute OR 1-minute resolution. */
+    verdict?: "trended" | "chopped" | "coin flip";
+    p?: number | null;
+    p_trend?: number | null;
+    p_chop?: number | null;
+    /** Net move as a share of total travel, in percent. */
+    net_progress_pct?: number;
     efficiency?: number;
     pctile?: number;
     median_at_bucket?: number;
-    /** Share of leave-one-out replicates keeping the label, and what that class
-     *  typically manages in this bucket. `fragile` is agreement below typical. */
-    bar_agreement?: number | null;
-    typical_agreement?: number | null;
-    fragile?: boolean;
     bars?: number;
     bars_expected?: number;
     n_history?: number;
   }>;
+  /** Sign-flip test on the session so far. The hourly rows almost never clear
+   *  it; a session sometimes does, and when it does this is a stronger claim
+   *  than any percentile — chance alone rarely produces it. */
+  random_walk?: {
+    p_trend: number; p_chop: number;
+    verdict: "trended" | "chopped" | "coin flip";
+    note: string;
+  } | null;
   hourly_note?: string;
+  /** The next-hour forecast, measured and null. Carried so the card can print
+   *  the number instead of a reassuring sentence. */
+  hourly_forecast?: {
+    verdict: "null";
+    oos_r2: number;
+    accuracy_pct: number;
+    baseline_pct: number;
+    note: string;
+  } | null;
   note?: string;
   method?: string;
   caveat?: string;

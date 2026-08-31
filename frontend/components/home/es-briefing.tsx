@@ -2545,7 +2545,34 @@ export default function EsBriefing() {
                         </span>{" "}
                         (base {d.chop_trend.base_trendy_pct?.toFixed(0)}%) · n={d.chop_trend.n_band}
                       </div>
-                      {/* The null travels WITH the reading rather than in a
+                      {/* Does the percentile above describe anything chance would
+                      not have produced? For an HOUR the answer is essentially
+                      never — which is why the hourly labels were removed. For a
+                      session it is sometimes yes, and when it is, this is the
+                      strongest statement on the card: not "low compared with
+                      other days" but "chance alone rarely does this". */}
+                  {d.chop_trend.random_walk && (
+                    <p className="text-[0.6rem] leading-snug">
+                      <span
+                        className={
+                          d.chop_trend.random_walk.verdict === "chopped" ? "text-amber-400 font-medium"
+                            : d.chop_trend.random_walk.verdict === "trended" ? "text-accent font-medium"
+                              : "text-text-muted"
+                        }
+                      >
+                        {d.chop_trend.random_walk.verdict === "coin flip"
+                          ? "Not distinguishable from a random walk"
+                          : `Beat a random walk: ${d.chop_trend.random_walk.verdict}`}
+                      </span>{" "}
+                      <span className="text-text-muted tabular-nums">
+                        (p={(d.chop_trend.random_walk.verdict === "trended"
+                          ? d.chop_trend.random_walk.p_trend
+                          : d.chop_trend.random_walk.p_chop
+                        )?.toFixed(3)})
+                      </span>
+                    </p>
+                  )}
+                  {/* The null travels WITH the reading rather than in a
                           footnote. A label that says the morning was choppy
                           is read as a forecast unless the page says, in
                           numbers and in the same breath, that it is not one. */}
@@ -3325,75 +3352,94 @@ export default function EsBriefing() {
                             This session · each hour on its own
                           </td>
                         </tr>
-                        <tr title="What THIS hour did, scored against the same hour across past sessions. Never compared with another hour: efficiency falls with bar count and the 15:30 bucket is half the width.">
-                          <td className="text-text-muted py-0.5">Hour&apos;s character</td>
-                          {(d.base_rates.path.extremes ?? []).map((e) => {
-                            const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
-                            if (!h || h.state !== "complete") {
-                              return (
-                                <td key={e.slot} className="text-right px-1 text-text-muted/60">
-                                  {h?.state === "pending" ? "…" : "—"}
-                                </td>
-                              );
-                            }
-                            return (
-                              <td
-                                key={e.slot}
-                                className={`text-right px-1 font-medium ${
-                                  h.label === "choppy" ? "text-amber-400"
-                                    : h.label === "trendy" ? "text-accent" : "text-text-muted"
-                                }`}
-                              >
-                                {h.label}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                        <tr title="Where this hour's efficiency sits in that same bucket's own history. Low = it covered ground without going anywhere.">
-                          <td className="text-text-muted py-0.5 pl-2">its percentile</td>
+                        {/* NET PROGRESS, not "character". The label that used to
+                            sit here ranked each hour's efficiency against the same
+                            hour in history and called the top third trendy — but
+                            that population is itself almost entirely random walks,
+                            so its 70th percentile is a random walk too. It printed
+                            "likely trendy" over hours that had done nothing. */}
+                        <tr title="Net move as a share of total travel inside the hour. 100% is a straight line; single digits mean price covered ground and ended where it started.">
+                          <td className="text-text-muted py-0.5">Net progress</td>
                           {(d.base_rates.path.extremes ?? []).map((e) => {
                             const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
                             return (
                               <td key={e.slot} className="text-right px-1 text-text tabular-nums">
+                                {h?.state === "complete" && h.net_progress_pct != null
+                                  ? `${h.net_progress_pct.toFixed(0)}%`
+                                  : h?.state === "pending" ? "…" : "—"}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                        <tr title="Where that sits among the same hour across past sessions. A ranking, not a verdict — the row below says whether it means anything.">
+                          <td className="text-text-muted py-0.5 pl-2">vs same hour</td>
+                          {(d.base_rates.path.extremes ?? []).map((e) => {
+                            const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
+                            return (
+                              <td key={e.slot} className="text-right px-1 text-text-muted tabular-nums">
                                 {h?.state === "complete" && h.pctile != null ? h.pctile.toFixed(0) : "—"}
                               </td>
                             );
                           })}
                         </tr>
-                        {/* The confidence gate is TWO conditions and the tooltip
-                            says so, because "confident" on a completed hour does
-                            not mean what it means on a forecast. A finished hour
-                            has no sampling uncertainty — efficiency is
-                            deterministic in its returns and invariant to
-                            permuting them — so the only thing that can be wrong
-                            is the CLASSIFICATION. Hence: deep in the tail, AND
-                            the label survives dropping any single bar at least as
-                            often as its class typically manages. That second
-                            clause is scored per class on purpose: leave-one-out
-                            agreement is 1.00 for 52% of trendy hours and 0% of
-                            choppy ones, so an absolute threshold would print
-                            "confident" only on trending hours and merely restate
-                            the label. */}
-                        <tr title="Two conditions: the reading sits in the outer decile of this bucket's history, AND its label survives dropping any single bar at least as often as that class typically does. Scored per class — a choppy hour's ratio is a small difference of large numbers and is inherently more fragile than a trending one's.">
-                          <td className="text-text-muted py-0.5 pl-2">confidence</td>
+                        {/* The row that keeps the two above honest. Against a
+                            sign-flip null — every move's size kept, its direction
+                            randomised — 9.5% of 8,708 historical hours clear
+                            p<0.10 on the trending side and 10.0% on the choppy
+                            side. Chance is 10%. There is no excess in either
+                            tail, and the same holds at 1-minute resolution, so
+                            this is an absence of signal rather than a shortage of
+                            bars. Most hours therefore read "coin flip", and that
+                            is the finding rather than a gap in it. */}
+                        <tr title="Sign-flip test: keep the size of every move in the hour, randomise its direction, and ask how often chance alone produces this much net progress. Measured over 8,708 past hours, only 9.5% beat it on the trending side and 10.0% on the choppy side — chance is 10%, so an hour of this tape is statistically a coin flip.">
+                          <td className="text-text-muted py-0.5 pl-2">vs a coin flip</td>
                           {(d.base_rates.path.extremes ?? []).map((e) => {
                             const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
-                            if (!h || h.state !== "complete" || h.confidence === "none") {
+                            if (!h || h.state !== "complete" || !h.verdict) {
                               return <td key={e.slot} className="text-right px-1 text-text-muted/60">—</td>;
                             }
+                            const real = h.verdict !== "coin flip";
                             return (
                               <td
                                 key={e.slot}
                                 className={`text-right px-1 ${
-                                  h.confidence === "confident" ? "text-text font-medium" : "text-text-muted"
+                                  h.verdict === "chopped" ? "text-amber-400 font-medium"
+                                    : h.verdict === "trended" ? "text-accent font-medium"
+                                      : "text-text-muted/70"
                                 }`}
                               >
-                                {h.confidence}
+                                {h.verdict}
+                                {real && h.p != null && (
+                                  <span className="text-text-muted/70 tabular-nums">
+                                    {" "}p={h.p.toFixed(2)}
+                                  </span>
+                                )}
                               </td>
                             );
                           })}
                         </tr>
                       </>
+                    )}
+                    {d.chop_trend?.hourly_forecast && (
+                      <tr>
+                        <td
+                          className="text-[0.55rem] text-text-muted/80 leading-snug pt-1"
+                          colSpan={1 + (d.base_rates.path.extremes ?? []).length}
+                        >
+                          {/* Asked for directly, and the answer is a null, so it
+                              prints as one. Reporting the R2 rather than a
+                              reassuring sentence is the whole point. */}
+                          Nothing here forecasts the next hour: prior-hour efficiency, reversal
+                          rate, volatility, range and the session&apos;s cumulative reading, fitted
+                          on 60% of sessions and scored on the rest, give an out-of-sample R
+                          <sup>2</sup> of {d.chop_trend.hourly_forecast.oos_r2?.toFixed(4)} and
+                          classify the next hour {d.chop_trend.hourly_forecast.accuracy_pct?.toFixed(1)}%
+                          correctly against a {d.chop_trend.hourly_forecast.baseline_pct?.toFixed(1)}%
+                          baseline. The one variable that looked predictive was time of day, and it
+                          was the half-width 15:30 bucket — excluding it, that correlation falls
+                          from +0.127 to −0.006.
+                        </td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
