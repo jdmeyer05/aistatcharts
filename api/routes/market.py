@@ -3283,6 +3283,18 @@ async def es_track_record(user: str = Depends(get_current_user)):
     return await asyncio.to_thread(character_track_record)
 
 
+@router.get("/es-chop-record")
+async def es_chop_record(user: str = Depends(get_current_user)):
+    """Walk-forward scorecard for the chop/trend read.
+
+    Separate from the brief for the same reason the character track record is:
+    it describes the MODULE rather than today, and it moves once a session at
+    most. `chop_track_record` holds its own 12h cache.
+    """
+    from src.es_chop_record import chop_track_record
+    return await asyncio.to_thread(chop_track_record)
+
+
 @router.get("/es-analogs")
 async def es_analogs(user: str = Depends(get_current_user)):
     """The sessions most similar to today, and what they went on to do.

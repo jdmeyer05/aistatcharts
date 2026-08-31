@@ -23,6 +23,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchEsBrief,
+  fetchEsChopRecord,
   fetchEsCardAudit,
   fetchEsTrackRecord,
   fetchEsAnalogs,
@@ -30,6 +31,7 @@ import {
   type EsBrief,
   type EsCardAudit,
   type EsTrackRecord,
+  type EsChopRecord,
   type EsGateTrackRecord,
   type EsAnalogs,
   type EsImpact,
@@ -516,6 +518,16 @@ export default function EsBriefing() {
 
   // Describes the MODULE rather than today, so it moves once a day at most and
   // is fetched on its own long cadence.
+  // The chop read's own scorecard. Its own endpoint rather than a field on the
+  // brief, for the same reason the character track record is: it describes the
+  // MODULE, not today, and it moves once a session at most.
+  const chopRecQ = useQuery<EsChopRecord>({
+    queryKey: ["es-chop-record"],
+    queryFn: fetchEsChopRecord,
+    staleTime: 12 * 60 * 60 * 1000,
+    retry: 1,
+  });
+
   const trackQ = useQuery<EsTrackRecord>({
     queryKey: ["es-track-record"],
     queryFn: fetchEsTrackRecord,
@@ -2557,6 +2569,68 @@ export default function EsBriefing() {
                           base rate — a measured null. This describes the tape behind you.
                         </p>
                       )}
+                  {/* ITS OWN RECORD, scored WALK-FORWARD. Every session is
+                        graded against a fit built only from sessions before it, so
+                        this is not the read marking its own homework — which is
+                        precisely what a whole-sample replay would have been, and it
+                        would have flattered the read by exactly the amount it is
+                        overfitted.
+
+                        Sits against the number it scores rather than on a separate
+                        page: a track record a reader has to go and find is a track
+                        record nobody checks. */}
+                    {chopRecQ.data?.available && (chopRecQ.data.rows ?? []).length > 0 && (
+                      <div className="mt-1 pt-1 border-t border-border/60 space-y-0.5">
+                        {(() => {
+                          const cur = d.chop_trend?.label;
+                          const row = (chopRecQ.data?.rows ?? []).find((x) => x.label === cur);
+                          if (!row || row.never_fired || row.delivered_pct == null) return null;
+                          return (
+                            <p className="text-[0.55rem] text-text-muted leading-snug">
+                              <span className="uppercase tracking-wider">Its record: </span>
+                              when this read said{" "}
+                              <span className="text-text">{cur}</span>, the session finished
+                              that way{" "}
+                              <span className="text-text tabular-nums">
+                                {row.delivered_pct.toFixed(0)}%
+                              </span>{" "}
+                              of the time out of sample
+                              {row.claimed_floor_pct != null && (
+                                <>
+                                  {" "}
+                                  against the{" "}
+                                  <span className="tabular-nums">
+                                    {row.claimed_floor_pct.toFixed(0)}%
+                                  </span>{" "}
+                                  the label claims
+                                </>
+                              )}{" "}
+                              (n={row.n}, fired on {row.coverage_pct?.toFixed(0)}% of readings).
+                            </p>
+                          );
+                        })()}
+                        <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                          Walk-forward over {chopRecQ.data.sessions_scored?.toLocaleString("en-US")}{" "}
+                          sessions ({chopRecQ.data.scored_from} to {chopRecQ.data.scored_to}):
+                          a {chopRecQ.data.train_min}-session training window refitted every{" "}
+                          {chopRecQ.data.refit_every}, each session scored only against sessions
+                          before it. The class cuts are refitted too — cutting them on the whole
+                          sample would leak the future into the definition of the outcome.
+                        </p>
+                        {/* The improvement lever, printed rather than acted on.
+                            Retuning a threshold using the same window that scored
+                            it would spend the out-of-sample evidence that makes
+                            the score worth reading. */}
+                        {(chopRecQ.data.improvements ?? []).length > 0 && (
+                          <p className="text-[0.55rem] text-amber-400/90 leading-snug">
+                            {chopRecQ.data.improvements!.join(" ")}
+                          </p>
+                        )}
+                        <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                          {chopRecQ.data.hourly_reason}
+                        </p>
+                      </div>
+                    )}
                       {d.chop_trend.band_widened && (
                         <p className="text-[0.55rem] text-text-muted/80 leading-snug">
                           The exact percentile band was too thin to quote, so the wider
@@ -3223,6 +3297,100 @@ export default function EsBriefing() {
                         <td key={p.slot} className="text-right px-1 text-text">{p.both_in_pct.toFixed(0)}%</td>
                       ))}
                     </tr>
+                    {/* TODAY, not a base rate. Everything above this divider is
+                        what a TYPICAL session does; everything below is what THIS
+                        one did. Two kinds of number in one table is how a reader
+                        ends up quoting today's 8th-percentile hour as a
+                        historical frequency, so the divider is labelled rather
+                        than implied by styling alone.
+
+                        Descriptive only. Measured on this sample an hour predicts
+                        neither the next hour (|corr| <= 0.074 across all six
+                        adjacent pairs) nor the session's final class (a choppy
+                        hour precedes a choppy day 31-41% of the time against a
+                        33% base). It shows the day's RHYTHM, which the cumulative
+                        read cannot: a session can read choppy overall precisely
+                        because each of its hours trended the other way. */}
+                    {(d.chop_trend?.hourly ?? []).some((h) => h.state === "complete") && (
+                      <>
+                        <tr className="border-t-2 border-border">
+                          <td
+                            className="text-[0.55rem] uppercase tracking-wider text-accent pt-1.5 pb-0.5"
+                            colSpan={1 + (d.base_rates.path.extremes ?? []).length}
+                          >
+                            This session · each hour on its own
+                          </td>
+                        </tr>
+                        <tr title="What THIS hour did, scored against the same hour across past sessions. Never compared with another hour: efficiency falls with bar count and the 15:30 bucket is half the width.">
+                          <td className="text-text-muted py-0.5">Hour&apos;s character</td>
+                          {(d.base_rates.path.extremes ?? []).map((e) => {
+                            const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
+                            if (!h || h.state !== "complete") {
+                              return (
+                                <td key={e.slot} className="text-right px-1 text-text-muted/60">
+                                  {h?.state === "pending" ? "…" : "—"}
+                                </td>
+                              );
+                            }
+                            return (
+                              <td
+                                key={e.slot}
+                                className={`text-right px-1 font-medium ${
+                                  h.label === "choppy" ? "text-amber-400"
+                                    : h.label === "trendy" ? "text-accent" : "text-text-muted"
+                                }`}
+                              >
+                                {h.label}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                        <tr title="Where this hour's efficiency sits in that same bucket's own history. Low = it covered ground without going anywhere.">
+                          <td className="text-text-muted py-0.5 pl-2">its percentile</td>
+                          {(d.base_rates.path.extremes ?? []).map((e) => {
+                            const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
+                            return (
+                              <td key={e.slot} className="text-right px-1 text-text tabular-nums">
+                                {h?.state === "complete" && h.pctile != null ? h.pctile.toFixed(0) : "—"}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                        {/* The confidence gate is TWO conditions and the tooltip
+                            says so, because "confident" on a completed hour does
+                            not mean what it means on a forecast. A finished hour
+                            has no sampling uncertainty — efficiency is
+                            deterministic in its returns and invariant to
+                            permuting them — so the only thing that can be wrong
+                            is the CLASSIFICATION. Hence: deep in the tail, AND
+                            the label survives dropping any single bar at least as
+                            often as its class typically manages. That second
+                            clause is scored per class on purpose: leave-one-out
+                            agreement is 1.00 for 52% of trendy hours and 0% of
+                            choppy ones, so an absolute threshold would print
+                            "confident" only on trending hours and merely restate
+                            the label. */}
+                        <tr title="Two conditions: the reading sits in the outer decile of this bucket's history, AND its label survives dropping any single bar at least as often as that class typically does. Scored per class — a choppy hour's ratio is a small difference of large numbers and is inherently more fragile than a trending one's.">
+                          <td className="text-text-muted py-0.5 pl-2">confidence</td>
+                          {(d.base_rates.path.extremes ?? []).map((e) => {
+                            const h = (d.chop_trend?.hourly ?? []).find((x) => x.bucket === e.slot);
+                            if (!h || h.state !== "complete" || h.confidence === "none") {
+                              return <td key={e.slot} className="text-right px-1 text-text-muted/60">—</td>;
+                            }
+                            return (
+                              <td
+                                key={e.slot}
+                                className={`text-right px-1 ${
+                                  h.confidence === "confident" ? "text-text font-medium" : "text-text-muted"
+                                }`}
+                              >
+                                {h.confidence}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      </>
+                    )}
                   </tbody>
                 </table>
               </div>

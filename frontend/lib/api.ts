@@ -4148,6 +4148,10 @@ export interface EsBrief {
   degraded?: string[];
 }
 
+export async function fetchEsChopRecord(): Promise<EsChopRecord> {
+  return apiFetch("/api/market/es-chop-record", { timeoutMs: 30_000 });
+}
+
 export async function fetchEsBrief(): Promise<EsBrief> {
   return apiFetch("/api/market/es-brief", { timeoutMs: 30_000 });
 }
@@ -4201,6 +4205,43 @@ export interface RrgMeasure {
  *  `label` is one of "confident trendy" / "likely trendy" / "mixed" /
  *  "likely choppy" / "confident choppy", and the confidence half of it is the
  *  measured frequency in `p_finish_*_pct`, never a word chosen by feel. */
+/** Walk-forward scorecard for the chop/trend read. Every session is scored
+ *  against a fit built only from sessions BEFORE it, so these are out-of-sample
+ *  numbers rather than the read grading its own homework. The hourly rows are
+ *  deliberately unscored — they make no prediction. */
+export interface EsChopRecord {
+  available: boolean;
+  reason?: string;
+  rows?: Array<{
+    label: string;
+    n: number;
+    never_fired?: boolean;
+    coverage_pct?: number;
+    delivered_pct?: number;
+    claimed_floor_pct?: number | null;
+    claimed_avg_pct?: number | null;
+    clears_floor?: boolean;
+    margin_pp?: number | null;
+  }>;
+  eras?: Array<{
+    era: string; from: string; to: string;
+    confident_delivered_pct?: number | null;
+    likely_delivered_pct?: number | null;
+  }>;
+  observations?: number;
+  sessions_scored?: number;
+  scored_from?: string;
+  scored_to?: string;
+  train_min?: number;
+  refit_every?: number;
+  /** Measured statements about what would improve the read — only where the
+   *  numbers support a direction. Empty is a valid, documented answer. */
+  improvements?: string[];
+  hourly_scored?: boolean;
+  hourly_reason?: string;
+  method?: string;
+}
+
 export interface EsChopTrend {
   available: boolean;
   reason?: string;
@@ -4242,6 +4283,28 @@ export interface EsChopTrend {
     verdict: "null";
     note: string;
   } | null;
+  /** THIS session's character hour by hour — a different measurement from
+   *  everything else here, which is cumulative from the open. Descriptive only:
+   *  an hour predicts neither the next hour nor the day, both measured null. */
+  hourly?: Array<{
+    bucket: string;
+    state: "complete" | "pending" | "not_started" | "flat";
+    label?: "choppy" | "mixed" | "trendy";
+    confidence?: "confident" | "likely" | "none";
+    read?: string;
+    efficiency?: number;
+    pctile?: number;
+    median_at_bucket?: number;
+    /** Share of leave-one-out replicates keeping the label, and what that class
+     *  typically manages in this bucket. `fragile` is agreement below typical. */
+    bar_agreement?: number | null;
+    typical_agreement?: number | null;
+    fragile?: boolean;
+    bars?: number;
+    bars_expected?: number;
+    n_history?: number;
+  }>;
+  hourly_note?: string;
   note?: string;
   method?: string;
   caveat?: string;

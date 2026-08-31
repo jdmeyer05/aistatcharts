@@ -145,6 +145,75 @@ def _today_bars(day: pd.Timestamp) -> pd.DataFrame | None:
         return None
 
 
+# The hourly buckets the session-path table is drawn on. 15:30 is half the width
+# of the others, which matters here more than anywhere else on the card: fewer
+# bars raises the efficiency ratio mechanically, and its median duly measures
+# 0.408 against ~0.27 everywhere else. It therefore gets its own distribution,
+# as every bucket does, and its readings are never compared with the rest.
+_HOUR_BUCKETS = ("09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30")
+_BUCKET_BARS = {b: (12 if b != "15:30" else 6) for b in _HOUR_BUCKETS}
+_BUCKET_MIN_FRAC = 0.8      # an hour missing a fifth of its bars is not an hour
+
+
+def _bucket_of(ts) -> str | None:
+    """Which hourly bucket a bar belongs to, or None outside the cash session."""
+    m = ts.hour * 60 + ts.minute
+    if m < 570 or m >= 960:
+        return None
+    return _HOUR_BUCKETS[min((m - 570) // 60, 6)]
+
+
+def _bucket_idx(index: pd.DatetimeIndex) -> np.ndarray:
+    """Bucket number per bar, -1 outside the cash session. Vectorised: the
+    string form of this ran a comprehension per bucket per session and cost
+    nearly two seconds over five years of bars, on the cold-start path."""
+    m = index.hour.to_numpy() * 60 + index.minute.to_numpy()
+    idx = np.full(len(m), -1, dtype=int)
+    ok = (m >= 570) & (m < 960)
+    idx[ok] = np.minimum((m[ok] - 570) // 60, 6)
+    return idx
+
+
+def _agreement(jk: np.ndarray, label: str, lo: float, hi: float) -> float:
+    """Share of leave-one-out replicates that keep `label`. Vectorised."""
+    good = jk[np.isfinite(jk)]
+    if not len(good):
+        return float("nan")
+    if label == "choppy":
+        return float((good < lo).mean())
+    if label == "trendy":
+        return float((good >= hi).mean())
+    return float(((good >= lo) & (good < hi)).mean())
+
+
+def _hour_er(closes: np.ndarray) -> tuple[float, float, int]:
+    """Efficiency of one hour, plus how much of it survives dropping any one bar.
+
+    Returns (efficiency, leave-one-out agreement in RATIO terms, bar count). The
+    agreement is computed in closed form — dropping return i changes the ratio to
+    |S - r_i| / (A - |r_i|) — so this costs nothing over the reading itself.
+
+    WHY LEAVE-ONE-OUT AND NOT A BOOTSTRAP. A finished hour has no sampling
+    uncertainty: efficiency is a deterministic function of its returns, and it is
+    invariant to permuting them, so there is nothing to resample. What can still
+    be wrong is the CLASSIFICATION — whether "choppy" survives the hour being
+    marginally different — and dropping one bar at a time measures exactly that.
+    An hour whose character rests on a single large bar is fragile; one built
+    from twelve consistent bars is not.
+    """
+    c = np.asarray(closes, dtype=float)
+    if len(c) < 3:
+        return float("nan"), float("nan"), 0
+    r = np.diff(c)
+    S, A = float(r.sum()), float(np.abs(r).sum())
+    if not np.isfinite(A) or A <= 0:
+        return float("nan"), float("nan"), len(r)
+    denom = A - np.abs(r)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        jk = np.where(denom > 0, np.abs(S - r) / denom, np.nan)
+    return abs(S) / A, jk, len(r)
+
+
 def _er(closes: np.ndarray) -> float:
     """Efficiency ratio over a run of closes. NaN below three points."""
     if closes is None or len(closes) < 3:
@@ -199,6 +268,116 @@ def _band(value: float, edges: np.ndarray) -> tuple[float, float, int]:
     return float(_EDGES[0]), float(_EDGES[1]), 0
 
 
+def _hour_panel(fine: pd.DataFrame) -> dict:
+    """Per-bucket history: the efficiency distribution, and how robust each class
+    typically is in that bucket.
+
+    The second half is what stops the confidence word from being a synonym for
+    the label. Measured over this sample, leave-one-out agreement is 1.00 for
+    52% of TRENDY hours and for 0% of choppy ones — a straight line stays
+    straight when you drop a bar, while a choppy hour's ratio is a small
+    difference of large numbers and swings. An absolute agreement threshold
+    would therefore print "confident" on trendy hours and never on choppy ones,
+    which restates the label instead of qualifying it. So each class is scored
+    against its OWN typical robustness.
+    """
+    out: dict = {}
+    day = fine.index.normalize()
+    per: dict = {b: [] for b in _HOUR_BUCKETS}
+    for _, g in fine.groupby(day):
+        if len(g) < _MIN_BARS:
+            continue
+        bi = _bucket_idx(g.index)
+        c = g["Close"].to_numpy(dtype=float)
+        for j, k in enumerate(_HOUR_BUCKETS):
+            cc = c[bi == j]
+            if len(cc) < _BUCKET_BARS[k] * _BUCKET_MIN_FRAC:
+                continue
+            e, jk, _ = _hour_er(cc)
+            if np.isfinite(e):
+                per[k].append((e, jk))
+
+    for k, rows in per.items():
+        if len(rows) < 200:
+            continue
+        er = np.array([r[0] for r in rows], dtype=float)
+        lo, hi = np.quantile(er, [1 / 3, 2 / 3])
+        d10, d90 = np.quantile(er, [0.10, 0.90])
+        # Typical robustness per class, so "confident" means robust FOR ITS KIND.
+        agree_by_class: dict = {}
+        for name, mask in (("choppy", er < lo), ("trendy", er >= hi),
+                           ("mixed", (er >= lo) & (er < hi))):
+            vals = [_agreement(np.asarray(rows[i][1], dtype=float), name, lo, hi)
+                    for i in np.where(mask)[0]]
+            v = np.array([x for x in vals if np.isfinite(x)], dtype=float)
+            agree_by_class[name] = float(np.median(v)) if len(v) else float("nan")
+        out[k] = {"er": er, "lo": float(lo), "hi": float(hi),
+                  "d10": float(d10), "d90": float(d90),
+                  "agree_median": agree_by_class, "n": len(er)}
+    return out
+
+
+def _hourly_rows(sess: pd.DataFrame, hp: dict) -> list:
+    """This session's character hour by hour.
+
+    Descriptive only, and the card says so: measured on this sample, an hour
+    predicts neither the next hour (|corr| <= 0.074 across all six adjacent
+    pairs) nor the session's final class (a choppy hour precedes a choppy day
+    31-41% of the time against a 33% base). What it does show is the day's
+    rhythm — and the rhythm is not recoverable from the cumulative read, which
+    can sit at the 20th percentile on a day whose every hour trended in an
+    opposite direction.
+    """
+    rows = []
+    if sess is None or sess.empty or not hp:
+        return rows
+    bi = _bucket_idx(sess.index)
+    c = sess["Close"].to_numpy(dtype=float)
+    for j, k in enumerate(_HOUR_BUCKETS):
+        h = hp.get(k)
+        if not h:
+            continue
+        cc = c[bi == j]
+        need = _BUCKET_BARS[k] * _BUCKET_MIN_FRAC
+        if len(cc) < need:
+            # An hour still filling in is reported as such, never as a reading.
+            rows.append({"bucket": k, "state": "pending" if len(cc) else "not_started",
+                         "bars": int(len(cc)), "bars_expected": _BUCKET_BARS[k]})
+            continue
+        e, jk, nb = _hour_er(cc)
+        if not np.isfinite(e):
+            rows.append({"bucket": k, "state": "flat", "bars": int(nb),
+                         "bars_expected": _BUCKET_BARS[k]})
+            continue
+        lo, hi = h["lo"], h["hi"]
+        cl = lambda v: "choppy" if v < lo else ("trendy" if v >= hi else "mixed")
+        label = cl(e)
+        pct = float((h["er"] < e).mean() * 100)
+
+        agree = _agreement(np.asarray(jk, dtype=float), label, lo, hi)
+        med = h["agree_median"].get(label, float("nan"))
+
+        # Two conditions, both required. Depth in the tail is what makes the
+        # label strong; the leave-one-out check is what stops a strong-looking
+        # reading that rests on one bar from being called confident.
+        deep = (e < h["d10"]) if label == "choppy" else (
+            (e >= h["d90"]) if label == "trendy" else False)
+        robust = np.isfinite(agree) and np.isfinite(med) and agree >= med
+        conf = "confident" if (deep and robust) else ("likely" if label != "mixed" else "none")
+
+        rows.append({
+            "bucket": k, "state": "complete", "label": label, "confidence": conf,
+            "read": (f"{conf} {label}" if conf != "none" else "mixed"),
+            "efficiency": round(e, 4), "pctile": round(pct, 1),
+            "median_at_bucket": round(float(np.median(h["er"])), 4),
+            "bar_agreement": round(agree, 2) if np.isfinite(agree) else None,
+            "typical_agreement": round(med, 2) if np.isfinite(med) else None,
+            "fragile": bool(np.isfinite(agree) and np.isfinite(med) and agree < med),
+            "bars": int(nb), "bars_expected": _BUCKET_BARS[k], "n_history": h["n"],
+        })
+    return rows
+
+
 def session_chop(fine: pd.DataFrame | None = None,
                  now: pd.Timestamp | None = None) -> dict | None:
     """Today character, its measured confidence, and the forward null.
@@ -251,6 +430,18 @@ def session_chop(fine: pd.DataFrame | None = None,
                 _CACHE[key] = (_now_s(), panel)
         if panel.empty or len(panel) < 200:
             return {"available": False, "reason": "not enough history to calibrate"}
+
+        # The per-bucket distributions are a separate object from the cumulative
+        # panel — an hour's efficiency and a session-to-date efficiency are not
+        # the same measurement and share no cuts. Cached on the same key.
+        hkey = ("hours", len(fine), str(fine.index[-1]), str(today.date()))
+        hhit = _CACHE.get(hkey)
+        if hhit and (_now_s() - hhit[0]) < _TTL_S:
+            hp = hhit[1]
+        else:
+            hp = _hour_panel(fine[fine.index.normalize() != today])
+            if hp:
+                _CACHE[hkey] = (_now_s(), hp)
 
         col = panel[[mark, "final"]].dropna()
         if len(col) < 200:
@@ -380,6 +571,17 @@ def session_chop(fine: pd.DataFrame | None = None,
             "bars_stale": stale,
             "last_bar": sess.index[-1].strftime("%H:%M"),
             "forward": fwd,
+            # The day's rhythm, hour by hour. A separate measurement from
+            # everything above: those are cumulative from the open, these are
+            # each hour on its own, and the two can disagree — a session whose
+            # every hour trended in an opposite direction reads choppy overall.
+            "hourly": _hourly_rows(sess, hp),
+            "hourly_note": (
+                "Each hour scored against its own history, never against another "
+                "hour: the 15:30 bucket is half the width of the others and its "
+                "median efficiency is 0.41 against ~0.27 elsewhere. Descriptive "
+                "only — an hour predicts neither the next hour nor the day."
+            ),
             "note": note,
             "method": (
                 "Kaufman efficiency ratio — net move divided by total travel — on "
