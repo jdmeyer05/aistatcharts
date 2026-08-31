@@ -24,7 +24,7 @@ the payload is comparable across clock times except those percentiles.
 WHAT IT DOES NOT DO — THE POINT WORTH READING TWICE. This says what the session
 HAS BEEN. It does not forecast the rest of it. Measured on the disjoint
 remainder (no shared bars, so no mechanical overlap), the correlation between
-efficiency so far and efficiency to come runs between -0.07 and +0.04 at all
+efficiency so far and efficiency to come runs between -0.08 and +0.04 at all
 eleven marks, signs flipping between the two halves of the sample — a flat null,
 reproducing an earlier null found on 30-second SPX bars over a different window.
 So the module ships that number rather than hiding it: a choppy morning is not
@@ -41,11 +41,15 @@ it grows with how far the reading sits from the middle.
 The two sides are NOT symmetric and the thresholds do not pretend otherwise. A
 session that has trended hard by midday has banked a net move that is difficult
 to undo, so the trendy side resolves early — top decile at 11:30 finished trendy
-70% of the time against a 33% base. A quiet morning can still break out, so the
-choppy side resolves late — bottom decile at 11:30 finished choppy only 47% of
-the time, reaching the same confidence only after about 13:30. "Confident
-choppy" is therefore a label the early session simply cannot earn, and that is
-the data verdict rather than a design choice.
+70% of the time out of sample against a 33% base. A quiet morning can still
+break out, so the choppy side resolves late — bottom decile at 11:30 finished
+choppy only 47% of the time.
+
+Measured against the thresholds below, on the full sample this is fitted on:
+"confident trendy" first becomes reachable at 11:00, "confident choppy" not
+until 14:00, and before 10:30 no band on either side clears even the "likely"
+floor. So the early session can report a lean and cannot report a conviction,
+and that is the data verdict rather than a design choice.
 """
 
 from __future__ import annotations
@@ -63,10 +67,13 @@ _TZ = "America/New_York"
 _CACHE: dict = {}
 _TTL_S = 6 * 3600
 
-# 30-minute marks. 09:30-10:00 is deliberately absent: seven bars is too few for
-# an efficiency ratio to carry information, and the 10:00 row measured the
-# weakest separation of any mark tested.
-_MARKS = ("10:00", "10:30", "11:00", "11:30", "12:00", "12:30",
+# 30-minute marks. The session does not get one until 10:30, and that is
+# measured rather than assumed: at 10:00 the best any percentile band manages is
+# 41% choppy / 44% trendy, both under the 45% floor, so EVERY reading there
+# resolves to "mixed". A block that can only ever print one word is worse than
+# no block — it looks like a read and carries nothing — so the mark is gone and
+# the card simply says nothing before 10:30.
+_MARKS = ("10:30", "11:00", "11:30", "12:00", "12:30",
           "13:00", "13:30", "14:00", "14:30", "15:00")
 
 _FULL_BARS = 78          # 09:30-16:00 inclusive on a 5-minute grid
@@ -228,10 +235,13 @@ def session_chop(fine: pd.DataFrame | None = None,
                    if m in stamps and clock.time() >= _time(*map(int, m.split(":")))]
         if not elapsed:
             return {"available": False,
-                    "reason": "before 10:00 — too few bars for an efficiency read"}
+                    "reason": "before 10:30 — no mark yet separates from its base rate"}
         mark = elapsed[-1]
 
-        key = ("panel", len(fine), str(fine.index[-1]))
+        # The day is part of the key: the panel is built to EXCLUDE today, so a
+        # container living across a session boundary would otherwise reuse a
+        # panel that excludes the wrong date.
+        key = ("panel", len(fine), str(fine.index[-1]), str(today.date()))
         hit = _CACHE.get(key)
         if hit and (_now_s() - hit[0]) < _TTL_S:
             panel = hit[1]
@@ -261,6 +271,13 @@ def session_chop(fine: pd.DataFrame | None = None,
         fin = col["final"].to_numpy(dtype=float)
         edges = np.quantile(hist, _EDGES)
         b_lo, b_hi, bi = _band(cur, edges)
+
+        # Measured on the sessions actually used, not assumed from the tercile
+        # construction: the cuts come from the whole panel while these rates are
+        # computed on the subset that has a bar at this mark, so the two need not
+        # be exactly a third.
+        base_chop = float((fin < lo_f).mean())
+        base_trend = float((fin >= hi_f).mean())
 
         def _rates(mask: np.ndarray) -> tuple[float, float, int]:
             n = int(mask.sum())
@@ -333,7 +350,8 @@ def session_chop(fine: pd.DataFrame | None = None,
             f"Through {mark} the session has covered its ground at an efficiency of "
             f"{cur:.3f} — {pct_txt}, against a median of {med:.3f}. Sessions reading "
             f"here at {mark} finished {side} {p_best * 100:.0f}% of the time "
-            f"(n={n_band}, base rate 33%)."
+            f"(n={n_band}, against a base rate of "
+            f"{(base_trend if side == 'trendy' else base_chop) * 100:.0f}%)."
         ) if label != "mixed" else (
             f"Through {mark} the session has covered its ground at an efficiency of "
             f"{cur:.3f} — {pct_txt}, against a median of {med:.3f}. That is close "
@@ -352,7 +370,8 @@ def session_chop(fine: pd.DataFrame | None = None,
             "median_at_mark": round(med, 4),
             "p_finish_choppy_pct": round(p_chop * 100, 1) if np.isfinite(p_chop) else None,
             "p_finish_trendy_pct": round(p_trend * 100, 1) if np.isfinite(p_trend) else None,
-            "base_rate_pct": 33.3,
+            "base_choppy_pct": round(base_chop * 100, 1),
+            "base_trendy_pct": round(base_trend * 100, 1),
             "band": f"p{b_lo * 100:.0f}-{b_hi * 100:.0f}",
             "band_widened": widened,
             "n_band": n_band,

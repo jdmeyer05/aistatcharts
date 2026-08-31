@@ -4213,7 +4213,11 @@ export interface EsChopTrend {
   median_at_mark?: number;
   p_finish_choppy_pct?: number | null;
   p_finish_trendy_pct?: number | null;
-  base_rate_pct?: number;
+  /** Measured on the sessions that actually have a bar at this mark, not
+   *  assumed from the tercile construction — the cuts are fitted on the whole
+   *  panel, so neither side need come out at exactly a third. */
+  base_choppy_pct?: number;
+  base_trendy_pct?: number;
   band?: string;
   band_widened?: boolean;
   n_band?: number;

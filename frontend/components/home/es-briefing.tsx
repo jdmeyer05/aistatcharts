@@ -2260,119 +2260,6 @@ export default function EsBriefing() {
                         )}
                       </div>
 
-                      {/* THE SECOND AXIS. Everything above sizes the session;
-                          this says how STRAIGHT it has been. They are close to
-                          independent — corr(range, efficiency) = +0.37 on the
-                          same sample — so a wide day can be pure rotation and a
-                          narrow one can be a single drift, and until now the
-                          card had no word for the difference.
-
-                          "Likely" and "confident" are not adjectives chosen
-                          here. They are the measured frequency with which a
-                          reading in this percentile band, AT THIS MARK, belonged
-                          to a session that finished in that class, and the
-                          number itself prints beside the label so the word can
-                          never outrun it. The two sides resolve at different
-                          speeds — a trend banks a net move that is hard to undo,
-                          a quiet morning can still break out — which is why
-                          "confident choppy" does not appear before the
-                          afternoon and "confident trendy" can appear by 11:30. */}
-                      {/* Every number this block prints is required in the
-                          gate rather than asserted at the point of use. A
-                          missing efficiency rendered as "0.000 against a 0.000
-                          median" is an absence wearing the clothes of a
-                          measurement, which is the specific way this card has
-                          gone wrong before. */}
-                      {d.chop_trend?.available &&
-                        typeof d.chop_trend.pctile === "number" &&
-                        typeof d.chop_trend.efficiency === "number" &&
-                        typeof d.chop_trend.median_at_mark === "number" && (
-                        <div className="pt-1 mt-1 border-t border-border/60 space-y-0.5">
-                          <div className="flex items-baseline gap-1.5 flex-wrap">
-                            <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                              Shape
-                            </span>
-                            <span
-                              className={`text-[0.6rem] font-bold uppercase ${
-                                d.chop_trend.side === "choppy" ? "text-amber-400"
-                                  : d.chop_trend.side === "trendy" ? "text-accent" : "text-text"
-                              }`}
-                            >
-                              {d.chop_trend.label}
-                            </span>
-                            <span className="text-[0.6rem] tabular-nums text-text font-semibold">
-                              {d.chop_trend.pctile.toFixed(0)}th pctile
-                            </span>
-                            <span className="text-[0.55rem] uppercase tracking-wider text-text-muted/80">
-                              at {d.chop_trend.mark}
-                            </span>
-                            {/* The mark is the last 30-minute boundary the FEED
-                                has bars for, which on this plan runs roughly
-                                twenty minutes behind the wall clock. Without
-                                this the card reads "at 11:30" at ten past noon
-                                and looks frozen, when it is simply refusing to
-                                score a mark whose bars have not arrived. */}
-                            {d.chop_trend.last_bar && d.chop_trend.last_bar !== d.chop_trend.mark && (
-                              <span className="text-[0.55rem] tabular-nums text-text-muted/80">
-                                bars through {d.chop_trend.last_bar}
-                              </span>
-                            )}
-                            {d.chop_trend.bars_stale && (
-                              <span className="text-[0.55rem] uppercase tracking-wider text-amber-400">
-                                cached bars
-                              </span>
-                            )}
-                          </div>
-                          {/* The efficiency ratio falls mechanically with bar
-                              count, so the raw figure is meaningless without the
-                              median it is being read against — printing 0.09 on
-                              its own invites comparison with a 15:00 reading
-                              that is not the same statement. */}
-                          <div className="text-[0.6rem] text-text-muted tabular-nums">
-                            Efficiency {d.chop_trend.efficiency.toFixed(3)} against a{" "}
-                            {d.chop_trend.median_at_mark.toFixed(3)} median at this mark ·
-                            sessions reading here finished{" "}
-                            <span className="text-text">
-                              {d.chop_trend.side === "trendy"
-                                ? d.chop_trend.p_finish_trendy_pct?.toFixed(0)
-                                : d.chop_trend.p_finish_choppy_pct?.toFixed(0)}
-                              %
-                            </span>{" "}
-                            {d.chop_trend.side === "mixed" ? "in that class" : d.chop_trend.side}{" "}
-                            against a 33% base (n={d.chop_trend.n_band})
-                          </div>
-                          {/* The null travels WITH the reading rather than in a
-                              footnote. A label that says the morning was choppy
-                              is read as a forecast unless the page says, in
-                              numbers and in the same breath, that it is not one. */}
-                          {d.chop_trend.forward && (
-                            <p className="text-[0.55rem] text-text-muted/80 leading-snug">
-                              Says nothing about the hours ahead: efficiency so far and
-                              efficiency to come are correlated{" "}
-                              <span className="tabular-nums">
-                                {d.chop_trend.forward.corr >= 0 ? "+" : ""}
-                                {d.chop_trend.forward.corr.toFixed(3)}
-                              </span>{" "}
-                              on bars that do not overlap, and this band was followed by a
-                              choppy remainder{" "}
-                              <span className="tabular-nums">
-                                {d.chop_trend.forward.p_rest_choppy_pct.toFixed(0)}%
-                              </span>{" "}
-                              of the time against a{" "}
-                              <span className="tabular-nums">
-                                {d.chop_trend.forward.base_pct.toFixed(0)}%
-                              </span>{" "}
-                              base rate — a measured null. This describes the tape behind you.
-                            </p>
-                          )}
-                          {d.chop_trend.band_widened && (
-                            <p className="text-[0.55rem] text-text-muted/80 leading-snug">
-                              The exact percentile band was too thin to quote, so the wider
-                              tercile on this side is shown instead.
-                            </p>
-                          )}
-                        </div>
-                      )}
                       {/* Once the path is fully covered this stops being an
                           estimate — implied_range is range_so_far divided by
                           1.0, i.e. the delivered range. Saying "implies 44 for
@@ -2547,6 +2434,134 @@ export default function EsBriefing() {
                             );
                           })()}
                         </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* THE SECOND AXIS. Everything above sizes the session;
+                      this says how STRAIGHT it has been. They are close to
+                      independent — corr(range, efficiency) = +0.37 on the
+                      same sample — so a wide day can be pure rotation and a
+                      narrow one can be a single drift, and until now the
+                      card had no word for the difference.
+
+                      "Likely" and "confident" are not adjectives chosen
+                      here. They are the measured frequency with which a
+                      reading in this percentile band, AT THIS MARK, belonged
+                      to a session that finished in that class, and the
+                      number itself prints beside the label so the word can
+                      never outrun it. The two sides resolve at different
+                      speeds — a trend banks a net move that is hard to undo,
+                      a quiet morning can still break out — which is why
+                      "confident choppy" does not appear before the
+                      afternoon and "confident trendy" can appear by 11:30. */}
+                  {/* Every number this block prints is required in the
+                      gate rather than asserted at the point of use. A
+                      missing efficiency rendered as "0.000 against a 0.000
+                      median" is an absence wearing the clothes of a
+                      measurement, which is the specific way this card has
+                      gone wrong before. */}
+                  {d.chop_trend?.available &&
+                    typeof d.chop_trend.pctile === "number" &&
+                    typeof d.chop_trend.efficiency === "number" &&
+                    typeof d.chop_trend.median_at_mark === "number" && (
+                    <div className="pt-1 mt-1 border-t border-border/60 space-y-0.5">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                          Shape
+                        </span>
+                        <span
+                          className={`text-[0.6rem] font-bold uppercase ${
+                            d.chop_trend.side === "choppy" ? "text-amber-400"
+                              : d.chop_trend.side === "trendy" ? "text-accent" : "text-text"
+                          }`}
+                        >
+                          {d.chop_trend.label}
+                        </span>
+                        <span className="text-[0.6rem] tabular-nums text-text font-semibold">
+                          {d.chop_trend.pctile.toFixed(0)}th pctile
+                        </span>
+                        <span className="text-[0.55rem] uppercase tracking-wider text-text-muted/80">
+                          at {d.chop_trend.mark}
+                        </span>
+                        {/* The mark is the last 30-minute boundary the FEED
+                            has bars for, which on this plan runs roughly
+                            twenty minutes behind the wall clock. Without
+                            this the card reads "at 11:30" at ten past noon
+                            and looks frozen, when it is simply refusing to
+                            score a mark whose bars have not arrived. */}
+                        {d.chop_trend.last_bar && d.chop_trend.last_bar !== d.chop_trend.mark && (
+                          <span className="text-[0.55rem] tabular-nums text-text-muted/80">
+                            bars through {d.chop_trend.last_bar}
+                          </span>
+                        )}
+                        {d.chop_trend.bars_stale && (
+                          <span className="text-[0.55rem] uppercase tracking-wider text-amber-400">
+                            cached bars
+                          </span>
+                        )}
+                      </div>
+                      {/* The efficiency ratio falls mechanically with bar
+                          count, so the raw figure is meaningless without the
+                          median it is being read against — printing 0.09 on
+                          its own invites comparison with a 15:00 reading
+                          that is not the same statement. */}
+                      {/* The measure in words rather than by name. "Efficiency
+                          0.095" is a term of art a reader has to already know;
+                          net progress against total travel is the same number
+                          and needs no glossary. */}
+                      <div className="text-[0.6rem] text-text-muted tabular-nums">
+                        Net progress was {d.chop_trend.efficiency.toFixed(3)} of total
+                        travel, against a {d.chop_trend.median_at_mark.toFixed(3)} median
+                        at this mark
+                      </div>
+                      {/* BOTH outcomes, always, each against its own MEASURED
+                          base. The previous wording printed a single rate and
+                          called it "in that class" whenever the read was mixed —
+                          but the number shown was the CHOPPY rate and "that
+                          class" had no referent on a mixed day. Showing both is
+                          shorter and cannot mislead: a mixed reading is visibly
+                          one where neither side separates from its base. */}
+                      <div className="text-[0.6rem] text-text-muted tabular-nums">
+                        Sessions reading here finished{" "}
+                        <span className={d.chop_trend.side === "choppy" ? "text-text" : ""}>
+                          choppy {d.chop_trend.p_finish_choppy_pct?.toFixed(0)}%
+                        </span>{" "}
+                        (base {d.chop_trend.base_choppy_pct?.toFixed(0)}%) ·{" "}
+                        <span className={d.chop_trend.side === "trendy" ? "text-text" : ""}>
+                          trendy {d.chop_trend.p_finish_trendy_pct?.toFixed(0)}%
+                        </span>{" "}
+                        (base {d.chop_trend.base_trendy_pct?.toFixed(0)}%) · n={d.chop_trend.n_band}
+                      </div>
+                      {/* The null travels WITH the reading rather than in a
+                          footnote. A label that says the morning was choppy
+                          is read as a forecast unless the page says, in
+                          numbers and in the same breath, that it is not one. */}
+                      {d.chop_trend.forward && (
+                        <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                          Says nothing about the hours ahead: efficiency so far and
+                          efficiency to come are correlated{" "}
+                          <span className="tabular-nums">
+                            {d.chop_trend.forward.corr >= 0 ? "+" : ""}
+                            {d.chop_trend.forward.corr.toFixed(3)}
+                          </span>{" "}
+                          on bars that do not overlap, and this band was followed by a
+                          choppy remainder{" "}
+                          <span className="tabular-nums">
+                            {d.chop_trend.forward.p_rest_choppy_pct.toFixed(0)}%
+                          </span>{" "}
+                          of the time against a{" "}
+                          <span className="tabular-nums">
+                            {d.chop_trend.forward.base_pct.toFixed(0)}%
+                          </span>{" "}
+                          base rate — a measured null. This describes the tape behind you.
+                        </p>
+                      )}
+                      {d.chop_trend.band_widened && (
+                        <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                          The exact percentile band was too thin to quote, so the wider
+                          tercile on this side is shown instead.
+                        </p>
                       )}
                     </div>
                   )}
