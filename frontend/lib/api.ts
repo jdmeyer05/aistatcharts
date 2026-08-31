@@ -4222,6 +4222,14 @@ export interface EsChopRecord {
     claimed_avg_pct?: number | null;
     clears_floor?: boolean;
     margin_pp?: number | null;
+    calibration_pp?: number | null;
+    calibration_z?: number | null;
+  }>;
+  /** Delivered against claimed, binned by what was CLAIMED rather than by the
+   *  word printed — the diagnostic a per-label table cannot be. */
+  reliability?: Array<{
+    claimed_pct: number; delivered_pct: number;
+    gap_pp: number; z: number | null; n: number;
   }>;
   eras?: Array<{
     era: string; from: string; to: string;
@@ -4234,6 +4242,13 @@ export interface EsChopRecord {
   scored_to?: string;
   train_min?: number;
   refit_every?: number;
+  /** Sessions in the rolling fit window. The read is deliberately NOT fitted
+   *  on all available history: the efficiency distribution drifts, and cuts
+   *  fitted on 2021 over-call choppy today. */
+  fit_window?: number;
+  /** Per-label calibration: delivered minus CLAIMED, and its sampling
+   *  z-score. `margin_pp` compares against the floor instead and must not
+   *  drive tuning — a floor is a minimum, not a forecast. */
   /** Measured statements about what would improve the read — only where the
    *  numbers support a direction. Empty is a valid, documented answer. */
   improvements?: string[];

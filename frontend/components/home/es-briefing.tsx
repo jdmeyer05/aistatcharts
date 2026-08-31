@@ -2611,11 +2611,15 @@ export default function EsBriefing() {
                         })()}
                         <p className="text-[0.55rem] text-text-muted/80 leading-snug">
                           Walk-forward over {chopRecQ.data.sessions_scored?.toLocaleString("en-US")}{" "}
-                          sessions ({chopRecQ.data.scored_from} to {chopRecQ.data.scored_to}):
-                          a {chopRecQ.data.train_min}-session training window refitted every{" "}
-                          {chopRecQ.data.refit_every}, each session scored only against sessions
-                          before it. The class cuts are refitted too — cutting them on the whole
-                          sample would leak the future into the definition of the outcome.
+                          sessions ({chopRecQ.data.scored_from} to {chopRecQ.data.scored_to}), on the
+                          same rolling {chopRecQ.data.fit_window}-session window the read itself is
+                          fitted on, refitted every {chopRecQ.data.refit_every}. Each session is
+                          scored only against sessions before it, and the class cuts are refitted
+                          too — cutting them on the whole sample would leak the future into the
+                          definition of the outcome. Measured against what each reading actually
+                          CLAIMED, never against the threshold that admitted it: cells clearing a
+                          65% bar average far above it, so scoring them against 65% reads a
+                          shortfall as headroom.
                         </p>
                         {/* The improvement lever, printed rather than acted on.
                             Retuning a threshold using the same window that scored

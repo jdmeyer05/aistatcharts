@@ -31,6 +31,26 @@ So the module ships that number rather than hiding it: a choppy morning is not
 evidence of a choppy afternoon, and the card says so in the same breath it says
 the morning was choppy.
 
+FITTED ON A ROLLING WINDOW, NOT ALL OF HISTORY. The efficiency distribution
+drifts. Measured on this sample, the 33rd percentile of final-session efficiency
+fell from 0.084 in 2021-22 to 0.070 in 2024-26 — sessions genuinely got choppier
+— and a class cut fitted on everything since 2021 therefore calls 36.4% of
+recent sessions choppy where a stationary cut would call 33.3%. That is not a
+rounding error: it showed up in the walk-forward scorecard as the choppy side
+delivering 4 points MORE than it promised while the trendy side delivered 3
+points less, a symmetry that is the signature of stale cuts rather than a bad
+threshold.
+
+So the fit uses the most recent 750 sessions. Walk-forward, that cuts weighted
+calibration error from 2.23 to 1.43 points with accuracy and coverage unchanged,
+and the optimum is broad — every window from 600 to 1000 beats an expanding one.
+Stated honestly, the gain is concentrated in the recent half of the test window
+(2.39 -> 0.65 points) and the window is marginally WORSE early on (2.26 -> 2.58),
+which is what a drift correction should look like: there is less to correct
+before the drift has accumulated, and a shorter window is meanwhile noisier.
+Production always forecasts forward with the full 750 behind it, so it lives in
+the regime where the correction pays.
+
 CONFIDENCE IS MEASURED, NOT WORDED. "Likely" and "confident" are set by the
 historical frequency with which a reading in today's percentile band, at today's
 mark, belonged to a session that FINISHED in that class — computed from the
@@ -79,6 +99,7 @@ _MARKS = ("10:30", "11:00", "11:30", "12:00", "12:30",
 _FULL_BARS = 78          # 09:30-16:00 inclusive on a 5-minute grid
 _MIN_BARS = _FULL_BARS - 2
 _MIN_CELL = 40           # below this a band is widened rather than quoted
+_FIT_WINDOW = 750        # sessions; the cuts track the tape rather than average it
 _TODAY_TTL_S = 60        # today's bars are the live half; history is not
 
 # Percentile band edges. Fine in the tails, where the reading actually separates,
@@ -430,6 +451,11 @@ def session_chop(fine: pd.DataFrame | None = None,
                 _CACHE[key] = (_now_s(), panel)
         if panel.empty or len(panel) < 200:
             return {"available": False, "reason": "not enough history to calibrate"}
+        # The cuts and band rates come from the recent window only. `panel` is
+        # sorted by date, so this is the tail. Everything older still exists —
+        # it is simply not allowed to define what "choppy" currently means.
+        history_available = int(len(panel))
+        panel = panel.iloc[-_FIT_WINDOW:] if len(panel) > _FIT_WINDOW else panel
 
         # The per-bucket distributions are a separate object from the cumulative
         # panel — an hour's efficiency and a session-to-date efficiency are not
@@ -439,7 +465,17 @@ def session_chop(fine: pd.DataFrame | None = None,
         if hhit and (_now_s() - hhit[0]) < _TTL_S:
             hp = hhit[1]
         else:
-            hp = _hour_panel(fine[fine.index.normalize() != today])
+            # Same rolling treatment: an hourly tercile cut fitted on 2021
+            # over-calls choppy hours in 2026 for exactly the reason the
+            # session-level one does. The hourly labels are descriptive and so
+            # carry no calibration score of their own, which is precisely why
+            # the correction is applied by argument rather than waiting for a
+            # scorecard to catch it.
+            _hist = fine[fine.index.normalize() != today]
+            _days = _hist.index.normalize().unique()
+            if len(_days) > _FIT_WINDOW:
+                _hist = _hist[_hist.index.normalize() >= _days[-_FIT_WINDOW]]
+            hp = _hour_panel(_hist)
             if hp:
                 _CACHE[hkey] = (_now_s(), hp)
 
@@ -567,6 +603,8 @@ def session_chop(fine: pd.DataFrame | None = None,
             "band_widened": widened,
             "n_band": n_band,
             "sessions": int(len(col)),
+            "fit_window": _FIT_WINDOW,
+            "history_available": history_available,
             "instrument": "SPY 5-minute closes, cash session",
             "bars_stale": stale,
             "last_bar": sess.index[-1].strftime("%H:%M"),
@@ -587,8 +625,11 @@ def session_chop(fine: pd.DataFrame | None = None,
                 "Kaufman efficiency ratio — net move divided by total travel — on "
                 "5-minute closes from the cash open to this mark. Efficiency falls "
                 "mechanically with bar count, so the reading is scored only against "
-                f"the {len(col):,} historical sessions AT THE SAME MARK, never across "
-                "clock times. Class cuts are the terciles of final-session efficiency; "
+                f"the {len(col):,} most recent historical sessions AT THE SAME MARK, "
+                "never across clock times. The window is rolling rather than the full "
+                f"history ({history_available:,} sessions available) because the "
+                "efficiency distribution drifts, and cuts fitted on 2021 over-call "
+                "choppy today. Class cuts are the terciles of final-session efficiency; "
                 "the confidence is the measured frequency with which this band finished "
                 "in that class, recomputed from the sample rather than stored."
             ),
