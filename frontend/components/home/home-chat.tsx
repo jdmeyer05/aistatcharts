@@ -30,7 +30,7 @@
  * silently swapping the ground under an open conversation.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { CardHeader } from "@/components/home/primitives";
@@ -50,6 +50,46 @@ import {
 
 type Msg = HomeChatTurn & { grounding?: { unverified_count: number; unverified_tokens: string[] } };
 
+/** Conversations survive a refresh.
+ *
+ *  THE SNAPSHOT IS STORED WITH THE MESSAGES, not separately and not omitted.
+ *  Restoring the turns alone would leave every earlier answer referencing
+ *  numbers the chat could no longer see, and the next reply would be reasoning
+ *  from a different page than the one above it — the exact incoherence the
+ *  freeze exists to prevent, reintroduced by the reload.
+ *
+ *  Written after mount, never during render: `localStorage` does not exist on
+ *  the server, and reading it in a render pass is how you get a hydration
+ *  mismatch on a streamed page. */
+const STORE_KEY = "home-chat-v1";
+const STORE_TTL_MS = 24 * 60 * 60 * 1000;
+
+type Stored = { msgs: Msg[]; frozen: { data: unknown; asOf: string | null }; savedAt: number };
+
+function load(): Stored | null {
+  try {
+    const raw = window.localStorage.getItem(STORE_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Stored;
+    if (!v?.frozen || !Array.isArray(v.msgs)) return null;
+    // A day-old conversation about a day-old page is clutter, not continuity.
+    if (!v.savedAt || Date.now() - v.savedAt > STORE_TTL_MS) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+function save(v: Stored | null) {
+  try {
+    if (v) window.localStorage.setItem(STORE_KEY, JSON.stringify(v));
+    else window.localStorage.removeItem(STORE_KEY);
+  } catch {
+    /* quota or private mode — the conversation still works, it just will not
+       survive a refresh. Never let persistence failure break the chat. */
+  }
+}
+
 const SUGGESTIONS = [
   "What is the single most unusual thing on this page right now?",
   "What does the pre-open prior say, and how much should I trust it?",
@@ -66,6 +106,17 @@ export default function HomeChat() {
   // The frozen snapshot. Null until the first question is asked.
   const frozen = useRef<{ data: unknown; asOf: string | null } | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
+  const [restored, setRestored] = useState(false);
+
+  // Restore after mount, so the server and the first client render agree.
+  useEffect(() => {
+    const v = load();
+    if (v) {
+      frozen.current = v.frozen;
+      setMsgs(v.msgs);
+      setRestored(true);
+    }
+  }, []);
 
   /** Read whatever the page has already loaded. `getQueryData` never fetches —
    *  this is a pure observer, so opening the chat costs no requests and cannot
@@ -103,6 +154,8 @@ export default function HomeChat() {
     frozen.current = null;
     setMsgs([]);
     setErr(null);
+    setRestored(false);
+    save(null);
   };
 
   async function send(text: string) {
@@ -125,7 +178,13 @@ export default function HomeChat() {
     setErr(null);
     try {
       const r = await askHomeChat({ data: frozen.current.data, question, history });
-      setMsgs((m) => [...m, { role: "assistant", content: r.answer, grounding: r.grounding }]);
+      setMsgs((m) => {
+        const next = [...m, { role: "assistant" as const, content: r.answer, grounding: r.grounding }];
+        // Persist only completed exchanges. Saving the user turn before the
+        // answer lands would restore a dangling question after a crash.
+        if (frozen.current) save({ msgs: next, frozen: frozen.current, savedAt: Date.now() });
+        return next;
+      });
       requestAnimationFrame(() => {
         scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
       });
@@ -162,6 +221,11 @@ export default function HomeChat() {
         Answers come only from the data on this page. It cannot see anything else, and it
         reports conditions rather than telling you what to trade.
         {frozen.current && " The snapshot is fixed for this conversation."}
+        {/* A restored conversation must SAY it was restored. Presenting it as
+            fresh would let the reader assume the answers above describe the
+            page in front of them, when they describe the page as it stood when
+            the conversation started. */}
+        {restored && msgs.length > 0 && " Resumed from an earlier session."}
       </p>
 
       {drifted && (

@@ -861,8 +861,12 @@ async def interpret(
 #    `as_of` travels with it.
 # 3. A DIFFERENT PROMPT. The panel's failure mode is surveying; a chat's is
 #    answering anyway. See `HOME_CHAT_SYSTEM`.
-_CHAT_MAX_TURNS = 12          # user+assistant messages retained, newest kept
-_CHAT_MAX_QUESTION = 2000     # characters
+# SIZED FOR A SINGLE OPERATOR, deliberately. An earlier pass tuned these for a
+# multi-tenant worst case that does not exist yet — the site has one user. The
+# binding constraint here is answer quality, not aggregate spend, and every
+# number below is cheap to walk back if that changes.
+_CHAT_MAX_TURNS = 40          # user+assistant messages retained, newest kept
+_CHAT_MAX_QUESTION = 8000     # characters — room to paste a table or a log
 # MEASURED, not guessed. The ES brief ALONE serialises to 65,548 characters
 # indented and 43,056 compact, so the first version of this — a 60,000 cap with
 # indent=2 — truncated on EVERY request, and truncation cuts the TAIL: every
@@ -874,7 +878,12 @@ _CHAT_MAX_QUESTION = 2000     # characters
 # pretty-printed JSON. The cap is then sized to the real payload rather than to
 # a round number: ~120k characters is roughly 30k tokens, well inside the 1M
 # window, ~$0.15 on a first turn and about a tenth of that once cached.
-_CHAT_MAX_SNAPSHOT = 120000   # characters of COMPACT JSON
+#
+# RAISED to 400k. The cap only decides when blocks get DROPPED — cost tracks the
+# bytes actually sent, not the ceiling — so a high cap is free unless the payload
+# really grows, and dropping a block is the outcome worth avoiding. At today's
+# ~43k the limit never binds; at 400k it would not bind even if the page tripled.
+_CHAT_MAX_SNAPSHOT = 400000   # characters of COMPACT JSON (~100k tokens)
 # Kept whole when the payload must be cut, in this order. Anything not named
 # here ranks below everything that is.
 _CHAT_BLOCK_PRIORITY = (
@@ -925,11 +934,11 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/chat")
-# 100/day, not 300. Each NEW conversation sends ~30k input tokens (~$0.15);
-# follow-ups read that from cache for about a tenth of it. The daily cap has
-# to be sized on the worst case — 300 fresh conversations — not the typical
-# one. Keyed per user, not per IP (see api/rate_limit._key_fn).
-@limiter.limit("15/minute;100/day")
+# Keyed per user, not per IP (see api/rate_limit._key_fn). Generous because the
+# site has one operator: a new conversation is ~11k input tokens at today's
+# payload (~$0.06) and follow-ups read that back from cache. This is a runaway
+# guard, not a budget.
+@limiter.limit("40/minute;1000/day")
 async def chat(
     request: Request,
     body: ChatRequest,
@@ -1002,7 +1011,11 @@ async def chat(
             # Opus 5 thinks by default and thinking counts against max_tokens,
             # so this is reasoning plus a short answer, not the answer alone.
             max_tokens=16000,
-            output_config={"effort": "medium"},
+            # "high", not "medium". The medium answers in testing were already
+            # good, and the standing preference on this platform is accuracy
+            # over speed — a chat that reasons harder about which block answers
+            # the question is worth a couple of seconds here.
+            output_config={"effort": "high"},
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
             system=[{"type": "text", "text": HOME_CHAT_SYSTEM,
