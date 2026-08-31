@@ -46,6 +46,7 @@ import {
 import { PULSE_TICKERS, PULSE_LABELS, ordinal } from "@/lib/home-constants";
 import EsBriefing from "@/components/home/es-briefing";
 import PageInterpretation from "@/components/home/page-interpretation";
+import HomeChat from "@/components/home/home-chat";
 import CtaFlows from "@/components/home/cta-flows";
 import MacroPressure from "@/components/home/macro-pressure";
 import SectorRrgCard from "@/components/home/sector-rrg";
@@ -974,6 +975,12 @@ export function HomeSwing() {
           before these boards hydrate would have it synthesise a page it cannot
           see. It also now names the blocks it could not read. */}
       <PageInterpretation />
+
+      {/* Sits directly under the one-shot interpretation because they answer
+          the same page from opposite ends: that panel says what today means
+          without being asked, this one answers what it did not cover. Below it,
+          not above, so the unprompted read is still what a reader meets first. */}
+      <HomeChat />
 
       <HorizonBand id="today" label="Today" hint="moves through the session, resets overnight">
         <MarketDriverCard />

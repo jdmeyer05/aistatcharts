@@ -839,3 +839,207 @@ async def interpret(
     except Exception as e:
         logger.warning(f"interpret failed: {e}")
         raise HTTPException(500, f"Interpretation failed: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# /chat — ask questions about the home page
+# ══════════════════════════════════════════════════════════════════════════
+#
+# WHY THIS IS NOT THE INTERPRET ENDPOINT WITH A HISTORY ARRAY. Three things
+# differ, and each one is a correctness issue rather than a preference:
+#
+# 1. NO ANSWER CACHE. `/interpret` is keyed on (page, data, prompt) because the
+#    same page produces the same interpretation for every user. A chat answer
+#    depends on the question and the turns before it, so the same cache would
+#    serve one user's answer to another's question. Prompt caching (input) is
+#    still used, and that is where the saving actually is.
+# 2. THE SNAPSHOT IS FROZEN BY THE CALLER, not re-read per turn. If the page
+#    refreshed between turns, turn 3 would answer off different numbers than
+#    turn 1 and the conversation would quietly contradict itself — and the
+#    cached prefix would invalidate every time, so it would cost more as well.
+#    The client sends the same snapshot for the life of a conversation and its
+#    `as_of` travels with it.
+# 3. A DIFFERENT PROMPT. The panel's failure mode is surveying; a chat's is
+#    answering anyway. See `HOME_CHAT_SYSTEM`.
+_CHAT_MAX_TURNS = 12          # user+assistant messages retained, newest kept
+_CHAT_MAX_QUESTION = 2000     # characters
+# MEASURED, not guessed. The ES brief ALONE serialises to 65,548 characters
+# indented and 43,056 compact, so the first version of this — a 60,000 cap with
+# indent=2 — truncated on EVERY request, and truncation cuts the TAIL: every
+# block after the brief (driver, vol, sectors, calendar, macro, valuation) was
+# silently dropped from every conversation. The chat would have claimed to
+# answer about a page it could only half see.
+#
+# Compact separators cost nothing and save 34% — the model does not need
+# pretty-printed JSON. The cap is then sized to the real payload rather than to
+# a round number: ~120k characters is roughly 30k tokens, well inside the 1M
+# window, ~$0.15 on a first turn and about a tenth of that once cached.
+_CHAT_MAX_SNAPSHOT = 120000   # characters of COMPACT JSON
+# Kept whole when the payload must be cut, in this order. Anything not named
+# here ranks below everything that is.
+_CHAT_BLOCK_PRIORITY = (
+    "as_of", "es_brief", "market_driver", "vol_landscape", "sectors",
+    "calendar", "macro_pressure", "cta_flows", "sector_rrg", "sp_valuation",
+)
+
+
+def _fit_snapshot(data: dict) -> tuple[str, list[str]]:
+    """Serialise the snapshot, dropping WHOLE blocks if it will not fit.
+
+    Cutting a JSON string at a byte offset hands the model malformed JSON and
+    an unmarked absence — the failure this platform cares most about. Dropping
+    named blocks and telling the model which ones went is strictly better: it
+    can then say "that block is not in the snapshot" instead of guessing at a
+    half-parsed object.
+    """
+    def dump(d: dict) -> str:
+        return json.dumps(d, default=str, sort_keys=True, separators=(",", ":"))
+
+    out = dump(data)
+    if len(out) <= _CHAT_MAX_SNAPSHOT:
+        return out, []
+
+    rank = {k: i for i, k in enumerate(_CHAT_BLOCK_PRIORITY)}
+    # Lowest priority first; unknown keys rank after every known one.
+    order = sorted(data.keys(), key=lambda k: (-rank.get(k, len(rank)), str(k)))
+    kept, dropped = dict(data), []
+    for key in order:
+        if len(out) <= _CHAT_MAX_SNAPSHOT or key in ("as_of", "es_brief"):
+            break
+        kept.pop(key, None)
+        dropped.append(str(key))
+        out = dump(kept)
+    # Last resort: the brief alone still overflows. Cut, and say so loudly.
+    return out[:_CHAT_MAX_SNAPSHOT], dropped
+
+
+class ChatTurn(BaseModel):
+    role: str                 # "user" | "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    data: dict                # the frozen page snapshot
+    question: str
+    history: list[ChatTurn] = []
+
+
+@router.post("/chat")
+# 100/day, not 300. Each NEW conversation sends ~30k input tokens (~$0.15);
+# follow-ups read that from cache for about a tenth of it. The daily cap has
+# to be sized on the worst case — 300 fresh conversations — not the typical
+# one. Keyed per user, not per IP (see api/rate_limit._key_fn).
+@limiter.limit("15/minute;100/day")
+async def chat(
+    request: Request,
+    body: ChatRequest,
+    user: str = Depends(get_current_user),
+):
+    """Answer a question about the current home-page snapshot."""
+    if user == "anonymous":
+        raise HTTPException(401, "Sign in required")
+
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(400, "Empty question")
+    if len(question) > _CHAT_MAX_QUESTION:
+        raise HTTPException(400, f"Question too long (max {_CHAT_MAX_QUESTION} characters)")
+
+    api_key = get_secret("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(503, "Chat unavailable — ANTHROPIC_API_KEY not configured")
+
+    from src.prompt_defaults import HOME_CHAT_SYSTEM
+    ctx = PAGE_CONTEXT.get("home_page", "")
+    snapshot, dropped = _fit_snapshot(body.data or {})
+    truncated = bool(dropped)
+
+    # ORDER MATTERS FOR THE CACHE. Rendering is tools -> system -> messages, and
+    # a prefix match means any byte change invalidates everything after it. The
+    # two stable things — the prompt and the frozen snapshot — go first and
+    # carry the breakpoints; the volatile turns follow. `sort_keys=True` above
+    # is part of that: an unsorted dict re-serialises in a different order and
+    # silently misses the cache on every turn.
+    context_turn = (
+        f"Here is the home page the trader is looking at.\n\n"
+        f"What the blocks mean:\n{ctx}\n\n"
+        f"Page snapshot:\n```json\n{snapshot}\n```"
+        + (f"\n\nNOT INCLUDED, because the snapshot did not fit: "
+           f"{', '.join(dropped)}. If the trader asks about any of those, say "
+           f"that block is not in this snapshot — do not infer it."
+           if dropped else "")
+    )
+
+    messages: list[dict] = [
+        {"role": "user", "content": [{"type": "text", "text": context_turn,
+                                      "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": "Understood. Ask me about it."},
+    ]
+    # ROLES MUST ALTERNATE and the history follows a synthetic ASSISTANT turn,
+    # so a history that begins with an assistant message produces two in a row
+    # and a 400 from the API. The client always sends complete pairs, but
+    # `[-12:]` on an odd-length history would still slice into the middle of
+    # one — an invariant held by the caller is not an invariant.
+    hist = [t for t in body.history
+            if t.role in ("user", "assistant") and (t.content or "").strip()]
+    hist = hist[-_CHAT_MAX_TURNS:]
+    while hist and hist[0].role == "assistant":
+        hist.pop(0)
+    prev = "assistant"
+    for t in hist:
+        if t.role == prev:          # drop a repeat rather than send a 400
+            continue
+        messages.append({"role": t.role, "content": t.content[:_CHAT_MAX_QUESTION]})
+        prev = t.role
+    if prev == "user":              # never two user turns in a row
+        messages.append({"role": "assistant", "content": "…"})
+    messages.append({"role": "user", "content": question})
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.beta.messages.create(
+            model=MODEL,
+            # Opus 5 thinks by default and thinking counts against max_tokens,
+            # so this is reasoning plus a short answer, not the answer alone.
+            max_tokens=16000,
+            output_config={"effort": "medium"},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            system=[{"type": "text", "text": HOME_CHAT_SYSTEM,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+        )
+        if msg.stop_reason == "refusal":
+            category = getattr(getattr(msg, "stop_details", None), "category", None)
+            logger.warning(f"Claude declined home chat category={category}")
+            raise HTTPException(502, "Claude declined to answer that.")
+
+        answer = "\n".join(b.text for b in msg.content
+                           if getattr(b, "type", None) == "text").strip()
+        if not answer:
+            raise HTTPException(502, "Empty answer from the model.")
+
+        return {
+            "ok": True,
+            "model": MODEL,
+            "answer": answer,
+            # Same grounding check the interpretation panel runs. A chat can
+            # invent a number as easily as a panel can, and this is the only
+            # automated thing standing between the two.
+            "grounding": _check_grounding(answer, body.data),
+            "snapshot_truncated": truncated,
+            "cache_read_tokens": getattr(msg.usage, "cache_read_input_tokens", 0),
+            "input_tokens": msg.usage.input_tokens,
+            "output_tokens": msg.usage.output_tokens,
+        }
+    except HTTPException:
+        raise
+    except anthropic.BadRequestError as e:
+        logger.warning(f"Claude rejected chat request: {e}")
+        raise HTTPException(400, f"Claude rejected the request: {e}")
+    except anthropic.RateLimitError as e:
+        logger.warning(f"Claude rate limited chat: {e}")
+        raise HTTPException(429, "Rate limited — try again shortly.")
+    except anthropic.APIError as e:
+        logger.warning(f"Claude API error on chat: {e}")
+        raise HTTPException(502, f"Claude API error: {e}")

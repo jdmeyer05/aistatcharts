@@ -1357,6 +1357,44 @@ export async function fetchInterpretation(params: {
   });
 }
 
+export interface HomeChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+export interface HomeChatAnswer {
+  ok: boolean;
+  model: string;
+  answer: string;
+  grounding: {
+    grounded_count: number;
+    unverified_count: number;
+    unverified_tokens: string[];
+  };
+  snapshot_truncated: boolean;
+  cache_read_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+}
+/** Ask a question about the home page.
+ *
+ *  `data` must be the SAME snapshot for the life of one conversation. Sending a
+ *  fresher one each turn would let turn 3 answer off different numbers than
+ *  turn 1 — the conversation would quietly contradict itself — and it would
+ *  invalidate the cached prompt prefix on every turn, so it would cost more as
+ *  well. The server caches that prefix; a stable snapshot is what makes the
+ *  second and later questions cheap. */
+export async function askHomeChat(params: {
+  data: unknown;
+  question: string;
+  history: HomeChatTurn[];
+}): Promise<HomeChatAnswer> {
+  return apiFetch("/api/ai/chat", {
+    method: "POST",
+    body: JSON.stringify(params),
+    timeoutMs: 120_000,
+  });
+}
+
 export interface Holding13F {
   company: string | null;
   class: string | null;
