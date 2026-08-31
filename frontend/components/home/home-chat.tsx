@@ -11,7 +11,7 @@
  *
  * THE PAYLOAD IS BROADER HERE, NOT SHARED. The panel prunes hard to fit ~13k of
  * a 20k budget, because everything it sends competes with the synthesis it has
- * to produce. A chat has ~120k characters of room and no idea which block the
+ * to produce. A chat has a 400k-character ceiling and no idea which block the
  * next question is about, so breadth beats pruning: it sends whole blocks and
  * lets the model find the one that answers. Sharing one builder would force one
  * of the two surfaces to carry the other's tradeoff.
@@ -22,10 +22,9 @@
  *     would let turn 3 answer off different numbers than turn 1, and nothing on
  *     screen would say so.
  *   - Cost. The server caches the prompt prefix (system + snapshot). A stable
- *     snapshot is the whole reason the second and later questions are cheap:
- *     the full snapshot is ~30k input tokens on a first question and is read
- *     back from cache on every follow-up. (A 13k prefix cache hit was measured
- *     on a deliberately small test payload — the real one is larger.)
+ *     snapshot is the whole reason the second and later questions are cheap.
+ *     Measured: the real payload serialises to 43,056 characters, roughly 11k
+ *     input tokens, read back from cache on every follow-up.
  * When the underlying page has moved on, the header offers a reset rather than
  * silently swapping the ground under an open conversation.
  */
@@ -48,7 +47,19 @@ import {
   type SectorRrg,
 } from "@/lib/api";
 
-type Msg = HomeChatTurn & { grounding?: { unverified_count: number; unverified_tokens: string[] } };
+type Msg = HomeChatTurn & {
+  grounding?: { unverified_count: number; unverified_tokens: string[] };
+  truncated?: boolean;
+};
+
+/** A stored turn is only usable if it still has the shape the API requires.
+ *  Anything else — an older schema, a half-written entry, a hand-edited key —
+ *  gets sent back as history and rejected as a 422, which presents as "the chat
+ *  is broken" with nothing to connect it to storage. */
+function isMsg(v: unknown): v is Msg {
+  const m = v as Msg | null;
+  return !!m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string";
+}
 
 /** Conversations survive a refresh.
  *
@@ -71,7 +82,7 @@ function load(): Stored | null {
     const raw = window.localStorage.getItem(STORE_KEY);
     if (!raw) return null;
     const v = JSON.parse(raw) as Stored;
-    if (!v?.frozen || !Array.isArray(v.msgs)) return null;
+    if (!v?.frozen || !Array.isArray(v.msgs) || !v.msgs.every(isMsg)) return null;
     // A day-old conversation about a day-old page is clutter, not continuity.
     if (!v.savedAt || Date.now() - v.savedAt > STORE_TTL_MS) return null;
     return v;
@@ -179,7 +190,8 @@ export default function HomeChat() {
     try {
       const r = await askHomeChat({ data: frozen.current.data, question, history });
       setMsgs((m) => {
-        const next = [...m, { role: "assistant" as const, content: r.answer, grounding: r.grounding }];
+        const next = [...m, { role: "assistant" as const, content: r.answer,
+                              grounding: r.grounding, truncated: r.answer_truncated }];
         // Persist only completed exchanges. Saving the user turn before the
         // answer lands would restore a dangling question after a crash.
         if (frozen.current) save({ msgs: next, frozen: frozen.current, savedAt: Date.now() });
@@ -250,6 +262,15 @@ export default function HomeChat() {
                 {/* The same grounding check the interpretation panel runs. A
                     chat can invent a number as easily as a panel can, and a
                     silent unverified figure is the failure this surfaces. */}
+                {/* An answer that ran out of budget is real but unfinished.
+                    Serving it as complete is the same failure as reporting an
+                    absence as a calm. */}
+                {m.role === "assistant" && m.truncated && (
+                  <div className="mt-1 text-[0.55rem] text-amber-400">
+                    This answer hit its length limit and stops mid-thought — ask a narrower
+                    question, or ask it to continue.
+                  </div>
+                )}
                 {m.role === "assistant" && (m.grounding?.unverified_count ?? 0) > 0 && (
                   <div className="mt-1 text-[0.55rem] text-amber-400">
                     {m.grounding!.unverified_count} figure

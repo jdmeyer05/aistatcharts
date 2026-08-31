@@ -1371,6 +1371,8 @@ export interface HomeChatAnswer {
     unverified_tokens: string[];
   };
   snapshot_truncated: boolean;
+  /** The model hit its token budget mid-answer. The text is real but unfinished. */
+  answer_truncated?: boolean;
   cache_read_tokens: number;
   input_tokens: number;
   output_tokens: number;

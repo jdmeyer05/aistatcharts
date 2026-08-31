@@ -918,8 +918,14 @@ def _fit_snapshot(data: dict) -> tuple[str, list[str]]:
         kept.pop(key, None)
         dropped.append(str(key))
         out = dump(kept)
-    # Last resort: the brief alone still overflows. Cut, and say so loudly.
-    return out[:_CHAT_MAX_SNAPSHOT], dropped
+    # Last resort: even after dropping everything droppable it still overflows,
+    # so the JSON gets cut at a byte offset and is no longer parseable. That has
+    # to be announced — returning it in `dropped` silently would tell the model
+    # which blocks went but not that what remains is malformed.
+    if len(out) > _CHAT_MAX_SNAPSHOT:
+        dropped.append("(the remaining JSON was cut mid-structure and will not parse)")
+        return out[:_CHAT_MAX_SNAPSHOT], dropped
+    return out, dropped
 
 
 class ChatTurn(BaseModel):
@@ -1009,8 +1015,12 @@ async def chat(
         msg = client.beta.messages.create(
             model=MODEL,
             # Opus 5 thinks by default and thinking counts against max_tokens,
-            # so this is reasoning plus a short answer, not the answer alone.
-            max_tokens=16000,
+            # so this budget is reasoning PLUS the answer, not the answer alone.
+            # 32k rather than 16k because effort went to "high" below: adaptive
+            # thinking over a ~30k-token snapshot can consume most of a 16k
+            # budget and leave the answer to be cut mid-sentence. Nothing is
+            # billed for headroom — cost tracks tokens actually produced.
+            max_tokens=32000,
             # "high", not "medium". The medium answers in testing were already
             # good, and the standing preference on this platform is accuracy
             # over speed — a chat that reasons harder about which block answers
@@ -1029,8 +1039,24 @@ async def chat(
 
         answer = "\n".join(b.text for b in msg.content
                            if getattr(b, "type", None) == "text").strip()
+
+        # `max_tokens` was checked nowhere in the first version, so an answer cut
+        # off mid-sentence was served as though it were complete — the same
+        # absence-rendered-as-a-calm failure this platform keeps finding. Two
+        # cases needing different handling: an empty response means the whole
+        # budget went to reasoning and there is nothing to show, while a
+        # non-empty one is worth returning WITH a flag so the reader is told.
+        hit_cap = msg.stop_reason == "max_tokens"
         if not answer:
+            if hit_cap:
+                logger.warning("home chat exhausted max_tokens before any text")
+                raise HTTPException(
+                    502, "The answer ran out of room before it started. "
+                         "Try a narrower question.")
             raise HTTPException(502, "Empty answer from the model.")
+        if hit_cap:
+            logger.warning(f"home chat truncated at max_tokens "
+                           f"out={msg.usage.output_tokens}")
 
         return {
             "ok": True,
@@ -1041,6 +1067,7 @@ async def chat(
             # automated thing standing between the two.
             "grounding": _check_grounding(answer, body.data),
             "snapshot_truncated": truncated,
+            "answer_truncated": hit_cap,
             "cache_read_tokens": getattr(msg.usage, "cache_read_input_tokens", 0),
             "input_tokens": msg.usage.input_tokens,
             "output_tokens": msg.usage.output_tokens,
