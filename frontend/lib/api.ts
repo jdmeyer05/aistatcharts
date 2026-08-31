@@ -4105,6 +4105,10 @@ export interface EsBrief {
    *  identically on the card without this. */
   levels_reason?: string | null;
   regime?: EsRegime | null;
+  /** How STRAIGHT the session has been, as against how big — the axis
+   *  `regime` is blind to. Descriptive only: its forward correlation is a
+   *  measured null and ships in `forward` so the card can say so. */
+  chop_trend?: EsChopTrend | null;
   rest_of_session?: EsRestOfSession | null;
   attribution?: EsAttribution | null;
   macro_setup?: EsMacroSetup | null;
@@ -4186,6 +4190,50 @@ export interface RrgMeasure {
   band: string | null;
   n_history: number;
   context: RrgContext | null;
+}
+
+
+/** Session shape — chop versus trend, on Kaufman efficiency over 5-minute closes.
+ *
+ *  `efficiency` is NOT comparable across clock times: the ratio falls
+ *  mechanically with bar count, so every reading is scored against the
+ *  historical distribution at the SAME `mark`, which is what `pctile` carries.
+ *  `label` is one of "confident trendy" / "likely trendy" / "mixed" /
+ *  "likely choppy" / "confident choppy", and the confidence half of it is the
+ *  measured frequency in `p_finish_*_pct`, never a word chosen by feel. */
+export interface EsChopTrend {
+  available: boolean;
+  reason?: string;
+  mark?: string;
+  label?: string;
+  side?: "choppy" | "trendy" | "mixed";
+  confidence?: "confident" | "likely" | "none";
+  efficiency?: number;
+  pctile?: number;
+  median_at_mark?: number;
+  p_finish_choppy_pct?: number | null;
+  p_finish_trendy_pct?: number | null;
+  base_rate_pct?: number;
+  band?: string;
+  band_widened?: boolean;
+  n_band?: number;
+  sessions?: number;
+  instrument?: string;
+  /** The forward test, on the DISJOINT remainder of the session. It comes back
+   *  null at every mark; it is carried in the payload so the card prints the
+   *  null rather than letting a descriptive label read as a forecast. */
+  forward?: {
+    p_rest_choppy_pct: number;
+    base_pct: number;
+    lift: number | null;
+    corr: number;
+    n: number;
+    verdict: "null";
+    note: string;
+  } | null;
+  note?: string;
+  method?: string;
+  caveat?: string;
 }
 
 export interface SectorRrg {

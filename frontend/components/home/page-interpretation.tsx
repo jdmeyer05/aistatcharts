@@ -222,6 +222,25 @@ export default function PageInterpretation() {
           }
         : null,
 
+      // The shape axis. Handed over with its forward null attached, because a
+      // narrator given only "likely choppy" writes a sentence about the
+      // afternoon — the exact reading the measurement does not support.
+      session_shape: brief?.chop_trend?.available
+        ? {
+            label: brief.chop_trend.label,
+            as_of_mark: brief.chop_trend.mark,
+            efficiency: brief.chop_trend.efficiency,
+            efficiency_pctile_at_this_mark: brief.chop_trend.pctile,
+            median_efficiency_at_this_mark: brief.chop_trend.median_at_mark,
+            pct_of_such_sessions_finishing_choppy: brief.chop_trend.p_finish_choppy_pct,
+            pct_of_such_sessions_finishing_trendy: brief.chop_trend.p_finish_trendy_pct,
+            base_rate_pct: brief.chop_trend.base_rate_pct,
+            n: brief.chop_trend.n_band,
+            describes: "the session so far, never the hours ahead",
+            forward_test: brief.chop_trend.forward,
+          }
+        : null,
+
       base_rates: br?.available
         ? {
             source: br.source, sessions: br.sessions, window_years: br.window_years,

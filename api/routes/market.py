@@ -3135,6 +3135,10 @@ def _es_brief_build() -> dict:
         # estimator here that is not fixed at the open, so it is the only one
         # that can see an UNSCHEDULED event while it is still running.
         "regime": cock.get("regime"),
+        # How STRAIGHT the session has been, as against how big — the axis every
+        # other estimator here is blind to. Describes the tape behind you; its
+        # forward correlation is a measured null and travels in the payload.
+        "chop_trend": cock.get("chop_trend"),
         # The only block on the card addressed to somebody already positioned
         # rather than deciding whether to engage.
         "rest_of_session": cock.get("rest_of_session"),

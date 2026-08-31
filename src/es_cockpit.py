@@ -486,6 +486,7 @@ def es_cockpit(now: pd.Timestamp | None = None,
     from src.es_attribution import price_attribution
     from src.es_macro_setup import macro_setup
     from src.es_level_clusters import cluster_levels
+    from src.es_chop import session_chop
 
     # The expected move is always computed for the SESSION AHEAD. So a range
     # already in the books may belong to a different session than the estimate,
@@ -601,6 +602,16 @@ def es_cockpit(now: pd.Timestamp | None = None,
     # reported `tolerance_basis` and it read the wrong one. A blanket catch
     # around a name lookup hides typos rather than data problems, so the lookup
     # is now explicit and only the numeric work is guarded.
+    # HOW STRAIGHT, as against how big. Every other estimator on this card sizes
+    # the session; none of them could tell a wide rotation from a narrow drift.
+    # Computed after the pool on purpose: it reads the same 5-minute frame the
+    # base-rate study has just cached, so running it here costs no fetch, while
+    # submitting it alongside would race that fetch and double it on a cold
+    # instance. Live sessions only — "this session has been choppy" is a claim
+    # about a tape that is trading, the same reason the path read stays silent
+    # outside the cash hours.
+    chop = _safe(lambda: session_chop(now=clock), "chop_trend") if live else None
+
     _rth = (frames or {}).get("cur_rth")
     _bar = None
     if _rth is not None and not _rth.empty:
@@ -666,6 +677,9 @@ def es_cockpit(now: pd.Timestamp | None = None,
         "candles": candles,
         "overnight": overnight_ctx,
         "regime": regime,
+        # The orthogonal axis to `regime`: that one says how big, this says how
+        # straight. Measured at corr +0.37, so they are close to independent.
+        "chop_trend": chop,
         "rest_of_session": ros,
         "attribution": attribution,
         "macro_setup": setup,
