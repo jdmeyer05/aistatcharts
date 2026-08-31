@@ -271,11 +271,19 @@ export default function HomeChat() {
                     question, or ask it to continue.
                   </div>
                 )}
+                {/* Wording matters here. The chat is allowed to draw on general
+                    knowledge as long as it labels it, so a figure that is not in
+                    the snapshot is often correct and expected — it just did not
+                    come from this page. Calling that an error would train the
+                    reader to ignore the one case that matters: a number
+                    presented AS a page reading that the page does not contain. */}
                 {m.role === "assistant" && (m.grounding?.unverified_count ?? 0) > 0 && (
-                  <div className="mt-1 text-[0.55rem] text-amber-400">
-                    {m.grounding!.unverified_count} figure
-                    {m.grounding!.unverified_count === 1 ? "" : "s"} could not be traced to the
-                    page data: {m.grounding!.unverified_tokens.slice(0, 6).join(", ")}
+                  <div className="mt-1 text-[0.55rem] text-text-muted">
+                    Not from this page&apos;s data:{" "}
+                    <span className="text-amber-400">
+                      {m.grounding!.unverified_tokens.slice(0, 6).join(", ")}
+                    </span>
+                    {" — fine if it was general context, worth checking if it read as a page figure."}
                   </div>
                 )}
               </div>

@@ -225,6 +225,30 @@ def _check_grounding(interpretation: str, data: dict) -> dict:
             grounded.append(token)
             continue
 
+        # Difference check: "the put wall is 146.76 below", where the answer has
+        # already stated 7707.25 and 7560.49. Added 2026-08-31 after the home
+        # chat flagged exactly that — correct arithmetic reported as unverified.
+        #
+        # NOT SEARCHED OVER THE PAYLOAD, and that is the whole design. Differences
+        # between arbitrary payload pairs would recreate the failure the ratio
+        # path above documents: a real payload carries ~780 numbers, so ~600,000
+        # candidate differences blanket the line densely enough to ground almost
+        # anything, and the check would stop meaning anything.
+        #
+        # The operands must be NAMEABLE, and the strictest available definition
+        # of nameable is that the model wrote them down: the pair is drawn only
+        # from numbers ALREADY GROUNDED IN THIS ANSWER. A few dozen candidates
+        # instead of hundreds of thousands, both of them values the answer has
+        # itself committed to, so a reader can check the subtraction on screen.
+        # Distances between two quoted levels — the motivating case — all have
+        # this shape.
+        diff_tol = _tolerance(n, is_pct)
+        vals = [v for v in (_normalize_num(t)[0] for t in grounded) if v is not None]
+        if any(abs(abs(a - b) - abs(n)) <= diff_tol
+               for i, a in enumerate(vals) for b in vals[i + 1:]):
+            grounded.append(token)
+            continue
+
         unverified.append(token)
 
     return {

@@ -1012,14 +1012,24 @@ async def chat(
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.beta.messages.create(
+        # STREAMED, then collected into one message. Not for the UI — this
+        # endpoint still returns a single JSON body — but because the SDK
+        # REFUSES a non-streaming request whose max_tokens implies a possible
+        # >10-minute response, and 32000 crosses that line. `messages.create`
+        # raised ValueError before sending anything, and no branch of the except
+        # chain below catches ValueError, so every request would have 500'd.
+        # Streaming and taking the final message keeps the headroom, satisfies
+        # the SDK, and removes the HTTP timeout risk at the same time.
+        with client.beta.messages.stream(
             model=MODEL,
             # Opus 5 thinks by default and thinking counts against max_tokens,
             # so this budget is reasoning PLUS the answer, not the answer alone.
             # 32k rather than 16k because effort went to "high" below: adaptive
-            # thinking over a ~30k-token snapshot can consume most of a 16k
-            # budget and leave the answer to be cut mid-sentence. Nothing is
-            # billed for headroom — cost tracks tokens actually produced.
+            # thinking over a large snapshot can consume most of a 16k budget
+            # and leave the answer cut mid-sentence. Nothing is billed for
+            # headroom — cost tracks tokens actually produced. NOTE this is also
+            # why the call below is streamed: the SDK rejects a non-streaming
+            # request at this budget.
             max_tokens=32000,
             # "high", not "medium". The medium answers in testing were already
             # good, and the standing preference on this platform is accuracy
@@ -1031,7 +1041,8 @@ async def chat(
             system=[{"type": "text", "text": HOME_CHAT_SYSTEM,
                      "cache_control": {"type": "ephemeral"}}],
             messages=messages,
-        )
+        ) as stream:
+            msg = stream.get_final_message()
         if msg.stop_reason == "refusal":
             category = getattr(getattr(msg, "stop_details", None), "category", None)
             logger.warning(f"Claude declined home chat category={category}")
@@ -1083,3 +1094,10 @@ async def chat(
     except anthropic.APIError as e:
         logger.warning(f"Claude API error on chat: {e}")
         raise HTTPException(502, f"Claude API error: {e}")
+    except Exception as e:
+        # The chain above catches Anthropic's typed errors. It did NOT catch the
+        # plain ValueError the SDK raises for a non-streaming request over its
+        # duration limit, which surfaced as a bare 500. Anything unexpected now
+        # returns a handled error instead of a stack trace.
+        logger.warning(f"home chat failed: {type(e).__name__}: {e}")
+        raise HTTPException(502, "Chat failed — try again.")
