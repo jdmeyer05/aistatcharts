@@ -13,10 +13,32 @@
  * from. Nothing here is a judgement call, and nothing is an entry signal —
  * it describes conditions and leaves the trade to the trader.
  *
- * HORIZONS ARE KEPT SEPARATE. Location, levels and the clock are intraday.
- * CTA flow and the macro scorecard are swing-horizon inputs and are labelled
- * as directional lean, never as intraday triggers — collapsing the two is the
- * easiest way to make this card actively misleading.
+ * HORIZONS ARE KEPT SEPARATE, and that is now enforced by what is on the card
+ * rather than by a label on it.
+ *
+ * Two blocks were removed. "Directional lean — swing horizon" rendered CTA flow
+ * and the macro backdrop as their own mini-boards; both now have full rows in
+ * `BoardRoster` one band down, under a heading that says they are multi-day.
+ * "Macro headlines" was the second headline list on this page — the driver card
+ * carries the other, from a different source, a screen away. The one-sentence
+ * lean survives inside `buildRead`, where it belongs: a clause of context, not
+ * a board. The rule used to be "label the horizons"; it is now "put each block
+ * in the horizon it belongs to", which is the axis the whole page runs on.
+ *
+ * SECTIONS FOLD, AND A FOLDED SECTION STILL SPEAKS. Measured at 3,967px across
+ * fourteen sections, this card was 37% of the page and had two foldable blocks
+ * in it — the page had navigation everywhere except where the scrolling was.
+ * Each major block is now a `CardSection` carrying the one-sentence read this
+ * file already computed for it (`emRead`, `gammaRead`, `structureRead`,
+ * `breadthRead`, `ladderRead`). Those reads used to render as a `Takeaway` at
+ * the BOTTOM of their block, so folding a section threw away the single line
+ * worth keeping. Folded, that line is what remains.
+ *
+ * Two sections default SHUT, and they are the two that cannot change between
+ * now and the close: the base-rate tables and the session-path table are
+ * unconditional history over thousands of sessions. Their summaries promote the
+ * parts that ARE about today — the conditioned gap note, and `path.live`, which
+ * re-reads an unconditional 57% gap fill as 20.7% at 11:45.
  */
 
 import { useMemo } from "react";
@@ -1729,16 +1751,32 @@ export default function EsBriefing() {
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-4">
             {/* ── price ladder ── */}
             <div className="space-y-1.5">
-              <div className="flex items-baseline justify-between">
-                <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                  Reference levels
-                </h3>
-                {frameLabel && (
-                  <span className="text-[0.55rem] text-text-muted" title={frameLabel.title}>
-                    {frameLabel.text}
-                  </span>
-                )}
-              </div>
+              <CardSection
+                id="ladder"
+                title="Reference levels"
+                /* Open by default: the ladder DEVELOPS — session high, low and
+                   VWAP move all session and every distance is signed off the
+                   last price. Foldable anyway, because twelve rows is a
+                   reference table, and `ladderRead` already answers the one
+                   question the table cannot: how many of these levels price can
+                   plausibly reach today. That sentence was rendered BELOW the
+                   twelve rows, so a reader who folded the block lost the only
+                   line worth keeping. Folded, it is now the line that stays. */
+                collapsedSummary={
+                  ladderRead ? (
+                    <span className="text-text">{ladderRead.headline}</span>
+                  ) : (
+                    <>Session, prior-day and overnight levels, signed from the last price.</>
+                  )
+                }
+                subtitle={
+                  frameLabel ? (
+                    <span className="text-[0.55rem] text-text-muted" title={frameLabel.title}>
+                      {frameLabel.text}
+                    </span>
+                  ) : undefined
+                }
+              >
 
               {ladder.length === 0 ? (
                 <p className="text-xs text-text-muted">
@@ -1815,6 +1853,7 @@ export default function EsBriefing() {
                 further away than a whole expected session&apos;s range — still context, but not a
                 target for today. Hover any distance for its share of that range.
               </p>
+              </CardSection>
             </div>
 
             {/* ── right column: clock + lean + headlines ──
@@ -2030,148 +2069,24 @@ export default function EsBriefing() {
                   </p>
                 </div>
               )}
-
-              {/* lean */}
-              {(d.cta || d.macro) && (
-                <div className="space-y-1.5">
-                  <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                    Directional lean — swing horizon
-                  </h3>
-                  <div className="grid grid-cols-2 gap-2 text-[0.65rem]">
-                    {d.cta && (
-                      <div className="border border-border rounded px-2 py-1.5">
-                        <div className="text-[0.55rem] uppercase tracking-wider text-text-muted">CTA flow (1w)</div>
-                        <div className="text-text font-semibold capitalize">
-                          {(d.cta.bias_1w ?? "—").replace(/_/g, " ")}
-                        </div>
-                        {d.cta.current_exposure != null && (
-                          <div className="text-text-muted tabular-nums text-[0.6rem]" title="Model points, not dollars.">
-                            exposure {d.cta.current_exposure > 0 ? "+" : ""}
-                            {d.cta.current_exposure.toFixed(0)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {d.macro && (
-                      <div className="border border-border rounded px-2 py-1.5">
-                        <div className="text-[0.55rem] uppercase tracking-wider text-text-muted">Macro backdrop</div>
-                        <div className="text-text font-semibold capitalize">
-                          {d.macro.net_label ?? "—"}
-                          {/* Coverage, not decoration: this verdict looked the
-                              same off 2 factors as off 12 during a FRED outage. */}
-                          {(d.macro.factors_unavailable ?? 0) > 0 && (
-                            <span className="ml-1.5 text-[0.55rem] uppercase tracking-wide text-spot font-semibold"
-                                  title={`${d.macro.factors_unavailable} of ${(d.macro.factors_reporting ?? 0) + (d.macro.factors_unavailable ?? 0)} macro factors failed to load. This verdict is built on the rest — treat it as provisional.`}>
-                              {d.macro.factors_reporting}/{(d.macro.factors_reporting ?? 0) + (d.macro.factors_unavailable ?? 0)}
-                            </span>
-                          )}
-                        </div>
-                        {d.macro.counts && (
-                          <div className="text-text-muted tabular-nums text-[0.6rem]">
-                            {d.macro.counts.supportive}↑ · {d.macro.counts.neutral}– · {d.macro.counts.headwind}↓
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <p className="text-[0.55rem] text-text-muted leading-snug">
-                    Both are multi-day signals. They set which way to lean, not when to enter.
-                  </p>
-                </div>
-              )}
-
-              {/* headlines */}
-              {(d.news ?? []).length > 0 && (
-                <div className="space-y-1.5 flex-1 min-h-0">
-                  <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                    Macro headlines
-                  </h3>
-                  {/* Synthesis above, headlines under it. The digest is written
-                      from the same ranked set rendered below, so a reader who
-                      distrusts a line can check it against the list without
-                      leaving the card. Absent when the model call fails — the
-                      headlines are the artifact, this is only the shortcut. */}
-                  {d.news_digest?.text && (
-                    <div className="border-l-2 border-accent/40 pl-2 py-0.5 space-y-0.5">
-                      <p className="text-[0.65rem] leading-snug text-text whitespace-pre-line">
-                        {d.news_digest.text}
-                      </p>
-                      <p className="text-[0.5rem] text-text-muted">
-                        synthesis of the {d.news_digest.n_headlines ?? (d.news ?? []).length} headlines below
-                        {d.news_digest.model ? ` · ${d.news_digest.model}` : ""}
-                      </p>
-                    </div>
-                  )}
-                  <ul className="space-y-1">
-                    {/* Render at least as many as the digest read. It cites
-                        headlines by name, so a shorter list would leave claims
-                        the reader cannot check — which is the whole point of
-                        putting the list under the synthesis. */}
-                    {(d.news ?? []).slice(0, Math.max(8, d.news_digest?.n_headlines ?? 0)).map((n, i) => (
-                      <li key={i} className="text-[0.65rem] leading-snug">
-                        {/* THE ORDER IS TIER FIRST, THEN RECENCY — deliberately,
-                            so an FOMC line from yesterday outranks colour from
-                            an hour ago. `tier` was computed server-side and
-                            never rendered, so the only ordering cue on screen
-                            was the age, and a correctly-ordered list read as a
-                            broken one: 3h · 4h · 9h · 1d · 2d · 3d · 1h · 5h.
-                            Marking the index-movers makes the sort legible
-                            without re-sorting it. */}
-                        {n.tier === 1 && (
-                          <span
-                            className="text-spot mr-1"
-                            title="A headline type that has moved the index. The list is ordered by this first, then by recency — not by time alone."
-                          >
-                            •
-                          </span>
-                        )}
-                        {n.url ? (
-                          <a
-                            href={n.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-text hover:text-accent"
-                          >
-                            {n.title}
-                          </a>
-                        ) : (
-                          <span className="text-text">{n.title}</span>
-                        )}
-                        <span className="text-text-muted ml-1 text-[0.55rem] whitespace-nowrap">
-                          {n.source}
-                          {/* Separator INSIDE the conditional. `fmtAgo` returns "" until the
-                              clock has a value, so ` · ${...}` emitted a dangling "·"
-                              on the server against "· 1h ago" on the client — which is
-                              the text mismatch that was still firing React #418 after
-                              every time string had already been removed from the SSR.
-                              Same shape as the "bars" label; fixed there, missed here. */}
-                          {(() => {
-                            const age = n.published ? fmtAgo(n.published, nowMin) : "";
-                            return age ? ` · ${age}` : "";
-                          })()}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  {/* Says the ordering rule out loud, because a list whose sort
-                      key is invisible looks unsorted however correct it is. */}
-                  <p className="text-[0.52rem] text-text-muted leading-snug pt-1">
-                    <span className="text-spot">•</span> marks headline types that have moved the
-                    index. Ordered by that first, then by recency — so an older policy line
-                    outranks fresher market colour. Nothing older than five days is carried.
-                  </p>
-                </div>
-              )}
             </div>
           </div>
 
           {/* ── expected move · dealer gamma · session structure ── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-border pt-3">
-            {/* expected move */}
+            {/* em */}
             <div className="space-y-1.5">
-              <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                Expected move — room to run
-              </h3>
+              <CardSection
+                id="em"
+                title="Expected move — room to run"
+                collapsedSummary={
+                  emRead ? (
+                    <span className="text-text">{emRead.headline}</span>
+                  ) : (
+                    <>What the option market prices this session to travel.</>
+                  )
+                }
+              >
               {!d.expected_move?.available ? (
                 <p className="text-[0.65rem] text-text-muted">Expected move unavailable.</p>
               ) : (
@@ -2747,13 +2662,22 @@ export default function EsBriefing() {
                   )}
                 </>
               )}
+              </CardSection>
             </div>
 
-            {/* dealer gamma */}
+            {/* gamma */}
             <div className="space-y-1.5">
-              <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                Dealer gamma — SPX
-              </h3>
+              <CardSection
+                id="gamma"
+                title="Dealer gamma — SPX"
+                collapsedSummary={
+                  gammaRead ? (
+                    <span className="text-text">{gammaRead.headline}</span>
+                  ) : (
+                    <>Which dealer-hedging regime the tape is in, and how far the flip sits.</>
+                  )
+                }
+              >
               {!d.gamma?.available ? (
                 <p className="text-[0.65rem] text-text-muted">
                   Gamma unavailable{d.gamma?.reason ? ` — ${d.gamma.reason}` : ""}.
@@ -2826,13 +2750,22 @@ export default function EsBriefing() {
                   </p>
                 </>
               )}
+              </CardSection>
             </div>
 
-            {/* session structure */}
+            {/* structure */}
             <div className="space-y-1.5">
-              <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                Session structure
-              </h3>
+              <CardSection
+                id="structure"
+                title="Session structure"
+                collapsedSummary={
+                  structureRead ? (
+                    <span className="text-text">{structureRead.headline}</span>
+                  ) : (
+                    <>Day type, initial balance, participation and the levels they imply.</>
+                  )
+                }
+              >
               {!d.intraday?.available ? (
                 <p className="text-[0.65rem] text-text-muted">Structure unavailable.</p>
               ) : (
@@ -2930,6 +2863,7 @@ export default function EsBriefing() {
                   )}
                 </div>
               )}
+              </CardSection>
             </div>
           </div>
 
@@ -2945,18 +2879,34 @@ export default function EsBriefing() {
           {/* ── breadth: how many stocks are going with the index ── */}
           {d.breadth?.available && (
             <div className="border-t border-border pt-3 space-y-2">
-              <div className="flex items-baseline justify-between gap-2 flex-wrap">
-                <h3 className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
-                  Breadth
-                </h3>
-                <span className="text-[0.55rem] text-text-muted" title={d.breadth.universe?.note}>
-                  {d.breadth.universe?.n?.toLocaleString("en-US")}
-                  {d.breadth.universe?.eligible_n
-                    ? ` of ${d.breadth.universe.eligible_n.toLocaleString("en-US")}`
-                    : ""}{" "}
-                  names · {d.breadth.live ? "live" : `last session ${d.breadth.session ?? ""}`}
-                </span>
-              </div>
+              <CardSection
+                id="breadth"
+                title="Breadth"
+                /* Open by default: this one DEVELOPS. Four stat tiles that each
+                   answer "how many stocks are going with the index" in a
+                   different unit, and they move all session. It is foldable
+                   rather than defaulted shut — a reader who never uses breadth
+                   folds it once and keeps the sentence. */
+                collapsedSummary={
+                  breadthRead ? (
+                    <span className="text-text">{breadthRead.headline}</span>
+                  ) : (
+                    <>
+                      How many stocks are going with the index, across{" "}
+                      {d.breadth.universe?.n?.toLocaleString("en-US")} names.
+                    </>
+                  )
+                }
+                subtitle={
+                  <span className="text-[0.55rem] text-text-muted" title={d.breadth.universe?.note}>
+                    {d.breadth.universe?.n?.toLocaleString("en-US")}
+                    {d.breadth.universe?.eligible_n
+                      ? ` of ${d.breadth.universe.eligible_n.toLocaleString("en-US")}`
+                      : ""}{" "}
+                    names · {d.breadth.live ? "live" : `last session ${d.breadth.session ?? ""}`}
+                  </span>
+                }
+              >
 
               {/* Fires before the cash open, when only a fraction of the universe
                   has printed and the counts are a thin sample. */}
@@ -3129,6 +3079,7 @@ export default function EsBriefing() {
                 {d.breadth.reconstruction}
                 {d.breadth.tick && !d.breadth.tick.available && ` NYSE TICK is not shown: ${d.breadth.tick.reason}`}
               </p>
+              </CardSection>
             </div>
           )}
 
@@ -3141,6 +3092,30 @@ export default function EsBriefing() {
               <CardSection
                 id="baserates"
                 title="Measured base rates"
+                /* CLOSED BY DEFAULT, unlike everything above it, on the axis
+                   this page is organised by: these are unconditional rates over
+                   thousands of sessions. Nothing in these tables reads
+                   differently at 15:00 than it did at 09:30, so a reader
+                   opening the card mid-session is scrolling past a block that
+                   cannot have changed since they last looked. The finding stays
+                   visible in the summary; only the tables fold. */
+                defaultOpen={false}
+                collapsedSummary={
+                  <>
+                    {/* The gap note is the ONE line in this block conditioned on
+                        today, so it is promoted verbatim rather than summarised
+                        as "a gap rate is inside" — a pointer to a finding is not
+                        the finding. */}
+                    {d.base_rates.gaps?.today && (
+                      <span className="text-text">{d.base_rates.gaps.today.note} </span>
+                    )}
+                    Otherwise unconditional daily rates over{" "}
+                    {d.base_rates.sessions?.toLocaleString("en-US")} sessions of{" "}
+                    {d.base_rates.instrument ?? d.base_rates.source} — how often a session takes
+                    the prior high or low, trends, or extends one side. Fixed history, not a
+                    reading on this session.
+                  </>
+                }
                 subtitle={
                   /* This label describes the DAILY study. The intraday path
                      rates below run on SPY 5-minute bars over a shorter window,
@@ -3297,6 +3272,28 @@ export default function EsBriefing() {
               <CardSection
                 id="sessionpath"
                 title="Session path"
+                /* Closed by default like the block above — but NOT for quite the
+                   same reason, and the difference decides what the summary has
+                   to carry. The hourly table is fixed history; `path.live` is
+                   not. It is the rate re-conditioned on the clock and on how far
+                   price currently sits from the level, and it moves through the
+                   session — an unconditional 57% gap-fill reads 20.7% live at
+                   11:45. Folding that away would hide the one line here that is
+                   about today, so it IS the summary, and the table is what
+                   folds. */
+                defaultOpen={false}
+                collapsedSummary={
+                  d.base_rates.path.live ? (
+                    <span className="text-text">{d.base_rates.path.live.note}</span>
+                  ) : (
+                    <>
+                      When in the session a move tends to happen, over{" "}
+                      {d.base_rates.path.sessions?.toLocaleString("en-US")} sessions of{" "}
+                      {d.base_rates.path.source}. No live reading for this clock yet — the
+                      hourly table inside is unconditional history.
+                    </>
+                  )
+                }
                 subtitle={
                   /* Its own window — shorter than the daily study above, and
                      labelling it with those sessions would overstate it. */

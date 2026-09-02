@@ -402,21 +402,39 @@ export function SplitBar({
  * One foldable block within a card, remembered per reader.
  *
  * WHY THE ES CARD NEEDED THIS. Measured, that card is 3,967px — 37% of the
- * whole page and about four screens — across eleven sections, of which two
+ * whole page and about four screens — across fourteen sections, of which two
  * were foldable. The horizon bands were applied to the page and never to the
  * single largest thing on it, so the reader got navigation everywhere except
  * where the scrolling actually is.
  *
- * Open by default, like the bands, for the same reason: folding work away by
- * default hides it. What this buys is that a reader who never looks at the
- * base-rate tables can fold them once and keep the card at a usable height.
+ * `collapsedSummary` IS WHAT MAKES A CLOSED SECTION HONEST, and it is why some
+ * sections can now default shut.
+ *
+ * The rule here was "open by default, always", on the grounds that folding work
+ * away by default hides it. That rule is right about a BARE chevron and wrong
+ * about this: a fold that still states the section's reading has hidden the
+ * evidence, not the finding. It is the same distinction `BoardRoster` runs on —
+ * a demoted board keeps a line that speaks — and the ES card is unusually well
+ * set up for it, because it already computes a one-sentence read for each of
+ * its major blocks (`emRead`, `gammaRead`, `structureRead`, `breadthRead`,
+ * `ladderRead`) and renders them as `Takeaway`s INSIDE the sections, where a
+ * folded reader never sees them. Closed, that sentence moves to the header.
+ *
+ * So: sections that develop through the session stay open. Sections that are
+ * measured history — base rates, the session-path table, the audit — describe
+ * something that does not move between now and the close, and default shut with
+ * their summary showing. `subtitle` is the open-state detail and is unchanged.
  */
 export function CardSection({
-  id, title, subtitle, children, defaultOpen = true,
+  id, title, subtitle, collapsedSummary, children, defaultOpen = true,
 }: {
   id: string;
   title: string;
   subtitle?: React.ReactNode;
+  /** One line, shown only when the section is CLOSED. Without it a closed
+   *  section is a bare chevron, which is the thing this project refuses to do
+   *  to built work. */
+  collapsedSummary?: React.ReactNode;
   children: React.ReactNode;
   defaultOpen?: boolean;
 }) {
@@ -440,6 +458,9 @@ export function CardSection({
         </button>
         {open && subtitle}
       </div>
+      {!open && collapsedSummary && (
+        <p className="text-[0.62rem] text-text-muted leading-snug pl-3.5">{collapsedSummary}</p>
+      )}
       {open && children}
     </div>
   );
