@@ -231,7 +231,7 @@ export default function SectorRrgCard() {
             Weekly · relative strength vs momentum against the S&amp;P 500 · {d?.tail_weeks ?? 8}-week trail
           </div>
         </div>
-        <Link href="/sectors" className="text-[0.6rem] text-text-muted hover:text-accent whitespace-nowrap">
+        <Link href="/sector-analysis" className="text-[0.6rem] text-text-muted hover:text-accent whitespace-nowrap">
           Sector analysis →
         </Link>
       </div>
