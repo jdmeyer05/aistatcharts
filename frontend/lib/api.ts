@@ -4130,7 +4130,14 @@ export interface EsBrief {
     sig30_status?: string;
     after_1000?: { median_runs?: number; mean_runs?: number; p_zero_pct?: number };
     runs_confirmed?: number;
-    leg_in_flight?: { direction?: string; size_usd?: number } | null;
+    leg_in_flight?: {
+      direction?: string;
+      size_usd?: number;
+      size_es_pts?: number;
+      /** Flat in distance traveled — legs are memoryless, so these odds hold
+       *  at any leg size; only the vol bucket moves them. */
+      continuation?: { p_add10_pct?: number; e_more_pts?: number; note?: string } | null;
+    } | null;
     bars_through?: string;
   } | null;
   rest_of_session?: EsRestOfSession | null;

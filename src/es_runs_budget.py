@@ -71,6 +71,15 @@ _SIG_PZ = (56, 42, 27, 12, 4)
 _QUINTILE = ("lowest 20%", "2nd quintile", "middle", "4th quintile",
              "highest 20%")
 
+# Leg continuation by VIX quintile (spy5m_research/run_survival.py,
+# 2026-09-02, 5,898 legs): P(the leg adds >= 10 SPX pts more | it reached
+# 15+) and E[additional pts]. The hazard is FLAT in distance traveled
+# (52-56% at every level 15 through 60 pts) -- legs are memoryless -- so no
+# x-dependence is quoted; only the vol bucket moves the odds. The shuffle
+# control reproduces these numbers: volatility arithmetic, not a signal.
+_CONT_P10 = (49, 51, 54, 53, 57)
+_CONT_E = (12.5, 14.8, 15.9, 15.9, 18.5)
+
 
 def _bucket(v: float, cuts: tuple) -> int:
     i = 0
@@ -232,12 +241,24 @@ def runs_budget(now: pd.Timestamp | None = None,
     closes = bars["Close"].to_numpy(float)
     count, leg_dir, leg_size = _run_legs(closes, THETA_USD)
     last_bar = bars.index[-1]
+    leg = None
+    if leg_dir:
+        leg = {"direction": "up" if leg_dir > 0 else "down",
+               "size_usd": round(leg_size, 2),
+               "size_es_pts": round(leg_size * 10, 1)}
+        # continuation odds only once the leg is itself run-sized -- below
+        # theta it is not yet the object the survival table measured
+        if vix is not None and leg_size >= THETA_USD:
+            b = _bucket(vix, _VIX_CUTS)
+            leg["continuation"] = {
+                "p_add10_pct": _CONT_P10[b],
+                "e_more_pts": _CONT_E[b],
+                "note": "flat in distance traveled -- legs are memoryless",
+            }
     out.update({
         "available": True,
         "runs_confirmed": count,
-        "leg_in_flight": {"direction": ("up" if leg_dir > 0 else
-                                        "down" if leg_dir < 0 else "none"),
-                          "size_usd": round(leg_size, 2)} if leg_dir else None,
+        "leg_in_flight": leg,
         "bars_through": last_bar.strftime("%H:%M"),
     })
 

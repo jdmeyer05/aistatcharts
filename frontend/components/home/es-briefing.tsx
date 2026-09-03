@@ -2689,7 +2689,21 @@ export default function EsBriefing() {
                             d.runs_budget.leg_in_flight.direction !== "none" && (
                             <>
                               {" "}· leg in flight {d.runs_budget.leg_in_flight.direction}{" "}
-                              ${d.runs_budget.leg_in_flight.size_usd?.toFixed(2)}
+                              {d.runs_budget.leg_in_flight.size_es_pts != null
+                                ? `${d.runs_budget.leg_in_flight.size_es_pts.toFixed(0)} pts`
+                                : `$${d.runs_budget.leg_in_flight.size_usd?.toFixed(2)}`}
+                              {/* The survival table's one-line answer to "is the
+                                  trend done": the hazard is flat in distance, so
+                                  these odds hold whether the leg has gone 15
+                                  points or 60 — only the vol bucket moves them. */}
+                              {d.runs_budget.leg_in_flight.continuation && (
+                                <>
+                                  {" "}· {d.runs_budget.leg_in_flight.continuation.p_add10_pct}%
+                                  odds it adds 10+ (E +
+                                  {d.runs_budget.leg_in_flight.continuation.e_more_pts?.toFixed(0)}
+                                  , at any distance)
+                                </>
+                              )}
                             </>
                           )}
                           {d.runs_budget.bars_through && (
