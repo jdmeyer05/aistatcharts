@@ -3139,6 +3139,9 @@ def _es_brief_build() -> dict:
         # other estimator here is blind to. Describes the tape behind you; its
         # forward correlation is a measured null and travels in the payload.
         "chop_trend": cock.get("chop_trend"),
+        # The trade budget: expected run count for a day like today, decided
+        # pre-open from the vol complex — the cap that replaces chop detection.
+        "runs_budget": cock.get("runs_budget"),
         # The only block on the card addressed to somebody already positioned
         # rather than deciding whether to engage.
         "rest_of_session": cock.get("rest_of_session"),

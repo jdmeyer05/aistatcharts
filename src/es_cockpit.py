@@ -389,6 +389,12 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
     regime = _safe(lambda: session_character(range_so_far=None, normal_range=None),
                    "regime")
 
+    # The trade budget reads prior-close VIX and SPY's own 1-minute day —
+    # no ES bar anywhere in it, so an ES=F outage is no reason to blank the
+    # one block whose job is to exist before the session even opens.
+    from src.es_runs_budget import runs_budget
+    budget = _safe(lambda: runs_budget(now=clock_et), "runs_budget")
+
     return {
         "available": True,
         "levels_unavailable_reason": reason,
@@ -403,6 +409,7 @@ def _levels_independent(reason: str, now: pd.Timestamp | None,
         "candles": candles,
         "overnight": overnight_ctx,
         "regime": regime,
+        "runs_budget": budget,
         "gap_pct": None,
         # Only what is ACTUALLY missing. Gamma used to be listed here
         # unconditionally alongside the two that genuinely need bars, which is
@@ -612,6 +619,17 @@ def es_cockpit(now: pd.Timestamp | None = None,
     # outside the cash hours.
     chop = _safe(lambda: session_chop(now=clock), "chop_trend") if live else None
 
+    # The trade budget: how many $1.50 runs a day like today usually hands
+    # out, from prior-close VIX before the bell and first-30-min sigma after
+    # 10:00. Deliberately NOT gated on `live` — the pre-open half is the whole
+    # point (the dead-day model decided as well before the open as at 10:00),
+    # and printing it only once the session is running would ask the reader to
+    # remember the plan instead of reading it. Its fetches are its own (VIX
+    # daily + one 1-minute day), so it races nothing in the pool.
+    from src.es_runs_budget import runs_budget
+    budget = _safe(lambda: runs_budget(now=clock_et, session_day=session_day),
+                   "runs_budget")
+
     _rth = (frames or {}).get("cur_rth")
     _bar = None
     if _rth is not None and not _rth.empty:
@@ -680,6 +698,9 @@ def es_cockpit(now: pd.Timestamp | None = None,
         # The orthogonal axis to `regime`: that one says how big, this says how
         # straight. Measured at corr +0.37, so they are close to independent.
         "chop_trend": chop,
+        # How many runs a day like today usually hands out — the cap, decided
+        # pre-open, that replaces trying to detect chop on the tape.
+        "runs_budget": budget,
         "rest_of_session": ros,
         "attribution": attribution,
         "macro_setup": setup,

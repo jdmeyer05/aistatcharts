@@ -2620,6 +2620,92 @@ export default function EsBriefing() {
                     </div>
                   )}
 
+                  {/* THE TRADE BUDGET. Chop cannot be detected live — that is
+                      a measured null (best predictive correlation of any
+                      filter: 0.09) — so the alternative to detecting it is a
+                      cap decided before the open, when the answer is already
+                      knowable: run count is a volatility effect and the vol
+                      complex prices it the night before. This line prints the
+                      cap so it is read each morning rather than remembered.
+                      Everything here is a measured frequency from the run
+                      study's calibration (1,254 sessions); the serial null
+                      ships with the number for the same reason the SHAPE
+                      block ships its forward null. */}
+                  {d.runs_budget?.available &&
+                    typeof d.runs_budget.pre_open?.median_runs === "number" &&
+                    typeof d.runs_budget.pre_open?.p_zero_pct === "number" && (
+                    <div className="pt-1 mt-1 border-t border-border/60 space-y-0.5">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
+                          Trade budget
+                        </span>
+                        <span className="text-[0.6rem] font-bold tabular-nums text-text">
+                          median {d.runs_budget.pre_open.median_runs} run
+                          {d.runs_budget.pre_open.median_runs === 1 ? "" : "s"}
+                        </span>
+                        <span
+                          className={`text-[0.6rem] tabular-nums ${
+                            d.runs_budget.pre_open.p_zero_pct >= 40
+                              ? "text-amber-400" : "text-text-muted"
+                          }`}
+                        >
+                          {d.runs_budget.pre_open.p_zero_pct}% chance of none
+                        </span>
+                        {typeof d.runs_budget.vix_prior_close === "number" && (
+                          <span className="text-[0.55rem] tabular-nums text-text-muted/80">
+                            VIX {d.runs_budget.vix_prior_close.toFixed(1)} prior close,{" "}
+                            {d.runs_budget.vix_bucket_label}
+                          </span>
+                        )}
+                      </div>
+                      {/* The one live update the study licenses: the first 30
+                          minutes keep partial rho +0.38 after the vol complex
+                          has spoken. Everything later adds nothing, so
+                          nothing later prints. */}
+                      {typeof d.runs_budget.after_1000?.median_runs === "number" &&
+                        typeof d.runs_budget.sig30_pct === "number" && (
+                        <div className="text-[0.6rem] text-text-muted tabular-nums">
+                          First 30 min ran {d.runs_budget.sig30_pct.toFixed(2)}% day-scaled
+                          ({d.runs_budget.sig30_bucket_label}): days like this delivered a
+                          median {d.runs_budget.after_1000.median_runs} after 10:00, none{" "}
+                          {d.runs_budget.after_1000.p_zero_pct}% of the time
+                        </div>
+                      )}
+                      {typeof d.runs_budget.runs_confirmed === "number" && (
+                        <div className="text-[0.6rem] text-text-muted tabular-nums">
+                          Confirmed so far:{" "}
+                          <span
+                            className={
+                              d.runs_budget.runs_confirmed >=
+                              (d.runs_budget.pre_open.median_runs || 0) &&
+                              d.runs_budget.runs_confirmed > 0
+                                ? "text-accent font-semibold" : "text-text"
+                            }
+                          >
+                            {d.runs_budget.runs_confirmed}
+                          </span>{" "}
+                          of {d.runs_budget.theta_note}
+                          {d.runs_budget.leg_in_flight &&
+                            d.runs_budget.leg_in_flight.direction !== "none" && (
+                            <>
+                              {" "}· leg in flight {d.runs_budget.leg_in_flight.direction}{" "}
+                              ${d.runs_budget.leg_in_flight.size_usd?.toFixed(2)}
+                            </>
+                          )}
+                          {d.runs_budget.bars_through && (
+                            <> · bars through {d.runs_budget.bars_through}</>
+                          )}
+                        </div>
+                      )}
+                      {d.runs_budget.serial_null && (
+                        <p className="text-[0.55rem] text-text-muted/80 leading-snug">
+                          Once the budget is spent, nothing measurable says another run is
+                          coming: {d.runs_budget.serial_null}.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {/* Dispersion speaks only before the first bucket closes —
                       the one window the path estimate cannot cover. Shown with
                       its own base rate attached because the lift is modest and

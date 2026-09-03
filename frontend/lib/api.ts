@@ -4109,6 +4109,30 @@ export interface EsBrief {
    *  `regime` is blind to. Descriptive only: its forward correlation is a
    *  measured null and ships in `forward` so the card can say so. */
   chop_trend?: EsChopTrend | null;
+  /** The trade budget: how many $1.50 runs a day like today usually hands
+   *  out, decided pre-open from prior-close VIX and updated once at 10:00
+   *  from first-30-min sigma. The cap that replaces detecting chop live —
+   *  which is a measured null the block itself states. */
+  runs_budget?: {
+    available: boolean;
+    theta_usd?: number;
+    theta_note?: string;
+    calibrated?: string;
+    n_sessions?: number;
+    serial_null?: string;
+    vix_prior_close?: number;
+    vix_bucket?: number;
+    vix_bucket_label?: string;
+    pre_open?: { median_runs?: number; mean_runs?: number; p_zero_pct?: number };
+    sig30_pct?: number;
+    sig30_bucket?: number;
+    sig30_bucket_label?: string;
+    sig30_status?: string;
+    after_1000?: { median_runs?: number; mean_runs?: number; p_zero_pct?: number };
+    runs_confirmed?: number;
+    leg_in_flight?: { direction?: string; size_usd?: number } | null;
+    bars_through?: string;
+  } | null;
   rest_of_session?: EsRestOfSession | null;
   attribution?: EsAttribution | null;
   macro_setup?: EsMacroSetup | null;
