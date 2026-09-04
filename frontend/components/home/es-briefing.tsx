@@ -2620,36 +2620,38 @@ export default function EsBriefing() {
                     </div>
                   )}
 
-                  {/* THE TRADE BUDGET. Chop cannot be detected live — that is
-                      a measured null (best predictive correlation of any
-                      filter: 0.09) — so the alternative to detecting it is a
-                      cap decided before the open, when the answer is already
-                      knowable: run count is a volatility effect and the vol
-                      complex prices it the night before. This line prints the
-                      cap so it is read each morning rather than remembered.
-                      Everything here is a measured frequency from the run
-                      study's calibration (1,254 sessions); the serial null
-                      ships with the number for the same reason the SHAPE
-                      block ships its forward null. */}
+                  {/* THE TRADE BUDGET, re-based 2026-09-03 to the user's
+                      actual P&L threshold: 10 ES points. The day-quality
+                      study showed a 10-pt move exists on ~all days, so the
+                      budget cannot be framed as "will one exist" — it is a
+                      cap on how many, plus the number that actually separates
+                      the user's good days from bad ones: traps per real leg
+                      (5-9.9 pt swings that reverse before reaching 10). Both
+                      are volatility effects the vol complex prices the night
+                      before; chop itself cannot be detected live (measured
+                      null, best filter correlation 0.09). Every figure is a
+                      measured frequency (calib_10pt.py, 1,254 sessions); the
+                      serial null ships with the number for the same reason
+                      the SHAPE block ships its forward null. */}
                   {d.runs_budget?.available &&
                     typeof d.runs_budget.pre_open?.median_runs === "number" &&
-                    typeof d.runs_budget.pre_open?.p_zero_pct === "number" && (
+                    typeof d.runs_budget.pre_open?.p_le1_pct === "number" && (
                     <div className="pt-1 mt-1 border-t border-border/60 space-y-0.5">
                       <div className="flex items-baseline gap-1.5 flex-wrap">
                         <span className="text-[0.6rem] font-bold uppercase tracking-wider text-text-muted">
                           Trade budget
                         </span>
                         <span className="text-[0.6rem] font-bold tabular-nums text-text">
-                          median {d.runs_budget.pre_open.median_runs} run
-                          {d.runs_budget.pre_open.median_runs === 1 ? "" : "s"}
+                          median {d.runs_budget.pre_open.median_runs} leg
+                          {d.runs_budget.pre_open.median_runs === 1 ? "" : "s"} of 10+ pts
                         </span>
                         <span
                           className={`text-[0.6rem] tabular-nums ${
-                            d.runs_budget.pre_open.p_zero_pct >= 40
+                            d.runs_budget.pre_open.p_le1_pct >= 25
                               ? "text-amber-400" : "text-text-muted"
                           }`}
                         >
-                          {d.runs_budget.pre_open.p_zero_pct}% chance of none
+                          {d.runs_budget.pre_open.p_le1_pct}% of such days confirm 1 or fewer
                         </span>
                         {typeof d.runs_budget.vix_prior_close === "number" && (
                           <span className="text-[0.55rem] tabular-nums text-text-muted/80">
@@ -2658,17 +2660,49 @@ export default function EsBriefing() {
                           </span>
                         )}
                       </div>
+                      {/* The day-quality line — the user-endorsed frame: money
+                          comes from the big legs, losses from the sub-10
+                          fakeouts, and the trap:leg ratio is the one number
+                          that describes the day. Low-vol days don't lack
+                          movement; they lack movement relative to the noise
+                          around it (ratio 2.28 in VIX q1 vs 1.06 in q5). */}
+                      {typeof d.runs_budget.day_quality?.trap_leg_ratio === "number" &&
+                        typeof d.runs_budget.day_quality?.traps_mean === "number" && (
+                        <div className="text-[0.6rem] tabular-nums">
+                          <span className="font-bold uppercase tracking-wider text-text-muted text-[0.55rem]">
+                            Day quality
+                          </span>{" "}
+                          <span
+                            className={
+                              d.runs_budget.day_quality.trap_leg_ratio >= 1.8
+                                ? "text-amber-400"
+                                : d.runs_budget.day_quality.trap_leg_ratio <= 1.2
+                                  ? "text-accent"
+                                  : "text-text"
+                            }
+                          >
+                            {d.runs_budget.day_quality.trap_leg_ratio.toFixed(1)} traps
+                            per confirmed leg
+                          </span>{" "}
+                          <span className="text-text-muted">
+                            — days like this threw ~
+                            {Math.round(d.runs_budget.day_quality.traps_mean)} swings of
+                            5–9.9 pts that reversed before reaching 10
+                          </span>
+                        </div>
+                      )}
                       {/* The one live update the study licenses: the first 30
                           minutes keep partial rho +0.38 after the vol complex
                           has spoken. Everything later adds nothing, so
                           nothing later prints. */}
                       {typeof d.runs_budget.after_1000?.median_runs === "number" &&
+                        typeof d.runs_budget.after_1000?.p_le1_pct === "number" &&
                         typeof d.runs_budget.sig30_pct === "number" && (
                         <div className="text-[0.6rem] text-text-muted tabular-nums">
                           First 30 min ran {d.runs_budget.sig30_pct.toFixed(2)}% day-scaled
                           ({d.runs_budget.sig30_bucket_label}): days like this delivered a
-                          median {d.runs_budget.after_1000.median_runs} after 10:00, none{" "}
-                          {d.runs_budget.after_1000.p_zero_pct}% of the time
+                          median {d.runs_budget.after_1000.median_runs} after 10:00, 1 or
+                          fewer {d.runs_budget.after_1000.p_le1_pct}% of the time
                         </div>
                       )}
                       {typeof d.runs_budget.runs_confirmed === "number" && (
@@ -2684,7 +2718,7 @@ export default function EsBriefing() {
                           >
                             {d.runs_budget.runs_confirmed}
                           </span>{" "}
-                          of {d.runs_budget.theta_note}
+                          leg{d.runs_budget.runs_confirmed === 1 ? "" : "s"} of 10+ ES pts
                           {d.runs_budget.leg_in_flight &&
                             d.runs_budget.leg_in_flight.direction !== "none" && (
                             <>
@@ -2693,9 +2727,11 @@ export default function EsBriefing() {
                                 ? `${d.runs_budget.leg_in_flight.size_es_pts.toFixed(0)} pts`
                                 : `$${d.runs_budget.leg_in_flight.size_usd?.toFixed(2)}`}
                               {/* The survival table's one-line answer to "is the
-                                  trend done": the hazard is flat in distance, so
-                                  these odds hold whether the leg has gone 15
-                                  points or 60 — only the vol bucket moves them. */}
+                                  trend done": the hazard is flat in distance
+                                  (re-verified in the 10-pt frame, 44-47% from 10
+                                  out to 50), so these odds hold whether the leg
+                                  has gone 10 points or 50 — only the vol bucket
+                                  moves them. */}
                               {d.runs_budget.leg_in_flight.continuation && (
                                 <>
                                   {" "}· {d.runs_budget.leg_in_flight.continuation.p_add10_pct}%
@@ -2713,7 +2749,7 @@ export default function EsBriefing() {
                       )}
                       {d.runs_budget.serial_null && (
                         <p className="text-[0.55rem] text-text-muted/80 leading-snug">
-                          Once the budget is spent, nothing measurable says another run is
+                          Once the budget is spent, nothing measurable says another leg is
                           coming: {d.runs_budget.serial_null}.
                         </p>
                       )}

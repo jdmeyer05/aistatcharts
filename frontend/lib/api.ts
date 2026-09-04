@@ -4109,10 +4109,12 @@ export interface EsBrief {
    *  `regime` is blind to. Descriptive only: its forward correlation is a
    *  measured null and ships in `forward` so the card can say so. */
   chop_trend?: EsChopTrend | null;
-  /** The trade budget: how many $1.50 runs a day like today usually hands
-   *  out, decided pre-open from prior-close VIX and updated once at 10:00
-   *  from first-30-min sigma. The cap that replaces detecting chop live —
-   *  which is a measured null the block itself states. */
+  /** The trade budget, re-based 2026-09-03 to the user's P&L threshold: how
+   *  many 10-ES-pt legs a day like today usually hands out, decided pre-open
+   *  from prior-close VIX and updated once at 10:00 from first-30-min sigma,
+   *  plus the day-quality ratio (traps per confirmed leg). The cap that
+   *  replaces detecting chop live — which is a measured null the block
+   *  itself states. */
   runs_budget?: {
     available: boolean;
     theta_usd?: number;
@@ -4123,12 +4125,31 @@ export interface EsBrief {
     vix_prior_close?: number;
     vix_bucket?: number;
     vix_bucket_label?: string;
-    pre_open?: { median_runs?: number; mean_runs?: number; p_zero_pct?: number };
+    pre_open?: {
+      median_runs?: number;
+      mean_runs?: number;
+      p_zero_pct?: number;
+      p_le1_pct?: number;
+    };
+    /** Traps per confirmed leg — 5-9.9 pt swings that reverse before ever
+     *  reaching 10, per real 10+ pt leg. 2.28 in VIX q1 down to 1.06 in q5:
+     *  low-vol days don't lack movement, they lack movement relative to the
+     *  noise around it. */
+    day_quality?: {
+      traps_mean?: number;
+      trap_leg_ratio?: number;
+      traps_note?: string;
+    } | null;
     sig30_pct?: number;
     sig30_bucket?: number;
     sig30_bucket_label?: string;
     sig30_status?: string;
-    after_1000?: { median_runs?: number; mean_runs?: number; p_zero_pct?: number };
+    after_1000?: {
+      median_runs?: number;
+      mean_runs?: number;
+      p_zero_pct?: number;
+      p_le1_pct?: number;
+    };
     runs_confirmed?: number;
     leg_in_flight?: {
       direction?: string;

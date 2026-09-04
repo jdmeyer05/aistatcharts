@@ -1,13 +1,20 @@
-"""How many tradeable runs does a day like today usually hand out — the trade
+"""How many tradeable legs does a day like today usually hand out — the trade
 budget, printed before the open instead of remembered.
 
-Answers one planning question: "if I engage today, how many legs of $1.50+
-(SPY scale, ~15 ES handles) should I expect, and what are the odds of none?"
-The point is the CAP. The run-structure study found no serial edge at all —
-a within-session permutation of each day's own bars reproduces the run count
-exactly (4,652 observed vs 4,692 shuffled, p=0.27) — so once the expected
-count is banked, nothing measurable says another is coming. The count is a
-volatility effect, and volatility is the one thing knowable in advance.
+RE-BASED 2026-09-03 to the user's actual P&L threshold: theta = $1.00 SPY
+= 10 ES/SPX points (was $1.50). The day-quality study (spy5m_research/
+day_quality.py) showed the money frame is: pay legs of 10+ pts vs TRAPS —
+5-9.9 pt swings that reverse before ever reaching 10. The trap-to-leg ratio
+is the day-quality number, and the vol level is the one pre-bell lever that
+moves it (2.28 traps per confirmed leg in the lowest VIX quintile vs 1.06 in
+the highest), so it prints beside the budget.
+
+The point of the budget is the CAP. The run-structure study found no serial
+edge at all — a within-session permutation of each day's own bars reproduces
+the run count exactly (at the $1.50 calibration: 4,652 observed vs 4,692
+shuffled, p=0.27) — so once the expected count is banked, nothing measurable
+says another is coming. The count is a volatility effect, and volatility is
+the one thing knowable in advance.
 
 Two readings, in order of when they become known:
   pre-open   VIX prior close -> full-session run expectation (the decision
@@ -22,19 +29,26 @@ ZigZag the study used: a leg is confirmed only after price retraces theta
 from its extreme, which is the first moment anyone could know.
 
 CALIBRATION — every constant below was computed, not assigned
-(spy5m_research/pine_calibration.py, run 2026-09-02): 1,254 SPY sessions,
-2021-08-16 -> 2026-08-13, 1-minute closes, theta = $1.50. The same table is
-embedded in the user's TradingView indicator (Session_Context.pine), so the
-two surfaces cannot disagree. Regenerate both from the script if recalibrated.
-Unconditional, for reference: median 2 runs/session, mean 3.71 (dragged by a
-violent minority), P(zero) 23%.
+(spy5m_research/calib_10pt.py, run 2026-09-03): 1,254 SPY sessions,
+2021-08-16 -> 2026-08-13, 1-minute closes, theta = $1.00, traps at $0.50.
+Budget tables count CONFIRMED legs only (same frame as the live counter);
+a zero-confirmed day can still be a strong one-way drift whose terminal leg
+never retraced 10 pts, which is why "P(zero)" is not quoted as "dead day" —
+the scarcity stat shown is P(<= 1 confirmed). Continuation odds include the
+terminal leg at bell value (dropping it manufactured fake money once) and the
+hazard was re-verified FLAT in this frame (44-47% at every distance 10-50 pts).
+Unconditional, for reference: median 6 legs/session, mean 7.81, P(<=1) 12.6%,
+traps mean 10.9. NOTE: the TradingView Session_Context panel still embeds the
+2026-09-02 theta=$1.50 tables (pine_calibration.py); regenerate it with
+calib_10pt.py's numbers when the user wants the two surfaces re-synced.
 
 The live inputs are measured to match the calibration's units exactly: sigma
 is the std of 1-MINUTE percent changes 09:30-10:00, scaled by sqrt(390)*100
 (day-scaled percent, instrument-free), and the counter runs on SPY 1-minute
 closes — which is why this module fetches its own 1-minute day rather than
-reusing the 5-minute frame (5-minute sampling counts 2.91 runs/session where
-1-minute counts 4.85; mixing resolutions would misread every bucket).
+reusing the 5-minute frame (measured at the $1.50 study: 5-minute sampling
+counts 2.91 runs/session where 1-minute counts 4.85; mixing resolutions
+would misread every bucket).
 """
 from __future__ import annotations
 
@@ -52,33 +66,39 @@ _CACHE: dict = {}
 _TODAY_TTL_S = 60
 _VIX_TTL_S = 12 * 3600
 
-THETA_USD = 1.50            # SPY dollars; ~15 ES handles at current ratios
-_CALIBRATED = "2026-09-02"
+THETA_USD = 1.00            # SPY dollars; 10 ES/SPX points at any index level
+_CALIBRATED = "2026-09-03"
 _N_SESSIONS = 1254
 
-# VIX prior close -> FULL-session runs
+# VIX prior close -> FULL-session confirmed legs, traps, and the day-quality
+# ratio (traps per confirmed leg). All from calib_10pt.py, 2026-09-03.
 _VIX_CUTS = (14.9, 16.9, 19.1, 23.0)
-_VIX_MED = (0, 2, 2, 3, 6)
-_VIX_MEAN = (1.0, 2.4, 3.2, 4.1, 7.9)
-_VIX_PZ = (52, 27, 17, 16, 2)
+_VIX_MED = (2, 5, 6, 7, 13)
+_VIX_MEAN = (2.9, 5.5, 7.0, 8.4, 15.3)
+_VIX_PZ = (17, 7, 5, 2, 0)
+_VIX_PLE1 = (31, 18, 9, 6, 0)
+_VIX_TRAPS = (6.6, 9.1, 10.8, 11.9, 16.3)
+_VIX_RATIO = (2.28, 1.66, 1.54, 1.42, 1.06)
 
-# first-30-min sigma (day-scaled %) -> runs AFTER 10:00 (re-anchored)
+# first-30-min sigma (day-scaled %) -> legs AFTER 10:00 (re-anchored)
 _SIG_CUTS = (0.55, 0.72, 0.92, 1.30)
-_SIG_MED = (0, 1, 2, 3, 5)
-_SIG_MEAN = (1.0, 1.6, 2.2, 3.9, 7.0)
-_SIG_PZ = (56, 42, 27, 12, 4)
+_SIG_MED = (2, 3, 4, 7, 11)
+_SIG_MEAN = (2.6, 3.8, 5.4, 8.1, 13.6)
+_SIG_PZ = (21, 15, 4, 3, 0)
+_SIG_PLE1 = (41, 27, 10, 5, 0)
 
 _QUINTILE = ("lowest 20%", "2nd quintile", "middle", "4th quintile",
              "highest 20%")
 
-# Leg continuation by VIX quintile (spy5m_research/run_survival.py,
-# 2026-09-02, 5,898 legs): P(the leg adds >= 10 SPX pts more | it reached
-# 15+) and E[additional pts]. The hazard is FLAT in distance traveled
-# (52-56% at every level 15 through 60 pts) -- legs are memoryless -- so no
-# x-dependence is quoted; only the vol bucket moves the odds. The shuffle
-# control reproduces these numbers: volatility arithmetic, not a signal.
-_CONT_P10 = (49, 51, 54, 53, 57)
-_CONT_E = (12.5, 14.8, 15.9, 15.9, 18.5)
+# Leg continuation by VIX quintile (calib_10pt.py, 2026-09-03, 11,044 legs
+# incl terminal): P(the leg adds >= 10 pts more | it reached run size) and
+# E[additional pts]. The hazard is FLAT in distance traveled in this frame
+# too (44-47% at every level 10 through 50 pts) -- legs are memoryless -- so
+# no x-dependence is quoted; only the vol bucket moves the odds. Levels are
+# lower than the old $1.50-frame numbers (49-57%) because a theta=10 leg dies
+# on an easier retrace; the frames are not comparable side by side.
+_CONT_P10 = (37, 42, 44, 43, 48)
+_CONT_E = (9.9, 11.7, 12.4, 12.6, 14.0)
 
 
 def _bucket(v: float, cuts: tuple) -> int:
@@ -208,14 +228,15 @@ def runs_budget(now: pd.Timestamp | None = None,
     out: dict = {
         "available": False,
         "theta_usd": THETA_USD,
-        "theta_note": "$1.50 on SPY, about 15 ES handles",
+        "theta_note": "10+ ES-pt legs ($1.00 SPY)",
         "calibrated": _CALIBRATED,
         "n_sessions": _N_SESSIONS,
         # The reason the count is a CAP and not a signal, shipped with the
         # number for the same reason the chop card ships its null.
-        "serial_null": ("run arrivals carry no serial structure "
-                        "(permutation null 0.99x observed, p=0.27); the count "
-                        "is a volatility effect, known mostly before the open"),
+        "serial_null": ("leg arrivals carry no serial structure (permutation "
+                        "null at the $1.50 calibration: 0.99x observed, "
+                        "p=0.27); the count is a volatility effect, known "
+                        "mostly before the open"),
     }
 
     vix = _prior_vix(day)
@@ -230,6 +251,17 @@ def runs_budget(now: pd.Timestamp | None = None,
                 "median_runs": _VIX_MED[b],
                 "mean_runs": _VIX_MEAN[b],
                 "p_zero_pct": _VIX_PZ[b],
+                "p_le1_pct": _VIX_PLE1[b],
+            },
+            # The user-endorsed day-quality frame (2026-09-03): losses come
+            # from 5-9.9 pt swings that reverse before reaching 10, so the
+            # traps-per-leg ratio is quoted beside the budget. Low-vol days
+            # do not lack movement; they lack movement relative to the noise
+            # around it.
+            "day_quality": {
+                "traps_mean": _VIX_TRAPS[b],
+                "trap_leg_ratio": _VIX_RATIO[b],
+                "traps_note": "5-9.9 pt swings that reverse before reaching 10",
             },
         })
 
@@ -282,6 +314,7 @@ def runs_budget(now: pd.Timestamp | None = None,
                     "median_runs": _SIG_MED[sb],
                     "mean_runs": _SIG_MEAN[sb],
                     "p_zero_pct": _SIG_PZ[sb],
+                    "p_le1_pct": _SIG_PLE1[sb],
                 },
             })
     elif last_bar.time() < _time(10, 0):
