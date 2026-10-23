@@ -1,0 +1,41 @@
+name: Daily Options Metrics
+
+# Fills the options fields of the day's metrics_history rows (ATM IV, put skew,
+# term slope, put/call, IV/HV, VRP) for the core tickers in worker.METRICS_TICKERS.
+# 21:45 UTC on weekdays is after the New York close in both DST states
+# (17:45 EDT / 16:45 EST). The task itself refuses to write before 16:30 ET, on
+# a weekend, or for a ticker with no bar for the day (holiday), and skips
+# tickers already filled, so a manual dispatch after the close is safe.
+# Separate from the hourly worker so one chain scan a day never spends that
+# job's 10-minute budget.
+on:
+  schedule:
+    - cron: '45 21 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  options-metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fill options metrics
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          python worker.py --task options_metrics

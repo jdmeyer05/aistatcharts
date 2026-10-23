@@ -446,6 +446,12 @@ Provide your assessment as JSON:
 
 # ─── TASK 4: METRICS SNAPSHOTS ─────────────────────────────────
 
+# Core tickers for the daily metrics_history rows (user_id "worker"). The hourly
+# metrics task writes spot/HV20/HV60; the daily options_metrics task fills the
+# options fields of the same rows.
+METRICS_TICKERS = ["SPY", "QQQ", "IWM", "TLT", "GLD", "USO", "XLE", "XLF", "AAPL", "MSFT"]
+
+
 def update_metrics_snapshots(db):
     """Save daily metrics and pre-warm price_history for popular tickers."""
     import requests
@@ -455,9 +461,6 @@ def update_metrics_snapshots(db):
     if not api_key:
         logger.warning("MASSIVE_API_KEY not set, skipping metrics")
         return
-
-    # Core tickers for metrics snapshots (HV20 computed)
-    METRICS_TICKERS = ["SPY", "QQQ", "IWM", "TLT", "GLD", "USO", "XLE", "XLF", "AAPL", "MSFT"]
 
     # Extended pre-warm list — popular tickers users load on first visit
     PREWARM_TICKERS = [
@@ -522,38 +525,147 @@ def update_metrics_snapshots(db):
             logger.warning(f"Pre-warm failed for {ticker}: {e}")
 
 
-def _update_ticker_metrics(db, ticker: str, api_key: str, today: str):
-    """Compute and save HV20 metrics for a single ticker."""
+def _daily_bars(ticker: str, api_key: str, end: str, days: int = 100) -> list[dict]:
+    """Polygon daily bars, oldest first. 100 calendar days holds the 61 closes HV60 needs."""
     import requests
+
+    start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{end}"
+    r = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 200}, timeout=15)
+    return r.json().get("results", [])
+
+
+def _rms_vol(closes: list[float], n: int) -> float | None:
+    """Annualised close-to-close vol over the last n log returns (zero-mean RMS), or None."""
     import math
 
+    if len(closes) < n + 1:
+        return None
+    rets = [math.log(closes[i] / closes[i - 1]) for i in range(len(closes) - n, len(closes))]
+    return (sum(r ** 2 for r in rets) / n) ** 0.5 * (252 ** 0.5)
+
+
+def _update_ticker_metrics(db, ticker: str, api_key: str, today: str):
+    """Compute and save spot, HV20 and HV60 for a single ticker."""
     try:
-        start = (datetime.now() - timedelta(days=35)).strftime("%Y-%m-%d")
-        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/{start}/{today}"
-        r = requests.get(url, params={"apiKey": api_key, "sort": "asc", "limit": 50}, timeout=15)
-        results = r.json().get("results", [])
+        results = _daily_bars(ticker, api_key, today)
         if not results:
             return
 
         closes = [bar["c"] for bar in results]
         spot = closes[-1]
 
-        hv20 = None
-        if len(closes) >= 21:
-            rets = [math.log(closes[i] / closes[i-1]) for i in range(1, len(closes))]
-            hv20 = (sum(r**2 for r in rets[-20:]) / 20) ** 0.5 * (252 ** 0.5)
-
         db.table("metrics_history").upsert({
             "user_id": "worker",
             "ticker": ticker,
             "date": today,
             "spot": spot,
-            "hv20": hv20,
+            "hv20": _rms_vol(closes, 20),
+            "hv60": _rms_vol(closes, 60),
         }, on_conflict="user_id,ticker,date").execute()
 
         logger.info(f"Metrics updated: {ticker} ${spot:.2f}")
     except Exception as e:
         logger.warning(f"Metrics update failed for {ticker}: {e}")
+
+
+def _finite(v) -> float | None:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def update_options_metrics(db, now_et: datetime | None = None):
+    """Fill the options fields of today's metrics_history rows, once per session day.
+
+    Until this task existed those fields were written only by the old Streamlit
+    pages, on page view, so they went empty when the site moved to Next.js
+    (last row 2026-05-21) while the hourly task kept writing spot/HV20 rows.
+
+    Runs after the New York close so every day is captured at the same point
+    (the Massive feed runs ~15 min behind, hence 16:30 ET). A ticker whose last
+    daily bar is not today's - a market holiday, or the feed lagging - is
+    skipped rather than written as a fresh reading of stale chains. Tickers
+    already filled today are skipped, so reruns are safe.
+
+    Metrics come from src.cross_asset_vol, the code behind the vol landscape.
+    vrp is IV - HV20 in vol points and iv_hv_ratio is IV / HV20, both against
+    the same HV20 the hourly task writes to this row, which is also how the
+    earlier rows were stored (SPY 2026-05-21: 0.1545 - 0.103 = 0.052).
+    """
+    from zoneinfo import ZoneInfo
+
+    api_key = os.environ.get("MASSIVE_API_KEY")
+    if not api_key:
+        logger.warning("MASSIVE_API_KEY not set, skipping options metrics")
+        return
+
+    now_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5 or (now_et.hour, now_et.minute) < (16, 30):
+        logger.info(f"Options metrics: {now_et:%a %H:%M} ET is not after a session close, skipped")
+        return
+    day = now_et.strftime("%Y-%m-%d")
+
+    try:
+        have = db.table("metrics_history").select("ticker,atm_iv") \
+            .eq("user_id", "worker").eq("date", day).execute()
+        done = {r["ticker"] for r in (have.data or []) if r.get("atm_iv") is not None}
+    except Exception as e:
+        logger.warning(f"Options metrics: could not read today's rows ({e}); computing all")
+        done = set()
+    todo = [t for t in METRICS_TICKERS if t not in done]
+    if not todo:
+        logger.info(f"Options metrics: {day} already filled")
+        return
+
+    hv20 = {}
+    for tk in todo:
+        try:
+            bars = _daily_bars(tk, api_key, day)
+        except Exception as e:
+            logger.warning(f"Options metrics: daily bars failed for {tk}: {e}")
+            continue
+        if not bars or datetime.fromtimestamp(bars[-1]["t"] / 1000, ZoneInfo("America/New_York")).strftime("%Y-%m-%d") != day:
+            logger.info(f"Options metrics: {tk} has no {day} session bar (holiday or feed lag), skipped")
+            continue
+        hv20[tk] = _rms_vol([b["c"] for b in bars], 20)
+    if not hv20:
+        return
+
+    try:
+        from src import cross_asset_vol as cav
+        rfr = cav.get_rfr()
+        data = cav.load_universe_data({tk: tk for tk in hv20}, rfr)
+        mdf = cav.compute_cross_asset_metrics(data, rfr)
+    except Exception as e:
+        logger.warning(f"Options metrics: chain scan failed: {e}")
+        return
+
+    written = []
+    for _, m in mdf.iterrows():
+        tk = m["Ticker"]
+        if tk not in hv20:
+            continue
+        iv, hv = _finite(m.get("Front_IV")), hv20[tk]
+        row = {
+            "user_id": "worker", "ticker": tk, "date": day,
+            "atm_iv": iv,
+            "put_skew": _finite(m.get("Put_Skew")),
+            "ts_slope": _finite(m.get("TS_Slope")),
+            "pc_ratio": _finite(m.get("PC_Ratio")),
+            "iv_hv_ratio": iv / hv if iv and hv else None,
+            "vrp": iv - hv if iv and hv else None,
+        }
+        try:
+            db.table("metrics_history").upsert(row, on_conflict="user_id,ticker,date").execute()
+            written.append(tk)
+        except Exception as e:
+            logger.warning(f"Options metrics: save failed for {tk}: {e}")
+    missing = sorted(set(hv20) - set(written))
+    logger.info(f"Options metrics {day}: wrote {', '.join(written) or 'none'}"
+                + (f"; no metrics for {', '.join(missing)}" if missing else ""))
 
 
 # ─── TASK 5: OPTIONS CHAIN PRE-WARM ────────────────────────────
@@ -1114,7 +1226,7 @@ def prompt_loop_evaluate(db):
 def main():
     parser = argparse.ArgumentParser(description="AI Statcharts hourly worker")
     parser.add_argument("--task", choices=["all", "conflict", "briefing", "timeline",
-                                            "metrics", "cleanup", "prewarm", "options",
+                                            "metrics", "options_metrics", "cleanup", "prewarm", "options",
                                             "market_news", "trump_validate", "sector_refresh",
                                             "prompt_seed", "prompt_ping", "prompt_grade",
                                             "prompt_regrade", "prompt_health",
@@ -1137,6 +1249,11 @@ def main():
 
     if args.task in ("all", "metrics", "prewarm"):
         update_metrics_snapshots(db)
+
+    # Not in "all": one chain scan per session day, on its own daily workflow
+    # (daily-options-metrics.yml) so it never spends the hourly job's budget.
+    if args.task == "options_metrics":
+        update_options_metrics(db)
 
     if args.task in ("all", "options", "prewarm"):
         prewarm_options_chains(db)
