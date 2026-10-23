@@ -82,6 +82,19 @@ def test_rms_vol_matches_the_old_hv20_formula():
     assert worker._rms_vol(closes[:20], 20) is None          # needs n + 1 closes
 
 
+def test_hourly_row_is_dated_by_its_newest_bar_not_the_utc_clock(monkeypatch):
+    # a Sunday run (UTC date 2026-10-25) must refresh Friday's row, not open a Sunday one
+    bars = _bars("2026-10-23", n=70)
+    monkeypatch.setattr(worker, "_daily_bars", lambda tk, api_key, end, days=100: bars)
+    db = _DB()
+    worker._update_ticker_metrics(db, "SPY", "test", "2026-10-25")
+    (row, conflict), = db.upserts
+    closes = [b["c"] for b in bars]
+    assert row["date"] == "2026-10-23" and conflict == "user_id,ticker,date"
+    assert row["spot"] == closes[-1]
+    assert row["hv20"] == worker._rms_vol(closes, 20) and row["hv60"] == worker._rms_vol(closes, 60)
+
+
 def test_rows_carry_options_fields_against_the_rows_own_hv20(monkeypatch):
     bars = {"SPY": _bars("2026-10-22"), "TLT": _bars("2026-10-22", start=90.0)}
     rows = [{"Ticker": "SPY", "Front_IV": 0.18, "Put_Skew": 1.12, "TS_Slope": 0.004, "PC_Ratio": 1.4},

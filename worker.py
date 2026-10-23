@@ -546,7 +546,15 @@ def _rms_vol(closes: list[float], n: int) -> float | None:
 
 
 def _update_ticker_metrics(db, ticker: str, api_key: str, today: str):
-    """Compute and save spot, HV20 and HV60 for a single ticker."""
+    """Compute and save spot, HV20 and HV60 for a single ticker.
+
+    The row is dated by its newest daily bar (New York date), not by the run's
+    clock. The runner's clock is UTC: a run after 20:00 ET used to open the NEXT
+    day's row with today's close, and weekend runs wrote Saturday/Sunday rows
+    repeating Friday.
+    """
+    from zoneinfo import ZoneInfo
+
     try:
         results = _daily_bars(ticker, api_key, today)
         if not results:
@@ -554,11 +562,12 @@ def _update_ticker_metrics(db, ticker: str, api_key: str, today: str):
 
         closes = [bar["c"] for bar in results]
         spot = closes[-1]
+        bar_day = datetime.fromtimestamp(results[-1]["t"] / 1000, ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
         db.table("metrics_history").upsert({
             "user_id": "worker",
             "ticker": ticker,
-            "date": today,
+            "date": bar_day,
             "spot": spot,
             "hv20": _rms_vol(closes, 20),
             "hv60": _rms_vol(closes, 60),
